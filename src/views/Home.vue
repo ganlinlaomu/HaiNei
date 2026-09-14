@@ -168,12 +168,13 @@ import { logger } from "@/utils/logger";
 import { formatRelativeTime } from "@/utils/format";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import VideoPlayer from "@/components/VideoPlayer.vue";
-import { backfillEvents, saveBackfillBreakpoint, loadBackfillBreakpoint } from "@/utils/backfill";
+import { backfillEvents, saveBackfillBreakpoint, loadBackfillBreakpoint, SYNC_OVERLAP_SECONDS } from "@/utils/backfill";
 import { useRoute } from "vue-router";
 import { usePullToRefresh } from "@/components/usePullToRefresh";
 import { getLastSeenCreatedAt, setLastSeenCreatedAt, updateLastSeenToNewest } from "@/utils/lastSeen";
 import { extractVideoData as extractVideoDataUtil, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
 import { useRealtimeInboxReconcile } from "@/components/useRealtimeInboxReconcile";
+import { closeSubscription } from "@/utils/closeSubscription";
 
 
 // reuse the regex logic from extractImageUrls to strip out image markdown and plain image URLs
@@ -223,6 +224,7 @@ export default defineComponent({
     const status = ref("未连接");
     let sub: any = null;
     let interactionsSub: any = null;
+    let homeAccountPk = "";
 
     const messagesRef = ref([] as any[]);
     const displayedMessages = ref([] as any[]);
@@ -240,6 +242,48 @@ export default defineComponent({
     const remainingMessagesCount = computed(() => {
       return messagesRef.value.length - displayedMessages.value.length;
     });
+
+    function closeHomeSubscriptions() {
+      closeSubscription(sub);
+      closeSubscription(interactionsSub);
+      sub = null;
+      interactionsSub = null;
+    }
+
+    function clearHomeRuntimeState() {
+      messagesRef.value = [];
+      displayedMessages.value = [];
+      pendingMessages.value = [];
+      readyForPending.value = false;
+      lastSeenCreatedAt.value = 0;
+      realtimeSessionSince.value = 0;
+      notificationJumpDone.value = false;
+      homeAccountPk = "";
+    }
+
+    async function initializeHomeRuntime(accountPk: string) {
+      await msgs.load(accountPk);
+      if (!accountPk || keys.pkHex !== accountPk || msgs.loadedFor !== accountPk) {
+        logger.warn(`[account] Home initialization discarded account=${accountPk?.slice(0, 8) || "none"}`);
+        return false;
+      }
+
+      messagesRef.value = [...msgs.inbox].sort(
+        (a, b) => (b.created_at || 0) - (a.created_at || 0)
+      );
+      displayedMessages.value = messagesRef.value.slice(0, PAGE_SIZE);
+      currentPage.value = 1;
+      isInitialLoad.value = false;
+
+      const storedLastSeen = getLastSeenCreatedAt(accountPk) || 0;
+      const newestInUI = displayedMessages.value[0]?.created_at || 0;
+      lastSeenCreatedAt.value = Math.max(storedLastSeen, newestInUI);
+      readyForPending.value = true;
+      homeAccountPk = accountPk;
+      updateLocalRefs();
+      void handleNotificationJump().catch((e) => logger.warn("notification jump failed", e));
+      return true;
+    }
 
     
     
@@ -325,13 +369,6 @@ export default defineComponent({
       }
     }
     
-    function refreshPendingOnForeground() {
-  if (!readyForPending.value) return;
-  logger.info("[Home] App 前台或重新打开 → 刷新 pendingMessages");
-  safeUpdateLocalRefs(); // 核心对账函数
-}
-    
-    
     function updateLocalRefs() {
   // ① 按时间排序 inbox
   messagesRef.value = [...msgs.inbox].sort(
@@ -392,17 +429,23 @@ export default defineComponent({
 // ⭐ 防重复触发包装（加在这里）
 // --------------------
 let reconciling = false;
+let reconcilePending = false;
 
-function safeUpdateLocalRefs() {
-  if (reconciling) return;
+async function safeUpdateLocalRefs() {
+  if (reconciling) {
+    reconcilePending = true;
+    return;
+  }
   reconciling = true;
 
   try {
-    updateLocalRefs();
+    do {
+      reconcilePending = false;
+      updateLocalRefs();
+      await Promise.resolve();
+    } while (reconcilePending);
   } finally {
-    queueMicrotask(() => {
-      reconciling = false;
-    });
+    reconciling = false;
   }
 }
     // 加载更多消息
@@ -757,16 +800,18 @@ function safeUpdateLocalRefs() {
     }
     
     async function backfillMessages(friendSet: Set<string>, relays: string[]) {
+      const accountPk = keys.pkHex;
+      if (!accountPk) return;
       try {
         const now = Math.floor(Date.now() / 1000);
-        const breakpointKey = `messages_${keys.pkHex}`;
+        const breakpointKey = `messages_${accountPk}`;
         const savedBreakpoint = loadBackfillBreakpoint(breakpointKey); 
         // Determine time range for backfill - always use 3-day window
         let since: number;
         let until: number = now;
         
         if (savedBreakpoint && savedBreakpoint > 0) {
-          since = savedBreakpoint + 1;
+          since = Math.max(0, savedBreakpoint - SYNC_OVERLAP_SECONDS);
           logger.info(
             `use backfillpoint to pull: since=${new Date(since * 1000).toLocaleString()}`
           );
@@ -793,6 +838,10 @@ function safeUpdateLocalRefs() {
         
         // Process event and decrypt
         const processEvent = async (evt: any) => {
+          if (keys.pkHex !== accountPk) {
+            logger.warn(`[account] message backfill event discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
+            return;
+          }
           fetchedEvents++;
           try {
             if (!friendSet.has(evt.pubkey)) {
@@ -814,7 +863,7 @@ function safeUpdateLocalRefs() {
               return;
             }
             
-            const myEntry = payload.keys.find((k: any) => k.to === keys.pkHex);
+            const myEntry = payload.keys.find((k: any) => k.to === accountPk);
             if (!myEntry) {
               notForMe++;
               return;
@@ -837,6 +886,10 @@ function safeUpdateLocalRefs() {
             
             try {
               const plain = await symDecryptPackage(symHex, payload.pkg);
+              if (keys.pkHex !== accountPk) {
+                logger.warn(`[account] decrypted message discarded account=${accountPk.slice(0, 8)} event=${evt.id?.slice(0, 8)}`);
+                return;
+              }
               const added = addMessageIfNew(evt, plain);
               if (added) {
                 decryptedEvents++;
@@ -865,9 +918,14 @@ function safeUpdateLocalRefs() {
           },
           onEvent: processEvent,
           onProgress: (stats) => {
+            if (keys.pkHex !== accountPk) return;
             status.value = `获取中: ${stats.totalEvents} 条事件`;
           },
           onComplete: (stats) => {
+            if (keys.pkHex !== accountPk) {
+              logger.warn(`[account] message backfill completion discarded account=${accountPk.slice(0, 8)}`);
+              return;
+            }
             const summary = [
               `获取: ${fetchedEvents} 条`,
               `解密成功: ${decryptedEvents} 条`,
@@ -891,7 +949,7 @@ function safeUpdateLocalRefs() {
             
             // Save the timestamp of the newest message for future reference
             // This helps track the last time we successfully fetched messages
-            const breakpointKey = `messages_${keys.pkHex}`;
+            const breakpointKey = `messages_${accountPk}`;
             if (newestTimestamp > 0) {
               saveBackfillBreakpoint(breakpointKey, newestTimestamp);
               logger.info(
@@ -910,18 +968,20 @@ function safeUpdateLocalRefs() {
         
       } catch (e) {
         logger.error("回填失败", e);
-        status.value = "获取消息失败";
+        if (keys.pkHex === accountPk) status.value = "获取消息失败";
       }
     }
     
     async function backfillInteractions(relays: string[]) {
+  const accountPk = keys.pkHex;
+  if (!accountPk) return;
   try {
     const now = Math.floor(Date.now() / 1000);
-    const breakpointKey = `interactions_${keys.pkHex}`;
+    const breakpointKey = `interactions_${accountPk}`;
     const saved = loadBackfillBreakpoint(breakpointKey);
 
     const since = saved && saved > 0
-      ? saved + 1
+      ? Math.max(0, saved - SYNC_OVERLAP_SECONDS)
       : now - THREE_DAYS_IN_SECONDS;
 
     let newestTs = 0;
@@ -932,6 +992,10 @@ function safeUpdateLocalRefs() {
       until: now,
       maxBatches: 10,
       onEvent: (evt) => {
+        if (keys.pkHex !== accountPk) {
+          logger.warn(`[account] interaction breakpoint event discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
+          return;
+        }
         if (evt.created_at && evt.created_at > newestTs) {
           newestTs = evt.created_at;
         }
@@ -942,6 +1006,10 @@ function safeUpdateLocalRefs() {
     });
 
     // ⭐ 只有真的拿到互动，才推进断点
+    if (keys.pkHex !== accountPk) {
+      logger.warn(`[account] interaction breakpoint completion discarded account=${accountPk.slice(0, 8)}`);
+      return;
+    }
     if (newestTs > 0) {
       saveBackfillBreakpoint(breakpointKey, newestTs);
       logger.info(
@@ -968,10 +1036,19 @@ function safeUpdateLocalRefs() {
           logger.warn("[startSub] skip: not logged in");
           return;
         }
-        friends.load().catch(console.error);
+        const accountPk = keys.pkHex;
+        if (homeAccountPk !== accountPk) {
+          const initialized = await initializeHomeRuntime(accountPk);
+          if (!initialized) return;
+        }
+        await friends.load(accountPk);
+        if (!accountPk || keys.pkHex !== accountPk || friends.loadedFor !== accountPk) {
+          logger.warn(`[account] subscription bootstrap discarded account=${accountPk?.slice(0, 8) || "none"}`);
+          return;
+        }
         logger.info(`好友列表加载完成: ${friends.list.length} 个好友`);
         const friendSet = new Set<string>((friends.list || []).map((f: any) => f.pubkey));
-        if (keys.pkHex) friendSet.add(keys.pkHex);
+        friendSet.add(accountPk);
         logger.info(`准备订阅 ${friendSet.size} 个作者（包括自己）`);
         
         if (friendSet.size === 0) {
@@ -985,6 +1062,7 @@ function safeUpdateLocalRefs() {
         
         // ============ 阶段2：下一帧启动实时订阅（避免阻塞首屏渲染） ============
         requestAnimationFrame(() => {
+          if (keys.pkHex !== accountPk) return;
           startRealtimeSubscription(friendSet, relays);
         });
         
@@ -992,11 +1070,13 @@ function safeUpdateLocalRefs() {
         const scheduleBackfill = () => {
           if (typeof requestIdleCallback !== 'undefined') {
             requestIdleCallback(() => {
+              if (keys.pkHex !== accountPk) return;
               startBackfill(friendSet, relays);
             }, { timeout: 2000 });
           } else {
             // 浏览器不支持 requestIdleCallback，使用 setTimeout 兜底
             setTimeout(() => {
+              if (keys.pkHex !== accountPk) return;
               startBackfill(friendSet, relays);
             }, 500);
           }
@@ -1011,6 +1091,8 @@ function safeUpdateLocalRefs() {
     
     // 阶段2：启动实时订阅
     async function startRealtimeSubscription(friendSet: Set<string>, relays: string[]) {
+      const accountPk = keys.pkHex;
+      if (!accountPk) return;
       try {
         logger.info("启动实时订阅...");
         
@@ -1020,7 +1102,7 @@ function safeUpdateLocalRefs() {
 const threeDaysAgo = now - THREE_DAYS_IN_SECONDS;
 
 const messageBreakpoint =
-  loadBackfillBreakpoint(`messages_${keys.pkHex}`) || 0;
+  loadBackfillBreakpoint(`messages_${accountPk}`) || 0;
 
 realtimeSessionSince.value = Math.floor(Date.now() / 1000);
 
@@ -1031,7 +1113,7 @@ logger.info(
 
 // ⭐ 关键：订阅 since = max(断点, 3天前)
 const since = Math.max(
-  messageBreakpoint + 1,
+  messageBreakpoint - SYNC_OVERLAP_SECONDS,
   threeDaysAgo
 );
 
@@ -1048,17 +1130,8 @@ logger.info(
         
         status.value = "连接中";
 
-        try {
-          if (sub) {
-            logger.debug("关闭之前的订阅");
-            if (typeof sub.close === "function") sub.close();
-            else if (typeof sub.unsub === "function") sub.unsub();
-            else if (typeof sub.unsubscribe === "function") sub.unsubscribe();
-            else if (typeof sub === "function") sub();
-          }
-        } catch (e) {
-          logger.warn("close prev sub error", e);
-        }
+        if (sub) logger.debug("关闭之前的订阅");
+        closeSubscription(sub);
         sub = null;
 
         try {
@@ -1067,6 +1140,10 @@ logger.info(
           sub = adapterSub;
           adapterSub.on("event", async (evt: any) => {
             try {
+              if (keys.pkHex !== accountPk) {
+                logger.warn(`[account] realtime message discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
+                return;
+              }
               if (!friendSet.has(evt.pubkey)) return;
               let payload: any;
               try { 
@@ -1076,7 +1153,7 @@ logger.info(
                 return; 
               }
               if (!payload?.keys || !payload?.pkg) return;
-              const myEntry = payload.keys.find((k: any) => k.to === keys.pkHex);
+              const myEntry = payload.keys.find((k: any) => k.to === accountPk);
               if (!myEntry) return;
               let symHex: string | null = null;
               try {
@@ -1092,6 +1169,11 @@ logger.info(
               try {
   const plain = await symDecryptPackage(symHex, payload.pkg);
 
+  if (keys.pkHex !== accountPk) {
+    logger.warn(`[account] decrypted realtime message discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
+    return;
+  }
+
   const added = addMessageIfNew(evt, plain);
 
   // ⭐⭐⭐ 关键修复：实时新消息立刻触发对账
@@ -1105,31 +1187,23 @@ logger.info(
               logger.warn("handle event fail", e);
             }
           });
-          adapterSub.on("eose", () => { status.value = "同步完成"; });
+          adapterSub.on("eose", (relayUrl: string) => {
+            if (keys.pkHex !== accountPk) return;
+            logger.debug(`[sync] realtime EOSE relay=${relayUrl} account=${accountPk.slice(0, 8)}`);
+            status.value = "同步完成";
+          });
 
-          setTimeout(() => { if (status.value === "连接中") status.value = "已订阅"; }, 800);
+          setTimeout(() => {
+            if (keys.pkHex === accountPk && status.value === "连接中") status.value = "已订阅";
+          }, 800);
         } catch (e) {
           logger.warn("subscribe adapter failed", e);
           status.value = "订阅失败";
         }
         
-        // Backfill historical interactions before subscribing to real-time events
-        // Now uses inbox (#p) and outbox (authors) filters for privacy compliance
-        // await backfillInteractions(relays);
-        backfillInteractions(relays).catch(console.error);
-        
         // Close existing interactions subscription before creating a new one
-        try {
-          if (interactionsSub) {
-            logger.debug("关闭之前的互动订阅");
-            if (typeof interactionsSub.close === "function") interactionsSub.close();
-            else if (typeof interactionsSub.unsub === "function") interactionsSub.unsub();
-            else if (typeof interactionsSub.unsubscribe === "function") interactionsSub.unsubscribe();
-            else if (typeof interactionsSub === "function") interactionsSub();
-          }
-        } catch (e) {
-          logger.warn("close prev interactions sub error", e);
-        }
+        if (interactionsSub) logger.debug("关闭之前的互动订阅");
+        closeSubscription(interactionsSub);
         interactionsSub = null;
         
         // Subscribe to interactions (kind 8965)
@@ -1138,32 +1212,34 @@ logger.info(
           // 1. Inbox: Interactions where user is tagged (#p) - for notifications
           // 2. Outbox: Interactions authored by user - for cross-device sync
           const interactionBreakpoint =
-          loadBackfillBreakpoint(`interactions_${keys.pkHex}`) || 0;
+          loadBackfillBreakpoint(`interactions_${accountPk}`) || 0;
+          const interactionSince = Math.max(
+            interactionBreakpoint - SYNC_OVERLAP_SECONDS,
+            threeDaysAgo
+          );
           
           const interactionFilters = [
             {
               kinds: [8965],
-              "#p": [keys.pkHex], // Inbox: interactions targeted at us
-              since: interactionBreakpoint + 1 // ⭐ inbox
+              "#p": [accountPk], // Inbox: interactions targeted at us
+              since: interactionSince
             },
             {
               kinds: [8965],
-              authors: [keys.pkHex], // Outbox: our own interactions
-              since: interactionBreakpoint + 1 // ⭐ outbox
+              authors: [accountPk], // Outbox: our own interactions
+              since: interactionSince
             }
           ];
           
           interactionsSub = subscribe(relays, interactionFilters);
           
           interactionsSub.on("event", async (evt: any) => {
+           if (keys.pkHex !== accountPk) {
+             logger.warn(`[account] realtime interaction discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
+             return;
+           }
            // ① 只处理互动事件
            if (evt.kind !== 8965) return;
-
-           // ② 确保 key 已就绪（PWA 这里很关键）
-           if (!keys.pkHex) {
-           logger.warn("[互动事件] 收到但 pkHex 未就绪，跳过", evt.id);
-           return;
-           }
 
            // ③ 打点日志（现在你最需要的是“确定有没有进来”）
            logger.info(
@@ -1174,7 +1250,7 @@ logger.info(
            );
 
            // ④ 真正交给 interactions 处理
-           await interactions.processInteractionEvent(evt, keys.pkHex);
+           await interactions.processInteractionEvent(evt, accountPk);
          });
 
           logger.debug("已订阅互动事件 (收件箱+发件箱)");
@@ -1188,12 +1264,16 @@ logger.info(
     
     // 阶段3：启动回填
     async function startBackfill(friendSet: Set<string>, relays: string[]) {
+      const accountPk = keys.pkHex;
+      if (!accountPk) return;
       try {
         logger.info("开始回填历史数据...");
         
         // 串行执行回填，避免并发压力
         await backfillMessages(friendSet, relays);
+        if (keys.pkHex !== accountPk) return;
         await backfillInteractions(relays);
+        if (keys.pkHex !== accountPk) return;
         
         logger.info("回填完成");
       } catch (e) {
@@ -1202,72 +1282,18 @@ logger.info(
     }
 
    onMounted(async () => {
-  try {
-    // ① 加载本地缓存
-    await msgs.load();
+     if (!keys.pkHex || homeAccountPk === keys.pkHex) return;
+     try {
+       await initializeHomeRuntime(keys.pkHex);
+     } catch (err) {
+       logger.error("[account] Home initialization failed", err);
+     }
+   });
 
-    // ② 首屏渲染（只用本地）
-    messagesRef.value = [...msgs.inbox].sort(
-      (a, b) => (b.created_at || 0) - (a.created_at || 0)
-    );
-    displayedMessages.value = messagesRef.value.slice(0, PAGE_SIZE);
-    currentPage.value = 1;
-    isInitialLoad.value = false;
-
-    // ③ 恢复上次 lastSeen
-    const storedLastSeen = getLastSeenCreatedAt(keys.pkHex) || 0;
-    if (displayedMessages.value.length > 0) {
-      const newestInUI = displayedMessages.value[0].created_at || 0;
-      lastSeenCreatedAt.value = Math.max(storedLastSeen, newestInUI);
-    } else {
-      lastSeenCreatedAt.value = storedLastSeen;
-    }
-
-    logger.info(
-      "[init] lastSeenCreatedAt =",
-      new Date(lastSeenCreatedAt.value * 1000).toLocaleString()
-    );
-
-    // ④ 现在才允许 pending 逻辑
-    readyForPending.value = true;
-
-    // ⑤ 冷启动对账
-    updateLocalRefs();
-
-    // ⑥ 通知跳转
-    await handleNotificationJump();
-  } catch (err) {
-    console.error("onMounted init failed:", err);
-  }
-
-  // --------------------
-  // 前台刷新 pending 消息函数
-  // --------------------
-  const refreshPendingOnForeground = () => {
-    if (!readyForPending.value) return;
-    logger.info("[Home] App 前台或重新打开 → 刷新 pendingMessages");
-    safeUpdateLocalRefs();
-  };
-
-  // 固定引用，避免 removeEventListener 解绑失败
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === "visible") refreshPendingOnForeground();
-  };
-
-  document.addEventListener("visibilitychange", handleVisibilityChange);
-  window.addEventListener("focus", refreshPendingOnForeground);
-
-  // --------------------
-  // 清理函数
-  // --------------------
-  onBeforeUnmount(() => {
-    document.removeEventListener("visibilitychange", handleVisibilityChange);
-    window.removeEventListener("focus", refreshPendingOnForeground);
-
-    if (sub) { try { sub.close?.(); } catch {} }
-    if (interactionsSub) { try { interactionsSub.close?.(); } catch {} }
-  });
-});
+   onBeforeUnmount(() => {
+     closeHomeSubscriptions();
+     clearHomeRuntimeState();
+   });
 
   // 启动 Realtime Reconcile
     useRealtimeInboxReconcile({
@@ -1279,7 +1305,11 @@ logger.info(
    watch(
   () => keys.isLoggedIn,
   (loggedIn) => {
-    if (!loggedIn) return;
+    if (!loggedIn) {
+      closeHomeSubscriptions();
+      clearHomeRuntimeState();
+      return;
+    }
 
     logger.info("[Home] keys ready → startSub()");
     startSub().catch((e) => {
@@ -1288,6 +1318,16 @@ logger.info(
   },
   { immediate: true }
 );
+   watch(
+     () => keys.pkHex,
+     (accountPk, previousPk) => {
+       if (!accountPk || !previousPk || accountPk === previousPk) return;
+       closeHomeSubscriptions();
+       clearHomeRuntimeState();
+       logger.info(`[account] Home account switch ${previousPk.slice(0, 8)} -> ${accountPk.slice(0, 8)}`);
+       startSub().catch((e) => logger.error("[account] switched account start failed", e));
+     }
+   );
    watch(
      () => interactions.interactions,
      () => {

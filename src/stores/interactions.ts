@@ -27,26 +27,26 @@ async function decodeInteractionEvent(
   keyStore: ReturnType<typeof useKeyStore>
 ): Promise<Interaction | null> {
   try {
-    logger.info(`[互动事件] 收到事件 ${evt.id} pubkey=${evt.pubkey} created_at=${evt.created_at}`);
+    logger.info(`[sync] interaction event=${evt.id?.slice(0, 8)} author=${evt.pubkey?.slice(0, 8)} created_at=${evt.created_at}`);
     
     // Parse payload
     let payload: any;
     try {
       payload = JSON.parse(evt.content);
     } catch (e) {
-      logger.warn(`[互动事件] 解析失败 ${evt.id}: 无效的JSON内容`, e);
+      logger.warn(`[sync] interaction parse failed event=${evt.id?.slice(0, 8)}`, e);
       return null;
     }
     
     if (!payload?.keys || !payload?.pkg) {
-      logger.warn(`[互动事件] 解析失败 ${evt.id}: 缺少keys或pkg字段`);
+      logger.warn(`[sync] interaction envelope invalid event=${evt.id?.slice(0, 8)}`);
       return null;
     }
     
     // Find our key entry
     const myEntry = payload.keys.find((k: any) => k.to === myPubkey);
     if (!myEntry) {
-      logger.debug(`[互动事件] 跳过事件 ${evt.id}: 不是发给当前用户的`);
+      logger.debug(`[sync] interaction not for account event=${evt.id?.slice(0, 8)}`);
       return null;
     }
     
@@ -55,7 +55,7 @@ async function decodeInteractionEvent(
     try {
       symHex = await keyStore.nip04Decrypt(evt.pubkey, myEntry.enc);
     } catch (e) {
-      logger.warn(`[互动事件] nip04解密失败 ${evt.id}`, e);
+      logger.warn(`[sync] interaction NIP-04 decrypt failed event=${evt.id?.slice(0, 8)}`, e);
       // Fallback: check if enc is already a hex key
       if (typeof myEntry.enc === "string" && /^[0-9a-fA-F]{64}$/.test(myEntry.enc)) {
         symHex = myEntry.enc;
@@ -72,18 +72,18 @@ async function decodeInteractionEvent(
       
       // Validate interaction structure
       if (!interaction.messageId || !interaction.type) {
-        logger.warn(`[互动事件] 解码失败 ${evt.id}: 缺少必需字段 (messageId或type)`);
+        logger.warn(`[sync] interaction fields missing event=${evt.id?.slice(0, 8)}`);
         return null;
       }
       
-      logger.info(`[互动事件] 解码成功 ${evt.id}: type=${interaction.type}, messageId=${interaction.messageId}, author=${interaction.author}`);
+      logger.info(`[sync] interaction decoded event=${evt.id?.slice(0, 8)} type=${interaction.type} message=${interaction.messageId.slice(0, 8)} author=${interaction.author.slice(0, 8)}`);
       return interaction;
     } catch (e) {
-      logger.warn(`[互动事件] 解密包失败 ${evt.id}`, e);
+      logger.warn(`[sync] interaction package decrypt failed event=${evt.id?.slice(0, 8)}`, e);
       return null;
     }
   } catch (e) {
-    logger.warn(`[互动事件] 解码/处理失败 ${evt.id}`, e);
+    logger.warn(`[sync] interaction decode failed event=${evt.id?.slice(0, 8)}`, e);
     return null;
   }
 }
@@ -116,6 +116,7 @@ export const useInteractionsStore = defineStore("interactions", {
     processedEvents: new Set<string>(),
     // Latest synced timestamp for incremental backfill
     lastSyncedAt: 0,
+    loadedFor: "",
   }),
   
   getters: {
@@ -276,7 +277,7 @@ export const useInteractionsStore = defineStore("interactions", {
       
       try {
         await pool.publish(relays, signed);
-        logger.debug("published interaction", { interaction, signed });
+        logger.debug(`[relay] interaction published account=${key.pkHex.slice(0, 8)} event=${signed.id.slice(0, 8)} relays=${relays.length}`);
       } catch (e) {
         logger.warn("publish interaction failed", e);
         throw e;
@@ -289,16 +290,24 @@ export const useInteractionsStore = defineStore("interactions", {
      */
     async processInteractionEvent(evt: any, myPubkey: string) {
      try {
+      const key = useKeyStore();
+      if (!myPubkey || key.pkHex !== myPubkey || this.loadedFor !== myPubkey) {
+        logger.warn(`[account] interaction event discarded account=${myPubkey?.slice(0, 8) || "none"} event=${evt?.id?.slice(0, 8) || "unknown"}`);
+        return false;
+      }
      // ⭐⭐⭐【关键】入口第一行做硬去重
       if (this.processedEvents.has(evt.id)) {
-        return;
+        return false;
        }
 
-      const key = useKeyStore();
       const interaction = await decodeInteractionEvent(evt, myPubkey, key);
 
       if (!interaction) {
-        return;
+        return false;
+      }
+      if (key.pkHex !== myPubkey || this.loadedFor !== myPubkey) {
+        logger.warn(`[account] decrypted interaction discarded account=${myPubkey.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
+        return false;
       }
 
       // ⭐ 只有「成功解码 + 即将写入」才标记为 processed
@@ -316,8 +325,10 @@ export const useInteractionsStore = defineStore("interactions", {
       if (evt.created_at && evt.created_at > this.lastSyncedAt) {
         this.lastSyncedAt = evt.created_at;
        }
+      return true;
       } catch (e) {
-      logger.warn(`[互动事件] 处理事件失败 ${evt.id}`, e);
+      logger.warn(`[sync] interaction processing failed event=${evt?.id?.slice(0, 8) || "unknown"}`, e);
+      return false;
      }
    },
 
@@ -388,12 +399,25 @@ export const useInteractionsStore = defineStore("interactions", {
     /**
      * Load interactions from localStorage
      */
-    load() {
+    load(pk?: string) {
       try {
         const key = useKeyStore();
-        if (!key.pkHex) return;
+        const targetPk = pk ?? key.pkHex;
+        if (!targetPk) {
+          this.reset(false);
+          return;
+        }
+
+        if (this.loadedFor && this.loadedFor !== targetPk) {
+          this.reset(false);
+        }
+        if (this.loadedFor === targetPk) return;
+        this.interactions.clear();
+        this.processedEvents.clear();
+        this.lastSyncedAt = 0;
+        this.loadedFor = targetPk;
         
-        const storageKey = `interactions_${key.pkHex}`;
+        const storageKey = `interactions_${targetPk}`;
         const stored = localStorage.getItem(storageKey);
         
         if (stored) {
@@ -409,6 +433,10 @@ export const useInteractionsStore = defineStore("interactions", {
             this.interactions = new Map(Object.entries(data));
             this.lastSyncedAt = 0;
           }
+        } else {
+          this.interactions.clear();
+          this.processedEvents.clear();
+          this.lastSyncedAt = 0;
         }
       } catch (e) {
         logger.warn("Failed to load interactions", e);
@@ -420,10 +448,10 @@ export const useInteractionsStore = defineStore("interactions", {
      */
     _saveToStorage() {
       try {
-        const key = useKeyStore();
-        if (!key.pkHex) return;
+        const pk = this.loadedFor;
+        if (!pk) return;
         
-        const storageKey = `interactions_${key.pkHex}`;
+        const storageKey = `interactions_${pk}`;
         const interactionsObj: Record<string, Interaction[]> = {};
         
         this.interactions.forEach((value, key) => {
@@ -447,17 +475,16 @@ export const useInteractionsStore = defineStore("interactions", {
      * @param removeFromStorage - If true, remove persisted interactions from localStorage
      */
     reset(removeFromStorage = false) {
+      const pk = this.loadedFor;
       this.interactions.clear();
       this.processedEvents.clear();
       this.lastSyncedAt = 0;
+      this.loadedFor = "";
       
-      if (removeFromStorage) {
+      if (removeFromStorage && pk) {
         try {
-          const key = useKeyStore();
-          if (key.pkHex) {
-            const storageKey = `interactions_${key.pkHex}`;
-            localStorage.removeItem(storageKey);
-          }
+          const storageKey = `interactions_${pk}`;
+          localStorage.removeItem(storageKey);
         } catch (e) {
           logger.warn("Failed to remove interactions from storage", e);
         }
@@ -481,6 +508,7 @@ export const useInteractionsStore = defineStore("interactions", {
       since?: number;
       until?: number;
       maxBatches?: number;
+      onEvent?: (event: any) => void;
       onProgress?: (fetched: number, processed: number) => void;
     }): Promise<{ fetched: number; processed: number }> {
       const key = useKeyStore();
@@ -494,8 +522,15 @@ export const useInteractionsStore = defineStore("interactions", {
         since = 0,
         until = Math.floor(Date.now() / 1000),
         maxBatches = 10,
+        onEvent: externalOnEvent,
         onProgress
       } = options;
+      const accountPk = key.pkHex;
+
+      if (this.loadedFor !== accountPk) {
+        logger.warn(`[account] interaction backfill skipped account=${accountPk.slice(0, 8)} loadedFor=${this.loadedFor.slice(0, 8) || "none"}`);
+        return { fetched: 0, processed: 0 };
+      }
       
       logger.info(`开始回填互动事件: since=${since ? new Date(since * 1000).toLocaleString() : 'beginning'}, until=${new Date(until * 1000).toLocaleString()}`);
       
@@ -505,9 +540,18 @@ export const useInteractionsStore = defineStore("interactions", {
       
       try {
         const processEvent = async (evt: any) => {
+          if (key.pkHex !== accountPk || this.loadedFor !== accountPk) {
+            logger.warn(`[account] interaction backfill event discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
+            return;
+          }
           fetchedCount++;
           try {
-            await this.processInteractionEvent(evt, key.pkHex);
+            const processed = await this.processInteractionEvent(evt, accountPk);
+            if (key.pkHex !== accountPk || this.loadedFor !== accountPk) {
+              logger.warn(`[account] interaction backfill result discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
+              return;
+            }
+            if (!processed) return;
             processedCount++;
             
             // Track the maximum timestamp we've seen
@@ -518,6 +562,7 @@ export const useInteractionsStore = defineStore("interactions", {
             if (onProgress) {
               onProgress(fetchedCount, processedCount);
             }
+            externalOnEvent?.(evt);
           } catch (e) {
             logger.warn("处理回填互动事件失败", e);
           }
@@ -529,13 +574,13 @@ export const useInteractionsStore = defineStore("interactions", {
         const filters: any[] = [
           {
             kinds: [8965],
-            "#p": [key.pkHex], // Inbox: interactions targeted at us
+            "#p": [accountPk], // Inbox: interactions targeted at us
             since,
             until
           },
           {
             kinds: [8965],
-            authors: [key.pkHex], // Outbox: our own interactions
+            authors: [accountPk], // Outbox: our own interactions
             since,
             until
           }
@@ -543,8 +588,8 @@ export const useInteractionsStore = defineStore("interactions", {
         
         // Log the filters being used for debugging
         logger.info(`互动回填过滤器详情:`);
-        logger.info(`  收件箱 (#p): kinds8965], #p=[${key.pkHex.substring(0, 8)}...], since=${new Date(since * 1000).toLocaleString()}, until=${new Date(until * 1000).toLocaleString()}`);
-        logger.info(`  发件箱 (authors): kinds8965], authors=[${key.pkHex.substring(0, 8)}...], since=${new Date(since * 1000).toLocaleString()}, until=${new Date(until * 1000).toLocaleString()}`);
+        logger.info(`  收件箱 (#p): kinds8965], #p=[${accountPk.substring(0, 8)}...], since=${new Date(since * 1000).toLocaleString()}, until=${new Date(until * 1000).toLocaleString()}`);
+        logger.info(`  发件箱 (authors): kinds8965], authors=[${accountPk.substring(0, 8)}...], since=${new Date(since * 1000).toLocaleString()}, until=${new Date(until * 1000).toLocaleString()}`);
         
         // Fetch with each filter in parallel for better performance
         const filterPromises = filters.map((filter, i) => {
@@ -559,6 +604,7 @@ export const useInteractionsStore = defineStore("interactions", {
               logger.debug(`回填互动进度 (${filterType}): ${stats.totalEvents} 条事件`);
             },
             onComplete: (stats) => {
+              if (key.pkHex !== accountPk || this.loadedFor !== accountPk) return;
               logger.info(`互动过滤器 ${filterType} 完成: ${stats.totalEvents} 条事件`);
             },
             batchSize: 500,
@@ -569,6 +615,10 @@ export const useInteractionsStore = defineStore("interactions", {
         
         // Wait for all filters to complete
         await Promise.all(filterPromises);
+        if (key.pkHex !== accountPk || this.loadedFor !== accountPk) {
+          logger.warn(`[account] interaction backfill completion discarded account=${accountPk.slice(0, 8)}`);
+          return { fetched: fetchedCount, processed: processedCount };
+        }
         
         logger.info(`互动事件回填完成: 获取 ${fetchedCount} 条, 处理 ${processedCount} 条`);
         

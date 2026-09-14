@@ -56,8 +56,14 @@ export const useNotificationsStore = defineStore("notifications", {
     async load(pk?: string) {
       const ks = useKeyStore();
       const targetPk = pk ?? ks.pkHex;
-      if (!targetPk) return;
+      if (!targetPk) {
+        this.reset(false);
+        return;
+      }
 
+      if (this.loadedFor && this.loadedFor !== targetPk) {
+        this.reset(false);
+      }
       if (this.loadedFor === targetPk) return;
       this.loadedFor = targetPk;
 

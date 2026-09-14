@@ -40,10 +40,11 @@ export const useMessagesStore = defineStore("messages", {
       const ks = useKeyStore();
       const targetPk = pk ?? ks.pkHex;
       if (!targetPk) {
-        this.inbox = [];
-        this.outbox = [];
-        this.loadedFor = "";
+        this.reset(false);
         return;
+      }
+      if (this.loadedFor && this.loadedFor !== targetPk) {
+        this.reset(false);
       }
       if (this.loadedFor === targetPk) return;
       this.loadedFor = targetPk;

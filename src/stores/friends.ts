@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { useKeyStore } from "./keys";
 import { getRelaysFromStorage, subscribe, publish } from "@/nostr/relays";
 import { logger } from "@/utils/logger";
+import { closeSubscription } from "@/utils/closeSubscription";
 
 /* =========================
  * Types（原样保留）
@@ -93,9 +94,19 @@ export const useFriendsStore = defineStore("friends", {
     async load(pk?: string) {
       const ks = useKeyStore();
       const targetPk = pk ?? ks.pkHex;
-      if (!targetPk) return;
+      if (!targetPk) {
+        this.reset(false);
+        return;
+      }
 
+      if (this.loadedFor && this.loadedFor !== targetPk) {
+        this.reset(false);
+      }
       if (this.loadedFor === targetPk) return;
+      // A missing local/relay record must resolve to an explicitly empty account.
+      this.list = [];
+      this.lastSyncTimestamp = 0;
+      this.syncError = "";
       this.loadedFor = targetPk;
 
       const key = storageKeyFor(targetPk);
@@ -142,7 +153,7 @@ export const useFriendsStore = defineStore("friends", {
         if (relayTs < localTs) {
           this.list = localData.list;
           this.lastSyncTimestamp = localTs;
-          this.publishToRelays().catch(() => {});
+          this.publishToRelays().catch(e => logger.warn("[friends] relay publish failed", e));
           return;
         }
 
@@ -156,7 +167,28 @@ export const useFriendsStore = defineStore("friends", {
       if (localData) {
         this.list = localData.list;
         this.lastSyncTimestamp = localTs;
-        this.publishToRelays().catch(() => {});
+        this.publishToRelays().catch(e => logger.warn("[friends] relay publish failed", e));
+      } else {
+        this.list = [];
+        this.lastSyncTimestamp = 0;
+      }
+    },
+
+    reset(removeFromStorage = false) {
+      const previousPk = this.loadedFor;
+      this.list = [];
+      this.loadedFor = "";
+      this.syncing = false;
+      this.lastSyncTimestamp = 0;
+      this.syncError = "";
+      this.version++;
+
+      if (removeFromStorage && previousPk) {
+        try {
+          localStorage.removeItem(`nostr_friends_${previousPk}`);
+        } catch (e) {
+          logger.warn(`[friends] remove storage failed account=${previousPk.slice(0, 8)}`, e);
+        }
       }
     },
 
@@ -187,7 +219,7 @@ export const useFriendsStore = defineStore("friends", {
 
       const ks = useKeyStore();
       if (ks.supportsNip04) {
-        this.publishToRelays().catch(() => {});
+        this.publishToRelays().catch(e => logger.warn("[friends] relay publish failed", e));
       }
       return true;
     },
@@ -203,7 +235,7 @@ export const useFriendsStore = defineStore("friends", {
 
       const ks = useKeyStore();
       if (ks.supportsNip04) {
-        this.publishToRelays().catch(() => {});
+        this.publishToRelays().catch(e => logger.warn("[friends] relay publish failed", e));
       }
       return true;
     },
@@ -220,7 +252,7 @@ export const useFriendsStore = defineStore("friends", {
 
       const ks = useKeyStore();
       if (ks.supportsNip04) {
-        this.publishToRelays().catch(() => {});
+        this.publishToRelays().catch(e => logger.warn("[friends] relay publish failed", e));
       }
       return true;
     },
@@ -264,6 +296,7 @@ export const useFriendsStore = defineStore("friends", {
     async fetchFromRelays(): Promise<boolean> {
       const ks = useKeyStore();
       if (!ks.isLoggedIn || !ks.supportsNip04) return false;
+      const accountPk = ks.pkHex;
 
       this.syncing = true;
 
@@ -277,48 +310,71 @@ export const useFriendsStore = defineStore("friends", {
         };
 
         return new Promise(resolve => {
-          let latest: any = null;
-
+          const expectedRelays = new Set(relays);
+          const completedRelays = new Set<string>();
+          const candidates = new Map<string, any>();
+          let finished = false;
           const sub = subscribe(relays, [filters]);
+          let timer = 0;
 
-          sub.on("event", evt => {
-            if (!latest || evt.created_at > latest.created_at) {
-              latest = evt;
-            }
-          });
+          const finish = async (reason: "eose" | "timeout" | "no-relays") => {
+            if (finished) return;
+            finished = true;
+            window.clearTimeout(timer);
+            closeSubscription(sub);
+            logger.info(`[friends] fetch complete account=${accountPk.slice(0, 8)} reason=${reason} eose=${completedRelays.size}/${expectedRelays.size} candidates=${candidates.size}`);
 
-          sub.on("eose", async () => {
-            sub.unsub();
-            if (!latest) {
-              this.syncing = false;
+            if (ks.pkHex !== accountPk || this.loadedFor !== accountPk) {
+              logger.warn(`[account] friends fetch discarded account=${accountPk.slice(0, 8)}`);
               resolve(false);
               return;
             }
 
-            try {
-              const decrypted = await ks.nip04Decrypt(
-                ks.pkHex,
-                latest.content
-              );
-              const incoming = JSON.parse(decrypted);
-              if (Array.isArray(incoming)) {
+            const ordered = [...candidates.values()].sort((a, b) =>
+              (b.created_at - a.created_at) || String(a.id).localeCompare(String(b.id))
+            );
+            for (const candidate of ordered) {
+              try {
+                const decrypted = await ks.nip04Decrypt(accountPk, candidate.content);
+                if (ks.pkHex !== accountPk || this.loadedFor !== accountPk) {
+                  logger.warn(`[account] friends decrypt discarded account=${accountPk.slice(0, 8)} event=${candidate.id?.slice(0, 8)}`);
+                  resolve(false);
+                  return;
+                }
+                const incoming = JSON.parse(decrypted);
+                if (!Array.isArray(incoming)) continue;
                 this.list = mergeList(this.list, incoming);
-                this.lastSyncTimestamp = latest.created_at;
+                this.lastSyncTimestamp = candidate.created_at;
                 this.save();
                 resolve(true);
-              } else {
-                resolve(false);
+                return;
+              } catch (e) {
+                logger.warn(`[friends] candidate invalid event=${candidate.id?.slice(0, 8)}`, e);
               }
-            } catch {
-              resolve(false);
-            } finally {
-              this.syncing = false;
             }
+            resolve(false);
+          };
+          timer = window.setTimeout(() => void finish("timeout"), 5000);
+
+          sub.on("event", evt => {
+            if (ks.pkHex !== accountPk || this.loadedFor !== accountPk) return;
+            if (evt?.id) candidates.set(evt.id, evt);
           });
+
+          sub.on("eose", (relayUrl: string) => {
+            completedRelays.add(relayUrl);
+            logger.debug(`[friends] EOSE relay=${relayUrl} count=${completedRelays.size}/${expectedRelays.size}`);
+            if (completedRelays.size >= expectedRelays.size) void finish("eose");
+          });
+
+          if (expectedRelays.size === 0) void finish("no-relays");
         });
-      } catch {
+      } catch (e) {
+        logger.error(`[friends] relay fetch failed account=${accountPk.slice(0, 8)}`, e);
         this.syncing = false;
         return false;
+      } finally {
+        if (this.loadedFor === accountPk) this.syncing = false;
       }
     }
   }
