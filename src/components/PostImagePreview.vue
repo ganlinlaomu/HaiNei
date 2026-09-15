@@ -48,6 +48,7 @@ import { decodeEncryptedImageRef, isEncryptedImageRef } from "@/utils/encryptedI
 import { base64ToBytes } from "@/nostr/crypto";
 import ImageViewer from "@/components/ImageViewer.vue";
 import { getImageFromCache, storeImageInCache } from "@/utils/imageCache";
+import { useKeyStore } from "@/stores/keys";
 
 interface ImageItem {
   url: string;
@@ -65,6 +66,7 @@ export default defineComponent({
     altText: { type: String, default: "image" }
   },
   setup(props) {
+    const keys = useKeyStore();
     const extractedUrls = computed(() => extractImageUrls(props.content || ""));
     const images = ref<ImageItem[]>([]);
     const objectUrls = new Set<string>();
@@ -150,9 +152,13 @@ export default defineComponent({
         return;
       }
 
+      const accountAtStart = keys.pkHex;
+      if (!accountAtStart) return;
+
       try {
         // Try to get from cache first
-        const cached = await getImageFromCache(item.url);
+        const cached = await getImageFromCache(accountAtStart, item.url);
+        if (keys.pkHex !== accountAtStart) return;
         if (cached) {
           // Cache hit! Use cached blob
           const objectUrl = URL.createObjectURL(cached.blob);
@@ -164,6 +170,7 @@ export default defineComponent({
 
         // Cache miss, fetch and decrypt
         const response = await fetch(metadata.url);
+        if (keys.pkHex !== accountAtStart) return;
         if (!response.ok) {
           console.error("Failed to fetch encrypted image:", metadata.url, response.status);
           images.value[idx].shouldLoad = true;
@@ -191,9 +198,10 @@ export default defineComponent({
         
         // Create blob and cache it
         const blob = new Blob([decrypted], { type: metadata.mime });
+        if (keys.pkHex !== accountAtStart) return;
         
         // Store in cache asynchronously (don't wait)
-        storeImageInCache(item.url, blob, metadata.mime).catch(e => {
+        storeImageInCache(accountAtStart, item.url, blob, metadata.mime).catch(e => {
           console.warn("Failed to cache image:", e);
         });
         

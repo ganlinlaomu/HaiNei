@@ -49,7 +49,7 @@ if (versionChanged) {
     
     // Clear expired image cache in background
     try {
-      await clearExpiredCache();
+      if (keys.pkHex) await clearExpiredCache(keys.pkHex);
     } catch (e) {
       console.warn("[main] clearExpiredCache failed", e);
     }

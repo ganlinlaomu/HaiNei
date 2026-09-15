@@ -171,7 +171,6 @@ import { DEFAULT_BLOSSOM_SERVERS } from "@/utils/blossom";
 import { useKeyStore } from "@/stores/keys";
 import { useSettingsStore, type BlossomServer } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
-import { db } from "@/db/dexie";
 import { getCacheStats, clearAllCache } from "@/utils/imageCache";
 
 export default defineComponent({
@@ -208,7 +207,8 @@ export default defineComponent({
     async function refreshCacheStats() {
       loadingCache.value = true;
       try {
-        const stats = await getCacheStats();
+        if (!ks.pkHex) return;
+        const stats = await getCacheStats(ks.pkHex);
         Object.assign(cacheStats, stats);
       } catch (e) {
         console.error("Failed to get cache stats", e);
@@ -224,7 +224,8 @@ export default defineComponent({
       }
       clearingCache.value = true;
       try {
-        await clearAllCache();
+        if (!ks.pkHex) return;
+        await clearAllCache(ks.pkHex);
         await refreshCacheStats();
         ui.addToast("缓存已清空", 2000, "success");
       } catch (e) {
