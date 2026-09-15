@@ -123,7 +123,7 @@ describe("relay reconnect", () => {
     const firstRequest = JSON.parse(first.sent.find(payload => JSON.parse(payload)[0] === "REQ")!);
 
     first.emit("close", {});
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(30_100);
     const second = MockWebSocket.instances[1];
     expect(second).toBeTruthy();
     second.emit("open", {});

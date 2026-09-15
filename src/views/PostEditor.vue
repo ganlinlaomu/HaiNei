@@ -22,16 +22,16 @@
               <label
                 class="upload-btn"
                 :class="{ disabled: !uploadEnabled || uploadingAny }"
-                :title="uploadEnabled ? (uploadingAny ? '上传中...' : '上传图片/视频') : '未配置 blossom_upload_url'"
+                :title="uploadEnabled ? (uploadingAny ? '上传中...' : '上传图片/视频') : '未配置媒体服务器'"
               >
                 <input type="file" accept="image/*,video/*" multiple @change="onFilesSelected" :disabled="!uploadEnabled || uploadingAny" />
                 上传图片/视频
               </label>
 
               <div class="upload-config-hint small">
-                Blossom:
+                Media:
                 <span v-if="uploadEnabled" class="ok">已配置</span>
-                <span v-else class="warn">未配置（请在 Settings 中填写 blossom_upload_url）</span>
+                <span v-else class="warn">未配置（请在设置中添加媒体服务器）</span>
                 <button class="check-btn" type="button" @click="checkBlossom" style="margin-left:8px;">检测配置</button>
               </div>
             </div>

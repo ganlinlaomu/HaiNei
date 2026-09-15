@@ -1,946 +1,586 @@
 <template>
-  <div class="settings-container">
-    <!-- Sync Status Bar -->
-    <div v-if="settings.syncing" class="sync-status syncing">
-      <span class="sync-icon">⟳</span> 同步中...
-    </div>
-    <div v-else-if="settings.syncError" class="sync-status error">
-      <span class="sync-icon">⚠</span> 同步失败: {{ settings.syncError }}
-    </div>
-    <div v-else-if="settings.lastSyncTimestamp > 0 && showSyncSuccess" class="sync-status success" :class="{ 'fade-out': isFadingOut }">
-      <span class="sync-icon icon-check-success">✓</span> 已同步
-    </div>
+  <main class="settings-container">
+    <div v-if="settings.syncing" class="sync-status">正在同步加密设置…</div>
+    <div v-else-if="settings.syncError" class="sync-status sync-warning">{{ settings.syncError }}</div>
+    <div v-else-if="settings.lastSyncTimestamp" class="sync-status sync-ok">设置已通过 Nostr 加密同步</div>
 
-    <div class="card">
-      <h3 style="margin: 0 0 12px 0;">设置</h3>
+    <section class="card">
+      <h2>设置</h2>
 
-      <!-- Relay Management Section -->
       <div class="section">
-        <h4>Relay 管理</h4>
-        <div class="add-form">
-          <input 
-            v-model="newRelay" 
-            class="input" 
-            placeholder="例如：wss://relay.example.com"
-            @keyup.enter="addRelay"
-          />
-          <button class="btn btn-primary" @click="addRelay">添加</button>
-        </div>
-        
-        <div v-if="relayList.length === 0" class="empty-message">
-          <span class="small">暂无 relay，请添加</span>
-        </div>
-        
-        <div class="item-list" v-else>
-          <div v-for="(relay, index) in relayList" :key="relay" class="item-card">
-            <div class="item-content">
-              <div class="item-main">
-                <div v-if="editingRelay !== relay" class="item-info">
-                  <div class="item-url">{{ shortRelay(relay) }}</div>
-                  <div class="item-status">
-                    <span 
-                      class="status-icon" 
-                      :class="{ 'icon-check-success': statuses[relay]?.ready, 'status-disconnected': !statuses[relay]?.ready }"
-                    >
-                      {{ statuses[relay]?.ready ? '✓' : '✗' }}
-                    </span>
-                    <span class="status-text">{{ statuses[relay]?.ready ? '已连接' : '未连接' }}</span>
-                  </div>
-                </div>
-                <input 
-                  v-else
-                  v-model="editedRelayValue"
-                  class="input input-inline"
-                  @keyup.enter="saveEditRelay(relay)"
-                  @keyup.esc="cancelEditRelay"
-                />
-              </div>
-              <div class="item-actions">
-                <template v-if="editingRelay !== relay">
-                  <button class="btn-icon btn-edit" @click="startEditRelay(relay)" title="编辑">✎</button>
-                  <button class="btn-icon btn-delete" @click="deleteRelay(relay)" title="删除">🗑</button>
-                </template>
-                <template v-else>
-                  <button class="btn-icon btn-save" @click="saveEditRelay(relay)" title="保存">✓</button>
-                  <button class="btn-icon btn-cancel" @click="cancelEditRelay" title="取消">✗</button>
-                </template>
-              </div>
-            </div>
+        <div class="section-heading">
+          <div>
+            <h3>Relay</h3>
+            <p>用户 Relay 优先，NIP-65 次之，默认 Relay 仅用于 fallback。</p>
           </div>
         </div>
-        
-        <div v-if="relayList.length > 0" class="section-note">
-          <span class="small">注意：修改 relay 后需刷新页面以应用更改</span>
+
+        <form class="add-form" @submit.prevent="addRelay">
+          <input
+            v-model="newRelay"
+            class="input"
+            inputmode="url"
+            autocapitalize="none"
+            autocomplete="off"
+            placeholder="wss://relay.example.com"
+          />
+          <button class="btn btn-primary" type="submit">添加</button>
+        </form>
+
+        <div class="item-list">
+          <article v-for="relay in relayList" :key="relay.url" class="item-card">
+            <div class="item-header">
+              <div class="item-main">
+                <div class="item-url">{{ relay.url }}</div>
+                <div class="meta-row">
+                  <span class="pill">{{ relaySourceLabel(relay.source) }}</span>
+                  <span class="pill" :class="{ healthy: statuses[relay.url]?.ready, failed: relay.lastFailureAt && !statuses[relay.url]?.ready }">
+                    {{ relayStatusLabel(relay) }}
+                  </span>
+                  <span v-if="relay.latency" class="pill">{{ relay.latency }}ms</span>
+                </div>
+              </div>
+              <button
+                v-if="!isBuiltinRelay(relay)"
+                class="text-button danger"
+                type="button"
+                @click="removeRelay(relay)"
+              >
+                删除
+              </button>
+            </div>
+
+            <div class="control-row">
+              <label><input type="checkbox" :checked="relay.enabled" @change="toggleRelay(relay, 'enabled', $event)" />启用</label>
+              <label><input type="checkbox" :checked="relay.read" @change="toggleRelay(relay, 'read', $event)" />读取</label>
+              <label><input type="checkbox" :checked="relay.write" @change="toggleRelay(relay, 'write', $event)" />写入</label>
+              <button class="text-button" type="button" @click="reconnect(relay.url)">重连</button>
+            </div>
+          </article>
         </div>
       </div>
 
-      <!-- Blossom Management Section -->
       <div class="section">
-        <h4>Blossom 图床管理</h4>
-        <div class="add-form">
-          <input 
-            v-model="newBlossomUrl" 
-            class="input" 
-            placeholder="例如：https://blossom.example"
-            @keyup.enter="addBlossom"
-          />
-          <button class="btn btn-primary" @click="addBlossom">添加</button>
-        </div>
-        
-        <div v-if="blossomList.length === 0" class="empty-message">
-          <span class="small">暂无 Blossom 图床，请添加</span>
-        </div>
-        
-        <div class="item-list" v-else>
-          <div v-for="(blossom, index) in blossomList" :key="index" class="item-card">
-            <div class="item-content">
-              <div class="item-main">
-                <div v-if="editingBlossom !== index" class="item-info">
-                  <div class="item-url">{{ blossom.url }}</div>
-                  <div class="item-status">
-                    <span class="status-icon icon-check-success">✓</span>
-                    <span class="status-text">{{ blossom.token ? '已配置 Token' : '无 Token' }}</span>
-                  </div>
-                </div>
-                <div v-else class="edit-form">
-                  <input 
-                    v-model="editedBlossomUrl"
-                    class="input input-inline"
-                    placeholder="图床地址"
-                  />
-                  <input 
-                    v-model="editedBlossomToken"
-                    class="input input-inline"
-                    placeholder="Token（可选）"
-                  />
-                </div>
-              </div>
-              <div class="item-actions">
-                <template v-if="editingBlossom !== index">
-                  <button class="btn-icon btn-edit" @click="startEditBlossom(index)" title="编辑">✎</button>
-                  <button class="btn-icon btn-delete" @click="deleteBlossom(index)" title="删除">🗑</button>
-                </template>
-                <template v-else>
-                  <button class="btn-icon btn-save" @click="saveEditBlossom(index)" title="保存">✓</button>
-                  <button class="btn-icon btn-cancel" @click="cancelEditBlossom" title="取消">✗</button>
-                </template>
-              </div>
-            </div>
+        <div class="section-heading">
+          <div>
+            <h3>Media / 图片服务器</h3>
+            <p>按 Primary、其他用户服务器、默认 fallback 的顺序上传。</p>
           </div>
+        </div>
+
+        <form class="media-add-form" @submit.prevent="addMediaServer">
+          <select v-model="newMediaType" class="input compact-input">
+            <option value="blossom">Blossom</option>
+            <option value="imgbed">ImgBed</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input
+            v-model="newMediaUrl"
+            class="input"
+            inputmode="url"
+            autocapitalize="none"
+            autocomplete="off"
+            placeholder="https://media.example.com"
+          />
+          <input
+            v-model="newMediaToken"
+            class="input"
+            type="password"
+            autocomplete="off"
+            placeholder="Token（可选）"
+          />
+          <button class="btn btn-primary" type="submit">添加</button>
+        </form>
+
+        <div class="item-list">
+          <article v-for="server in mediaList" :key="server.id" class="item-card">
+            <div class="item-header">
+              <div class="item-main">
+                <div class="item-url">{{ server.url }}</div>
+                <div class="meta-row">
+                  <span class="pill">{{ mediaTypeLabel(server.type) }}</span>
+                  <span class="pill">{{ server.source === "user" ? "用户" : "默认" }}</span>
+                  <span v-if="primaryMediaId === server.id" class="pill primary">Primary</span>
+                  <span v-else-if="server.source === 'default'" class="pill">Fallback</span>
+                </div>
+              </div>
+              <button
+                v-if="!isBuiltinMedia(server)"
+                class="text-button danger"
+                type="button"
+                @click="removeMediaServer(server)"
+              >
+                删除
+              </button>
+            </div>
+
+            <div class="health-grid">
+              <span>最近成功：{{ formatTimestamp(server.lastSuccessAt) }}</span>
+              <span>最近失败：{{ formatTimestamp(server.lastFailureAt) }}</span>
+            </div>
+
+            <div class="control-row">
+              <label><input type="checkbox" :checked="server.enabled" @change="toggleMediaServer(server, $event)" />启用</label>
+              <button
+                v-if="server.source === 'user' && primaryMediaId !== server.id"
+                class="text-button"
+                type="button"
+                @click="settings.setPrimaryMediaServer(server.id)"
+              >
+                设为 Primary
+              </button>
+            </div>
+          </article>
         </div>
       </div>
 
-      <!-- Cache Management Section -->
       <div class="section">
-        <h4>缓存管理</h4>
+        <h3>缓存管理</h3>
         <div class="cache-info">
           <div class="small">
-            <div>图片缓存: {{ cacheStats.count }} 个文件</div>
-            <div>缓存大小: {{ formatSize(cacheStats.size) }}</div>
-            <div v-if="cacheStats.oldestTimestamp > 0">
-              最早缓存: {{ new Date(cacheStats.oldestTimestamp).toLocaleDateString() }}
-            </div>
+            <div>图片缓存：{{ cacheStats.count }} 个文件</div>
+            <div>缓存大小：{{ formatSize(cacheStats.size) }}</div>
+            <div v-if="cacheStats.oldestTimestamp">最早缓存：{{ new Date(cacheStats.oldestTimestamp).toLocaleDateString() }}</div>
           </div>
-          <div class="cache-actions">
-            <button class="btn btn-secondary" @click="refreshCacheStats" :disabled="loadingCache">
-              {{ loadingCache ? '加载中...' : '刷新统计' }}
+          <div class="button-row">
+            <button class="btn btn-secondary" type="button" :disabled="loadingCache" @click="refreshCacheStats">
+              {{ loadingCache ? "加载中…" : "刷新统计" }}
             </button>
-            <button class="btn btn-warning" @click="clearCache" :disabled="clearingCache">
-              {{ clearingCache ? '清理中...' : '清空缓存' }}
+            <button class="btn btn-warning" type="button" :disabled="clearingCache" @click="clearCache">
+              {{ clearingCache ? "清理中…" : "清空缓存" }}
             </button>
           </div>
         </div>
       </div>
 
-      <!-- Account Section -->
       <div class="section">
-        <h4>账户</h4>
-        <div class="account-info">
-          <div class="small">已登录：{{ shortPk }}</div>
-          <button class="btn btn-danger" @click="doLogout">退出登录</button>
+        <h3>账户</h3>
+        <div class="account-row">
+          <span class="small">已登录：{{ shortPk }}</span>
+          <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
         </div>
       </div>
 
       <div class="section">
-        <h4>开发 / 诊断</h4>
-        <div class="account-info">
-          <div class="small">查看 Relay、NIP-17 与消息同步的本地实时日志</div>
-          <button class="btn btn-secondary" @click="openDebug">系统诊断</button>
+        <h3>开发 / 诊断</h3>
+        <div class="account-row">
+          <span class="small">查看 Relay、NIP-17 与消息同步的本地实时日志</span>
+          <button class="btn btn-secondary" type="button" @click="router.push('/debug')">系统诊断</button>
         </div>
       </div>
-    </div>
-  </div>
+    </section>
+  </main>
 </template>
 
-<script lang="ts">
-import { defineComponent, ref, reactive, onMounted, onBeforeUnmount, onActivated, onDeactivated, computed, watch } from "vue";
-import { DEFAULT_RELAYS, getRelaysFromStorage, inspectRelays, reconnectRelay } from "@/nostr/relays";
-import { DEFAULT_BLOSSOM_SERVERS } from "@/utils/blossom";
-import { useKeyStore } from "@/stores/keys";
-import { useSettingsStore, type BlossomServer } from "@/stores/settings";
-import { useUIStore } from "@/stores/ui";
-import { getCacheStats, clearAllCache } from "@/utils/imageCache";
+<script setup lang="ts">
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
+import { inspectRelays, reconnectRelay } from "@/nostr/relays";
+import { useKeyStore } from "@/stores/keys";
+import { useSettingsStore } from "@/stores/settings";
+import { useUIStore } from "@/stores/ui";
+import { clearAllCache, getCacheStats } from "@/utils/imageCache";
+import {
+  DEFAULT_MEDIA_SERVERS,
+  DEFAULT_RELAY_URLS,
+  type MediaServer,
+  type MediaServerType,
+  type RelayConfig,
+  type RelaySource
+} from "@/services/connectionSettings";
 
-export default defineComponent({
-  name: "Settings",
-  setup() {
-    const ks = useKeyStore();
-    const settings = useSettingsStore();
-    const ui = useUIStore();
-    const router = useRouter();
-    const shortPk = computed(() => (ks.pkHex ? ks.pkHex.slice(0, 8) + "..." : ""));
+const keyStore = useKeyStore();
+const settings = useSettingsStore();
+const ui = useUIStore();
+const router = useRouter();
 
-    // Sync success message state
-    const showSyncSuccess = ref(false);
-    const isFadingOut = ref(false);
-    let hideTimeout: ReturnType<typeof setTimeout> | null = null;
-    let fadeTimeout: ReturnType<typeof setTimeout> | null = null;
-    let statusInterval: ReturnType<typeof setInterval> | null = null;
+const shortPk = computed(() => keyStore.pkHex ? `${keyStore.pkHex.slice(0, 8)}...${keyStore.pkHex.slice(-6)}` : "");
+const relayList = computed(() => settings.relayList);
+const mediaList = computed(() => settings.mediaList);
+const primaryMediaId = computed(() =>
+  settings.activeMediaServers.find(server => server.source === "user")?.id || ""
+);
 
-    // Relay management
-    const newRelay = ref("");
-    const statuses = reactive<Record<string, any>>({});
-    const editingRelay = ref<string | null>(null);
-    const editedRelayValue = ref("");
+const newRelay = ref("");
+const newMediaType = ref<MediaServerType>("blossom");
+const newMediaUrl = ref("");
+const newMediaToken = ref("");
+const statuses = reactive<Record<string, { ready?: boolean }>>({});
+const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0 });
+const loadingCache = ref(false);
+const clearingCache = ref(false);
+let statusInterval: ReturnType<typeof setInterval> | null = null;
 
-    // Blossom management
-    const newBlossomUrl = ref("");
-    const editingBlossom = ref<number | null>(null);
-    const editedBlossomUrl = ref("");
-    const editedBlossomToken = ref("");
+function relaySourceLabel(source: RelaySource) {
+  return source === "user" ? "用户" : source === "nip65" ? "NIP-65" : "默认";
+}
 
-    // Cache management
-    const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0 });
-    const loadingCache = ref(false);
-    const clearingCache = ref(false);
+function mediaTypeLabel(type: MediaServerType) {
+  return type === "blossom" ? "Blossom" : type === "imgbed" ? "ImgBed" : "Custom";
+}
 
-    async function refreshCacheStats() {
-      loadingCache.value = true;
-      try {
-        if (!ks.pkHex) return;
-        const stats = await getCacheStats(ks.pkHex);
-        Object.assign(cacheStats, stats);
-      } catch (e) {
-        console.error("Failed to get cache stats", e);
-        ui.addToast("获取缓存统计失败", 2000, "error");
-      } finally {
-        loadingCache.value = false;
-      }
-    }
+function isBuiltinRelay(relay: RelayConfig) {
+  return relay.source === "default" || (DEFAULT_RELAY_URLS as readonly string[]).includes(relay.url);
+}
 
-    async function clearCache() {
-      if (!confirm("确定要清空所有图片缓存吗？")) {
-        return;
-      }
-      clearingCache.value = true;
-      try {
-        if (!ks.pkHex) return;
-        await clearAllCache(ks.pkHex);
-        await refreshCacheStats();
-        ui.addToast("缓存已清空", 2000, "success");
-      } catch (e) {
-        console.error("Failed to clear cache", e);
-        ui.addToast("清空缓存失败", 2000, "error");
-      } finally {
-        clearingCache.value = false;
-      }
-    }
+function isBuiltinMedia(server: MediaServer) {
+  return server.source === "default"
+    || DEFAULT_MEDIA_SERVERS.some(item => item.id === server.id || item.url === server.url);
+}
 
-    function formatSize(bytes: number): string {
-      if (bytes === 0) return "0 B";
-      const k = 1024;
-      const sizes = ["B", "KB", "MB", "GB"];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return (bytes / Math.pow(k, i)).toFixed(2) + " " + sizes[i];
-    }
+function relayStatusLabel(relay: RelayConfig) {
+  if (!relay.enabled) return "已停用";
+  if (statuses[relay.url]?.ready) return "已连接";
+  if (relay.lastFailureAt) return "连接失败";
+  return "未连接";
+}
 
-    // Watch for sync completion to show/hide success message
-    watch(() => settings.lastSyncTimestamp, (newVal, oldVal) => {
-      if (newVal > 0 && newVal !== oldVal && !settings.syncing && !settings.syncError) {
-        // Clear any existing timeouts
-        if (hideTimeout) {
-          clearTimeout(hideTimeout);
-          hideTimeout = null;
-        }
-        if (fadeTimeout) {
-          clearTimeout(fadeTimeout);
-          fadeTimeout = null;
-        }
-        
-        // Show the success message
-        showSyncSuccess.value = true;
-        isFadingOut.value = false;
-        
-        // Start fade-out after 3 seconds
-        hideTimeout = setTimeout(() => {
-          isFadingOut.value = true;
-          // Hide completely after fade-out animation (0.5s)
-          fadeTimeout = setTimeout(() => {
-            showSyncSuccess.value = false;
-            isFadingOut.value = false;
-            fadeTimeout = null;
-          }, 500);
-          hideTimeout = null;
-        }, 3000);
-      }
-    });
+function formatTimestamp(timestamp?: number) {
+  return timestamp ? new Date(timestamp).toLocaleString() : "—";
+}
 
-    function shortRelay(u: string) {
-      return u.replace(/^wss?:\/\//, "").replace(/\/$/, "");
-    }
-
-    // Relay functions - now using settings store
-    function loadRelays() {
-      // Migration from old localStorage format
-      const stored = localStorage.getItem("custom-relays");
-      if (stored && settings.relayList.length === 0) {
-        const relays = stored.split("\n").filter((r: string) => r.trim());
-        if (relays.length > 0) {
-          settings.updateRelays(relays);
-          // Remove old format
-          localStorage.removeItem("custom-relays");
-        }
-      } else if (settings.relayList.length === 0) {
-        // Initialize with defaults
-        settings.updateRelays([...DEFAULT_RELAYS]);
-      }
-    }
-
-    function saveRelaysToStorage() {
-      // Also update localStorage for backward compatibility with relay module
-      localStorage.setItem("custom-relays", settings.relayList.join("\n"));
-    }
-
-    function addRelay() {
-      const relay = newRelay.value.trim();
-      if (!relay) {
-        alert("请输入有效的 relay 地址");
-        return;
-      }
-      if (settings.relayList.includes(relay)) {
-        alert("该 relay 已存在");
-        return;
-      }
-      const updated = [...settings.relayList, relay];
-      settings.updateRelays(updated);
-      // Also update localStorage for backward compatibility
-      localStorage.setItem("custom-relays", updated.join("\n"));
-      newRelay.value = "";
-      refreshStatuses();
-    }
-
-    function deleteRelay(relay: string) {
-      if (confirm(`确定要删除 ${shortRelay(relay)} 吗？`)) {
-        const updated = settings.relayList.filter((r: string) => r !== relay);
-        settings.updateRelays(updated);
-        // Also update localStorage for backward compatibility
-        localStorage.setItem("custom-relays", updated.join("\n"));
-        delete statuses[relay];
-      }
-    }
-
-    function startEditRelay(relay: string) {
-      editingRelay.value = relay;
-      editedRelayValue.value = relay;
-    }
-
-    function saveEditRelay(oldRelay: string) {
-      const newRelay = editedRelayValue.value.trim();
-      if (!newRelay) {
-        alert("请输入有效的 relay 地址");
-        return;
-      }
-      if (newRelay !== oldRelay && settings.relayList.includes(newRelay)) {
-        alert("该 relay 已存在");
-        return;
-      }
-      const index = settings.relayList.indexOf(oldRelay);
-      if (index !== -1) {
-        const updated = [...settings.relayList];
-        updated[index] = newRelay;
-        settings.updateRelays(updated);
-        // Also update localStorage for backward compatibility
-        localStorage.setItem("custom-relays", updated.join("\n"));
-      }
-      editingRelay.value = null;
-      refreshStatuses();
-    }
-
-    function cancelEditRelay() {
-      editingRelay.value = null;
-      editedRelayValue.value = "";
-    }
-
-    // Blossom functions - now using settings store
-    function migrateOldBlossomFormat() {
-      const url = localStorage.getItem("blossom_upload_url") || "";
-      const token = localStorage.getItem("blossom_token") || "";
-      if (url && settings.blossomList.length === 0) {
-        settings.updateBlossomServers([{ url, token }]);
-      }
-    }
-
-    function loadBlossoms() {
-      // Migration from old localStorage format
-      const stored = localStorage.getItem("blossom_servers");
-      if (stored && settings.blossomList.length === 0) {
-        try {
-          const servers = JSON.parse(stored);
-          if (Array.isArray(servers) && servers.length > 0) {
-            settings.updateBlossomServers(servers);
-          } else {
-            migrateOldBlossomFormat();
-          }
-        } catch (e) {
-          migrateOldBlossomFormat();
-        }
-      } else if (settings.blossomList.length === 0) {
-        migrateOldBlossomFormat();
-      }
-      
-      // If still no blossom servers after migration, use defaults
-      if (settings.blossomList.length === 0) {
-        settings.updateBlossomServers([...DEFAULT_BLOSSOM_SERVERS]);
-        saveBlossomsToStorage();
-      }
-    }
-
-    function saveBlossomsToStorage() {
-      // Keep compatibility with PostEditor
-      localStorage.setItem("blossom_servers", JSON.stringify(settings.blossomList));
-      if (settings.blossomList.length > 0) {
-        localStorage.setItem("blossom_upload_url", settings.blossomList[0].url);
-        localStorage.setItem("blossom_token", settings.blossomList[0].token);
-      } else {
-        localStorage.removeItem("blossom_upload_url");
-        localStorage.removeItem("blossom_token");
-      }
-      window.dispatchEvent(new Event("blossom-config-updated"));
-    }
-
-    function addBlossom() {
-      const url = newBlossomUrl.value.trim();
-      if (!url) {
-        alert("请输入有效的 Blossom 图床地址");
-        return;
-      }
-      const updated = [...settings.blossomList, { url, token: "" }];
-      settings.updateBlossomServers(updated);
-      saveBlossomsToStorage();
-      newBlossomUrl.value = "";
-    }
-
-    function deleteBlossom(index: number) {
-      if (confirm("确定要删除该 Blossom 图床吗？")) {
-        const updated = [...settings.blossomList];
-        updated.splice(index, 1);
-        settings.updateBlossomServers(updated);
-        saveBlossomsToStorage();
-      }
-    }
-
-    function startEditBlossom(index: number) {
-      editingBlossom.value = index;
-      editedBlossomUrl.value = settings.blossomList[index].url;
-      editedBlossomToken.value = settings.blossomList[index].token;
-    }
-
-    function saveEditBlossom(index: number) {
-      const url = editedBlossomUrl.value.trim();
-      if (!url) {
-        alert("请输入有效的 Blossom 图床地址");
-        return;
-      }
-      const updated = [...settings.blossomList];
-      updated[index] = {
-        url,
-        token: editedBlossomToken.value.trim()
-      };
-      settings.updateBlossomServers(updated);
-      saveBlossomsToStorage();
-      editingBlossom.value = null;
-    }
-
-    function cancelEditBlossom() {
-      editingBlossom.value = null;
-      editedBlossomUrl.value = "";
-      editedBlossomToken.value = "";
-    }
-
-    function refreshStatuses() {
-      const info = inspectRelays();
-      // Clear old statuses for removed relays
-      const currentRelays = new Set(settings.relayList);
-      for (const r in statuses) {
-        if (!currentRelays.has(r)) {
-          delete statuses[r];
-        }
-      }
-      // Update statuses for current relays
-      for (const r of settings.relayList) {
-        statuses[r] = info[r] || { ready: false, queueLength: 0, subs: 0, okHandlers: 0 };
-      }
-    }
-
-    function startStatusPolling() {
-      if (statusInterval) return;
-      refreshStatuses();
-      statusInterval = setInterval(refreshStatuses, 5000);
-    }
-
-    function stopStatusPolling() {
-      if (!statusInterval) return;
-      clearInterval(statusInterval);
-      statusInterval = null;
-    }
-
-    function reconnect(url: string) {
-      reconnectRelay(url);
-      setTimeout(refreshStatuses, 800);
-    }
-
-    const doLogout = () => {
-      ks.logout();
-      location.href = "/#/login";
-    };
-    const openDebug = () => router.push("/debug");
-
-    onMounted(() => {
-      loadRelays();
-      loadBlossoms();
-      refreshCacheStats();
-      startStatusPolling();
-    });
-
-    onActivated(startStatusPolling);
-    onDeactivated(stopStatusPolling);
-
-    onBeforeUnmount(() => {
-      stopStatusPolling();
-      // Clean up timeouts to prevent memory leaks
-      if (hideTimeout) {
-        clearTimeout(hideTimeout);
-        hideTimeout = null;
-      }
-      if (fadeTimeout) {
-        clearTimeout(fadeTimeout);
-        fadeTimeout = null;
-      }
-    });
-
-    return {
-      shortPk,
-      newRelay,
-      relayList: computed(() => settings.relayList),
-      statuses,
-      editingRelay,
-      editedRelayValue,
-      addRelay,
-      deleteRelay,
-      startEditRelay,
-      saveEditRelay,
-      cancelEditRelay,
-      newBlossomUrl,
-      blossomList: computed(() => settings.blossomList),
-      editingBlossom,
-      editedBlossomUrl,
-      editedBlossomToken,
-      addBlossom,
-      deleteBlossom,
-      startEditBlossom,
-      saveEditBlossom,
-      cancelEditBlossom,
-      shortRelay,
-      refreshStatuses,
-      reconnect,
-      doLogout,
-      openDebug,
-      settings,
-      showSyncSuccess,
-      isFadingOut,
-      cacheStats,
-      loadingCache,
-      clearingCache,
-      refreshCacheStats,
-      clearCache,
-      formatSize
-    };
+function addRelay() {
+  if (!settings.addRelay(newRelay.value)) {
+    ui.addToast("请输入有效的 Relay 地址", 2200, "error");
+    return;
   }
+  newRelay.value = "";
+  refreshStatuses();
+}
+
+function removeRelay(relay: RelayConfig) {
+  if (!confirm(`确定要删除 ${relay.url} 吗？`)) return;
+  settings.deleteRelay(relay.url);
+  delete statuses[relay.url];
+}
+
+function toggleRelay(relay: RelayConfig, field: "enabled" | "read" | "write", event: Event) {
+  settings.updateRelay(relay.url, { [field]: (event.target as HTMLInputElement).checked });
+}
+
+function reconnect(url: string) {
+  reconnectRelay(url);
+  window.setTimeout(refreshStatuses, 800);
+}
+
+function addMediaServer() {
+  if (!settings.addMediaServer(newMediaType.value, newMediaUrl.value, newMediaToken.value.trim())) {
+    ui.addToast("请输入有效的媒体服务器地址", 2200, "error");
+    return;
+  }
+  newMediaUrl.value = "";
+  newMediaToken.value = "";
+}
+
+function removeMediaServer(server: MediaServer) {
+  if (!confirm(`确定要删除 ${server.url} 吗？`)) return;
+  settings.deleteMediaServer(server.id);
+}
+
+function toggleMediaServer(server: MediaServer, event: Event) {
+  settings.updateMediaServer(server.id, { enabled: (event.target as HTMLInputElement).checked });
+}
+
+function refreshStatuses() {
+  const current = inspectRelays();
+  const activeUrls = new Set(relayList.value.map(relay => relay.url));
+  for (const url of Object.keys(statuses)) {
+    if (!activeUrls.has(url)) delete statuses[url];
+  }
+  for (const relay of relayList.value) statuses[relay.url] = current[relay.url] || { ready: false };
+}
+
+function startStatusPolling() {
+  if (statusInterval) return;
+  refreshStatuses();
+  statusInterval = setInterval(refreshStatuses, 5_000);
+}
+
+function stopStatusPolling() {
+  if (!statusInterval) return;
+  clearInterval(statusInterval);
+  statusInterval = null;
+}
+
+async function refreshCacheStats() {
+  if (!keyStore.pkHex) return;
+  loadingCache.value = true;
+  try {
+    Object.assign(cacheStats, await getCacheStats(keyStore.pkHex));
+  } catch {
+    ui.addToast("获取缓存统计失败", 2_000, "error");
+  } finally {
+    loadingCache.value = false;
+  }
+}
+
+async function clearCache() {
+  if (!keyStore.pkHex || !confirm("确定要清空所有图片缓存吗？")) return;
+  clearingCache.value = true;
+  try {
+    await clearAllCache(keyStore.pkHex);
+    await refreshCacheStats();
+    ui.addToast("缓存已清空", 2_000, "success");
+  } catch {
+    ui.addToast("清空缓存失败", 2_000, "error");
+  } finally {
+    clearingCache.value = false;
+  }
+}
+
+function formatSize(bytes: number) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(2)} ${units[index]}`;
+}
+
+function doLogout() {
+  keyStore.logout();
+  location.href = "/#/login";
+}
+
+onMounted(async () => {
+  if (keyStore.pkHex && settings.loadedFor !== keyStore.pkHex) await settings.load(keyStore.pkHex);
+  await refreshCacheStats();
+  startStatusPolling();
 });
+onActivated(startStatusPolling);
+onDeactivated(stopStatusPolling);
+onBeforeUnmount(stopStatusPolling);
 </script>
 
 <style scoped>
-.sync-status {
-  padding: 10px 16px;
-  margin-bottom: 12px;
-  border-radius: 8px;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  transition: opacity 0.5s ease-out;
-}
-
-.sync-status.fade-out {
-  opacity: 0;
-}
-
-.sync-status.syncing {
-  background: #dbeafe;
-  color: #1e40af;
-}
-
-.sync-status.success {
-  background: #dcfce7;
-  color: #15803d;
-  border: 2px solid #10b981;
-}
-
-.sync-status.error {
-  background: #fee2e2;
-  color: #991b1b;
-}
-
-.sync-icon {
-  font-size: 16px;
-  font-weight: bold;
-}
-
-.icon-check-success {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 1px solid #10b981;
-  color: #10b981;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  background: transparent;
-}
-
 .settings-container {
-  max-width: 100%;
-  padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 12px 12px calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px);
+}
+
+.card {
+  padding: 18px;
+}
+
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h2 {
+  margin-bottom: 4px;
+}
+
+h3 {
+  margin-bottom: 6px;
+  font-size: 1rem;
 }
 
 .section {
-  margin-top: 24px;
-  padding-top: 24px;
+  padding: 20px 0;
   border-top: 1px solid #e2e8f0;
 }
 
-.section:first-child {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: none;
+.section:first-of-type {
+  margin-top: 12px;
 }
 
-.section h4 {
-  margin: 0 0 16px 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--primary);
+.section-heading p {
+  margin-bottom: 14px;
+  color: #64748b;
+  font-size: 0.78rem;
+  line-height: 1.5;
 }
 
-.add-form {
-  display: flex;
+.sync-status {
+  margin-bottom: 10px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: #e0f2fe;
+  color: #075985;
+  font-size: 0.8rem;
+}
+
+.sync-warning {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.sync-ok {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.add-form,
+.media-add-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
-.add-form .input {
-  flex: 1;
-  margin-top: 0;
+.media-add-form {
+  grid-template-columns: 120px minmax(0, 1fr) minmax(120px, 0.7fr) auto;
 }
 
-.btn-primary {
-  background: transparent;
-  color: #3b82f6;
-  border: 1px solid #3b82f6;
-  padding: 8px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 500;
-  transition: all 0.2s;
-}
-
-.btn-primary:hover {
-  background: #3b82f6;
-  color: white;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
-}
-
-.btn-primary:active {
-  transform: translateY(0);
-}
-
-.empty-message {
-  padding: 24px;
-  text-align: center;
-  color: #94a3b8;
-  background: #f8fafc;
-  border-radius: 8px;
-  border: 1px dashed #cbd5e1;
+.input {
+  min-height: 44px;
+  margin: 0;
 }
 
 .item-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  gap: 10px;
 }
 
 .item-card {
-  background: #f8fafc;
-  border-radius: 8px;
-  padding: 12px;
-  transition: all 0.2s;
+  padding: 13px;
   border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
 }
 
-.item-card:hover {
-  background: #f1f5f9;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
-}
-
-.item-content {
+.item-header,
+.control-row,
+.button-row,
+.account-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 }
 
 .item-main {
-  flex: 1;
   min-width: 0;
 }
 
-.item-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .item-url {
-  font-weight: 500;
-  color: var(--primary);
-  word-break: break-all;
+  color: #1e293b;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
 }
 
-.item-status {
+.meta-row {
+  margin-top: 7px;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
-.status-icon {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: bold;
+.pill {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 0.68rem;
 }
 
-.status-disconnected {
-  background: transparent;
-  color: #ef4444;
-  border: 1px solid #ef4444;
+.pill.healthy,
+.pill.primary {
+  background: #d1fae5;
+  color: #047857;
 }
 
-.status-text {
-  color: #64748b;
+.pill.failed {
+  background: #fee2e2;
+  color: #b91c1c;
 }
 
-.item-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.btn-icon {
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  transition: all 0.2s;
-  background: white;
-}
-
-.btn-edit {
-  color: #3b82f6;
-  border: 1px solid #3b82f6;
-}
-
-.btn-edit:hover {
-  background: #3b82f6;
-  color: white;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
-}
-
-.btn-delete {
-  color: #ef4444;
-  border: 1px solid #ef4444;
-}
-
-.btn-delete:hover {
-  background: #ef4444;
-  color: white;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.3);
-}
-
-.btn-save {
-  color: #10b981;
-  border: 1px solid #10b981;
-}
-
-.btn-save:hover {
-  background: #10b981;
-  color: white;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
-}
-
-.btn-cancel {
-  color: #ef4444;
-  border: 1px solid #ef4444;
-}
-
-.btn-cancel:hover {
-  background: #ef4444;
-  color: white;
-  transform: translateY(-1px);
-}
-
-.edit-form {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.input-inline {
-  margin-top: 0;
-  font-size: 14px;
-}
-
-.section-note {
+.control-row {
   margin-top: 12px;
-  padding: 8px 12px;
-  background: #fef3c7;
-  border-left: 3px solid #f59e0b;
-  border-radius: 4px;
-}
-
-.account-info {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.cache-info {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.cache-actions {
-  display: flex;
-  gap: 8px;
+  justify-content: flex-start;
   flex-wrap: wrap;
 }
 
-.btn-secondary {
-  background: transparent;
-  color: #64748b;
-  border: 1px solid #cbd5e1;
-  padding: 8px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 500;
-  transition: all 0.2s;
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: #f8fafc;
-  border-color: #94a3b8;
+.control-row label {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: #475569;
+  font-size: 0.78rem;
 }
 
-.btn-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.control-row input {
+  width: 17px;
+  height: 17px;
+}
+
+.text-button {
+  min-height: 36px;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+}
+
+.text-button.danger {
+  color: #b91c1c;
+}
+
+.health-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  color: #64748b;
+  font-size: 0.7rem;
+}
+
+.cache-info {
+  display: grid;
+  gap: 12px;
+}
+
+.small {
+  color: #64748b;
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.btn {
+  min-height: 42px;
+}
+
+.btn-secondary {
+  background: #475569;
 }
 
 .btn-warning {
-  background: transparent;
-  color: #f59e0b;
-  border: 1px solid #f59e0b;
-  padding: 8px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 500;
-  transition: all 0.2s;
-}
-
-.btn-warning:hover:not(:disabled) {
-  background: #f59e0b;
-  color: white;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
-}
-
-.btn-warning:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  background: #d97706;
 }
 
 .btn-danger {
-  background: transparent;
-  color: #ef4444;
-  border: 1px solid #ef4444;
-  padding: 8px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 500;
-  transition: all 0.2s;
-  max-width: 150px;
-}
-
-.btn-danger:hover {
-  background: #ef4444;
-  color: white;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
-}
-
-.btn-danger:active {
-  transform: translateY(0);
+  background: #dc2626;
 }
 
 @media (max-width: 640px) {
-  .add-form {
-    flex-direction: column;
+  .settings-container {
+    padding-right: 8px;
+    padding-left: 8px;
   }
-  
-  .item-content {
-    flex-direction: column;
-    align-items: stretch;
+
+  .card {
+    padding: 14px;
   }
-  
-  .item-actions {
-    justify-content: flex-end;
+
+  .media-add-form {
+    grid-template-columns: 110px minmax(0, 1fr);
+  }
+
+  .media-add-form .btn,
+  .media-add-form input[type="password"] {
+    grid-column: 1 / -1;
+  }
+
+  .health-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>
