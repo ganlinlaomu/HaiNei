@@ -160,6 +160,14 @@
           <button class="btn btn-danger" @click="doLogout">退出登录</button>
         </div>
       </div>
+
+      <div class="section">
+        <h4>开发 / 诊断</h4>
+        <div class="account-info">
+          <div class="small">查看 Relay、NIP-17 与消息同步的本地实时日志</div>
+          <button class="btn btn-secondary" @click="openDebug">系统诊断</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -172,6 +180,7 @@ import { useKeyStore } from "@/stores/keys";
 import { useSettingsStore, type BlossomServer } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import { getCacheStats, clearAllCache } from "@/utils/imageCache";
+import { useRouter } from "vue-router";
 
 export default defineComponent({
   name: "Settings",
@@ -179,6 +188,7 @@ export default defineComponent({
     const ks = useKeyStore();
     const settings = useSettingsStore();
     const ui = useUIStore();
+    const router = useRouter();
     const shortPk = computed(() => (ks.pkHex ? ks.pkHex.slice(0, 8) + "..." : ""));
 
     // Sync success message state
@@ -494,6 +504,7 @@ export default defineComponent({
       ks.logout();
       location.href = "/#/login";
     };
+    const openDebug = () => router.push("/debug");
 
     onMounted(() => {
       loadRelays();
@@ -544,6 +555,7 @@ export default defineComponent({
       refreshStatuses,
       reconnect,
       doLogout,
+      openDebug,
       settings,
       showSyncSuccess,
       isFadingOut,
