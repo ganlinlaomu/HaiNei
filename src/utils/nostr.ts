@@ -7,6 +7,7 @@ import {
   verifyEvent,
   nip04 
 } from 'nostr-tools';
+import { LEGACY_MESSAGE_KIND } from '@/nostr/messaging/protocol';
 
 /**
  * NIP-44 style broadcast group implementation (for kind=8964 messages)
@@ -117,7 +118,7 @@ export class NostrService {
 
     // publish optional group-meta event (public metadata without members)
     const metaEvt: any = {
-      kind: 8964,
+      kind: LEGACY_MESSAGE_KIND,
       created_at: Math.floor(Date.now() / 1000),
       tags: [[GROUP_TAG, groupId], ['name', groupName]],
       content: JSON.stringify({ type: 'group-meta', groupId, name: groupName, owner: ownerPub }),
@@ -194,7 +195,7 @@ export class NostrService {
    * Publishes a broadcast event (no recipient pubkeys, only ['g', groupId] tag)
    */
   async publishGroupMessage(opts: { groupId: string; groupKeyB64: string; content: string; privateKey?: string; kind?: number }) {
-    const { groupId, groupKeyB64, content, privateKey, kind = 8964 } = opts;
+    const { groupId, groupKeyB64, content, privateKey, kind = LEGACY_MESSAGE_KIND } = opts;
     const sk = privateKey || generatePrivateKey();
     const pub = getPublicKey(sk);
     const keyRaw = base64ToBytes(groupKeyB64);
@@ -223,7 +224,7 @@ export class NostrService {
    */
   subscribeGroup(options: { groupId: string; authors?: string[]; onEvent: (evt: any) => void }) {
     const subId = Math.random().toString(36).slice(2, 9);
-    const filters: any = { kinds: [8964], '#g': [options.groupId] };
+    const filters: any = { kinds: [LEGACY_MESSAGE_KIND], '#g': [options.groupId] };
     if (options.authors && options.authors.length) filters.authors = options.authors;
     const s = this.pool.sub(RELAYS, [filters]);
     s.on('event', (evt: any) => {
@@ -299,7 +300,7 @@ export class NostrService {
 
     // publish a group-rotate meta event so clients can know a rotation occurred (meta does not include key)
     const meta: any = {
-      kind: 8964,
+      kind: LEGACY_MESSAGE_KIND,
       created_at: Math.floor(Date.now() / 1000),
       tags: [[GROUP_TAG, groupId], ['rotated', String(Date.now())]],
       content: JSON.stringify({ type: 'group-rotate', groupId, reason: rotateReason, owner: ownerPub }),

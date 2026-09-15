@@ -1,118 +1,79 @@
 import { defineStore } from "pinia";
-import { pool } from "@/nostr/relays";
 import { getRelaysFromStorage } from "@/nostr/relays";
+import { sendDirectMessage } from "@/nostr/messaging/service";
 import { useKeyStore } from "@/stores/keys";
-import { genSymHex, symEncryptPackage } from "@/nostr/crypto";
 import { logger } from "@/utils/logger";
 import { useMessagesStore } from "@/stores/messages";
 
 export const usePostsStore = defineStore("posts", {
   state: () => ({}),
-
   actions: {
-    async publishNip44PerMessage(recipients: string[], plaintext: string) {
+    async sendDirectMessage(recipients: string[], plaintext: string, replyTo?: string) {
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
+      const accountAtStart = key.pkHex;
+      const requestedRecipients = [...new Set(recipients.filter(Boolean))];
+      if (requestedRecipients.length === 0) throw new Error("recipients 不能为空");
+      const otherRecipients = requestedRecipients.filter(pubkey => pubkey !== accountAtStart);
+      const recipientPubkeys = otherRecipients.length > 0 ? otherRecipients : [accountAtStart];
 
-      let targetPk = key.pkHex;
-
-      if (!Array.isArray(recipients) || recipients.length === 0) {
-        throw new Error("recipients 不能为空");
-      }
-      if (!recipients.includes(targetPk)) {
-        recipients = [...recipients, targetPk];
-      }
-
-      const symHex = genSymHex();
-      const pkg = await symEncryptPackage(symHex, plaintext);
-
-      const keysArr: Array<{ to: string; enc: string }> = [];
-      for (const r of recipients) {
-        try {
-          const enc = await key.nip04Encrypt(r, symHex);
-          keysArr.push({ to: r, enc });
-        } catch (e) {
-          logger.warn("envelope encrypt failed for", r, e);
-          keysArr.push({ to: r, enc: "" });
+      const result = await sendDirectMessage({
+        recipientPubkeys,
+        content: plaintext,
+        replyTo,
+        relays: getRelaysFromStorage(),
+        context: {
+          senderPubkey: accountAtStart,
+          nip04Encrypt: key.nip04Encrypt.bind(key),
+          nip44Encrypt: key.supportsNip44 ? key.nip44Encrypt.bind(key) : undefined,
+          signEvent: key.signEvent.bind(key)
         }
-      }
-
-      const payload = { version: "nip-44-per-message-v1", keys: keysArr, pkg };
-      const contentStr = JSON.stringify(payload);
-
-      const event: any = {
-        kind: 8964,
-        pubkey: targetPk,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [],
-        content: contentStr
-      };
-
-      const signed = await key.signEvent(event);
-      const relays = getRelaysFromStorage();
-
-      let relayResults: Array<{ relay: string; ok: boolean; reason?: any; ts?: number }> = [];
-
-      try {
-        const pubs: any = await pool.publish(relays, signed);
-        if (Array.isArray(pubs)) {
-          relayResults = pubs.map((p: any) => ({
-            relay: p.relay || p.url,
-            ok: !!p.ok,
-            reason: p.reason,
-            ts: p.ts || Date.now()
-          }));
-        } else {
-          relayResults = relays.map((r) => ({
-            relay: r,
-            ok: true,
-            ts: Date.now()
-          }));
-        }
-      } catch (e) {
-        logger.warn("publish failed", e);
-        relayResults = relays.map((r) => ({
-          relay: r,
-          ok: false,
-          reason: e,
-          ts: Date.now()
-        }));
-      }
+      });
+      if (key.pkHex !== accountAtStart) throw new Error("账号已切换，消息结果已丢弃");
 
       const out = {
-        id: signed.id,
-        created_at: signed.created_at,
+        id: result.message.id,
+        created_at: result.message.createdAt,
         sent_at: Date.now(),
-        content: contentStr,
-        relayResults
+        content: plaintext,
+        relayResults: result.relayResults
       };
-
-      /* =========================
-       * ✅ 安全写入 per-account outbox
-       * ========================= */
       try {
         const msgs = useMessagesStore();
-
-        // 🔐 显式按当前账号 load
-        if (msgs.loadedFor !== targetPk) {
-          await msgs.load(targetPk);
-        }
-
-        // 🔐 await，避免 PWA 挂起丢数据
-        await msgs.addOutbox(out);
+        if (msgs.loadedFor !== accountAtStart) await msgs.load(accountAtStart);
+        if (key.pkHex === accountAtStart) await msgs.addOutbox(out);
       } catch (e) {
-        logger.warn("saving outbox to messages store failed", e);
+        logger.warn("[message-protocol] saving outbox failed", e);
         try {
-          const fallbackKey = `nostr_outbox_${targetPk}`;
+          const fallbackKey = `nostr_outbox_${accountAtStart}`;
           const existing = JSON.parse(localStorage.getItem(fallbackKey) || "[]");
-          const scopedOutbox = Array.isArray(existing) ? [out, ...existing].slice(0, 500) : [out];
-          localStorage.setItem(fallbackKey, JSON.stringify(scopedOutbox));
+          localStorage.setItem(fallbackKey, JSON.stringify([out, ...(Array.isArray(existing) ? existing : [])].slice(0, 500)));
         } catch {}
       }
 
-      logger.debug("published event", { signed, relayResults });
+      logger.debug("[message-protocol] published", {
+        protocol: result.message.protocol,
+        messageId: result.message.id.slice(0, 8),
+        eventCount: result.events.length
+      });
+      return result;
+    },
 
-      return { signed, relayResults };
+    // Compatibility API. It now prefers NIP-17 and only falls back when NIP-44 is unavailable.
+    async publishNip44PerMessage(recipients: string[], plaintext: string) {
+      const result = await this.sendDirectMessage(recipients, plaintext);
+      return {
+        ...result,
+        signed: {
+          id: result.message.id,
+          pubkey: result.message.senderPubkey,
+          created_at: result.message.createdAt,
+          kind: result.message.transportKind,
+          tags: result.message.tags,
+          content: plaintext,
+          sig: ""
+        }
+      };
     }
   }
 });

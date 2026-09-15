@@ -2,10 +2,11 @@ import { defineStore } from "pinia";
 import { pool } from "@/nostr/relays";
 import { getRelaysFromStorage } from "@/nostr/relays";
 import { useKeyStore } from "@/stores/keys";
-import { genSymHex, symEncryptPackage, symDecryptPackage } from "@/nostr/crypto";
 import { useNotificationsStore } from "@/stores/notifications";
 import { logger } from "@/utils/logger";
 import { backfillEvents } from "@/utils/backfill";
+import { decodeMessageEvent, legacy8965Adapter } from "@/nostr/messaging/protocol";
+import { buildInteractionSubscriptions } from "@/nostr/messaging/subscriptions";
 
 /**
  * Interactions store - handles encrypted likes and comments
@@ -28,47 +29,14 @@ async function decodeInteractionEvent(
 ): Promise<Interaction | null> {
   try {
     logger.info(`[sync] interaction event=${evt.id?.slice(0, 8)} author=${evt.pubkey?.slice(0, 8)} created_at=${evt.created_at}`);
-    
-    // Parse payload
-    let payload: any;
+    const decoded = await decodeMessageEvent(evt, {
+      accountPubkey: myPubkey,
+      nip04Decrypt: keyStore.nip04Decrypt.bind(keyStore),
+      nip44Decrypt: keyStore.supportsNip44 ? keyStore.nip44Decrypt.bind(keyStore) : undefined
+    });
+    if (!decoded || decoded.protocol !== "legacy-8965" || !decoded.plaintext) return null;
     try {
-      payload = JSON.parse(evt.content);
-    } catch (e) {
-      logger.warn(`[sync] interaction parse failed event=${evt.id?.slice(0, 8)}`, e);
-      return null;
-    }
-    
-    if (!payload?.keys || !payload?.pkg) {
-      logger.warn(`[sync] interaction envelope invalid event=${evt.id?.slice(0, 8)}`);
-      return null;
-    }
-    
-    // Find our key entry
-    const myEntry = payload.keys.find((k: any) => k.to === myPubkey);
-    if (!myEntry) {
-      logger.debug(`[sync] interaction not for account event=${evt.id?.slice(0, 8)}`);
-      return null;
-    }
-    
-    // Decrypt symmetric key
-    let symHex: string;
-    try {
-      symHex = await keyStore.nip04Decrypt(evt.pubkey, myEntry.enc);
-    } catch (e) {
-      logger.warn(`[sync] interaction NIP-04 decrypt failed event=${evt.id?.slice(0, 8)}`, e);
-      // Fallback: check if enc is already a hex key
-      if (typeof myEntry.enc === "string" && /^[0-9a-fA-F]{64}$/.test(myEntry.enc)) {
-        symHex = myEntry.enc;
-        logger.debug(`[互动事件] 使用回退方式：enc字段已是hex密钥`);
-      } else {
-        return null;
-      }
-    }
-    
-    // Decrypt interaction payload
-    try {
-      const plain = await symDecryptPackage(symHex, payload.pkg);
-      const interaction: Interaction = JSON.parse(plain);
+      const interaction: Interaction = JSON.parse(decoded.plaintext);
       
       // Validate interaction structure
       if (!interaction.messageId || !interaction.type) {
@@ -229,55 +197,33 @@ export const useInteractionsStore = defineStore("interactions", {
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
       
-      // Create encrypted payload
       const plaintext = JSON.stringify(interaction);
-      const symHex = genSymHex();
-      const pkg = await symEncryptPackage(symHex, plaintext);
-      
-      // Encrypt the symmetric key for the recipient and self
       const recipients = [recipientPubkey];
       if (key.pkHex !== recipientPubkey) {
         recipients.push(key.pkHex); // Include self to see own interactions
       }
       
-      const keysArr: Array<{ to: string; enc: string }> = [];
-      for (const r of recipients) {
-        try {
-          const enc = await key.nip04Encrypt(r, symHex);
-          keysArr.push({ to: r, enc });
-        } catch (e) {
-          logger.warn("envelope encrypt failed for", r, e);
-          keysArr.push({ to: r, enc: "" });
-        }
-      }
-      
-      const payload = {
-        version: "nip-44-interaction-v1",
-        keys: keysArr,
-        pkg
-      };
-      
-      const contentStr = JSON.stringify(payload);
-      
-      // Create event with kind 8965 for interactions
-      const event: any = {
-        kind: 8965,
-        pubkey: key.pkHex,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [
-          ["e", interaction.messageId], // Reference to the message
-          ["p", recipientPubkey] // Target user
-        ],
-        content: contentStr
-      };
-      
-      const signed = await key.signEvent(event);
+      const encoded = await legacy8965Adapter.encode!({
+        recipientPubkeys: recipients,
+        plaintext,
+        replyTo: interaction.messageId
+      }, {
+        senderPubkey: key.pkHex,
+        nip04Encrypt: key.nip04Encrypt.bind(key),
+        signEvent: key.signEvent.bind(key)
+      });
+      const signed = encoded.events[0];
       
       const relays = getRelaysFromStorage();
       
       try {
         await pool.publish(relays, signed);
-        logger.debug(`[relay] interaction published account=${key.pkHex.slice(0, 8)} event=${signed.id.slice(0, 8)} relays=${relays.length}`);
+        logger.debug("[message-protocol] published legacy interaction", {
+          account: key.pkHex.slice(0, 8),
+          eventId: signed.id.slice(0, 8),
+          interactionType: interaction.type,
+          relays: relays.length
+        });
       } catch (e) {
         logger.warn("publish interaction failed", e);
         throw e;
@@ -571,29 +517,15 @@ export const useInteractionsStore = defineStore("interactions", {
         // Build filters - we fetch interactions in two ways for privacy and comprehensive sync:
         // 1. Inbox: Interactions where user is mentioned (#p tag) - others' interactions sent to us
         // 2. Outbox: Interactions authored by user - our own interactions (for cross-device sync)
-        const filters: any[] = [
-          {
-            kinds: [8965],
-            "#p": [accountPk], // Inbox: interactions targeted at us
-            since,
-            until
-          },
-          {
-            kinds: [8965],
-            authors: [accountPk], // Outbox: our own interactions
-            since,
-            until
-          }
-        ];
+        const filters = buildInteractionSubscriptions(accountPk, since, until);
         
         // Log the filters being used for debugging
         logger.info(`互动回填过滤器详情:`);
-        logger.info(`  收件箱 (#p): kinds8965], #p=[${accountPk.substring(0, 8)}...], since=${new Date(since * 1000).toLocaleString()}, until=${new Date(until * 1000).toLocaleString()}`);
-        logger.info(`  发件箱 (authors): kinds8965], authors=[${accountPk.substring(0, 8)}...], since=${new Date(since * 1000).toLocaleString()}, until=${new Date(until * 1000).toLocaleString()}`);
+        logger.info(`  收件箱/发件箱: account=[${accountPk.substring(0, 8)}...], since=${since}, until=${until}`);
         
         // Fetch with each filter in parallel for better performance
         const filterPromises = filters.map((filter, i) => {
-          const filterType = filter["#p"] ? "收件箱 (#p)" : "发件箱 (authors)";
+          const filterType = "#p" in filter ? "收件箱 (#p)" : "发件箱 (authors)";
           logger.debug(`回填互动过滤器 ${i + 1}/${filters.length}: ${filterType}`);
           
           return backfillEvents({

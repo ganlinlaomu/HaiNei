@@ -605,8 +605,8 @@ export default defineComponent({
           fullContent += `${VIDEO_METADATA_PREFIX}${JSON.stringify(videoData)}${VIDEO_METADATA_SUFFIX}\n`;
         }
         
-        const { signed } = await posts.publishNip44PerMessage(recips, fullContent);
-        try { await msgs.load(); msgs.addInbox({ id: signed.id, pubkey: keys.pkHex, created_at: signed.created_at, content: fullContent,myGroups: allFriends.value ? ["全部好友"] : selectedGroups.value.slice() }); } catch {}
+        const { message } = await posts.sendDirectMessage(recips, fullContent);
+        try { await msgs.load(); msgs.addInbox({ id: message.id, pubkey: keys.pkHex, created_at: message.createdAt, content: fullContent, protocol: message.protocol, transportKind: message.transportKind, transportEventId: message.transportEventId, rumorId: message.rumorId, recipientPubkeys: message.recipientPubkeys, conversationId: message.conversationId, myGroups: allFriends.value ? ["全部好友"] : selectedGroups.value.slice() }); } catch {}
         ui.addToast("发送成功", 1200, "success");
         setTimeout(()=>{ visible.value = false; router.replace("/"); }, 220);
       } catch (e:any) {

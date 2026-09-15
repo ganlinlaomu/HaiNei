@@ -161,7 +161,6 @@ import { defineComponent, ref, onMounted, onBeforeUnmount, computed, watch, next
 import { useFriendsStore } from "@/stores/friends";
 import { useKeyStore } from "@/stores/keys";
 import { getRelaysFromStorage, subscribe } from "@/nostr/relays";
-import { symDecryptPackage } from "@/nostr/crypto";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { useInteractionsStore } from "@/stores/interactions";
 import { logger } from "@/utils/logger";
@@ -175,6 +174,9 @@ import { getLastSeenCreatedAt, setLastSeenCreatedAt, updateLastSeenToNewest } fr
 import { extractVideoData as extractVideoDataUtil, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
 import { useRealtimeInboxReconcile } from "@/components/useRealtimeInboxReconcile";
 import { closeSubscription } from "@/utils/closeSubscription";
+import { decodeMessageEvent, type CanonicalMessage } from "@/nostr/messaging/protocol";
+import { buildInteractionSubscriptions, buildMessageSubscriptions } from "@/nostr/messaging/subscriptions";
+import { MessageDeduplicator } from "@/nostr/messaging/deduplication";
 
 
 // reuse the regex logic from extractImageUrls to strip out image markdown and plain image URLs
@@ -225,6 +227,7 @@ export default defineComponent({
     let sub: any = null;
     let interactionsSub: any = null;
     let homeAccountPk = "";
+    const messageDeduplicator = new MessageDeduplicator();
 
     const messagesRef = ref([] as any[]);
     const displayedMessages = ref([] as any[]);
@@ -520,21 +523,29 @@ async function safeUpdateLocalRefs() {
       return pubkey.slice(0, 8) + "...";
     }
 
-    function addMessageIfNew(evt: any, plain: string) {
-  if (!evt || !evt.id) return false;
+    function addMessageIfNew(message: CanonicalMessage) {
+  if (!message?.id || !messageDeduplicator.accept(message)) return false;
 
   // Check if message already exists in inbox
-  const existing = msgs.inbox.find(m => m.id === evt.id);
+  const existing = msgs.inbox.find(m => m.id === message.id);
   if (existing) {
     return false;
   }
 
   // Add new message to inbox
   const added = {
-    id: evt.id,
-    pubkey: evt.pubkey,
-    created_at: evt.created_at,
-    content: plain
+    id: message.id,
+    pubkey: message.senderPubkey,
+    created_at: message.createdAt,
+    content: message.plaintext || "",
+    protocol: message.protocol,
+    transportKind: message.transportKind,
+    transportEventId: message.transportEventId,
+    rumorId: message.rumorId,
+    recipientPubkeys: message.recipientPubkeys,
+    conversationId: message.conversationId,
+    replyTo: message.replyTo,
+    rootId: message.rootId
   };
 
   msgs.addInbox(added);
@@ -803,6 +814,8 @@ async function safeUpdateLocalRefs() {
       const accountPk = keys.pkHex;
       if (!accountPk) return;
       try {
+        const accountAtStart = keys.pkHex;
+        if (!accountAtStart) return;
         const now = Math.floor(Date.now() / 1000);
         const breakpointKey = `messages_${accountPk}`;
         const savedBreakpoint = loadBackfillBreakpoint(breakpointKey); 
@@ -822,7 +835,7 @@ async function safeUpdateLocalRefs() {
           );
         }
         
-        logger.info(`回填参数: kinds=[8964], authors数量=${friendSet.size}, since=${new Date(since * 1000).toLocaleString()}, until=${new Date(until * 1000).toLocaleString()}`);
+        logger.info(`[message-protocol] 回填 authors=${friendSet.size}, since=${since}, until=${until}`);
         logger.debug(`好友列表: ${Array.from(friendSet).slice(0, 5).map(pk => pk.slice(0, 8)).join(', ')}${friendSet.size > 5 ? `... (共${friendSet.size}个)` : ''}`);
         
         status.value = "获取历史消息中...";
@@ -844,63 +857,19 @@ async function safeUpdateLocalRefs() {
           }
           fetchedEvents++;
           try {
-            if (!friendSet.has(evt.pubkey)) {
-              notFromFriends++;
-              return;
-            }
-            
-            let payload: any;
-            try { 
-              payload = JSON.parse(evt.content); 
-            } catch { 
-              parseErrors++;
-              logger.warn(`事件 ${evt.id?.slice(0,8)} 解析失败: 无效的JSON`);
-              return; 
-            }
-            
-            if (!payload?.keys || !payload?.pkg) {
-              parseErrors++;
-              return;
-            }
-            
-            const myEntry = payload.keys.find((k: any) => k.to === accountPk);
-            if (!myEntry) {
-              notForMe++;
-              return;
-            }
-            
-            let symHex: string | null = null;
-            try {
-              symHex = await keys.nip04Decrypt(evt.pubkey, myEntry.enc);
-            } catch (e) {
-              logger.warn(`事件 ${evt.id?.slice(0,8)} NIP-04解密失败，尝试备用方案`, e);
-              // Fallback: check if enc is already a hex key
-              if (typeof myEntry.enc === "string" && /^[0-9a-fA-F]{64}$/.test(myEntry.enc)) {
-                symHex = myEntry.enc;
-                logger.info(`事件 ${evt.id?.slice(0,8)} 使用备用hex key`);
-              } else {
-                decryptErrors++;
-                return;
-              }
-            }
-            
-            try {
-              const plain = await symDecryptPackage(symHex, payload.pkg);
-              if (keys.pkHex !== accountPk) {
-                logger.warn(`[account] decrypted message discarded account=${accountPk.slice(0, 8)} event=${evt.id?.slice(0, 8)}`);
-                return;
-              }
-              const added = addMessageIfNew(evt, plain);
-              if (added) {
-                decryptedEvents++;
-                // Track the newest message timestamp for breakpoint
-                if (evt.created_at > newestTimestamp) {
-                  newestTimestamp = evt.created_at;
-                }
-              }
-            } catch (e) {
-              decryptErrors++;
-              logger.warn(`事件 ${evt.id?.slice(0,8)} 对称解密失败`, e);
+            if (keys.pkHex !== accountPk) return;
+            const message = await decodeMessageEvent(evt, {
+              accountPubkey: accountPk,
+              nip04Decrypt: keys.nip04Decrypt.bind(keys),
+              nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined
+            });
+            if (keys.pkHex !== accountPk) return;
+            if (!message) { decryptErrors++; return; }
+            if (!friendSet.has(message.senderPubkey)) { notFromFriends++; return; }
+            const added = addMessageIfNew(message);
+            if (added) {
+              decryptedEvents++;
+              newestTimestamp = Math.max(newestTimestamp, message.createdAt);
             }
           } catch (e) {
             logger.error("处理回填事件失败", e);
@@ -908,14 +877,10 @@ async function safeUpdateLocalRefs() {
         };
         
         // Use backfill utility with batching and pagination
-        const stats = await backfillEvents({
+        const protocolFilters = buildMessageSubscriptions(accountAtStart, Array.from(friendSet), since, until);
+        await Promise.all(protocolFilters.map(filters => backfillEvents({
           relays,
-          filters: {
-            kinds: [8964],
-            authors: Array.from(friendSet),
-            since,
-            until
-          },
+          filters,
           onEvent: processEvent,
           onProgress: (stats) => {
             if (keys.pkHex !== accountPk) return;
@@ -950,7 +915,7 @@ async function safeUpdateLocalRefs() {
             // Save the timestamp of the newest message for future reference
             // This helps track the last time we successfully fetched messages
             const breakpointKey = `messages_${accountPk}`;
-            if (newestTimestamp > 0) {
+            if (keys.pkHex === accountPk && newestTimestamp > 0) {
               saveBackfillBreakpoint(breakpointKey, newestTimestamp);
               logger.info(
               `保存最新消息断点: ${new Date(newestTimestamp * 1000).toLocaleString()}`
@@ -964,7 +929,7 @@ async function safeUpdateLocalRefs() {
           authorBatchSize: 50,
           maxBatches: 20,
           timeoutMs: 10000
-        });
+        })));
         
       } catch (e) {
         logger.error("回填失败", e);
@@ -1094,6 +1059,8 @@ async function safeUpdateLocalRefs() {
       const accountPk = keys.pkHex;
       if (!accountPk) return;
       try {
+        const accountAtStart = keys.pkHex;
+        if (!accountAtStart) return;
         logger.info("启动实时订阅...");
         
         // 从本地取回填断点
@@ -1117,11 +1084,7 @@ const since = Math.max(
   threeDaysAgo
 );
 
-const filters = {
-  kinds: [8964],
-  authors: Array.from(friendSet),
-  since
-};
+const filters = buildMessageSubscriptions(accountAtStart, Array.from(friendSet), since);
 
 logger.info(
   `实时订阅 since = ${new Date(since * 1000).toLocaleString()}`
@@ -1135,8 +1098,8 @@ logger.info(
         sub = null;
 
         try {
-          logger.info("开始实时订阅 kind=8964 事件...");
-          const adapterSub = subscribe(relays, [filters]);
+          logger.info("[message-protocol] 开始实时协议订阅");
+          const adapterSub = subscribe(relays, filters);
           sub = adapterSub;
           adapterSub.on("event", async (evt: any) => {
             try {
@@ -1144,45 +1107,19 @@ logger.info(
                 logger.warn(`[account] realtime message discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
                 return;
               }
-              if (!friendSet.has(evt.pubkey)) return;
-              let payload: any;
-              try { 
-                payload = JSON.parse(evt.content); 
-              } catch { 
-                logger.warn(`实时事件 ${evt.id?.slice(0,8)} JSON解析失败`);
-                return; 
-              }
-              if (!payload?.keys || !payload?.pkg) return;
-              const myEntry = payload.keys.find((k: any) => k.to === accountPk);
-              if (!myEntry) return;
-              let symHex: string | null = null;
-              try {
-                symHex = await keys.nip04Decrypt(evt.pubkey, myEntry.enc);
-              } catch (e) {
-                logger.warn(`实时事件 ${evt.id?.slice(0,8)} NIP-04解密失败，尝试备用方案`, e);
-                if (typeof myEntry.enc === "string" && /^[0-9a-fA-F]{64}$/.test(myEntry.enc)) {
-                  symHex = myEntry.enc;
-                } else {
-                  return;
-                }
-              }
-              try {
-  const plain = await symDecryptPackage(symHex, payload.pkg);
-
-  if (keys.pkHex !== accountPk) {
-    logger.warn(`[account] decrypted realtime message discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
-    return;
-  }
-
-  const added = addMessageIfNew(evt, plain);
+              const message = await decodeMessageEvent(evt, {
+                accountPubkey: accountPk,
+                nip04Decrypt: keys.nip04Decrypt.bind(keys),
+                nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined
+              });
+              if (keys.pkHex !== accountPk) return;
+              if (!message || !friendSet.has(message.senderPubkey)) return;
+              const added = addMessageIfNew(message);
 
   // ⭐⭐⭐ 关键修复：实时新消息立刻触发对账
   if (added && readyForPending.value) {
     safeUpdateLocalRefs();
   }
-} catch (e) {
-  logger.warn(`实时事件 ${evt.id?.slice(0,8)} 对称解密失败`, e);
-}
             } catch (e) {
               logger.warn("handle event fail", e);
             }
@@ -1206,7 +1143,7 @@ logger.info(
         closeSubscription(interactionsSub);
         interactionsSub = null;
         
-        // Subscribe to interactions (kind 8965)
+        // Subscribe to legacy interactions through the protocol subscription planner.
         try {
           // Subscribe to two types of interactions for comprehensive coverage:
           // 1. Inbox: Interactions where user is tagged (#p) - for notifications
@@ -1218,18 +1155,10 @@ logger.info(
             threeDaysAgo
           );
           
-          const interactionFilters = [
-            {
-              kinds: [8965],
-              "#p": [accountPk], // Inbox: interactions targeted at us
-              since: interactionSince
-            },
-            {
-              kinds: [8965],
-              authors: [accountPk], // Outbox: our own interactions
-              since: interactionSince
-            }
-          ];
+          const interactionFilters = buildInteractionSubscriptions(
+            accountPk,
+            interactionSince
+          );
           
           interactionsSub = subscribe(relays, interactionFilters);
           
@@ -1238,8 +1167,6 @@ logger.info(
              logger.warn(`[account] realtime interaction discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
              return;
            }
-           // ① 只处理互动事件
-           if (evt.kind !== 8965) return;
 
            // ③ 打点日志（现在你最需要的是“确定有没有进来”）
            logger.info(

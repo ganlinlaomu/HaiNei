@@ -1,11 +1,20 @@
 import { defineStore } from "pinia";
 import { useKeyStore } from "./keys";
+import { inferLegacyProtocol, LEGACY_MESSAGE_KIND } from "@/nostr/messaging/protocol";
 
 export type InboxItem = {
   id: string;
   pubkey: string;
   created_at: number;
   content: string;
+  protocol?: "legacy-8964" | "legacy-8965" | "nip04" | "nip44" | "nip17";
+  transportKind?: number;
+  transportEventId?: string;
+  rumorId?: string;
+  recipientPubkeys?: string[];
+  conversationId?: string;
+  replyTo?: string;
+  rootId?: string;
   _localMeta?: {
     groupCount: number;
     groups: Array<{ name: string; count: number }>;
@@ -54,7 +63,13 @@ export const useMessagesStore = defineStore("messages", {
         const ik = inboxKeyFor(targetPk);
         if (ik) {
           const rawI = localStorage.getItem(ik);
-          this.inbox = rawI ? JSON.parse(rawI) : [];
+          const stored = rawI ? JSON.parse(rawI) : [];
+          this.inbox = Array.isArray(stored) ? stored.map((item: InboxItem) => ({
+            ...item,
+            protocol: item.protocol ?? inferLegacyProtocol(item.transportKind) ?? "legacy-8964",
+            transportKind: item.transportKind ?? LEGACY_MESSAGE_KIND,
+            transportEventId: item.transportEventId ?? item.id
+          })) : [];
         } else {
           this.inbox = [];
         }

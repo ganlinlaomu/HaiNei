@@ -62,24 +62,12 @@ export default defineStore('nostr', () => {
     messages.value = [];
   };
 
-  const publishMultiRecipient = async (opts: { content: string; privateKey: string; recipients: string[] }) => {
-    const { content, privateKey, recipients } = opts;
-    // publish via NostrService
-    await nostr.publishMultiRecipient({
-      content,
-      privateKey,
-      recipients,
-      kind: 8964
-    });
-  };
-
   return {
     messages,
     loadedFor,
     loadCached,
     reset,
     connect,
-    subscribeByAuthors,
-    publishMultiRecipient
+    subscribeByAuthors
   };
 });
