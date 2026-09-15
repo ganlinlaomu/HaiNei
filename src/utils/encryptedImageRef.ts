@@ -62,5 +62,5 @@ export function decodeEncryptedImageRef(ref: string): EncryptedImageMetadata | n
  * Check if a string is an encrypted image reference
  */
 export function isEncryptedImageRef(str: string): boolean {
-  return str && str.startsWith("blossom+aesgcm:");
+  return Boolean(str && str.startsWith("blossom+aesgcm:"));
 }

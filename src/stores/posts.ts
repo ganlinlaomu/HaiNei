@@ -24,7 +24,6 @@ export const usePostsStore = defineStore("posts", {
         relays: getRelaysFromStorage(),
         context: {
           senderPubkey: accountAtStart,
-          nip04Encrypt: key.nip04Encrypt.bind(key),
           nip44Encrypt: key.supportsNip44 ? key.nip44Encrypt.bind(key) : undefined,
           signEvent: key.signEvent.bind(key)
         }
@@ -58,22 +57,5 @@ export const usePostsStore = defineStore("posts", {
       });
       return result;
     },
-
-    // Compatibility API. It now prefers NIP-17 and only falls back when NIP-44 is unavailable.
-    async publishNip44PerMessage(recipients: string[], plaintext: string) {
-      const result = await this.sendDirectMessage(recipients, plaintext);
-      return {
-        ...result,
-        signed: {
-          id: result.message.id,
-          pubkey: result.message.senderPubkey,
-          created_at: result.message.createdAt,
-          kind: result.message.transportKind,
-          tags: result.message.tags,
-          content: plaintext,
-          sig: ""
-        }
-      };
-    }
   }
 });

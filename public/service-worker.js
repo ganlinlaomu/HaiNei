@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = '0.1.4'; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = '0.1.5'; // ⚠️ 更新代码时同步修改此版本号
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}`;
 const HTML_CACHE = `${CACHE_PREFIX}-html-${VERSION}`;

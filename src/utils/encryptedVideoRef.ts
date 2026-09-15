@@ -65,7 +65,7 @@ export function decodeEncryptedVideoRef(ref: string): EncryptedVideoMetadata | n
  * Check if a string is an encrypted video reference
  */
 export function isEncryptedVideoRef(str: string): boolean {
-  return str && str.startsWith("blossom+aesgcm+video:");
+  return Boolean(str && str.startsWith("blossom+aesgcm+video:"));
 }
 
 /**

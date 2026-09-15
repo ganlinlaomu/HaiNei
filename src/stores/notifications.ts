@@ -4,7 +4,7 @@ import { useInteractionsStore, type Comment } from "./interactions";
 
 export interface NotificationItem {
   id: string;
-  type: "like" | "comment";
+  type: "like" | "comment" | "message";
   from: string;
   messageId: string;
   commentId?: string;

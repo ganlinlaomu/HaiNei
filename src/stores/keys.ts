@@ -6,10 +6,10 @@ import { useMessagesStore } from "./messages";
 import { useSettingsStore } from "./settings";
 import { useInteractionsStore } from "./interactions";
 import { useNotificationsStore } from "./notifications";
-import type { WindowNostr } from "nostr-tools/lib/types/nip07";
+import type { WindowNostr } from "nostr-tools/nip07";
 import { BunkerSigner, type BunkerPointer, parseBunkerInput } from "nostr-tools/nip46";
 import { finalizeEvent } from "nostr-tools";
-import type { EventTemplate, VerifiedEvent } from "nostr-tools/lib/types/core";
+import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import {
   encryptPrivateKey,
   decryptPrivateKey,
@@ -578,6 +578,7 @@ export const useKeyStore = defineStore("keys", {
         if (bunkerInput) {
           try {
             const bunkerPointer = await parseBunkerInput(bunkerInput);
+            if (!bunkerPointer) throw new Error("无效的 Bunker 连接信息");
             
             // Try to restore the client secret key
             let clientSecretKey: Uint8Array;

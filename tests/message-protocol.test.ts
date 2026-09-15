@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   finalizeEvent,
   getPublicKey,
-  nip04,
   nip17,
   nip44,
   nip59,
@@ -13,8 +12,6 @@ import {
   decodeMessageEvent,
   decryptDirectMessage,
   encryptDirectMessage,
-  legacy8964Adapter,
-  legacy8965Adapter,
   nip17Adapter
 } from "@/nostr/messaging/protocol";
 import { MessageDeduplicator } from "@/nostr/messaging/deduplication";
@@ -29,7 +26,6 @@ const wrongPubkey = getPublicKey(wrongSecret);
 
 const senderContext = {
   senderPubkey,
-  nip04Encrypt: (pubkey: string, plaintext: string) => Promise.resolve(nip04.encrypt(senderSecret, pubkey, plaintext)),
   nip44Encrypt: (pubkey: string, plaintext: string) => encryptDirectMessage({ senderPrivateKey: senderSecret, recipientPubkey: pubkey, plaintext }),
   signEvent: (event: EventTemplate) => Promise.resolve(finalizeEvent(event, senderSecret))
 };
@@ -37,7 +33,6 @@ const senderContext = {
 function recipientDecodeContext(secret = recipientSecret, account = recipientPubkey) {
   return {
     accountPubkey: account,
-    nip04Decrypt: (pubkey: string, ciphertext: string) => Promise.resolve(nip04.decrypt(secret, pubkey, ciphertext)),
     nip44Decrypt: (pubkey: string, ciphertext: string) => decryptDirectMessage({ recipientPrivateKey: secret, senderPubkey: pubkey, ciphertext })
   };
 }
@@ -55,32 +50,22 @@ describe("NIP-44 v2 primitive", () => {
   });
 });
 
-describe("legacy adapters", () => {
-  for (const [name, adapter] of [["8964", legacy8964Adapter], ["8965", legacy8965Adapter]] as const) {
-    it(`decodes legacy ${name} without leaking its wire shape`, async () => {
-      const encoded = await adapter.encode!({ recipientPubkeys: [recipientPubkey], plaintext: name === "8965" ? JSON.stringify({ type: "like", messageId: "m" }) : "legacy" }, senderContext);
-      const decoded = await decodeMessageEvent(encoded.events[0], recipientDecodeContext());
-      expect(decoded?.protocol).toBe(`legacy-${name}`);
-      expect(decoded?.senderPubkey).toBe(senderPubkey);
-      expect(decoded?.plaintext).toContain(name === "8965" ? "messageId" : "legacy");
-    });
-  }
-
-  it("rejects malformed legacy data and preserves readable history", async () => {
-    const malformed = finalizeEvent({ kind: 8964, created_at: 1, tags: [], content: "not-json" }, senderSecret);
-    await expect(decodeMessageEvent(malformed, recipientDecodeContext())).resolves.toBeNull();
-  });
-});
-
 describe("NIP-17 gift wrap", () => {
   it("builds, unwraps, validates and deduplicates a standard message", async () => {
-    const encoded = await nip17Adapter.encode!({ recipientPubkeys: [recipientPubkey], plaintext: "private hello", replyTo: "a".repeat(64) }, senderContext);
+    const encoded = await nip17Adapter.encode!({
+      recipientPubkeys: [recipientPubkey],
+      plaintext: "private hello",
+      replyTo: "a".repeat(64),
+      tags: [["l", "hainei-interaction"], ["p", wrongPubkey]]
+    }, senderContext);
     const recipientWrap = encoded.events.find(event => event.tags[0]?.[1] === recipientPubkey)!;
     const decoded = await decodeMessageEvent(recipientWrap, recipientDecodeContext());
     const standardClientRumor = nip17.unwrapEvent(recipientWrap, recipientSecret);
     expect(recipientWrap.kind).toBe(1059);
     expect(standardClientRumor).toMatchObject({ kind: 14, id: encoded.message.id, content: "private hello" });
     expect(decoded).toMatchObject({ id: encoded.message.id, rumorId: encoded.message.id, plaintext: "private hello", senderPubkey, protocol: "nip17" });
+    expect(decoded?.tags).toContainEqual(["l", "hainei-interaction"]);
+    expect(decoded?.tags).not.toContainEqual(["p", wrongPubkey]);
     expect(decoded?.transportEventId).toBe(recipientWrap.id);
     const dedupe = new MessageDeduplicator();
     expect(dedupe.accept(decoded!)).toBe(true);
@@ -111,11 +96,17 @@ describe("NIP-17 gift wrap", () => {
     await expect(decodeMessageEvent(unknown, recipientDecodeContext())).resolves.toBeNull();
   });
 
-  it("plans gift-wrap transport separately from legacy compatibility", () => {
+  it("subscribes only to private NIP-17 gift wraps", () => {
     const filters = buildMessageSubscriptions(recipientPubkey, [senderPubkey], 10);
-    expect(filters.some(filter => filter.kinds.includes(1059) && "#p" in filter)).toBe(true);
-    expect(filters.some(filter => filter.kinds.includes(14))).toBe(true);
-    expect(filters.some(filter => filter.kinds.includes(8964))).toBe(true);
+    expect(filters).toHaveLength(1);
+    expect(filters[0]).toMatchObject({ kinds: [1059], "#p": [recipientPubkey] });
     expect(filters.find(filter => filter.kinds.includes(1059))?.since).toBe(0);
+  });
+
+  it("does not decode removed custom message or interaction kinds", async () => {
+    for (const kind of [8964, 8965]) {
+      const event = finalizeEvent({ kind, created_at: 1, tags: [["p", recipientPubkey]], content: "removed" }, senderSecret);
+      await expect(decodeMessageEvent(event, recipientDecodeContext())).resolves.toBeNull();
+    }
   });
 });

@@ -1,14 +1,15 @@
 import type { NostrEvent } from "nostr-tools";
 import { publish } from "@/nostr/relays";
-import { legacy8964Adapter, nip17Adapter, type CanonicalMessage, type EncodeContext } from "./protocol";
+import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./protocol";
 
-export type MessageProtocolPolicy = "nip17" | "legacy";
+export type MessageProtocolPolicy = "nip17";
 
 export interface SendDirectMessageOptions {
   recipientPubkeys: string[];
   content: string;
   replyTo?: string;
   rootId?: string;
+  tags?: string[][];
   protocol?: MessageProtocolPolicy;
   relays: string[];
   context: EncodeContext;
@@ -25,12 +26,11 @@ export async function buildMessageEvents(options: Omit<SendDirectMessageOptions,
     recipientPubkeys: options.recipientPubkeys,
     plaintext: options.content,
     replyTo: options.replyTo,
-    rootId: options.rootId
+    rootId: options.rootId,
+    tags: options.tags
   };
-  const useLegacy = options.protocol === "legacy" || !options.context.nip44Encrypt;
-  const adapter = useLegacy ? legacy8964Adapter : nip17Adapter;
-  if (!adapter.encode) throw new Error(`protocol ${adapter.name} cannot encode messages`);
-  return adapter.encode(outgoing, options.context);
+  if (!options.context.nip44Encrypt) throw new Error("当前登录方式不支持 NIP-44，无法发送 NIP-17 消息");
+  return nip17Adapter.encode!(outgoing, options.context);
 }
 
 export async function publishMessageEvents(events: NostrEvent[], relays: string[]) {
@@ -44,5 +44,11 @@ export async function publishMessageEvents(events: NostrEvent[], relays: string[
 export async function sendDirectMessage(options: SendDirectMessageOptions): Promise<PublishedMessage> {
   const encoded = await buildMessageEvents(options);
   const relayResults = await publishMessageEvents(encoded.events, options.relays);
+  const failedEvents = encoded.events.filter(event =>
+    !relayResults.some(result => result.eventId === event.id && result.ok)
+  );
+  if (failedEvents.length > 0) {
+    throw new Error(`消息发布失败：${failedEvents.length}/${encoded.events.length} 个加密副本未被任何 relay 接收`);
+  }
   return { ...encoded, relayResults };
 }

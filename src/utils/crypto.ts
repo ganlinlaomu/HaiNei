@@ -7,6 +7,12 @@ const PBKDF2_ITERATIONS = 100000;
 const SALT_LENGTH = 16;
 const IV_LENGTH = 12;
 
+function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 export type EncryptedData = {
   ciphertext: string; // base64
   salt: string; // base64
@@ -30,7 +36,7 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
   return await crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt: salt,
+      salt: ownedBuffer(salt),
       iterations: PBKDF2_ITERATIONS,
       hash: "SHA-256"
     },
@@ -133,9 +139,9 @@ export async function decryptPrivateKey(
   // Decrypt the data
   try {
     const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: iv },
+      { name: "AES-GCM", iv: ownedBuffer(iv) },
       key,
-      ciphertext
+      ownedBuffer(ciphertext)
     );
 
     const decoder = new TextDecoder();

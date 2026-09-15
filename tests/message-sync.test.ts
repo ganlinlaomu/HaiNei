@@ -45,6 +45,27 @@ afterEach(async () => {
 });
 
 describe("reliable message persistence", () => {
+  it("purges cached records from removed message protocols", async () => {
+    const db = database();
+    const repo = new SyncedMessageRepository(db);
+    await db.syncedMessages.add({
+      accountPubkey: ACCOUNT_A,
+      id: "removed",
+      senderPubkey: PEER,
+      recipientPubkeys: [ACCOUNT_A],
+      conversationId: "removed-conversation",
+      plaintext: "old",
+      createdAt: 1,
+      protocol: "removed-custom",
+      transportKind: 8964,
+      transportEventIds: ["removed"],
+      firstSeenAt: 1,
+      lastSeenAt: 1
+    });
+    expect(await repo.purgeUnsupportedMessages(ACCOUNT_A)).toBe(1);
+    expect(await repo.list(ACCOUNT_A)).toEqual([]);
+  });
+
   it("deduplicates concurrent multi-relay and duplicate realtime delivery atomically", async () => {
     const repo = new SyncedMessageRepository(database());
     const canonical = message("logical-rumor", 1000);

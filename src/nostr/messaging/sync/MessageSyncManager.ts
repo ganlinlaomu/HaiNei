@@ -18,25 +18,6 @@ type ManagerDependencies = {
   now?: () => number;
 };
 
-function legacyToCanonical(item: Record<string, any>, accountPubkey: string): CanonicalMessage | null {
-  if (!item?.id || !item?.pubkey || typeof item.created_at !== "number") return null;
-  return {
-    id: item.rumorId || item.id,
-    senderPubkey: String(item.pubkey).toLowerCase(),
-    recipientPubkeys: Array.isArray(item.recipientPubkeys) ? item.recipientPubkeys : [accountPubkey],
-    conversationId: item.conversationId || [accountPubkey, String(item.pubkey).toLowerCase()].sort().join(":"),
-    plaintext: typeof item.content === "string" ? item.content : undefined,
-    createdAt: item.created_at,
-    protocol: item.protocol || "legacy-8964",
-    transportKind: item.transportKind || 8964,
-    transportEventId: item.transportEventId || item.id,
-    rumorId: item.rumorId,
-    replyTo: item.replyTo,
-    rootId: item.rootId,
-    tags: []
-  };
-}
-
 export class MessageSyncManager {
   private readonly repository: SyncedMessageRepository;
   private readonly subscribeFn: SubscribeForCatchup;
@@ -93,17 +74,12 @@ export class MessageSyncManager {
     );
 
     await this.setStatus("connecting", sessionId);
-    for (const item of options.legacyMessages || []) {
-      if (!isCurrent()) return;
-      const message = legacyToCanonical(item, accountPubkey);
-      if (message) await this.pipeline.ingestCanonicalMessage(message, { source: "local-migration" });
-    }
-    const localMessages = await this.repository.list(accountPubkey);
+    const purged = await this.repository.purgeUnsupportedMessages(accountPubkey);
+    if (purged > 0) logger.info(`[message-sync] removed ${purged} unsupported cached messages`);
+    const localMessages = (await this.repository.list(accountPubkey))
+      .filter(record => record.protocol === "nip17" && record.transportKind === 1059);
     for (const record of localMessages) {
       if (!isCurrent()) return;
-      if (options.legacyReadThrough) {
-        await this.repository.seedReadState(accountPubkey, record.conversationId, options.legacyReadThrough);
-      }
       await options.onMessage?.({
         id: record.id,
         senderPubkey: record.senderPubkey,

@@ -1,5 +1,5 @@
 <template>
-  <div class="encrypted-video-player-container">
+  <div ref="container" class="encrypted-video-player-container">
     <!-- Loading state -->
     <div v-if="loading" class="video-loading">
       <div class="loading-spinner"></div>
@@ -30,7 +30,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, ref, onMounted, onBeforeUnmount, PropType } from 'vue';
+import { defineComponent, ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, PropType } from 'vue';
 import { decryptVideoToBlob, importKeyFromBase64 } from '@/utils/videoCrypto';
 import type { EncryptedVideoMetadata } from '@/utils/encryptedVideoRef';
 
@@ -47,14 +47,23 @@ export default defineComponent({
     const error = ref<string | null>(null);
     const decryptedUrl = ref<string | null>(null);
     const videoElement = ref<HTMLVideoElement | null>(null);
+    const container = ref<HTMLElement | null>(null);
+    let observer: IntersectionObserver | null = null;
+    let controller: AbortController | null = null;
+    let started = false;
+    let generation = 0;
 
     async function decryptAndLoad() {
+      if (started) return;
+      started = true;
+      const run = ++generation;
       loading.value = true;
       error.value = null;
+      controller = new AbortController();
 
       try {
         // Fetch the encrypted video from Blossom
-        const response = await fetch(props.metadata.url);
+        const response = await fetch(props.metadata.url, { signal: controller.signal });
         if (!response.ok) {
           throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`);
         }
@@ -72,13 +81,45 @@ export default defineComponent({
           props.metadata.mime
         );
 
+        if (run !== generation) {
+          URL.revokeObjectURL(blobUrl);
+          return;
+        }
         decryptedUrl.value = blobUrl;
       } catch (e: any) {
+        if (e?.name === 'AbortError') return;
+        if (run !== generation) return;
         console.error('Failed to decrypt video:', e);
         error.value = e.message || '解密视频失败';
       } finally {
-        loading.value = false;
+        if (run === generation) {
+          controller = null;
+          loading.value = false;
+        }
       }
+    }
+
+    function observeVisibility() {
+      if (started || observer || !container.value) return;
+      observer = new IntersectionObserver(entries => {
+        if (!entries.some(entry => entry.isIntersecting)) return;
+        observer?.disconnect();
+        observer = null;
+        void decryptAndLoad();
+      }, { rootMargin: '200px 0px', threshold: 0.01 });
+      observer.observe(container.value);
+    }
+
+    function releaseVideo() {
+      generation++;
+      controller?.abort();
+      controller = null;
+      observer?.disconnect();
+      observer = null;
+      if (decryptedUrl.value) URL.revokeObjectURL(decryptedUrl.value);
+      decryptedUrl.value = null;
+      started = false;
+      loading.value = true;
     }
 
     function onVideoLoaded() {
@@ -91,20 +132,21 @@ export default defineComponent({
     }
 
     onMounted(() => {
-      decryptAndLoad();
+      observeVisibility();
     });
 
+    onActivated(observeVisibility);
+    onDeactivated(releaseVideo);
+
     onBeforeUnmount(() => {
-      // Clean up blob URL to prevent memory leaks
-      if (decryptedUrl.value) {
-        URL.revokeObjectURL(decryptedUrl.value);
-      }
+      releaseVideo();
     });
 
     return {
       loading,
       error,
       decryptedUrl,
+      container,
       videoElement,
       onVideoLoaded,
       onVideoError

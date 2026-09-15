@@ -8,18 +8,23 @@
       </keep-alive>
     </router-view>
     <ToastContainer />
-    <PostEditorModal />
+    <PostEditorModal v-if="ui.showPostEditor" />
   </div>
 </template>
 
 <script lang="ts">
-import { defineComponent } from "vue";
+import { defineAsyncComponent, defineComponent } from "vue";
 import HeaderBar from "@/components/HeaderBar.vue";
 import ToastContainer from "@/components/ToastContainer.vue";
-import PostEditorModal from "@/components/PostEditorModal.vue";
 import UpdateNotification from "@/components/UpdateNotification.vue";
+import { useUIStore } from "@/stores/ui";
+
+const PostEditorModal = defineAsyncComponent(() => import("@/components/PostEditorModal.vue"));
 
 export default defineComponent({
-  components: { HeaderBar, ToastContainer, PostEditorModal, UpdateNotification }
+  components: { HeaderBar, ToastContainer, PostEditorModal, UpdateNotification },
+  setup() {
+    return { ui: useUIStore() };
+  }
 });
 </script>

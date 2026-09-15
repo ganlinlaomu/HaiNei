@@ -652,7 +652,7 @@ export default defineComponent({
           }, 100);
         }
       }
-    });
+    }, { immediate: true });
 
     // PostEditorModal is mounted at App level and otherwise survives route
     // changes. Never leave it covering the destination page.

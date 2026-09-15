@@ -23,8 +23,6 @@ export type MessageSyncOptions = {
   relays: string[];
   authors: string[];
   decodeContext: DecodeContext;
-  legacyMessages?: Array<Record<string, any>>;
-  legacyReadThrough?: number;
   onMessage?: (message: CanonicalMessage, metadata: MessageIngestionMetadata) => void | Promise<void>;
   onStatus?: (status: SyncStatus) => void;
 };

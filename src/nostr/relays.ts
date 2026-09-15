@@ -18,6 +18,7 @@ type RelayConn = {
   reconnectTimer?: number | null;
   reconnectAttempts: number;
   hasConnected: boolean;
+  shouldReconnect: boolean;
 };
 
 const CONNECT_TIMEOUT = 4000;
@@ -92,11 +93,13 @@ function ensureRelayConn(url: string): RelayConn {
     okHandlers: new Map(),
     reconnectTimer: null,
     reconnectAttempts: 0,
-    hasConnected: false
+    hasConnected: false,
+    shouldReconnect: true
   };
   relaysMap[url] = conn;
 
   const create = () => {
+    if (!conn.shouldReconnect) return;
     try {
       const ws = new WebSocket(url);
       conn.ws = ws;
@@ -158,11 +161,12 @@ function ensureRelayConn(url: string): RelayConn {
       };
 
       const onClose = () => {
-        logger.warn(`[relay] disconnected relay=${url}; reconnect scheduled`);
         conn.ready = false;
         conn.ws = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
         emitConnectionState({ url, connected: false, reconnected: conn.hasConnected, at: Date.now() });
+        if (!conn.shouldReconnect) return;
+        logger.warn(`[relay] disconnected relay=${url}; reconnect scheduled`);
         const attempt = conn.reconnectAttempts++;
         const baseDelay = Math.min(MAX_RECONNECT_DELAY, 1000 * (2 ** attempt));
         const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4));
@@ -313,6 +317,7 @@ export function reconnectRelay(url: string) {
     return;
   }
   try {
+    r.shouldReconnect = true;
     if (r.ws) {
       try { r.ws.close(); } catch { }
     } else if (!r.reconnectTimer) {
@@ -327,6 +332,22 @@ export function reconnectRelay(url: string) {
   } catch (e) {
     logger.warn("reconnectRelay error", e);
   }
+}
+
+/** Permanently stop and forget a relay that was removed from settings. */
+export function disconnectRelay(url: string) {
+  const conn = relaysMap[url];
+  if (!conn) return;
+  conn.shouldReconnect = false;
+  if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+  conn.reconnectTimer = null;
+  conn.queue = [];
+  conn.subs.clear();
+  conn.okHandlers.clear();
+  try { conn.ws?.close(); } catch {}
+  conn.ws = null;
+  conn.ready = false;
+  delete relaysMap[url];
 }
 
 /**

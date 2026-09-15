@@ -4,7 +4,8 @@ import {
   getRelaysFromStorage,
   subscribe,
   publish,
-  reconnectRelay
+  reconnectRelay,
+  disconnectRelay
 } from "@/nostr/relays";
 import { logger } from "@/utils/logger";
 import { closeSubscription } from "@/utils/closeSubscription";
@@ -199,7 +200,16 @@ export const useSettingsStore = defineStore("settings", {
      * update
      * ================================================================ */
     updateRelays(relays: string[]) {
-      this.settings.relays = [...relays];
+      const next = [...new Set(relays.map(value => value.trim()).filter(Boolean))];
+      const previous = this.settings.relays;
+      for (const relay of previous) {
+        if (!next.includes(relay)) disconnectRelay(relay);
+      }
+      this.settings.relays = next;
+      localStorage.setItem("custom-relays", next.join("\n"));
+      for (const relay of next) {
+        if (!previous.includes(relay)) reconnectRelay(relay);
+      }
       this.save();
       if (useKeyStore().supportsNip04) {
         this.publishToRelays().catch(() => {});

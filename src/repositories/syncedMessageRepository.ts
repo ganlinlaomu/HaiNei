@@ -97,6 +97,19 @@ export class SyncedMessageRepository {
     return (limit === undefined ? query : query.limit(limit)).toArray();
   }
 
+  async purgeUnsupportedMessages(accountPubkey: string) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const keys = await this.database.syncedMessages
+      .where("accountPubkey")
+      .equals(account)
+      .filter(record => record.protocol !== "nip17" || record.transportKind !== 1059)
+      .primaryKeys();
+    if (keys.length === 0) return 0;
+    await this.database.syncedMessages.bulkDelete(keys);
+    await this.rebuildConversationState(account);
+    return keys.length;
+  }
+
   async listConversation(accountPubkey: string, conversationId: string) {
     const account = normalizeAccountPubkey(accountPubkey);
     return this.database.syncedMessages

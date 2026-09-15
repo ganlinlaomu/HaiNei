@@ -42,7 +42,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, computed, ref, onBeforeUnmount, watch, onMounted, nextTick } from "vue";
+import { defineComponent, computed, ref, onBeforeUnmount, watch, nextTick } from "vue";
 import { extractImageUrls } from "@/utils/extractImageUrls";
 import { decodeEncryptedImageRef, isEncryptedImageRef } from "@/utils/encryptedImageRef";
 import { base64ToBytes } from "@/nostr/crypto";
@@ -232,6 +232,8 @@ export default defineComponent({
         }
       });
       objectUrls.clear();
+      itemRefs.value = [];
+      itemIndexMap.clear();
       
       // Process all image URLs (创建占位符)
       const processed = await Promise.all(urls.map(processImageUrl));
@@ -301,13 +303,6 @@ export default defineComponent({
       failed.value[idx] = true;
     }
     
-    onMounted(() => {
-      // 组件挂载后设置观察器
-      if (props.showAll && images.value.length > 0) {
-        setupIntersectionObserver();
-      }
-    });
-
     onBeforeUnmount(() => {
       // Clean up observer
       if (observer.value) {

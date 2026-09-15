@@ -1,13 +1,12 @@
 import { defineStore } from "pinia";
 import { useKeyStore } from "./keys";
-import { inferLegacyProtocol, LEGACY_MESSAGE_KIND } from "@/nostr/messaging/protocol";
 
 export type InboxItem = {
   id: string;
   pubkey: string;
   created_at: number;
   content: string;
-  protocol?: "legacy-8964" | "legacy-8965" | "nip04" | "nip44" | "nip17";
+  protocol?: "nip17";
   transportKind?: number;
   transportEventId?: string;
   rumorId?: string;
@@ -38,6 +37,9 @@ function outboxKeyFor(pk: string | null | undefined) {
   return `nostr_outbox_${pk}`;
 }
 
+let inboxSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let outboxSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
 export const useMessagesStore = defineStore("messages", {
   state: () => ({
     inbox: [] as InboxItem[],
@@ -64,12 +66,14 @@ export const useMessagesStore = defineStore("messages", {
         if (ik) {
           const rawI = localStorage.getItem(ik);
           const stored = rawI ? JSON.parse(rawI) : [];
-          this.inbox = Array.isArray(stored) ? stored.map((item: InboxItem) => ({
-            ...item,
-            protocol: item.protocol ?? inferLegacyProtocol(item.transportKind) ?? "legacy-8964",
-            transportKind: item.transportKind ?? LEGACY_MESSAGE_KIND,
-            transportEventId: item.transportEventId ?? item.id
-          })) : [];
+          const compatible = Array.isArray(stored) ? stored
+            .filter((item: InboxItem) => item.protocol === "nip17" && item.transportKind === 1059) : [];
+          this.inbox = compatible
+            .map((item: InboxItem) => ({
+              ...item,
+              transportEventId: item.transportEventId ?? item.id
+            }));
+          if (Array.isArray(stored) && compatible.length !== stored.length) this.saveInbox();
         } else {
           this.inbox = [];
         }
@@ -92,15 +96,33 @@ export const useMessagesStore = defineStore("messages", {
     },
 
     saveInbox() {
+      if (inboxSaveTimer) {
+        clearTimeout(inboxSaveTimer);
+        inboxSaveTimer = null;
+      }
       const key = inboxKeyFor(this.loadedFor || "");
       if (!key) return;
       try { localStorage.setItem(key, JSON.stringify(this.inbox)); } catch {}
     },
 
     saveOutbox() {
+      if (outboxSaveTimer) {
+        clearTimeout(outboxSaveTimer);
+        outboxSaveTimer = null;
+      }
       const key = outboxKeyFor(this.loadedFor || "");
       if (!key) return;
       try { localStorage.setItem(key, JSON.stringify(this.outbox)); } catch {}
+    },
+
+    scheduleInboxSave() {
+      if (inboxSaveTimer) return;
+      inboxSaveTimer = setTimeout(() => this.saveInbox(), 150);
+    },
+
+    scheduleOutboxSave() {
+      if (outboxSaveTimer) return;
+      outboxSaveTimer = setTimeout(() => this.saveOutbox(), 150);
     },
 
     addInbox(item: InboxItem) {
@@ -123,7 +145,7 @@ export const useMessagesStore = defineStore("messages", {
             ...existing,
             _localMeta: item._localMeta
           };
-          this.saveInbox();
+          this.scheduleInboxSave();
         }
         // All other cases: keep existing as-is
         return;
@@ -133,14 +155,14 @@ export const useMessagesStore = defineStore("messages", {
       this.inbox.unshift(item);
       // keep bounded history
       if (this.inbox.length > 1000) this.inbox.splice(1000);
-      this.saveInbox();
+      this.scheduleInboxSave();
     },
 
     addOutbox(item: OutboxItem) {
       if (!item || !item.id) return;
       this.outbox.unshift(item);
       if (this.outbox.length > 500) this.outbox.splice(500);
-      this.saveOutbox();
+      this.scheduleOutboxSave();
     },
 
     // remove in-memory lists for current user, optionally remove persisted storage
@@ -148,6 +170,15 @@ export const useMessagesStore = defineStore("messages", {
       const pk = this.loadedFor || "";
       const ik = inboxKeyFor(pk);
       const ok = outboxKeyFor(pk);
+      if (removeFromStorage) {
+        if (inboxSaveTimer) clearTimeout(inboxSaveTimer);
+        if (outboxSaveTimer) clearTimeout(outboxSaveTimer);
+        inboxSaveTimer = null;
+        outboxSaveTimer = null;
+      } else {
+        this.saveInbox();
+        this.saveOutbox();
+      }
       this.inbox = [];
       this.outbox = [];
       this.loadedFor = "";

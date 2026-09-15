@@ -3,7 +3,6 @@ import { nextTick } from "vue";
 import Login from "@/views/Login.vue";
 import Home from "@/views/Home.vue";
 // Lazy load less frequently accessed views
-const PostEditor = () => import("@/views/PostEditor.vue");
 const Friends = () => import("@/views/Friends.vue");
 const Settings = () => import("@/views/Settings.vue");
 const Notifications = () => import("@/views/Notifications.vue");
@@ -33,12 +32,6 @@ const routes: Array<RouteRecordRaw> = [
     path: "/",
     name: "Home",
     component: Home,
-    meta: { requiresAuth: true }
-  },
-  {
-    path: "/post",
-    name: "PostEditor",
-    component: PostEditor,
     meta: { requiresAuth: true }
   },
   {

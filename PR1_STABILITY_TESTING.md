@@ -70,7 +70,7 @@ records.
 
 ## D. WebSocket reconnect and REQ replay
 
-1. Log in and leave Home open with a kind 8964 subscription.
+1. Log in and leave Home open with a kind 1059 NIP-17 subscription.
 2. In DevTools Network, select each relay WebSocket and close it, or briefly
    disable/re-enable the network.
 3. Wait for reconnect and have a friend publish a new post without refreshing.
@@ -109,6 +109,6 @@ batch with unchanged `until` and zero new IDs stops instead of looping forever.
 
 ## Regression checks
 
-Verify existing kind 8964 posts and kind 8965 interactions can still be read and
-sent, including existing encrypted image/video references. No storage migration
-or deletion should occur.
+Verify kind 1059 NIP-17 posts and labeled NIP-17 interactions can be read and
+sent, including encrypted image/video references. Confirm older custom protocol
+events are not subscribed to or decoded. No storage deletion should occur.

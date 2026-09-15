@@ -40,19 +40,13 @@
               @click="go(n)"
             >
               <div class="icon">
-                {{ n.type === "like" ? "❤️" : "💬" }}
+                {{ notificationIcon(n) }}
               </div>
 
               <div class="content">
                 <div class="text">
                   <span class="from">{{ displayName(n.from) }}</span>
-                  {{
-                    n.type === "like"
-                      ? "点赞了你"
-                      : n.replyId
-                      ? "回复了你的评论"
-                      : "评论了你"
-                  }}
+                  {{ notificationAction(n) }}
                 </div>
 
                 <!-- 评论/回复或点赞对应帖子内容 -->
@@ -95,19 +89,13 @@
               @click="go(n)"
             >
               <div class="icon">
-                {{ n.type === "like" ? "❤️" : "💬" }}
+                {{ notificationIcon(n) }}
               </div>
 
               <div class="content">
                 <div class="text">
                   <span class="from">{{ displayName(n.from) }}</span>
-                  {{
-                    n.type === "like"
-                      ? "点赞了你"
-                      : n.replyId
-                      ? "回复了你的评论"
-                      : "评论了你"
-                  }}
+                  {{ notificationAction(n) }}
                 </div>
 
                 <div class="comment-content">
@@ -149,19 +137,13 @@
               @click="go(n)"
             >
               <div class="icon">
-                {{ n.type === "like" ? "❤️" : "💬" }}
+                {{ notificationIcon(n) }}
               </div>
 
               <div class="content">
                 <div class="text">
                   <span class="from">{{ displayName(n.from) }}</span>
-                  {{
-                    n.type === "like"
-                      ? "点赞了你"
-                      : n.replyId
-                      ? "回复了你的评论"
-                      : "评论了你"
-                  }}
+                  {{ notificationAction(n) }}
                 </div>
 
                 <div class="comment-content">
@@ -195,6 +177,13 @@ const friends = useFriendsStore();
 const interactions = useInteractionsStore();
 const messagesStore = useMessagesStore();
 const router = useRouter();
+
+const friendsByPubkey = computed(() =>
+  new Map(friends.sortedList.map(friend => [friend.pubkey, friend]))
+);
+const messagesById = computed(() =>
+  new Map(messagesStore.inbox.map(message => [message.id, message]))
+);
 
 /* ---------- 时间分组 ---------- */
 function startOfDay(ts: number) {
@@ -259,8 +248,16 @@ function dismiss(n: any) {
   swipe[n.id] = 0;
 }
 function displayName(pk: string) {
-  const f = friends.sortedList.find(f => f.pubkey === pk);
+  const f = friendsByPubkey.value.get(pk);
   return f?.name || pk.slice(0, 8) + "...";
+}
+function notificationIcon(n: any) {
+  return n.type === "like" ? "❤️" : n.type === "message" ? "🔔" : "💬";
+}
+function notificationAction(n: any) {
+  if (n.type === "like") return "点赞了你";
+  if (n.type === "message") return "发布了新消息";
+  return n.replyId ? "回复了你的评论" : "评论了你";
 }
 function go(n: any) {
   notifications.markAsRead(n.id);
@@ -269,43 +266,18 @@ function go(n: any) {
 
 /* ---------- 评论/回复/点赞内容 ---------- */
 function getNotificationContent(n: any) {
+  if (n.type === "message") return summarizeNotificationText(n.postContent || "");
   const allInteractions = interactions.getComments(n.messageId);
-  const messagesStore = useMessagesStore();
-  const rootPost = messagesStore.inbox.find(m => m.id === n.messageId);
+  const rootPost = messagesById.value.get(n.messageId);
   
-  const summarize = (text: string, maxLength = 40) => {
-    if (!text) return "";
-    
-    let cleanText = text;
-
-    // 1. 过滤加密图片字符串 (例如 blossom+aesgcm 或其他自定义格式)
-    // 这种正则会匹配 ![alt](blossom+aesgcm:...) 格式
-    cleanText = cleanText.replace(/!\[.*?\]\(blossom\+aesgcm:[^\s)]+\)/gi, '[加密图片]');
-    
-    // 2. 过滤视频元数据 (针对你 Home 页里的 [video:{...}] 格式)
-    cleanText = cleanText.replace(/\[video:\{.*?\}\]/gi, '[视频]');
-
-    // 3. 过滤普通链接
-    cleanText = cleanText.replace(/https?:\/\/[^\s]+/gi, '[链接]');
-
-    // 4. 处理换行和空白
-    cleanText = cleanText.replace(/\s+/g, " ").trim();
-
-    // 5. 截断
-    if (cleanText.length > maxLength) {
-      return cleanText.slice(0, maxLength) + "...";
-    }
-    return cleanText;
-  };
-
-  const rootSummary = summarize(rootPost?.content || rootPost?.text || "");
+  const rootSummary = summarizeNotificationText(rootPost?.content || rootPost?.text || "");
 
   // 处理点赞
   if (n.type === "like") {
     const targetId = n.replyId || n.commentId;
     if (targetId) {
       const target = allInteractions.find(c => c.id === targetId);
-      return summarize(target?.text || "已删除消息");
+      return summarizeNotificationText(target?.text || "已删除消息");
     }
     return rootSummary || "[媒体动态]";
   }
@@ -315,7 +287,7 @@ function getNotificationContent(n: any) {
   const actionNode = allInteractions.find(c => c.id === targetId);
   
   if (targetId && actionNode) {
-    const actionSummary = summarize(actionNode.text);
+    const actionSummary = summarizeNotificationText(actionNode.text);
     // 这里的格式为: "评论内容 // 原帖: 原帖内容"
     return rootSummary 
       ? `${actionSummary} // 原帖: ${rootSummary}` 
@@ -323,6 +295,18 @@ function getNotificationContent(n: any) {
   }
 
   return rootSummary || "[媒体动态]";
+}
+
+function summarizeNotificationText(text: string, maxLength = 40) {
+  if (!text) return "[媒体动态]";
+  let cleanText = text
+    .replace(/!\[.*?\]\(blossom\+aesgcm:[^\s)]+\)/gi, "[加密图片]")
+    .replace(/\[video:\{.*?\}\]/gi, "[视频]")
+    .replace(/https?:\/\/[^\s]+/gi, "[链接]")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleanText.length > maxLength) cleanText = `${cleanText.slice(0, maxLength)}...`;
+  return cleanText || "[媒体动态]";
 }
 </script>
 

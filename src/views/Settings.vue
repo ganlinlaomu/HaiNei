@@ -165,7 +165,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, ref, reactive, onMounted, onBeforeUnmount, computed, watch } from "vue";
+import { defineComponent, ref, reactive, onMounted, onBeforeUnmount, onActivated, onDeactivated, computed, watch } from "vue";
 import { DEFAULT_RELAYS, getRelaysFromStorage, inspectRelays, reconnectRelay } from "@/nostr/relays";
 import { DEFAULT_BLOSSOM_SERVERS } from "@/utils/blossom";
 import { useKeyStore } from "@/stores/keys";
@@ -186,6 +186,7 @@ export default defineComponent({
     const isFadingOut = ref(false);
     let hideTimeout: ReturnType<typeof setTimeout> | null = null;
     let fadeTimeout: ReturnType<typeof setTimeout> | null = null;
+    let statusInterval: ReturnType<typeof setInterval> | null = null;
 
     // Relay management
     const newRelay = ref("");
@@ -472,6 +473,18 @@ export default defineComponent({
       }
     }
 
+    function startStatusPolling() {
+      if (statusInterval) return;
+      refreshStatuses();
+      statusInterval = setInterval(refreshStatuses, 5000);
+    }
+
+    function stopStatusPolling() {
+      if (!statusInterval) return;
+      clearInterval(statusInterval);
+      statusInterval = null;
+    }
+
     function reconnect(url: string) {
       reconnectRelay(url);
       setTimeout(refreshStatuses, 800);
@@ -485,18 +498,15 @@ export default defineComponent({
     onMounted(() => {
       loadRelays();
       loadBlossoms();
-      refreshStatuses();
       refreshCacheStats();
-      
-      // Auto-refresh statuses every 5 seconds
-      const intervalId = setInterval(refreshStatuses, 5000);
-      
-      return () => {
-        clearInterval(intervalId);
-      };
+      startStatusPolling();
     });
 
+    onActivated(startStatusPolling);
+    onDeactivated(stopStatusPolling);
+
     onBeforeUnmount(() => {
+      stopStatusPolling();
       // Clean up timeouts to prevent memory leaks
       if (hideTimeout) {
         clearTimeout(hideTimeout);

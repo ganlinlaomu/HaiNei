@@ -18,16 +18,15 @@
 3. logical-message deduplication;
 4. relay publication.
 
-New posts prefer a standard NIP-17 kind 14 rumor, NIP-44 v2 kind 13 seal, and
+Messages use a standard NIP-17 kind 14 rumor, NIP-44 v2 kind 13 seal, and
 kind 1059 gift wrap. A separate wrap is produced for every recipient and for
 the sender. Only the target `p` tag is exposed on each outer wrap. The same
 rumor id is retained across all copies and is the canonical message id.
 
-Legacy kinds remain readable through adapters. If the active signer cannot
-perform NIP-44, the send policy can use the legacy 8964 adapter rather than
-silently producing a non-standard NIP-17 event. Legacy 8965 interactions also
-use their adapter instead of constructing or decoding the wire payload in the
-store.
+The application no longer subscribes to, sends, decodes, or imports the old
+custom message and interaction kinds. Likes and comments are encrypted NIP-17
+messages identified by an encrypted rumor label. A signer without NIP-44
+support receives an explicit send error instead of using an older protocol.
 
 ## NIP-17 validation
 
@@ -42,7 +41,8 @@ so a wrapper randomized into the past is not excluded by a rumor-time cursor.
 ## Compatibility and scope
 
 - Existing account-scoped storage keys and the PR2 Dexie schema are unchanged.
-- Old inbox entries without protocol metadata are inferred as legacy 8964 on read.
+- Old custom-protocol inbox entries are ignored; there is no read migration or
+  fallback decoder.
 - Relay discovery/ranking, NIP-65/NIP-10050 routing, final group protocol,
   attachments, push notifications, service workers, nostrdb, and UI design are
   intentionally not changed in PR3.

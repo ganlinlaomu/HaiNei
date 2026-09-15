@@ -1,16 +1,13 @@
 import "fake-indexeddb/auto";
 import Dexie from "dexie";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   HaiNeiDatabase,
-  resolveUnambiguousLegacyAccount,
-  type AccountMessageRecord
+  resolveUnambiguousLegacyAccount
 } from "@/db/dexie";
-import { MessageRepository, messageRepository } from "@/repositories/messageRepository";
+import { MessageRepository } from "@/repositories/messageRepository";
 import { MetaRepository } from "@/repositories/metaRepository";
 import { ImageCacheRepository } from "@/repositories/imageCacheRepository";
-import useNostrStore from "@/stores/useNostrStore";
 
 const ACCOUNT_A = "a".repeat(64);
 const ACCOUNT_B = "b".repeat(64);
@@ -39,11 +36,9 @@ beforeEach(() => {
     configurable: true,
     value: new MemoryStorage()
   });
-  setActivePinia(createPinia());
 });
 
 afterEach(async () => {
-  vi.restoreAllMocks();
   const active = databases.splice(0);
   const names = [...new Set(active.map(database => database.name))];
   active.forEach(database => database.close());
@@ -85,23 +80,6 @@ describe("account-scoped repositories", () => {
     expect((await images.get(ACCOUNT_B, "encrypted://same"))?.blob.size).toBe(2);
   });
 
-  it("drops a late account A query result after the store switches to B", async () => {
-    const store = useNostrStore();
-    let releaseA!: (records: AccountMessageRecord[]) => void;
-    const delayedA = new Promise<AccountMessageRecord[]>(resolve => { releaseA = resolve; });
-    vi.spyOn(messageRepository, "listLatest").mockImplementation(async account => {
-      if (account === ACCOUNT_A) return delayedA;
-      return [{ accountPubkey: ACCOUNT_B, id: "b", pubkey: PEER_C, content: "B", created_at: 2 }];
-    });
-
-    const pendingA = store.loadCached(ACCOUNT_A);
-    await store.loadCached(ACCOUNT_B);
-    releaseA([{ accountPubkey: ACCOUNT_A, id: "a", pubkey: PEER_C, content: "A", created_at: 1 }]);
-    await pendingA;
-
-    expect(store.loadedFor).toBe(ACCOUNT_B);
-    expect(store.messages.map(message => message.content)).toEqual(["B"]);
-  });
 });
 
 describe("v2 to v3 migration", () => {

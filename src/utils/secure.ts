@@ -15,6 +15,12 @@
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
+function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function bytesToBase64(bytes: Uint8Array) {
   let binary = "";
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
@@ -37,7 +43,7 @@ export async function deriveKeyFromPassword(password: string, salt: Uint8Array, 
     ["deriveKey"]
   );
   const key = await crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    { name: "PBKDF2", salt: ownedBuffer(salt), iterations, hash: "SHA-256" },
     pwKey,
     { name: "AES-GCM", length: 256 },
     true,

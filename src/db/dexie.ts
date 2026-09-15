@@ -1,6 +1,6 @@
 import Dexie, { type Table, type Transaction } from "dexie";
 
-export const APP_VERSION = "0.1.0";
+export const APP_VERSION = "0.1.5";
 export const DB_VERSION = 4;
 export const DATABASE_NAME = "closed_community_db";
 

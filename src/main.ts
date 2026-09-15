@@ -60,13 +60,8 @@ if (versionChanged) {
     window.addEventListener("load", () => {
       navigator.serviceWorker
         .register("/service-worker.js")
-        .then((registration) => {
+        .then(() => {
           console.log("[main] Service Worker registered successfully");
-          
-          // Check for updates periodically
-          setInterval(() => {
-            registration.update();
-          }, 60000); // Check every 60 seconds
         })
         .catch((err) => {
           console.warn("Service Worker 注册失败", err);

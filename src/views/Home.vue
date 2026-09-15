@@ -160,23 +160,21 @@
 import { defineComponent, ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from "vue";
 import { useFriendsStore } from "@/stores/friends";
 import { useKeyStore } from "@/stores/keys";
-import { getRelaysFromStorage, subscribe } from "@/nostr/relays";
+import { getRelaysFromStorage } from "@/nostr/relays";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
-import { useInteractionsStore } from "@/stores/interactions";
+import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
+import { useNotificationsStore } from "@/stores/notifications";
 import { logger } from "@/utils/logger";
 import { formatRelativeTime } from "@/utils/format";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import VideoPlayer from "@/components/VideoPlayer.vue";
-import { saveBackfillBreakpoint, loadBackfillBreakpoint } from "@/utils/backfill";
 import { useRoute } from "vue-router";
 import { usePullToRefresh } from "@/components/usePullToRefresh";
 import { getLastSeenCreatedAt, setLastSeenCreatedAt, updateLastSeenToNewest } from "@/utils/lastSeen";
 import { extractVideoData as extractVideoDataUtil, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
 import { useRealtimeInboxReconcile } from "@/components/useRealtimeInboxReconcile";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
-import { buildInteractionSubscriptions } from "@/nostr/messaging/subscriptions";
-import { MessageSyncManager, SYNC_OVERLAP_SECONDS } from "@/nostr/messaging/sync";
-import { closeSubscription } from "@/utils/subscriptions";
+import { MessageSyncManager } from "@/nostr/messaging/sync";
 
 
 // reuse the regex logic from extractImageUrls to strip out image markdown and plain image URLs
@@ -195,10 +193,6 @@ const videoDataRE = /\[video:(\{[^\]]+\})\]/g;
 // Get video URL removal patterns for text cleanup
 const videoUrlPatterns = getVideoUrlRemovalPatterns();
 
-// Constants for time calculations
-const SECONDS_PER_DAY = 24 * 60 * 60;
-const THREE_DAYS_IN_SECONDS = 3 * SECONDS_PER_DAY;
-
 // Constants for scroll and layout calculations
 const BOTTOM_NAV_HEIGHT = 80; // Must match --bottom-nav-height in styles.css
 const SCROLL_SAFE_OFFSET = 20; // Extra padding to ensure elements are fully visible
@@ -212,19 +206,15 @@ export default defineComponent({
     const keys = useKeyStore();
     const msgs = useMessagesStore();
     const interactions = useInteractionsStore();
+    const notifications = useNotificationsStore();
     const readyForPending = ref(false);
     const route = useRoute();
     const realtimeSessionSince = ref(0);
     const notificationJumpDone = ref(false);
     const lastSeenCreatedAt = ref(0); // Track the watermark for filtering pending messages
-    const inboxSnapshot = computed(() =>
-  msgs.inbox
-    .map(m => m.id)
-    .join("|")
-);
+    const inboxSnapshot = computed(() => `${msgs.inbox.length}:${msgs.inbox[0]?.id || ""}`);
 
     const status = ref("未连接");
-    let interactionsSub: any = null;
     let homeAccountPk = "";
     const messageSync = new MessageSyncManager();
 
@@ -247,8 +237,6 @@ export default defineComponent({
 
     function closeHomeSubscriptions() {
       messageSync.stop();
-      closeSubscription(interactionsSub);
-      interactionsSub = null;
     }
 
     function clearHomeRuntimeState() {
@@ -435,24 +423,31 @@ export default defineComponent({
   // --------------------
 // ⭐ 防重复触发包装（加在这里）
 // --------------------
-let reconciling = false;
+let reconcileScheduled = false;
 let reconcilePending = false;
 
 async function safeUpdateLocalRefs() {
-  if (reconciling) {
+  if (route.path !== "/") {
     reconcilePending = true;
     return;
   }
-  reconciling = true;
-  try {
-    do {
-      reconcilePending = false;
-      updateLocalRefs();
-      await Promise.resolve();
-    } while (reconcilePending);
-  } finally {
-    reconciling = false;
+  if (reconcileScheduled) {
+    reconcilePending = true;
+    return;
   }
+  reconcileScheduled = true;
+  await new Promise<void>(resolve => {
+    const run = () => {
+      reconcileScheduled = false;
+      updateLocalRefs();
+      const shouldRunAgain = reconcilePending;
+      reconcilePending = false;
+      resolve();
+      if (shouldRunAgain) void safeUpdateLocalRefs();
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  });
 }
     // 加载更多消息
     function loadMoreMessages() {
@@ -541,7 +536,6 @@ async function safeUpdateLocalRefs() {
     replyTo: message.replyTo,
     rootId: message.rootId
   });
-  if (readyForPending.value) safeUpdateLocalRefs();
 }
 
     function textWithoutImages(content: string): string {
@@ -800,66 +794,11 @@ async function safeUpdateLocalRefs() {
       return interactions.getCommentCount(messageId);
     }
     
-    async function backfillInteractions(relays: string[]) {
-  const accountPk = keys.pkHex;
-  if (!accountPk) return;
-  try {
-    const now = Math.floor(Date.now() / 1000);
-    const breakpointKey = `interactions_${accountPk}`;
-    const saved = loadBackfillBreakpoint(breakpointKey);
-
-    const since = saved && saved > 0
-      ? Math.max(0, saved - SYNC_OVERLAP_SECONDS)
-      : now - THREE_DAYS_IN_SECONDS;
-
-    let newestTs = 0;
-
-    await interactions.backfillInteractions({
-      relays,
-      since,
-      until: now,
-      maxBatches: 10,
-      onEvent: (evt) => {
-        if (keys.pkHex !== accountPk) {
-          logger.warn(`[account] interaction breakpoint event discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
-          return;
-        }
-        if (evt.created_at && evt.created_at > newestTs) {
-          newestTs = evt.created_at;
-        }
-      },
-      onProgress: (fetched, processed) => {
-        logger.debug(`互动回填: fetched=${fetched}, processed=${processed}`);
-      }
-    });
-
-    // ⭐ 只有真的拿到互动，才推进断点
-    if (keys.pkHex !== accountPk) {
-      logger.warn(`[account] interaction breakpoint completion discarded account=${accountPk.slice(0, 8)}`);
-      return;
-    }
-    if (newestTs > 0) {
-      saveBackfillBreakpoint(breakpointKey, newestTs);
-      logger.info(
-        `互动断点更新至 ${new Date(newestTs * 1000).toLocaleString()}`
-      );
-    } else {
-      logger.info("互动回填无新事件，不推进断点");
-    }
-
-  } catch (e) {
-    logger.error("回填互动失败", e);
-  }
-}
-
-
     async function startSub() {
       try {
         logger.info("开始订阅流程");
         if (!keys.isLoggedIn) {
           messageSync.stop();
-          closeSubscription(interactionsSub);
-          interactionsSub = null;
           status.value = "未登录";
           logger.warn("[startSub] skip: not logged in");
           return;
@@ -901,15 +840,27 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
           authors: Array.from(friendSet),
           decodeContext: {
             accountPubkey: accountAtStart,
-            nip04Decrypt: keys.nip04Decrypt.bind(keys),
             nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined
           },
-          legacyMessages: msgs.inbox,
-          legacyReadThrough: getLastSeenCreatedAt(accountAtStart),
-          onMessage: async (message) => {
+          onMessage: async (message, metadata) => {
             if (keys.pkHex !== accountAtStart) return;
             if (!friendSet.has(message.senderPubkey)) return;
+            if (isInteractionMessage(message)) {
+              await interactions.processCanonicalInteraction(message, accountAtStart);
+              return;
+            }
             mirrorSyncedMessage(message);
+            if (message.senderPubkey !== accountAtStart && metadata.source !== "local-migration") {
+              notifications.addNotification({
+                id: `message:${message.id}`,
+                type: "message",
+                from: message.senderPubkey,
+                messageId: message.id,
+                created_at: message.createdAt,
+                read: false,
+                postContent: message.plaintext || ""
+              });
+            }
           },
           onStatus: syncStatus => {
             if (keys.pkHex !== accountAtStart) return;
@@ -919,57 +870,6 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
           }
         });
         
-        // Backfill historical interactions before subscribing to real-time events
-        // Now uses inbox (#p) and outbox (authors) filters for privacy compliance
-        // await backfillInteractions(relays);
-        backfillInteractions(relays).catch(e => logger.error("interaction backfill failed", e));
-        
-        // Close existing interactions subscription before creating a new one
-        if (interactionsSub) logger.debug("关闭之前的互动订阅");
-        closeSubscription(interactionsSub);
-        interactionsSub = null;
-        
-        // Subscribe to legacy interactions through the protocol subscription planner.
-        try {
-          // Subscribe to two types of interactions for comprehensive coverage:
-          // 1. Inbox: Interactions where user is tagged (#p) - for notifications
-          // 2. Outbox: Interactions authored by user - for cross-device sync
-          const interactionBreakpoint =
-          loadBackfillBreakpoint(`interactions_${accountPk}`) || 0;
-          const interactionSince = Math.max(
-            interactionBreakpoint - SYNC_OVERLAP_SECONDS,
-            Math.floor(Date.now() / 1000) - THREE_DAYS_IN_SECONDS
-          );
-          
-          const interactionFilters = buildInteractionSubscriptions(
-            accountPk,
-            interactionSince
-          );
-          
-          interactionsSub = subscribe(relays, interactionFilters);
-          
-          interactionsSub.on("event", async (evt: any) => {
-           if (keys.pkHex !== accountPk) {
-             logger.warn(`[account] realtime interaction discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
-             return;
-           }
-
-           // ③ 打点日志（现在你最需要的是“确定有没有进来”）
-           logger.info(
-             "[互动事件] Home.vue 收到",
-             evt.id.slice(0, 8),
-             "from",
-             evt.pubkey.slice(0, 8)
-           );
-
-           // ④ 真正交给 interactions 处理
-           await interactions.processInteractionEvent(evt, accountPk);
-         });
-
-          logger.debug("已订阅互动事件 (收件箱+发件箱)");
-        } catch (e) {
-          logger.warn("subscribe to interactions failed", e);
-        }
       } catch (e) {
         logger.error("startRealtimeSubscription failed", e);
       }
@@ -1023,12 +923,11 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
      }
    );
    watch(
-     () => interactions.interactions,
+     () => interactions.lastSyncedAt,
      () => {
-       if (notificationJumpDone.value) return;
+       if (route.path !== "/" || notificationJumpDone.value) return;
        handleNotificationJump();
-     },
-     { deep: true }
+     }
    );
 
    
@@ -1057,7 +956,11 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
    
    
     // Watch for route query changes to handle notification jump state
-    watch(() => route.query, (newQuery, oldQuery) => {
+    watch(() => route.path, path => {
+      if (path === "/" && reconcilePending) void safeUpdateLocalRefs();
+    });
+
+    watch(() => route.query, newQuery => {
   if (!hasNotificationParams(newQuery)) {
     notificationJumpDone.value = false;
   } else {

@@ -1,5 +1,11 @@
 import { bytesToBase64, base64ToBytes } from "@/nostr/crypto";
 
+function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 /* ========================
  * 图片 AES-GCM 加密
  * ======================== */
@@ -13,7 +19,7 @@ export async function encryptImageBytes(
   const encrypted = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    plainBytes
+    ownedBuffer(plainBytes)
   );
 
   return {
@@ -36,7 +42,7 @@ export async function decryptImageBytes(
   const decrypted = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv },
     key,
-    ct
+    ownedBuffer(ct)
   );
 
   return new Uint8Array(decrypted);

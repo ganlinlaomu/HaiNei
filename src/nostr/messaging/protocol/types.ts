@@ -1,11 +1,6 @@
 import type { EventTemplate, NostrEvent, VerifiedEvent } from "nostr-tools";
 
-export type MessageProtocol =
-  | "legacy-8964"
-  | "legacy-8965"
-  | "nip04"
-  | "nip44"
-  | "nip17";
+export type MessageProtocol = "nip17";
 
 export interface CanonicalMessage {
   id: string;
@@ -27,13 +22,11 @@ export interface CanonicalMessage {
 
 export interface DecodeContext {
   accountPubkey: string;
-  nip04Decrypt?: (senderPubkey: string, ciphertext: string) => Promise<string>;
   nip44Decrypt?: (senderPubkey: string, ciphertext: string) => Promise<string>;
 }
 
 export interface EncodeContext {
   senderPubkey: string;
-  nip04Encrypt?: (recipientPubkey: string, plaintext: string) => Promise<string>;
   nip44Encrypt?: (recipientPubkey: string, plaintext: string) => Promise<string>;
   signEvent: (event: EventTemplate) => Promise<VerifiedEvent>;
 }
@@ -44,6 +37,7 @@ export interface OutgoingMessage {
   createdAt?: number;
   replyTo?: string;
   rootId?: string;
+  tags?: string[][];
 }
 
 export interface EncodedMessage {

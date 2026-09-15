@@ -99,6 +99,10 @@ export async function buildNip17Message(message: OutgoingMessage, context: Encod
   const tags: string[][] = recipients.map(pubkey => ["p", pubkey]);
   if (message.rootId) tags.push(["e", message.rootId, "", "root"]);
   if (message.replyTo) tags.push(["e", message.replyTo, "", "reply"]);
+  for (const tag of message.tags || []) {
+    if (!Array.isArray(tag) || tag.length === 0 || tag[0] === "p" || tag[0] === "e") continue;
+    tags.push([...tag]);
+  }
   const rumorBase: UnsignedEvent = {
     pubkey: sender,
     kind: RUMOR_KIND,
