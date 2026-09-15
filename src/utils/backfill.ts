@@ -10,6 +10,9 @@
 
 import { subscribe } from "@/nostr/relays";
 import { logger } from "@/utils/logger";
+import { closeSubscription } from "@/utils/closeSubscription";
+
+export const SYNC_OVERLAP_SECONDS = 300;
 
 export type BackfillFilter = {
   kinds: number[];
@@ -57,7 +60,7 @@ function batchAuthors(authors: string[], batchSize: number): string[][] {
  * This function implements backward time pagination:
  * - Starts from `until` (or current time if not provided)
  * - Fetches events in batches with `limit`
- * - For next batch, sets `until` to oldest event timestamp - 1
+ * - Keeps the oldest timestamp inclusive and de-duplicates by event ID
  * - Continues until `since` is reached or no more events
  */
 export async function backfillEvents(options: BackfillOptions): Promise<BackfillStats> {
@@ -91,6 +94,7 @@ export async function backfillEvents(options: BackfillOptions): Promise<Backfill
 
   const targetSince = filters.since || 0;
   const initialUntil = filters.until || Math.floor(Date.now() / 1000);
+  const seenEventIds = new Set<string>();
   
   // Log differently based on whether we have authors or not
   if (hasAuthors) {
@@ -120,7 +124,7 @@ export async function backfillEvents(options: BackfillOptions): Promise<Backfill
 
     // Continue fetching batches for this author group
     while (batchCount < maxBatches) {
-      if (currentUntil <= targetSince) {
+      if (currentUntil < targetSince) {
         logger.info(`已到达时间边界，停止回填`);
         break;
       }
@@ -164,39 +168,49 @@ export async function backfillEvents(options: BackfillOptions): Promise<Backfill
       let oldestInBatch = currentUntil;
 
       try {
-        const eventsReceived = await new Promise<boolean>((resolve) => {
+        await new Promise<void>((resolve) => {
           const sub = subscribe(relays, [batchFilter]);
-          let hasEvents = false;
-          let resolved = false; // Flag to prevent double resolution
+          const expectedRelays = new Set(relays);
+          const completedRelays = new Set<string>();
+          let resolved = false;
+
+          const finish = (reason: "eose" | "timeout" | "no-relays") => {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timeoutId);
+            closeSubscription(sub);
+            logger.info(
+              `[backfill] batch complete reason=${reason} eose=${completedRelays.size}/${expectedRelays.size} since=${targetSince} until=${currentUntil}`
+            );
+            resolve();
+          };
           
           const timeoutId = setTimeout(() => {
-            if (!resolved) {
-              resolved = true;
-              sub.unsub();
-              resolve(hasEvents);
-            }
+            finish("timeout");
           }, timeoutMs);
 
           sub.on("event", (evt: any) => {
-            hasEvents = true;
             batchEvents.push(evt);
             if (evt.created_at < oldestInBatch) {
               oldestInBatch = evt.created_at;
             }
           });
 
-          sub.on("eose", () => {
-            if (!resolved) {
-              resolved = true;
-              clearTimeout(timeoutId);
-              sub.unsub();
-              resolve(hasEvents);
-            }
+          sub.on("eose", (relayUrl: string) => {
+            completedRelays.add(relayUrl);
+            logger.debug(`[backfill] EOSE relay=${relayUrl} count=${completedRelays.size}/${expectedRelays.size}`);
+            if (completedRelays.size >= expectedRelays.size) finish("eose");
           });
+
+          if (expectedRelays.size === 0) finish("no-relays");
         });
 
         // Process events in this batch
+        let newUniqueEventsThisBatch = 0;
         for (const evt of batchEvents) {
+          if (!evt?.id || seenEventIds.has(evt.id)) continue;
+          seenEventIds.add(evt.id);
+          newUniqueEventsThisBatch++;
           try {
             await onEvent(evt);
             stats.totalEvents++;
@@ -211,7 +225,7 @@ export async function backfillEvents(options: BackfillOptions): Promise<Backfill
               }
             }
           } catch (e) {
-            logger.warn("处理事件失败", evt.id, e);
+            logger.warn(`[backfill] event processing failed event=${evt.id?.slice(0, 8)}`, e);
           }
         }
 
@@ -223,7 +237,7 @@ export async function backfillEvents(options: BackfillOptions): Promise<Backfill
           onProgress({ ...stats, completed: false });
         }
 
-        logger.info(`批次 #${batchCount} 完成: ${batchEvents.length} 个事件`);
+        logger.info(`[backfill] batch=${batchCount} received=${batchEvents.length} unique=${newUniqueEventsThisBatch} until=${currentUntil}`);
 
         // Check if we should continue
         if (batchEvents.length === 0) {
@@ -236,9 +250,12 @@ export async function backfillEvents(options: BackfillOptions): Promise<Backfill
           break;
         }
 
-        // Move time window backward for next batch
-        // Use oldest event timestamp - 1 as new until
-        currentUntil = oldestInBatch - 1;
+        // Keep the boundary second inclusive: relays may have more events sharing it.
+        if (oldestInBatch === currentUntil && newUniqueEventsThisBatch === 0) {
+          logger.warn(`[backfill] stop stalled pagination until=${currentUntil}`);
+          break;
+        }
+        currentUntil = oldestInBatch;
 
       } catch (e) {
         logger.error(`批次 #${batchCount + 1} 失败`, e);
@@ -309,20 +326,30 @@ export async function backfillFriendLists(options: {
       
       await new Promise<void>((resolve) => {
         const sub = subscribe(relays, [filter]);
-        const timeoutId = setTimeout(() => {
-          sub.unsub();
+        const expectedRelays = new Set(relays);
+        const completedRelays = new Set<string>();
+        let resolved = false;
+        const finish = () => {
+          if (resolved) return;
+          resolved = true;
+          clearTimeout(timeoutId);
+          closeSubscription(sub);
           resolve();
+        };
+        const timeoutId = setTimeout(() => {
+          finish();
         }, timeoutMs);
 
         sub.on("event", (evt: any) => {
           batchEvents.push(evt);
         });
 
-        sub.on("eose", () => {
-          clearTimeout(timeoutId);
-          sub.unsub();
-          resolve();
+        sub.on("eose", (relayUrl: string) => {
+          completedRelays.add(relayUrl);
+          if (completedRelays.size >= expectedRelays.size) finish();
         });
+
+        if (expectedRelays.size === 0) finish();
       });
 
       // Process events
@@ -331,7 +358,7 @@ export async function backfillFriendLists(options: {
           await onEvent(evt);
           totalFetched++;
         } catch (e) {
-          logger.warn("处理好友列表事件失败", evt.id, e);
+          logger.warn(`[backfill] friend event processing failed event=${evt.id?.slice(0, 8)}`, e);
         }
       }
 

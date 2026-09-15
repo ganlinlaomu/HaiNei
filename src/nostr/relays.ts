@@ -24,6 +24,36 @@ const RECONNECT_DELAY = 3000;
 
 const relaysMap: Record<string, RelayConn> = {};
 
+function queuedSubscriptionIds(queue: string[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of queue) {
+    try {
+      const payload = JSON.parse(message);
+      if (Array.isArray(payload) && payload[0] === "REQ" && typeof payload[1] === "string") {
+        ids.add(payload[1]);
+      }
+    } catch {
+      // Non-JSON queue entries are ignored and still flushed normally.
+    }
+  }
+  return ids;
+}
+
+function replaySubscriptions(conn: RelayConn, ws: WebSocket, queuedReqIds: Set<string>) {
+  for (const [subId, sub] of conn.subs.entries()) {
+    // A subscription created while disconnected already has its REQ in the queue.
+    if (queuedReqIds.has(subId)) continue;
+    try {
+      ws.send(JSON.stringify(["REQ", subId, ...sub.filters]));
+      logger.info(`[relay] replay subscription relay=${conn.url} sub=${subId}`);
+    } catch (e) {
+      const request = JSON.stringify(["REQ", subId, ...sub.filters]);
+      if (!conn.queue.includes(request)) conn.queue.push(request);
+      logger.warn(`[relay] subscription replay failed relay=${conn.url} sub=${subId}`, e);
+    }
+  }
+}
+
 export const DEFAULT_RELAYS = [
   "wss://relay.damus.io",
   "wss://relay.0xchat.com",
@@ -57,11 +87,17 @@ function ensureRelayConn(url: string): RelayConn {
 
       const onOpen = () => {
         conn.ready = true;
+        const queuedReqIds = queuedSubscriptionIds(conn.queue);
         // flush queue
         while (conn.queue.length) {
           const m = conn.queue.shift()!;
-          try { ws.send(m); } catch (e) { /* ignore send errors */ }
+          try { ws.send(m); } catch (e) {
+            if (!conn.queue.includes(m)) conn.queue.push(m);
+            logger.warn(`[relay] queued send failed relay=${url}`, e);
+            break;
+          }
         }
+        replaySubscriptions(conn, ws, queuedReqIds);
       };
 
       const onMessage = (ev: MessageEvent) => {
@@ -101,6 +137,7 @@ function ensureRelayConn(url: string): RelayConn {
       };
 
       const onClose = () => {
+        logger.warn(`[relay] disconnected relay=${url}; reconnect scheduled`);
         conn.ready = false;
         conn.ws = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
@@ -253,10 +290,8 @@ export function reconnectRelay(url: string) {
     if (r.ws) {
       try { r.ws.close(); } catch { }
     }
-    // clear state and recreate
+    // Preserve active subscriptions so the next socket can replay their REQs.
     r.ready = false;
-    r.queue = [];
-    r.subs.clear();
     r.okHandlers.clear();
     if (r.reconnectTimer) window.clearTimeout(r.reconnectTimer);
     // recreate connection
@@ -283,8 +318,8 @@ export const pool = {
         });
       }
       if (typeof callbacks.oneose === "function") {
-        sub.on("eose", () => {
-          try { callbacks.oneose(); } catch (e) { logger.warn("oneose cb error", e); }
+        sub.on("eose", (relayUrl: string) => {
+          try { callbacks.oneose(relayUrl); } catch (e) { logger.warn("oneose cb error", e); }
         });
       }
       return {

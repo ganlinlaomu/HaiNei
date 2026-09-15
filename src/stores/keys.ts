@@ -99,6 +99,66 @@ export const useKeyStore = defineStore("keys", {
     }
   },
   actions: {
+    async loadAccountStores(pk: string) {
+      const account = pk.slice(0, 8);
+      // Settings must load first so no later store can use the previous account's
+      // relay or Blossom mirrors during an account switch.
+      try {
+        await useSettingsStore().load(pk);
+      } catch (e) {
+        console.error(`[account] settings load failed account=${account}`, e);
+      }
+      try {
+        await useFriendsStore().load(pk);
+      } catch (e) {
+        console.error(`[account] friends load failed account=${account}`, e);
+      }
+      try {
+        await useMessagesStore().load(pk);
+      } catch (e) {
+        console.error(`[account] messages load failed account=${account}`, e);
+      }
+      try {
+        await useInteractionsStore().load(pk);
+      } catch (e) {
+        console.error(`[account] interactions load failed account=${account}`, e);
+      }
+      try {
+        await useNotificationsStore().load(pk);
+      } catch (e) {
+        console.error(`[account] notifications load failed account=${account}`, e);
+      }
+    },
+
+    resetAccountStores(currentPk: string) {
+      const account = currentPk.slice(0, 8) || "none";
+      try {
+        useFriendsStore().reset(false);
+      } catch (e) {
+        console.error(`[account] friends reset failed account=${account}`, e);
+      }
+      try {
+        useMessagesStore().reset(false);
+      } catch (e) {
+        console.error(`[account] messages reset failed account=${account}`, e);
+      }
+      try {
+        useSettingsStore().reset();
+      } catch (e) {
+        console.error(`[account] settings reset failed account=${account}`, e);
+      }
+      try {
+        useInteractionsStore().reset(false);
+      } catch (e) {
+        console.error(`[account] interactions reset failed account=${account}`, e);
+      }
+      try {
+        useNotificationsStore().reset(false);
+      } catch (e) {
+        console.error(`[account] notifications reset failed account=${account}`, e);
+      }
+    },
+
     /**
      * Unified NIP-04 decryption that works with all login methods
      * @param senderPubHex - The public key of the sender
@@ -231,27 +291,7 @@ export const useKeyStore = defineStore("keys", {
         localStorage.setItem("loginMethod", this.loginMethod);
         localStorage.setItem("loginTimestamp", String(this.loginTimestamp));
       } catch {}
-      // load account-scoped stores
-      try {
-        const friends = useFriendsStore();
-        await friends.load(this.pkHex);
-      } catch {}
-      try {
-        const msgs = useMessagesStore();
-        await msgs.load(this.pkHex);
-      } catch {}
-      try {
-        const settings = useSettingsStore();
-        await settings.load(this.pkHex);
-      } catch {}
-      try {
-        const interactions = useInteractionsStore();
-        await interactions.load();
-      } catch {}
-      try {
-        const notifications = useNotificationsStore();
-        await notifications.load(this.pkHex);
-      } catch {}
+      await this.loadAccountStores(this.pkHex);
     },
 
     /**
@@ -276,27 +316,7 @@ export const useKeyStore = defineStore("keys", {
           localStorage.removeItem("skHex"); // Ensure no private key is stored
         } catch {}
 
-        // load account-scoped stores
-        try {
-          const friends = useFriendsStore();
-          await friends.load(this.pkHex);
-        } catch {}
-        try {
-          const msgs = useMessagesStore();
-          await msgs.load(this.pkHex);
-        } catch {}
-        try {
-          const settings = useSettingsStore();
-          await settings.load(this.pkHex);
-        } catch {}
-        try {
-          const interactions = useInteractionsStore();
-          await interactions.load();
-        } catch {}
-        try {
-          const notifications = useNotificationsStore();
-          await notifications.load(this.pkHex);
-        } catch {}
+        await this.loadAccountStores(this.pkHex);
       } catch (e: any) {
         this.pkHex = "";
         this.loginMethod = "";
@@ -368,27 +388,7 @@ export const useKeyStore = defineStore("keys", {
           localStorage.removeItem("skHex"); // Ensure no private key is stored
         } catch {}
 
-        // load account-scoped stores
-        try {
-          const friends = useFriendsStore();
-          await friends.load(this.pkHex);
-        } catch {}
-        try {
-          const msgs = useMessagesStore();
-          await msgs.load(this.pkHex);
-        } catch {}
-        try {
-          const settings = useSettingsStore();
-          await settings.load(this.pkHex);
-        } catch {}
-        try {
-          const interactions = useInteractionsStore();
-          await interactions.load();
-        } catch {}
-        try {
-          const notifications = useNotificationsStore();
-          await notifications.load(this.pkHex);
-        } catch {}
+        await this.loadAccountStores(this.pkHex);
       } catch (e: any) {
         this.pkHex = "";
         this.loginMethod = "";
@@ -465,27 +465,7 @@ export const useKeyStore = defineStore("keys", {
           return;
         }
 
-        // Load account-scoped stores
-        try {
-          const friends = useFriendsStore();
-          await friends.load(this.pkHex);
-        } catch {}
-        try {
-          const msgs = useMessagesStore();
-          await msgs.load(this.pkHex);
-        } catch {}
-        try {
-          const settings = useSettingsStore();
-          await settings.load(this.pkHex);
-        } catch {}
-        try {
-          const interactions = useInteractionsStore();
-          await interactions.load();
-        } catch {}
-        try {
-          const notifications = useNotificationsStore();
-          await notifications.load(this.pkHex);
-        } catch {}
+        await this.loadAccountStores(this.pkHex);
       } catch (e: any) {
         this.skHex = "";
         this.pkHex = "";
@@ -527,27 +507,7 @@ export const useKeyStore = defineStore("keys", {
         this.skHex = skHex;
         this.isUnlocked = true;
 
-        // Load account-scoped stores if not already loaded
-        try {
-          const friends = useFriendsStore();
-          await friends.load(this.pkHex);
-        } catch {}
-        try {
-          const msgs = useMessagesStore();
-          await msgs.load(this.pkHex);
-        } catch {}
-        try {
-          const settings = useSettingsStore();
-          await settings.load(this.pkHex);
-        } catch {}
-        try {
-          const interactions = useInteractionsStore();
-          await interactions.load();
-        } catch {}
-        try {
-          const notifications = useNotificationsStore();
-          await notifications.load(this.pkHex);
-        } catch {}
+        await this.loadAccountStores(this.pkHex);
       } catch (e: any) {
         // Don't clear state on failed unlock attempt
         throw e;
@@ -659,26 +619,7 @@ export const useKeyStore = defineStore("keys", {
 
       // Load account-scoped stores for non-encrypted or successfully restored sessions
       if (method === "nip07" || method === "nip46" || (method === "sk" && !isEncrypted)) {
-        try {
-          const friends = useFriendsStore();
-          await friends.load(this.pkHex);
-        } catch {}
-        try {
-          const msgs = useMessagesStore();
-          await msgs.load(this.pkHex);
-        } catch {}
-        try {
-          const settings = useSettingsStore();
-          await settings.load(this.pkHex);
-        } catch {}
-        try {
-          const interactions = useInteractionsStore();
-          await interactions.load();
-        } catch {}
-        try {
-          const notifications = useNotificationsStore();
-          await notifications.load(this.pkHex);
-        } catch {}
+        await this.loadAccountStores(this.pkHex);
       }
       
       this.isRestored = true;
@@ -716,20 +657,26 @@ export const useKeyStore = defineStore("keys", {
 
     logout() {
       const currentPk = this.pkHex;
+
+      // Stop and clear account-scoped runtime state while the account context exists.
+      this.resetAccountStores(currentPk);
+
+      // Close bunker signer before clearing the key/login state.
+      if (this.bunkerSigner) {
+        try {
+          this.bunkerSigner.close();
+        } catch (e) {
+          console.error(`[account] bunker close failed account=${currentPk.slice(0, 8) || "none"}`, e);
+        }
+        this.bunkerSigner = null;
+      }
+
       this.skHex = "";
       this.pkHex = "";
       this.loginMethod = "";
       this.loginTimestamp = 0;
       this.isEncrypted = false;
       this.isUnlocked = false;
-      
-      // Close bunker signer if exists
-      if (this.bunkerSigner) {
-        try {
-          this.bunkerSigner.close();
-        } catch {}
-        this.bunkerSigner = null;
-      }
       
       this.bunkerClientSecretKey = null;
       
@@ -742,28 +689,9 @@ export const useKeyStore = defineStore("keys", {
         localStorage.removeItem("bunkerClientSecretKey");
         localStorage.removeItem("isEncrypted");
         // Note: We don't remove the encrypted key itself, user can unlock again
-      } catch {}
-      // clear in-memory stores (do not delete persisted storage by default)
-      try {
-        const friends = useFriendsStore();
-        friends.reset(false);
-      } catch {}
-      try {
-        const msgs = useMessagesStore();
-        msgs.reset(false);
-      } catch {}
-      try {
-        const settings = useSettingsStore();
-        settings.reset(false);
-      } catch {}
-      try {
-        const interactions = useInteractionsStore();
-        interactions.reset(false);
-      } catch {}
-      try {
-        const notifications = useNotificationsStore();
-        notifications.reset(false);
-      } catch {}
+      } catch (e) {
+        console.error(`[account] login metadata cleanup failed account=${currentPk.slice(0, 8) || "none"}`, e);
+      }
       // navigate to login
       try {
         const router = useRouter();

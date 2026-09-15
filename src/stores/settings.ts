@@ -7,6 +7,7 @@ import {
   reconnectRelay
 } from "@/nostr/relays";
 import { logger } from "@/utils/logger";
+import { closeSubscription } from "@/utils/closeSubscription";
 
 /* ------------------------------------------------------------------ */
 /* types */
@@ -68,6 +69,17 @@ export const useSettingsStore = defineStore("settings", {
       this.syncError = "";
       this.lastSyncTimestamp = 0;
       this._isFetching = false;
+      try {
+        localStorage.removeItem("custom-relays");
+        localStorage.removeItem("blossom_servers");
+        localStorage.removeItem("blossom_upload_url");
+        localStorage.removeItem("blossom_token");
+        window.dispatchEvent(new CustomEvent("blossom-config-updated", {
+          detail: { servers: [] }
+        }));
+      } catch (e) {
+        logger.warn("[settings] clear global mirrors failed", e);
+      }
     },
 
     /* ================================================================
@@ -83,7 +95,7 @@ export const useSettingsStore = defineStore("settings", {
       }
 
       // 🔥 切账号
-      if (this.loadedFor && this.loadedFor !== targetPk) {
+      if (this.loadedFor !== targetPk) {
         this.reset();
       }
 
@@ -138,7 +150,7 @@ export const useSettingsStore = defineStore("settings", {
       try {
         localStorage.setItem("custom-relays", this.settings.relays.join("\n"));
         for (const r of this.settings.relays) {
-          try { reconnectRelay(r); } catch {}
+          try { reconnectRelay(r); } catch (e) { logger.warn(`[settings] relay reconnect failed relay=${r}`, e); }
         }
       } catch (e) {
         logger.error("apply relay failed", e);
@@ -249,6 +261,7 @@ export const useSettingsStore = defineStore("settings", {
       const ks = useKeyStore();
       if (!ks.isLoggedIn || ks.pkHex !== this.loadedFor) return false;
       if (this._isFetching) return false;
+      const accountPk = ks.pkHex;
 
       this._isFetching = true;
       this.syncing = true;
@@ -264,35 +277,65 @@ export const useSettingsStore = defineStore("settings", {
         }]);
 
         return await new Promise(resolve => {
-          let latest: any = null;
-          const timer = setTimeout(() => finish(false), 5000);
+          const expectedRelays = new Set(relays);
+          const completedRelays = new Set<string>();
+          const candidates = new Map<string, any>();
+          let finished = false;
+          let timer: ReturnType<typeof setTimeout>;
 
-          const finish = (ok: boolean) => {
+          const finish = async (reason: "eose" | "timeout" | "no-relays") => {
+            if (finished) return;
+            finished = true;
             clearTimeout(timer);
-            try { sub.unsub(); } catch {}
-            resolve(ok);
+            closeSubscription(sub);
+            logger.info(`[settings] fetch complete account=${accountPk.slice(0, 8)} reason=${reason} eose=${completedRelays.size}/${expectedRelays.size} candidates=${candidates.size}`);
+
+            if (ks.pkHex !== accountPk || this.loadedFor !== accountPk) {
+              logger.warn(`[account] settings fetch discarded account=${accountPk.slice(0, 8)}`);
+              resolve(false);
+              return;
+            }
+
+            const ordered = [...candidates.values()].sort((a, b) =>
+              (b.created_at - a.created_at) || String(a.id).localeCompare(String(b.id))
+            );
+            for (const candidate of ordered) {
+              try {
+                const dec = await ks.nip04Decrypt(accountPk, candidate.content);
+                if (ks.pkHex !== accountPk || this.loadedFor !== accountPk) {
+                  logger.warn(`[account] settings decrypt discarded account=${accountPk.slice(0, 8)} event=${candidate.id?.slice(0, 8)}`);
+                  resolve(false);
+                  return;
+                }
+                const parsed = JSON.parse(dec);
+                if (!parsed || !Array.isArray(parsed.relays) || !Array.isArray(parsed.blossomServers)) continue;
+                this.settings = parsed;
+                this.lastSyncTimestamp = candidate.created_at;
+                this.save();
+                this.applySettings();
+                resolve(true);
+                return;
+              } catch (e) {
+                logger.warn(`[settings] candidate invalid event=${candidate.id?.slice(0, 8)}`, e);
+              }
+            }
+            this.syncError = candidates.size ? "解密失败" : "";
+            resolve(false);
           };
+          timer = setTimeout(() => void finish("timeout"), 5000);
 
           sub.on("event", e => {
-            if (!latest || e.created_at > latest.created_at) {
-              latest = e;
-            }
+            if (ks.pkHex !== accountPk || this.loadedFor !== accountPk) return;
+            if (e?.id) candidates.set(e.id, e);
           });
 
-          sub.on("eose", async () => {
-            if (!latest) return finish(false);
-            try {
-              const dec = await ks.nip04Decrypt(ks.pkHex, latest.content);
-              this.settings = JSON.parse(dec);
-              this.lastSyncTimestamp = latest.created_at;
-              this.save();
-              this.applySettings();
-              finish(true);
-            } catch {
-              this.syncError = "解密失败";
-              finish(false);
-            }
+          sub.on("eose", (relayUrl: string) => {
+            completedRelays.add(relayUrl);
+            logger.debug(`[settings] EOSE relay=${relayUrl} count=${completedRelays.size}/${expectedRelays.size}`);
+            if (completedRelays.size >= expectedRelays.size) void finish("eose");
           });
+
+          if (expectedRelays.size === 0) void finish("no-relays");
         });
       } finally {
         this.syncing = false;
