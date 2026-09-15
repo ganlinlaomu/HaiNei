@@ -27,7 +27,7 @@ const routes: Array<RouteRecordRaw> = [
     path: "/login",
     name: "Login",
     component: Login,
-    meta: { requiresAuth: false }
+    meta: { requiresAuth: false, hideHeader: true }
   },
   {
     path: "/",
