@@ -167,16 +167,16 @@ import { logger } from "@/utils/logger";
 import { formatRelativeTime } from "@/utils/format";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import VideoPlayer from "@/components/VideoPlayer.vue";
-import { backfillEvents, saveBackfillBreakpoint, loadBackfillBreakpoint, SYNC_OVERLAP_SECONDS } from "@/utils/backfill";
+import { saveBackfillBreakpoint, loadBackfillBreakpoint } from "@/utils/backfill";
 import { useRoute } from "vue-router";
 import { usePullToRefresh } from "@/components/usePullToRefresh";
 import { getLastSeenCreatedAt, setLastSeenCreatedAt, updateLastSeenToNewest } from "@/utils/lastSeen";
 import { extractVideoData as extractVideoDataUtil, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
 import { useRealtimeInboxReconcile } from "@/components/useRealtimeInboxReconcile";
-import { closeSubscription } from "@/utils/closeSubscription";
-import { decodeMessageEvent, type CanonicalMessage } from "@/nostr/messaging/protocol";
-import { buildInteractionSubscriptions, buildMessageSubscriptions } from "@/nostr/messaging/subscriptions";
-import { MessageDeduplicator } from "@/nostr/messaging/deduplication";
+import type { CanonicalMessage } from "@/nostr/messaging/protocol";
+import { buildInteractionSubscriptions } from "@/nostr/messaging/subscriptions";
+import { MessageSyncManager, SYNC_OVERLAP_SECONDS } from "@/nostr/messaging/sync";
+import { closeSubscription } from "@/utils/subscriptions";
 
 
 // reuse the regex logic from extractImageUrls to strip out image markdown and plain image URLs
@@ -224,10 +224,9 @@ export default defineComponent({
 );
 
     const status = ref("未连接");
-    let sub: any = null;
     let interactionsSub: any = null;
     let homeAccountPk = "";
-    const messageDeduplicator = new MessageDeduplicator();
+    const messageSync = new MessageSyncManager();
 
     const messagesRef = ref([] as any[]);
     const displayedMessages = ref([] as any[]);
@@ -247,9 +246,8 @@ export default defineComponent({
     });
 
     function closeHomeSubscriptions() {
-      closeSubscription(sub);
+      messageSync.stop();
       closeSubscription(interactionsSub);
-      sub = null;
       interactionsSub = null;
     }
 
@@ -366,6 +364,12 @@ export default defineComponent({
         // Update lastSeen watermark to the newest message timestamp across all displayed messages
         lastSeenCreatedAt.value = updateLastSeenToNewest(keys.pkHex, merged);
         logger.info(`更新 lastSeenCreatedAt: ${new Date(lastSeenCreatedAt.value * 1000).toLocaleString()}`);
+        const visibleConversations = new Set(
+          pendingMessages.value.map(message => message.conversationId).filter(Boolean)
+        );
+        for (const conversationId of visibleConversations) {
+          void messageSync.markConversationRead(String(conversationId));
+        }
         
         pendingMessages.value = [];
         updateMessageTimeRange();
@@ -440,7 +444,6 @@ async function safeUpdateLocalRefs() {
     return;
   }
   reconciling = true;
-
   try {
     do {
       reconcilePending = false;
@@ -478,7 +481,7 @@ async function safeUpdateLocalRefs() {
        refreshing
     } = usePullToRefresh({
       onRefresh: async () => {
-        await startSub();      // 重逻辑
+        await messageSync.resume("manual");
         safeUpdateLocalRefs();     // UI 刷新
       }
     });
@@ -523,17 +526,8 @@ async function safeUpdateLocalRefs() {
       return pubkey.slice(0, 8) + "...";
     }
 
-    function addMessageIfNew(message: CanonicalMessage) {
-  if (!message?.id || !messageDeduplicator.accept(message)) return false;
-
-  // Check if message already exists in inbox
-  const existing = msgs.inbox.find(m => m.id === message.id);
-  if (existing) {
-    return false;
-  }
-
-  // Add new message to inbox
-  const added = {
+    function mirrorSyncedMessage(message: CanonicalMessage) {
+  msgs.addInbox({
     id: message.id,
     pubkey: message.senderPubkey,
     created_at: message.createdAt,
@@ -546,12 +540,8 @@ async function safeUpdateLocalRefs() {
     conversationId: message.conversationId,
     replyTo: message.replyTo,
     rootId: message.rootId
-  };
-
-  msgs.addInbox(added);
-
-
-  return true;
+  });
+  if (readyForPending.value) safeUpdateLocalRefs();
 }
 
     function textWithoutImages(content: string): string {
@@ -810,133 +800,6 @@ async function safeUpdateLocalRefs() {
       return interactions.getCommentCount(messageId);
     }
     
-    async function backfillMessages(friendSet: Set<string>, relays: string[]) {
-      const accountPk = keys.pkHex;
-      if (!accountPk) return;
-      try {
-        const accountAtStart = keys.pkHex;
-        if (!accountAtStart) return;
-        const now = Math.floor(Date.now() / 1000);
-        const breakpointKey = `messages_${accountPk}`;
-        const savedBreakpoint = loadBackfillBreakpoint(breakpointKey); 
-        // Determine time range for backfill - always use 3-day window
-        let since: number;
-        let until: number = now;
-        
-        if (savedBreakpoint && savedBreakpoint > 0) {
-          since = Math.max(0, savedBreakpoint - SYNC_OVERLAP_SECONDS);
-          logger.info(
-            `use backfillpoint to pull: since=${new Date(since * 1000).toLocaleString()}`
-          );
-        } else {
-          since = now - THREE_DAYS_IN_SECONDS;
-          logger.info(
-          `no backfillpoint,pull three days: since=${new Date(since * 1000).toLocaleString()}`
-          );
-        }
-        
-        logger.info(`[message-protocol] 回填 authors=${friendSet.size}, since=${since}, until=${until}`);
-        logger.debug(`好友列表: ${Array.from(friendSet).slice(0, 5).map(pk => pk.slice(0, 8)).join(', ')}${friendSet.size > 5 ? `... (共${friendSet.size}个)` : ''}`);
-        
-        status.value = "获取历史消息中...";
-        
-        // Track decryption statistics
-        let fetchedEvents = 0;
-        let decryptedEvents = 0;
-        let notForMe = 0;
-        let parseErrors = 0;
-        let decryptErrors = 0;
-        let notFromFriends = 0;
-        let newestTimestamp = 0;
-        
-        // Process event and decrypt
-        const processEvent = async (evt: any) => {
-          if (keys.pkHex !== accountPk) {
-            logger.warn(`[account] message backfill event discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
-            return;
-          }
-          fetchedEvents++;
-          try {
-            if (keys.pkHex !== accountPk) return;
-            const message = await decodeMessageEvent(evt, {
-              accountPubkey: accountPk,
-              nip04Decrypt: keys.nip04Decrypt.bind(keys),
-              nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined
-            });
-            if (keys.pkHex !== accountPk) return;
-            if (!message) { decryptErrors++; return; }
-            if (!friendSet.has(message.senderPubkey)) { notFromFriends++; return; }
-            const added = addMessageIfNew(message);
-            if (added) {
-              decryptedEvents++;
-              newestTimestamp = Math.max(newestTimestamp, message.createdAt);
-            }
-          } catch (e) {
-            logger.error("处理回填事件失败", e);
-          }
-        };
-        
-        // Use backfill utility with batching and pagination
-        const protocolFilters = buildMessageSubscriptions(accountAtStart, Array.from(friendSet), since, until);
-        await Promise.all(protocolFilters.map(filters => backfillEvents({
-          relays,
-          filters,
-          onEvent: processEvent,
-          onProgress: (stats) => {
-            if (keys.pkHex !== accountPk) return;
-            status.value = `获取中: ${stats.totalEvents} 条事件`;
-          },
-          onComplete: (stats) => {
-            if (keys.pkHex !== accountPk) {
-              logger.warn(`[account] message backfill completion discarded account=${accountPk.slice(0, 8)}`);
-              return;
-            }
-            const summary = [
-              `获取: ${fetchedEvents} 条`,
-              `解密成功: ${decryptedEvents} 条`,
-            ];
-            if (notFromFriends > 0) summary.push(`非好友: ${notFromFriends} 条`);
-            if (notForMe > 0) summary.push(`非自己: ${notForMe} 条`);
-            if (parseErrors > 0) summary.push(`解析失败: ${parseErrors} 条`);
-            if (decryptErrors > 0) summary.push(`解密失败: ${decryptErrors} 条`);
-            
-            const summaryText = summary.join(', ');
-            logger.info(`回填完成: ${summaryText}`);
-            
-            if (decryptedEvents > 0) {
-              status.value = `获取成功 ${decryptedEvents} 条消息`;
-            } else if (fetchedEvents > 0) {
-              status.value = `获取了 ${fetchedEvents} 条事件但无法解密`;
-              logger.warn(`回填获取了事件但全部解密失败。可能原因: 1) 事件不是发给自己的 2) 密钥不匹配 3) 数据格式错误`);
-            } else {
-              status.value = "已是最新";
-            }
-            
-            // Save the timestamp of the newest message for future reference
-            // This helps track the last time we successfully fetched messages
-            const breakpointKey = `messages_${accountPk}`;
-            if (keys.pkHex === accountPk && newestTimestamp > 0) {
-              saveBackfillBreakpoint(breakpointKey, newestTimestamp);
-              logger.info(
-              `保存最新消息断点: ${new Date(newestTimestamp * 1000).toLocaleString()}`
-              );
-             } else {
-  // ✅ 什么都不要做
-               logger.info("本次回填无新消息，不推进断点");
-            }
-          },
-          batchSize: 1000, // Increased batch size for more efficient fetching
-          authorBatchSize: 50,
-          maxBatches: 20,
-          timeoutMs: 10000
-        })));
-        
-      } catch (e) {
-        logger.error("回填失败", e);
-        if (keys.pkHex === accountPk) status.value = "获取消息失败";
-      }
-    }
-    
     async function backfillInteractions(relays: string[]) {
   const accountPk = keys.pkHex;
   if (!accountPk) return;
@@ -993,10 +856,10 @@ async function safeUpdateLocalRefs() {
     async function startSub() {
       try {
         logger.info("开始订阅流程");
-        
-        // ============ 阶段1：首屏本地数据加载（同步，快速） ============
-        
         if (!keys.isLoggedIn) {
+          messageSync.stop();
+          closeSubscription(interactionsSub);
+          interactionsSub = null;
           status.value = "未登录";
           logger.warn("[startSub] skip: not logged in");
           return;
@@ -1015,39 +878,9 @@ async function safeUpdateLocalRefs() {
         const friendSet = new Set<string>((friends.list || []).map((f: any) => f.pubkey));
         friendSet.add(accountPk);
         logger.info(`准备订阅 ${friendSet.size} 个作者（包括自己）`);
-        
-        if (friendSet.size === 0) {
-          status.value = "好友为空";
-          logger.warn("好友列表为空，无法订阅");
-          return;
-        }
-
         const relays = getRelaysFromStorage();
         logger.info(`使用中继: ${relays.join(', ')}`);
-        
-        // ============ 阶段2：下一帧启动实时订阅（避免阻塞首屏渲染） ============
-        requestAnimationFrame(() => {
-          if (keys.pkHex !== accountPk) return;
-          startRealtimeSubscription(friendSet, relays);
-        });
-        
-        // ============ 阶段3：空闲时启动回填（避免抢占主线程） ============
-        const scheduleBackfill = () => {
-          if (typeof requestIdleCallback !== 'undefined') {
-            requestIdleCallback(() => {
-              if (keys.pkHex !== accountPk) return;
-              startBackfill(friendSet, relays);
-            }, { timeout: 2000 });
-          } else {
-            // 浏览器不支持 requestIdleCallback，使用 setTimeout 兜底
-            setTimeout(() => {
-              if (keys.pkHex !== accountPk) return;
-              startBackfill(friendSet, relays);
-            }, 500);
-          }
-        };
-        scheduleBackfill();
-        
+        await startRealtimeSubscription(friendSet, relays);
       } catch (e) {
         logger.error("startSub failed", e);
         status.value = "订阅失败";
@@ -1061,82 +894,35 @@ async function safeUpdateLocalRefs() {
       try {
         const accountAtStart = keys.pkHex;
         if (!accountAtStart) return;
-        logger.info("启动实时订阅...");
-        
-        // 从本地取回填断点
-        // ⭐ 从本地取回填断点（关键）
-        const now = Math.floor(Date.now() / 1000);
-const threeDaysAgo = now - THREE_DAYS_IN_SECONDS;
-
-const messageBreakpoint =
-  loadBackfillBreakpoint(`messages_${accountPk}`) || 0;
-
 realtimeSessionSince.value = Math.floor(Date.now() / 1000);
-
-logger.info(
-  "[realtime] session since =",
-  new Date(realtimeSessionSince.value * 1000).toLocaleString()
-);
-
-// ⭐ 关键：订阅 since = max(断点, 3天前)
-const since = Math.max(
-  messageBreakpoint - SYNC_OVERLAP_SECONDS,
-  threeDaysAgo
-);
-
-const filters = buildMessageSubscriptions(accountAtStart, Array.from(friendSet), since);
-
-logger.info(
-  `实时订阅 since = ${new Date(since * 1000).toLocaleString()}`
-);
-
+        await messageSync.start({
+          accountPubkey: accountAtStart,
+          relays,
+          authors: Array.from(friendSet),
+          decodeContext: {
+            accountPubkey: accountAtStart,
+            nip04Decrypt: keys.nip04Decrypt.bind(keys),
+            nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined
+          },
+          legacyMessages: msgs.inbox,
+          legacyReadThrough: getLastSeenCreatedAt(accountAtStart),
+          onMessage: async (message) => {
+            if (keys.pkHex !== accountAtStart) return;
+            if (!friendSet.has(message.senderPubkey)) return;
+            mirrorSyncedMessage(message);
+          },
+          onStatus: syncStatus => {
+            if (keys.pkHex !== accountAtStart) return;
+            status.value = syncStatus === "live" ? "同步完成" :
+              syncStatus === "catching-up" ? "获取历史消息中..." :
+              syncStatus === "error" ? "同步失败" : "连接中";
+          }
+        });
         
-        status.value = "连接中";
-
-        if (sub) logger.debug("关闭之前的订阅");
-        closeSubscription(sub);
-        sub = null;
-
-        try {
-          logger.info("[message-protocol] 开始实时协议订阅");
-          const adapterSub = subscribe(relays, filters);
-          sub = adapterSub;
-          adapterSub.on("event", async (evt: any) => {
-            try {
-              if (keys.pkHex !== accountPk) {
-                logger.warn(`[account] realtime message discarded account=${accountPk.slice(0, 8)} event=${evt?.id?.slice(0, 8) || "unknown"}`);
-                return;
-              }
-              const message = await decodeMessageEvent(evt, {
-                accountPubkey: accountPk,
-                nip04Decrypt: keys.nip04Decrypt.bind(keys),
-                nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined
-              });
-              if (keys.pkHex !== accountPk) return;
-              if (!message || !friendSet.has(message.senderPubkey)) return;
-              const added = addMessageIfNew(message);
-
-  // ⭐⭐⭐ 关键修复：实时新消息立刻触发对账
-  if (added && readyForPending.value) {
-    safeUpdateLocalRefs();
-  }
-            } catch (e) {
-              logger.warn("handle event fail", e);
-            }
-          });
-          adapterSub.on("eose", (relayUrl: string) => {
-            if (keys.pkHex !== accountPk) return;
-            logger.debug(`[sync] realtime EOSE relay=${relayUrl} account=${accountPk.slice(0, 8)}`);
-            status.value = "同步完成";
-          });
-
-          setTimeout(() => {
-            if (keys.pkHex === accountPk && status.value === "连接中") status.value = "已订阅";
-          }, 800);
-        } catch (e) {
-          logger.warn("subscribe adapter failed", e);
-          status.value = "订阅失败";
-        }
+        // Backfill historical interactions before subscribing to real-time events
+        // Now uses inbox (#p) and outbox (authors) filters for privacy compliance
+        // await backfillInteractions(relays);
+        backfillInteractions(relays).catch(e => logger.error("interaction backfill failed", e));
         
         // Close existing interactions subscription before creating a new one
         if (interactionsSub) logger.debug("关闭之前的互动订阅");
@@ -1152,7 +938,7 @@ logger.info(
           loadBackfillBreakpoint(`interactions_${accountPk}`) || 0;
           const interactionSince = Math.max(
             interactionBreakpoint - SYNC_OVERLAP_SECONDS,
-            threeDaysAgo
+            Math.floor(Date.now() / 1000) - THREE_DAYS_IN_SECONDS
           );
           
           const interactionFilters = buildInteractionSubscriptions(
@@ -1189,25 +975,6 @@ logger.info(
       }
     }
     
-    // 阶段3：启动回填
-    async function startBackfill(friendSet: Set<string>, relays: string[]) {
-      const accountPk = keys.pkHex;
-      if (!accountPk) return;
-      try {
-        logger.info("开始回填历史数据...");
-        
-        // 串行执行回填，避免并发压力
-        await backfillMessages(friendSet, relays);
-        if (keys.pkHex !== accountPk) return;
-        await backfillInteractions(relays);
-        if (keys.pkHex !== accountPk) return;
-        
-        logger.info("回填完成");
-      } catch (e) {
-        logger.error("startBackfill failed", e);
-      }
-    }
-
    onMounted(async () => {
      if (!keys.pkHex || homeAccountPk === keys.pkHex) return;
      try {
