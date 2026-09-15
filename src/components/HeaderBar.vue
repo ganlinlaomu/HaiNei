@@ -2,7 +2,7 @@
 
   <!-- bottom nav moved into Headbar file for simplicity; only shown when logged in and unlocked -->
   <nav v-show="shouldShowBottomNav" class="bottom-nav">
-    <router-link class="nav-item" to="/">
+    <router-link class="nav-item" to="/" @click="handleNavigation">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
         <polyline points="9 22 9 12 15 12 15 22"></polyline>
@@ -16,7 +16,7 @@
       </svg>
       <span class="nav-label">发帖</span>
     </a>
-    <router-link class="nav-item" to="/friends">
+    <router-link class="nav-item" to="/friends" @click="handleNavigation">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
         <circle cx="9" cy="7" r="4"></circle>
@@ -26,7 +26,7 @@
       <span class="nav-label">好友</span>
     </router-link>
     <!-- ⭐⭐⭐ 新增：通知 -->
-    <router-link class="nav-item" to="/notifications">
+    <router-link class="nav-item" to="/notifications" @click="handleNavigation">
       <span class="icon-wrapper">
         <svg
           class="icon"
@@ -52,7 +52,7 @@
 
       <span class="nav-label">通知</span>
     </router-link>
-    <router-link class="nav-item" to="/settings">
+    <router-link class="nav-item" to="/settings" @click="handleNavigation">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3"></circle>
         <path d="M12 1v6M12 17v6M4.22 4.22l4.24 4.25M15.54 15.54l4.24 4.25M1 12h6M17 12h6M4.22 19.78l4.24-4.25M15.54 8.46l4.24-4.25"></path>
@@ -88,8 +88,12 @@ export default defineComponent({
     function handlePostClick() {
       ui.openPostEditor();
     }
+
+    function handleNavigation() {
+      ui.closePostEditor();
+    }
     
-    return { isLoggedIn, shortPk, handlePostClick, notifications, shouldShowBottomNav };
+    return { isLoggedIn, shortPk, handlePostClick, handleNavigation, notifications, shouldShowBottomNav };
   }
 });
 </script>

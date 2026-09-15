@@ -166,7 +166,7 @@
 
 <script lang="ts">
 import { defineComponent, ref, onBeforeUnmount, watch, nextTick, computed } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendsStore } from "@/stores/friends";
 import { usePostsStore } from "@/stores/posts";
@@ -204,6 +204,7 @@ export default defineComponent({
   name: "PostEditorModal",
   setup() {
     const router = useRouter();
+    const route = useRoute();
     const keys = useKeyStore();
     const friends = useFriendsStore();
     const posts = usePostsStore();
@@ -595,20 +596,23 @@ export default defineComponent({
       uploads.value.splice(idx, 1);
     }
 
-    function onClose() {
-      ui.closePostEditor();
-      // Clear form data
+    function resetEditor() {
       content.value = "";
       error.value = null;
       allFriends.value = true;
       selectedGroups.value = [];
-      // Clear uploads and revoke object URLs
       for (const item of uploads.value) {
         if (item.preview) {
           try { URL.revokeObjectURL(item.preview); } catch {}
         }
       }
       uploads.value = [];
+      videoPreview.value = null;
+    }
+
+    function onClose() {
+      ui.closePostEditor();
+      resetEditor();
     }
 
     // Store the element that triggered the modal for focus return
@@ -638,6 +642,9 @@ export default defineComponent({
         // Don't auto-focus textarea to avoid mobile keyboard popup
         // Users can manually click the textarea when ready to type
       } else {
+        // The editor may also be closed by bottom navigation or another
+        // programmatic route change, so cleanup cannot live only in onClose().
+        resetEditor();
         // Return focus to trigger element when modal closes
         if (triggerElement && typeof triggerElement.focus === 'function') {
           setTimeout(() => {
@@ -645,6 +652,12 @@ export default defineComponent({
           }, 100);
         }
       }
+    });
+
+    // PostEditorModal is mounted at App level and otherwise survives route
+    // changes. Never leave it covering the destination page.
+    watch(() => route.fullPath, () => {
+      if (ui.showPostEditor) onClose();
     });
 
     onBeforeUnmount(()=>{
