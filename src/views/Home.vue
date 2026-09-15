@@ -175,6 +175,7 @@ import { extractVideoData as extractVideoDataUtil, getVideoUrlRemovalPatterns } 
 import { useRealtimeInboxReconcile } from "@/components/useRealtimeInboxReconcile";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
+import { createHomeMessageHandler } from "@/nostr/messaging/homeDelivery";
 
 
 // reuse the regex logic from extractImageUrls to strip out image markdown and plain image URLs
@@ -808,18 +809,25 @@ async function safeUpdateLocalRefs() {
           const initialized = await initializeHomeRuntime(accountPk);
           if (!initialized) return;
         }
-        await friends.load(accountPk);
-        if (!accountPk || keys.pkHex !== accountPk || friends.loadedFor !== accountPk) {
+        try {
+          await friends.load(accountPk);
+        } catch (error) {
+          logger.warn("[message-sync] friend list unavailable; continuing receive sync", {
+            account: accountPk.slice(0, 12),
+            reason: error instanceof Error ? error.name || "Error" : "unknown_error"
+          });
+        }
+        if (!accountPk || keys.pkHex !== accountPk) {
           logger.warn(`[account] subscription bootstrap discarded account=${accountPk?.slice(0, 8) || "none"}`);
           return;
         }
-        logger.info(`好友列表加载完成: ${friends.list.length} 个好友`);
-        const friendSet = new Set<string>((friends.list || []).map((f: any) => f.pubkey));
-        friendSet.add(accountPk);
-        logger.info(`准备订阅 ${friendSet.size} 个作者（包括自己）`);
+        const knownAuthors = friends.loadedFor === accountPk
+          ? (friends.list || []).map((friend: any) => friend.pubkey)
+          : [];
+        logger.info(`好友列表加载完成: ${knownAuthors.length} 个好友`);
         const relays = getRelaysFromStorage();
         logger.info(`使用中继: ${relays.join(', ')}`);
-        await startRealtimeSubscription(friendSet, relays);
+        await startRealtimeSubscription(knownAuthors, relays);
       } catch (e) {
         logger.error("startSub failed", e);
         status.value = "订阅失败";
@@ -827,7 +835,7 @@ async function safeUpdateLocalRefs() {
     }
     
     // 阶段2：启动实时订阅
-    async function startRealtimeSubscription(friendSet: Set<string>, relays: string[]) {
+    async function startRealtimeSubscription(knownAuthors: string[], relays: string[]) {
       const accountPk = keys.pkHex;
       if (!accountPk) return;
       try {
@@ -837,20 +845,18 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
         await messageSync.start({
           accountPubkey: accountAtStart,
           relays,
-          authors: Array.from(friendSet),
+          authors: [...new Set([...knownAuthors, accountAtStart])],
           decodeContext: {
             accountPubkey: accountAtStart,
             nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined
           },
-          onMessage: async (message, metadata) => {
-            if (keys.pkHex !== accountAtStart) return;
-            if (!friendSet.has(message.senderPubkey)) return;
-            if (isInteractionMessage(message)) {
-              await interactions.processCanonicalInteraction(message, accountAtStart);
-              return;
-            }
-            mirrorSyncedMessage(message);
-            if (message.senderPubkey !== accountAtStart && metadata.source !== "local-migration") {
+          onMessage: createHomeMessageHandler({
+            accountPubkey: accountAtStart,
+            currentAccount: () => keys.pkHex,
+            isInteraction: isInteractionMessage,
+            processInteraction: message => interactions.processCanonicalInteraction(message, accountAtStart),
+            mirrorMessage: mirrorSyncedMessage,
+            notifyMessage: message => {
               notifications.addNotification({
                 id: `message:${message.id}`,
                 type: "message",
@@ -861,7 +867,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
                 postContent: message.plaintext || ""
               });
             }
-          },
+          }),
           onStatus: syncStatus => {
             if (keys.pkHex !== accountAtStart) return;
             status.value = syncStatus === "live" ? "同步完成" :

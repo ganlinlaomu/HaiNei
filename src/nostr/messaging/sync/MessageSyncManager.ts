@@ -80,7 +80,7 @@ export class MessageSyncManager {
       .filter(record => record.protocol === "nip17" && record.transportKind === 1059);
     for (const record of localMessages) {
       if (!isCurrent()) return;
-      await options.onMessage?.({
+      const restoredMessage: CanonicalMessage = {
         id: record.id,
         senderPubkey: record.senderPubkey,
         recipientPubkeys: record.recipientPubkeys,
@@ -95,7 +95,22 @@ export class MessageSyncManager {
         replyTo: record.replyTo,
         rootId: record.rootId,
         tags: record.tags || []
-      }, { source: "local-migration" });
+      };
+      try {
+        await options.onMessage?.(restoredMessage, { source: "local-migration" });
+        logger.debug("[message-sync] restored_from_dexie", {
+          logicalMessageId: record.id.slice(0, 12),
+          transportEventId: record.transportEventIds[0]?.slice(0, 12) || "unknown",
+          sender: record.senderPubkey.slice(0, 12),
+          account: accountPubkey.slice(0, 12)
+        });
+      } catch (error) {
+        logger.warn("[message-sync] ui_restore_failed", {
+          logicalMessageId: record.id.slice(0, 12),
+          account: accountPubkey.slice(0, 12),
+          reason: error instanceof Error ? error.name || "Error" : "unknown_error"
+        });
+      }
     }
     if (!isCurrent()) return;
 

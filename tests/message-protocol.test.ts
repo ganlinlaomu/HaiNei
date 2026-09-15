@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   finalizeEvent,
   getPublicKey,
@@ -16,6 +16,7 @@ import {
 } from "@/nostr/messaging/protocol";
 import { MessageDeduplicator } from "@/nostr/messaging/deduplication";
 import { buildMessageSubscriptions } from "@/nostr/messaging/subscriptions";
+import { logger } from "@/utils/logger";
 
 const senderSecret = utils.hexToBytes("1".padStart(64, "0"));
 const recipientSecret = utils.hexToBytes("2".padStart(64, "0"));
@@ -51,6 +52,26 @@ describe("NIP-44 v2 primitive", () => {
 });
 
 describe("NIP-17 gift wrap", () => {
+  it("emits every safe receive-stage diagnostic on successful decode", async () => {
+    const encoded = await nip17Adapter.encode!({ recipientPubkeys: [recipientPubkey], plaintext: "diagnostic" }, senderContext);
+    const wrap = encoded.events.find(event => event.tags[0]?.[1] === recipientPubkey)!;
+    const debug = vi.spyOn(logger, "debug").mockImplementation(() => {});
+    await expect(decodeMessageEvent(wrap, recipientDecodeContext())).resolves.toBeTruthy();
+    const stages = debug.mock.calls.map(call => call[0]);
+    expect(stages).toEqual(expect.arrayContaining([
+      "[nip17] wrap_received",
+      "[nip17] outer_recipient_valid",
+      "[nip17] outer_decrypt_success",
+      "[nip17] seal_valid",
+      "[nip17] rumor_decrypt_success",
+      "[nip17] rumor_valid",
+      "[nip17] recipient_match",
+      "[nip17] decode_success"
+    ]));
+    expect(JSON.stringify(debug.mock.calls)).not.toContain(wrap.content);
+    debug.mockRestore();
+  });
+
   it("builds, unwraps, validates and deduplicates a standard message", async () => {
     const encoded = await nip17Adapter.encode!({
       recipientPubkeys: [recipientPubkey],

@@ -46,6 +46,14 @@ describe("NIP-17 message publication", () => {
       context
     });
     expect(result.events).toHaveLength(2);
+    expect(new Set(result.events.map(event => event.id)).size).toBe(2);
+    expect(result.events.every(event => event.kind === 1059 && event.tags.length === 1)).toBe(true);
+    expect(result.events.map(event => event.tags[0]).sort((a, b) => a[1].localeCompare(b[1]))).toEqual(
+      [["p", senderPubkey], ["p", recipientPubkey]].sort((a, b) => a[1].localeCompare(b[1]))
+    );
     expect(result.relayResults).toHaveLength(2);
+    expect(result.relayResults.map(result => result.targetPubkey).sort()).toEqual(
+      [senderPubkey, recipientPubkey].sort()
+    );
   });
 });
