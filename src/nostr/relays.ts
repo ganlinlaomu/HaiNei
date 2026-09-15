@@ -13,16 +13,31 @@ type RelayConn = {
   ws: WebSocket | null;
   ready: boolean;
   queue: string[];
-  subs: Map<string, { filters: any[]; handlers: Set<(evt: any) => void>; eoseHandlers: Set<() => void> }>;
+  subs: Map<string, { filters: any[]; handlers: Set<(evt: any, relayUrl: string) => void>; eoseHandlers: Set<(relayUrl: string) => void> }>;
   okHandlers: Map<string, (res: any) => void>;
   reconnectTimer?: number | null;
+  reconnectAttempts: number;
+  hasConnected: boolean;
 };
 
 const CONNECT_TIMEOUT = 4000;
 const PUBLISH_TIMEOUT = 5000;
-const RECONNECT_DELAY = 3000;
+const MAX_RECONNECT_DELAY = 30000;
 
 const relaysMap: Record<string, RelayConn> = {};
+export type RelayConnectionEvent = { url: string; connected: boolean; reconnected: boolean; at: number };
+const connectionListeners = new Set<(event: RelayConnectionEvent) => void>();
+
+export function onRelayConnectionState(listener: (event: RelayConnectionEvent) => void) {
+  connectionListeners.add(listener);
+  return () => connectionListeners.delete(listener);
+}
+
+function emitConnectionState(event: RelayConnectionEvent) {
+  for (const listener of connectionListeners) {
+    try { listener(event); } catch (e) { logger.warn("[relay] connection listener failed", e); }
+  }
+}
 
 function queuedSubscriptionIds(queue: string[]): Set<string> {
   const ids = new Set<string>();
@@ -75,7 +90,9 @@ function ensureRelayConn(url: string): RelayConn {
     queue: [],
     subs: new Map(),
     okHandlers: new Map(),
-    reconnectTimer: null
+    reconnectTimer: null,
+    reconnectAttempts: 0,
+    hasConnected: false
   };
   relaysMap[url] = conn;
 
@@ -86,7 +103,10 @@ function ensureRelayConn(url: string): RelayConn {
       conn.ready = false;
 
       const onOpen = () => {
+        const reconnected = conn.hasConnected;
         conn.ready = true;
+        conn.hasConnected = true;
+        conn.reconnectAttempts = 0;
         const queuedReqIds = queuedSubscriptionIds(conn.queue);
         // flush queue
         while (conn.queue.length) {
@@ -98,6 +118,7 @@ function ensureRelayConn(url: string): RelayConn {
           }
         }
         replaySubscriptions(conn, ws, queuedReqIds);
+        emitConnectionState({ url, connected: true, reconnected, at: Date.now() });
       };
 
       const onMessage = (ev: MessageEvent) => {
@@ -111,7 +132,7 @@ function ensureRelayConn(url: string): RelayConn {
           const s = conn.subs.get(subId);
           if (s) {
             for (const h of s.handlers) {
-              try { h(event); } catch (e) { logger.warn("handler error", e); }
+              try { h(event, url); } catch (e) { logger.warn("handler error", e); }
             }
           }
         } else if (t === "EOSE") {
@@ -119,7 +140,7 @@ function ensureRelayConn(url: string): RelayConn {
           const s = conn.subs.get(subId);
           if (s) {
             for (const eh of s.eoseHandlers) {
-              try { eh(); } catch (e) { logger.warn("eose handler error", e); }
+              try { eh(url); } catch (e) { logger.warn("eose handler error", e); }
             }
           }
         } else if (t === "OK") {
@@ -141,10 +162,14 @@ function ensureRelayConn(url: string): RelayConn {
         conn.ready = false;
         conn.ws = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+        emitConnectionState({ url, connected: false, reconnected: conn.hasConnected, at: Date.now() });
+        const attempt = conn.reconnectAttempts++;
+        const baseDelay = Math.min(MAX_RECONNECT_DELAY, 1000 * (2 ** attempt));
+        const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4));
         conn.reconnectTimer = window.setTimeout(() => {
           conn.reconnectTimer = null;
           create();
-        }, RECONNECT_DELAY);
+        }, delay);
       };
 
       const onError = () => { /* ignore: close will handle reconnect */ };
@@ -201,7 +226,7 @@ export function subscribe(relays: string[], filtersArray: any[]) {
           const conn = relaysMap[url];
           if (!conn) continue;
           const s = conn.subs.get(subId);
-          if (s) s.eoseHandlers.add(() => cb(url));
+          if (s) s.eoseHandlers.add(cb as any);
         }
       }
     },
@@ -270,7 +295,8 @@ export function inspectRelays() {
       ready: r.ready,
       queueLength: r.queue.length,
       subs: Array.from(r.subs.keys()).length,
-      okHandlers: Array.from(r.okHandlers.keys()).length
+      okHandlers: Array.from(r.okHandlers.keys()).length,
+      reconnectAttempts: r.reconnectAttempts
     };
   }
   return out;
@@ -289,14 +315,15 @@ export function reconnectRelay(url: string) {
   try {
     if (r.ws) {
       try { r.ws.close(); } catch { }
+    } else if (!r.reconnectTimer) {
+      const subscriptions = r.subs;
+      delete relaysMap[url];
+      const replacement = ensureRelayConn(url);
+      replacement.subs = subscriptions;
     }
     // Preserve active subscriptions so the next socket can replay their REQs.
     r.ready = false;
     r.okHandlers.clear();
-    if (r.reconnectTimer) window.clearTimeout(r.reconnectTimer);
-    // recreate connection
-    // small delay to allow close events propagate
-    setTimeout(() => ensureRelayConn(url), 250);
   } catch (e) {
     logger.warn("reconnectRelay error", e);
   }
