@@ -6,6 +6,7 @@ import Home from "@/views/Home.vue";
 const Friends = () => import("@/views/Friends.vue");
 const Settings = () => import("@/views/Settings.vue");
 const Notifications = () => import("@/views/Notifications.vue");
+const Debug = () => import("@/views/Debug.vue");
 import { useKeyStore } from "@/stores/keys";
 
 /**
@@ -50,6 +51,12 @@ const routes: Array<RouteRecordRaw> = [
     path: "/settings",
     name: "Settings",
     component: Settings,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/debug",
+    name: "Debug",
+    component: Debug,
     meta: { requiresAuth: true }
   },
   // fallback

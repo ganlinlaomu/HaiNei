@@ -1,6 +1,6 @@
 import type { NostrEvent } from "nostr-tools";
 import { publish } from "@/nostr/relays";
-import { logger } from "@/utils/logger";
+import { debugLog } from "@/utils/debugLog";
 import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./protocol";
 
 export type MessageProtocolPolicy = "nip17";
@@ -48,7 +48,7 @@ export async function buildMessageEvents(options: Omit<SendDirectMessageOptions,
 export async function publishMessageEvents(events: NostrEvent[], relays: string[]) {
   const batches = await Promise.all(events.map(async event => {
     const targetPubkey = eventTarget(event);
-    logger.debug("[message-sync] publish_attempt", {
+    debugLog("publish", "gift_wrap_publish_start", {
       eventId: event.id.slice(0, 12),
       kind: event.kind,
       target: targetPubkey?.slice(0, 12) || "missing",
@@ -56,7 +56,7 @@ export async function publishMessageEvents(events: NostrEvent[], relays: string[
     });
     const results = await publish(relays, event);
     return results.map(result => {
-      logger.debug("[message-sync] publish_result", {
+      debugLog("publish", "gift_wrap_publish_result", {
         eventId: event.id.slice(0, 12),
         target: targetPubkey?.slice(0, 12) || "missing",
         relay: result.relay,
@@ -70,24 +70,34 @@ export async function publishMessageEvents(events: NostrEvent[], relays: string[
 
 export async function sendDirectMessage(options: SendDirectMessageOptions): Promise<PublishedMessage> {
   const encoded = await buildMessageEvents(options);
+  debugLog("publish", "message_publish_start", {
+    logicalMessageId: encoded.message.id,
+    recipients: encoded.message.recipientPubkeys.length,
+    giftWraps: encoded.events.length,
+    copies: encoded.events.map(event => ({
+      eventId: event.id,
+      target: eventTarget(event) || "missing",
+      role: eventTarget(event) === options.context.senderPubkey ? "sender" : "recipient"
+    }))
+  }, "info");
   const relayResults = await publishMessageEvents(encoded.events, options.relays);
   const failedEvents = encoded.events.filter(event =>
     !relayResults.some(result => result.eventId === event.id && result.ok)
   );
   if (failedEvents.length > 0) {
-    logger.warn("[message-sync] publish_failed", {
+    debugLog("publish", "message_publish_failed", {
       failedCopies: failedEvents.map(event => ({
         eventId: event.id.slice(0, 12),
         target: eventTarget(event)?.slice(0, 12) || "missing"
       })),
       copyCount: encoded.events.length,
       relayCount: options.relays.length
-    });
+    }, "error");
     throw new Error(`消息发布失败：${failedEvents.length}/${encoded.events.length} 个加密副本未被任何 relay 接收`);
   }
-  logger.debug("[message-sync] publish_success", {
+  debugLog("publish", "message_publish_success", {
     logicalMessageId: encoded.message.id.slice(0, 12),
     copyCount: encoded.events.length
-  });
+  }, "info");
   return { ...encoded, relayResults };
 }

@@ -5,6 +5,7 @@ import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { syncedMessageRepository, type SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { closeSubscription } from "@/utils/subscriptions";
 import { logger } from "@/utils/logger";
+import { debugLog } from "@/utils/debugLog";
 import { runPagedCatchup, type SubscribeForCatchup } from "./catchup";
 import { MessageIngestionPipeline, type DecodeMessage } from "./ingestion";
 import { calculateCatchupSince } from "./sorting";
@@ -98,18 +99,18 @@ export class MessageSyncManager {
       };
       try {
         await options.onMessage?.(restoredMessage, { source: "local-migration" });
-        logger.debug("[message-sync] restored_from_dexie", {
+        debugLog("storage", "dexie_message_restored", {
           logicalMessageId: record.id.slice(0, 12),
           transportEventId: record.transportEventIds[0]?.slice(0, 12) || "unknown",
           sender: record.senderPubkey.slice(0, 12),
           account: accountPubkey.slice(0, 12)
         });
       } catch (error) {
-        logger.warn("[message-sync] ui_restore_failed", {
+        debugLog("ui", "ui_restore_failed", {
           logicalMessageId: record.id.slice(0, 12),
           account: accountPubkey.slice(0, 12),
           reason: error instanceof Error ? error.name || "Error" : "unknown_error"
-        });
+        }, "warn");
       }
     }
     if (!isCurrent()) return;

@@ -1,6 +1,6 @@
 import type { CanonicalMessage } from "./protocol";
 import type { MessageIngestionMetadata } from "./sync/types";
-import { logger } from "@/utils/logger";
+import { debugLog } from "@/utils/debugLog";
 
 export type HomeMessageDelivery = {
   accountPubkey: string;
@@ -25,19 +25,43 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
       source: metadata.source
     };
     if (delivery.currentAccount() !== delivery.accountPubkey) {
-      logger.debug("[message-sync] ui_discarded_stale_account", diagnostic);
+      debugLog("ui", "ui_stale_account_discarded", diagnostic, "warn");
       return;
     }
     if (delivery.isInteraction(message)) {
-      await delivery.processInteraction(message);
-      logger.debug("[message-sync] interaction_routed", diagnostic);
+      try {
+        await delivery.processInteraction(message);
+        debugLog("ui", "ui_interaction_routed", diagnostic);
+      } catch (error) {
+        debugLog("ui", "ui_interaction_failed", {
+          ...diagnostic,
+          reason: error instanceof Error ? error.name : "interaction_error"
+        }, "error");
+        throw error;
+      }
       return;
     }
-    delivery.mirrorMessage(message);
-    logger.debug("[message-sync] ui_mirrored", diagnostic);
+    try {
+      delivery.mirrorMessage(message);
+      debugLog("ui", "ui_message_mirrored", diagnostic, "info");
+    } catch (error) {
+      debugLog("ui", "ui_mirror_failed", {
+        ...diagnostic,
+        reason: error instanceof Error ? error.name : "ui_mirror_error"
+      }, "error");
+      throw error;
+    }
     if (message.senderPubkey !== delivery.accountPubkey && metadata.source !== "local-migration") {
-      delivery.notifyMessage(message);
-      logger.debug("[message-sync] notification_created", diagnostic);
+      try {
+        delivery.notifyMessage(message);
+        debugLog("ui", "ui_notification_created", diagnostic, "info");
+      } catch (error) {
+        debugLog("ui", "ui_notification_failed", {
+          ...diagnostic,
+          reason: error instanceof Error ? error.name : "notification_error"
+        }, "error");
+        throw error;
+      }
     }
   };
 }

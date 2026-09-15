@@ -9,7 +9,7 @@ import {
 } from "nostr-tools";
 import { deriveConversationId, normalizePubkey, recipientPubkeys, replyReferences, verifySignedEvent } from "./common";
 import type { CanonicalMessage, EncodedMessage, MessageProtocolAdapter, OutgoingMessage, EncodeContext } from "./types";
-import { logger } from "@/utils/logger";
+import { debugLog } from "@/utils/debugLog";
 
 export const GIFT_WRAP_KIND = 1059;
 export const SEAL_KIND = 13;
@@ -41,13 +41,13 @@ function eventDiagnostic(event: NostrEvent, account: string, stage: string, reas
     stage,
     eventId: event.id?.slice(0, 12) || "unknown",
     eventKind: event.kind,
-    account: account.slice(0, 12) || "unknown",
+    accountPrefix: account.slice(0, 12) || "unknown",
     ...(reason ? { reason } : {})
   };
 }
 
 function decodeFailed(event: NostrEvent, account: string, stage: string, reason: string): null {
-  logger.warn("[nip17] decode_failed", eventDiagnostic(event, account, stage, reason));
+  debugLog("nip17", "decode_failed", eventDiagnostic(event, account, stage, reason), "warn");
   return null;
 }
 
@@ -60,7 +60,7 @@ export const nip17Adapter: MessageProtocolAdapter = {
   canDecode: event => event.kind === GIFT_WRAP_KIND || event.kind === RUMOR_KIND,
   async decode(event, context) {
     const accountInput = typeof context.accountPubkey === "string" ? context.accountPubkey : "";
-    logger.debug("[nip17] wrap_received", eventDiagnostic(event, accountInput, "wrap-received"));
+    debugLog("nip17", "wrap_received", eventDiagnostic(event, accountInput, "wrap-received"));
     try {
       const account = normalizePubkey(context.accountPubkey);
       let rumor: Rumor;
@@ -73,7 +73,7 @@ export const nip17Adapter: MessageProtocolAdapter = {
         const outerRecipients = recipientPubkeys(event.tags);
         if (outerRecipients.length !== 1) return decodeFailed(event, account, "outer-recipient", "expected_exactly_one_recipient");
         if (outerRecipients[0] !== account) return decodeFailed(event, account, "outer-recipient", "recipient_mismatch");
-        logger.debug("[nip17] outer_recipient_valid", eventDiagnostic(event, account, "outer-recipient"));
+        debugLog("nip17", "outer_recipient_valid", eventDiagnostic(event, account, "outer-recipient"));
 
         let sealPlaintext: string;
         try {
@@ -81,7 +81,7 @@ export const nip17Adapter: MessageProtocolAdapter = {
         } catch (error) {
           return decodeFailed(event, account, "outer-decrypt", errorKind(error));
         }
-        logger.debug("[nip17] outer_decrypt_success", eventDiagnostic(event, account, "outer-decrypt"));
+        debugLog("nip17", "outer_decrypt_success", eventDiagnostic(event, account, "outer-decrypt"));
         const sealValue = parseObject(sealPlaintext);
         if (!sealValue) return decodeFailed(event, account, "seal-validation", "invalid_seal_json");
         if (!validateEvent(sealValue)) return decodeFailed(event, account, "seal-validation", "invalid_seal_shape");
@@ -89,7 +89,7 @@ export const nip17Adapter: MessageProtocolAdapter = {
         if (sealValue.tags.length !== 0) return decodeFailed(event, account, "seal-validation", "seal_tags_not_empty");
         const seal = sealValue as unknown as NostrEvent;
         if (!verifySignedEvent(seal)) return decodeFailed(event, account, "seal-validation", "invalid_seal_signature");
-        logger.debug("[nip17] seal_valid", eventDiagnostic(event, account, "seal-validation"));
+        debugLog("nip17", "seal_valid", eventDiagnostic(event, account, "seal-validation"));
 
         let rumorPlaintext: string;
         try {
@@ -97,7 +97,7 @@ export const nip17Adapter: MessageProtocolAdapter = {
         } catch (error) {
           return decodeFailed(event, account, "rumor-decrypt", errorKind(error));
         }
-        logger.debug("[nip17] rumor_decrypt_success", eventDiagnostic(event, account, "rumor-decrypt"));
+        debugLog("nip17", "rumor_decrypt_success", eventDiagnostic(event, account, "rumor-decrypt"));
         const rumorValue = parseObject(rumorPlaintext);
         if (!rumorValue) return decodeFailed(event, account, "rumor-validation", "invalid_rumor_json");
         if ("sig" in rumorValue) return decodeFailed(event, account, "rumor-validation", "rumor_must_be_unsigned");
@@ -111,13 +111,13 @@ export const nip17Adapter: MessageProtocolAdapter = {
         if (!verifySignedEvent(event)) return decodeFailed(event, account, "rumor-validation", "invalid_rumor_signature");
         rumor = event as unknown as Rumor;
       }
-      logger.debug("[nip17] rumor_valid", eventDiagnostic(event, account, "rumor-validation"));
+      debugLog("nip17", "rumor_valid", eventDiagnostic(event, account, "rumor-validation"));
 
       const recipients = recipientPubkeys(rumor.tags);
       if (rumor.pubkey !== account && !recipients.includes(account)) {
         return decodeFailed(event, account, "recipient-validation", "account_not_in_rumor");
       }
-      logger.debug("[nip17] recipient_match", eventDiagnostic(event, account, "recipient-validation"));
+      debugLog("nip17", "recipient_match", eventDiagnostic(event, account, "recipient-validation"));
       const participants = [rumor.pubkey, ...recipients];
       const decoded: CanonicalMessage = {
         id: rumor.id,
@@ -135,7 +135,7 @@ export const nip17Adapter: MessageProtocolAdapter = {
         tags: rumor.tags,
         rawEvent: transportEvent
       };
-      logger.debug("[nip17] decode_success", {
+      debugLog("nip17", "decode_success", {
         ...eventDiagnostic(event, account, "decode-success"),
         logicalMessageId: rumor.id.slice(0, 12),
         sender: rumor.pubkey.slice(0, 12)

@@ -21,6 +21,7 @@ import {
   base64ToUint8Array,
   type EncryptedData
 } from "@/utils/crypto";
+import { debugLog } from "@/utils/debugLog";
 
 /**
  * keys store with robust nostr-tools feature detection.
@@ -49,6 +50,17 @@ function safeGeneratePrivateKey(): string {
 }
 async function safeGetPublicKey(skHex: string): Promise<string> {
   return nostr.getPublicKey(nostr.utils.hexToBytes(skHex));
+}
+
+function logAccountLogin(previousPubkey: string, pubkey: string, loginMethod: string) {
+  if (previousPubkey && previousPubkey !== pubkey) {
+    debugLog("account", "account_switch", {
+      pubkeyPrefix: pubkey,
+      previousPubkeyPrefix: previousPubkey,
+      loginMethod
+    }, "info");
+  }
+  debugLog("account", "account_login", { pubkeyPrefix: pubkey, loginMethod }, "info");
 }
 
 export const useKeyStore = defineStore("keys", {
@@ -304,6 +316,7 @@ export const useKeyStore = defineStore("keys", {
       }
     },
     async loginWithSk(sk: string) {
+      const previousPubkey = this.pkHex;
       this.skHex = sk;
       this.loginMethod = "sk";
       this.loginTimestamp = Math.floor(Date.now() / 1000);
@@ -324,12 +337,14 @@ export const useKeyStore = defineStore("keys", {
         localStorage.setItem("loginTimestamp", String(this.loginTimestamp));
       } catch {}
       await this.loadAccountStores(this.pkHex);
+      logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
     },
 
     /**
      * Login with NIP-07 browser extension
      */
     async loginWithExtension() {
+      const previousPubkey = this.pkHex;
       if (!window.nostr) {
         throw new Error("未检测到 Nostr 浏览器插件。请安装如 Alby, nos2x 等插件。");
       }
@@ -349,6 +364,7 @@ export const useKeyStore = defineStore("keys", {
         } catch {}
 
         await this.loadAccountStores(this.pkHex);
+        logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
       } catch (e: any) {
         this.pkHex = "";
         this.loginMethod = "";
@@ -362,6 +378,7 @@ export const useKeyStore = defineStore("keys", {
      * @param bunkerInput - bunker:// URL or name@domain NIP-05
      */
     async loginWithBunker(bunkerInput: string) {
+      const previousPubkey = this.pkHex;
       try {
         // Parse bunker input (bunker:// URL or NIP-05)
         const bunkerPointer = await parseBunkerInput(bunkerInput.trim());
@@ -421,6 +438,7 @@ export const useKeyStore = defineStore("keys", {
         } catch {}
 
         await this.loadAccountStores(this.pkHex);
+        logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
       } catch (e: any) {
         this.pkHex = "";
         this.loginMethod = "";
@@ -441,6 +459,7 @@ export const useKeyStore = defineStore("keys", {
      * @param password - Optional password to encrypt the private key. If provided, key will be encrypted.
      */
     async loginWithNsec(nsecOrHex: string, password?: string) {
+      const previousPubkey = this.pkHex;
       try {
         let skHex: string;
 
@@ -498,6 +517,7 @@ export const useKeyStore = defineStore("keys", {
         }
 
         await this.loadAccountStores(this.pkHex);
+        logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
       } catch (e: any) {
         this.skHex = "";
         this.pkHex = "";
@@ -553,6 +573,7 @@ export const useKeyStore = defineStore("keys", {
     
     async restoreSession() {
       this.isRestoring = true;
+      debugLog("account", "session_restore_start", {}, "info");
       try {
         const method = localStorage.getItem("loginMethod") as
           | "sk"
@@ -565,6 +586,7 @@ export const useKeyStore = defineStore("keys", {
 
         if (!method || !pk) {
           this.isRestored = true;
+          debugLog("account", "session_restore_success", { pubkeyPrefix: "", loginMethod: "" }, "info");
           return;
         }
 
@@ -620,13 +642,24 @@ export const useKeyStore = defineStore("keys", {
             this.bunkerClientSecretKey = clientSecretKey;
           } catch (e) {
             console.error("[keys] bunker restore failed", e);
+            debugLog("account", "session_restore_failed", {
+              pubkeyPrefix: pk,
+              loginMethod: method,
+              reason: e instanceof Error ? e.name : "bunker_restore_failed"
+            }, "warn");
             this.logout();
             this.isRestored = true;
             return;
           }
         } else {
+          debugLog("account", "session_restore_failed", {
+            pubkeyPrefix: pk,
+            loginMethod: method,
+            reason: "missing_bunker_input"
+          }, "warn");
           this.logout();
           this.isRestored = true;
+          debugLog("account", "session_restore_success", { pubkeyPrefix: this.pkHex, loginMethod: method }, "info");
           return;
         }
       }
@@ -656,8 +689,14 @@ export const useKeyStore = defineStore("keys", {
       }
       
       this.isRestored = true;
+      debugLog("account", "session_restore_success", { pubkeyPrefix: this.pkHex, loginMethod: method }, "info");
     } catch (error) {
       console.error("[keys] restoreSession error", error);
+      debugLog("account", "session_restore_failed", {
+        pubkeyPrefix: this.pkHex,
+        loginMethod: this.loginMethod,
+        reason: error instanceof Error ? error.name : "restore_failed"
+      }, "error");
       this.isRestored = true;
     } finally {
       this.isRestoring = false;
@@ -690,6 +729,11 @@ export const useKeyStore = defineStore("keys", {
 
     logout() {
       const currentPk = this.pkHex;
+      const currentMethod = this.loginMethod;
+      debugLog("account", "account_logout", {
+        pubkeyPrefix: currentPk,
+        loginMethod: currentMethod
+      }, "info");
 
       // Stop and clear account-scoped runtime state while the account context exists.
       this.resetAccountStores(currentPk);

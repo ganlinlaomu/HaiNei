@@ -7,6 +7,7 @@
 // - inspectRelays(): relay status summary
 // - reconnectRelay(url): force reconnect of one relay
 import { logger } from "@/utils/logger";
+import { debugLog } from "@/utils/debugLog";
 
 type RelayConn = {
   url: string;
@@ -55,12 +56,53 @@ function queuedSubscriptionIds(queue: string[]): Set<string> {
   return ids;
 }
 
+function subscriptionDiagnostic(conn: RelayConn, subId: string, filters?: any[]) {
+  const activeFilters = filters ?? conn.subs.get(subId)?.filters ?? [];
+  const kinds = [...new Set(activeFilters.flatMap((filter) => Array.isArray(filter?.kinds) ? filter.kinds : []))];
+  const recipient = activeFilters
+    .flatMap((filter) => Array.isArray(filter?.["#p"]) ? filter["#p"] : [])
+    .find((value) => typeof value === "string");
+  return {
+    relay: conn.url,
+    subId,
+    kinds,
+    recipientPrefix: typeof recipient === "string" ? recipient.slice(0, 12) : undefined
+  };
+}
+
+function eventDiagnostic(conn: RelayConn, event: any) {
+  const target = Array.isArray(event?.tags)
+    ? event.tags.find((tag: unknown) => Array.isArray(tag) && tag[0] === "p")?.[1]
+    : undefined;
+  return {
+    relay: conn.url,
+    eventId: typeof event?.id === "string" ? event.id.slice(0, 12) : "unknown",
+    kind: event?.kind,
+    target: typeof target === "string" ? target.slice(0, 12) : undefined
+  };
+}
+
+function logWireSend(conn: RelayConn, serialized: string) {
+  try {
+    const payload = JSON.parse(serialized);
+    if (payload?.[0] === "REQ") {
+      debugLog("subscription", "subscription_sent", subscriptionDiagnostic(conn, payload[1], payload.slice(2)));
+    } else if (payload?.[0] === "EVENT") {
+      debugLog("publish", "publish_event_sent", eventDiagnostic(conn, payload[1]));
+    }
+  } catch {
+    // The wire send already succeeded; diagnostics must not interfere.
+  }
+}
+
 function replaySubscriptions(conn: RelayConn, ws: WebSocket, queuedReqIds: Set<string>) {
   for (const [subId, sub] of conn.subs.entries()) {
     // A subscription created while disconnected already has its REQ in the queue.
     if (queuedReqIds.has(subId)) continue;
     try {
       ws.send(JSON.stringify(["REQ", subId, ...sub.filters]));
+      debugLog("subscription", "subscription_replayed", subscriptionDiagnostic(conn, subId, sub.filters), "info");
+      debugLog("subscription", "subscription_sent", subscriptionDiagnostic(conn, subId, sub.filters));
       logger.info(`[relay] replay subscription relay=${conn.url} sub=${subId}`);
     } catch (e) {
       const request = JSON.stringify(["REQ", subId, ...sub.filters]);
@@ -100,6 +142,7 @@ function ensureRelayConn(url: string): RelayConn {
 
   const create = () => {
     if (!conn.shouldReconnect) return;
+    debugLog("relay", "relay_connecting", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "info");
     try {
       const ws = new WebSocket(url);
       conn.ws = ws;
@@ -107,14 +150,19 @@ function ensureRelayConn(url: string): RelayConn {
 
       const onOpen = () => {
         const reconnected = conn.hasConnected;
+        const reconnectAttempts = conn.reconnectAttempts;
         conn.ready = true;
         conn.hasConnected = true;
         conn.reconnectAttempts = 0;
+        debugLog("relay", "relay_connected", { relay: url, reconnectAttempts }, "info");
         const queuedReqIds = queuedSubscriptionIds(conn.queue);
         // flush queue
         while (conn.queue.length) {
           const m = conn.queue.shift()!;
-          try { ws.send(m); } catch (e) {
+          try {
+            ws.send(m);
+            logWireSend(conn, m);
+          } catch (e) {
             if (!conn.queue.includes(m)) conn.queue.push(m);
             logger.warn(`[relay] queued send failed relay=${url}`, e);
             break;
@@ -132,10 +180,18 @@ function ensureRelayConn(url: string): RelayConn {
         if (t === "EVENT") {
           const subId = data[1];
           const event = data[2];
+          const recipient = Array.isArray(event?.tags)
+            ? event.tags.find((tag: unknown) => Array.isArray(tag) && tag[0] === "p")?.[1]
+            : undefined;
+          debugLog("relay", "relay_event_received", {
+            relay: url,
+            subId,
+            eventId: typeof event?.id === "string" ? event.id.slice(0, 12) : "unknown",
+            kind: event?.kind,
+            recipientPrefix: typeof recipient === "string" ? recipient.slice(0, 12) : undefined,
+            createdAt: event?.created_at
+          });
           if (event?.kind === 1059) {
-            const recipient = Array.isArray(event.tags)
-              ? event.tags.find((tag: unknown) => Array.isArray(tag) && tag[0] === "p")?.[1]
-              : undefined;
             logger.debug("[relay] nip17_event", {
               relay: url,
               subId,
@@ -152,6 +208,7 @@ function ensureRelayConn(url: string): RelayConn {
           }
         } else if (t === "EOSE") {
           const subId = data[1];
+          debugLog("subscription", "eose_received", subscriptionDiagnostic(conn, subId));
           const s = conn.subs.get(subId);
           if (s) {
             for (const eh of s.eoseHandlers) {
@@ -177,24 +234,37 @@ function ensureRelayConn(url: string): RelayConn {
         conn.ws = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
         emitConnectionState({ url, connected: false, reconnected: conn.hasConnected, at: Date.now() });
+        debugLog("relay", "relay_disconnected", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "warn");
         if (!conn.shouldReconnect) return;
         logger.warn(`[relay] disconnected relay=${url}; reconnect scheduled`);
         const attempt = conn.reconnectAttempts++;
         const baseDelay = Math.min(MAX_RECONNECT_DELAY, 1000 * (2 ** attempt));
         const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4));
+        debugLog("relay", "relay_reconnect_scheduled", {
+          relay: url,
+          reconnectAttempts: conn.reconnectAttempts,
+          delayMs: delay
+        }, "warn");
         conn.reconnectTimer = window.setTimeout(() => {
           conn.reconnectTimer = null;
           create();
         }, delay);
       };
 
-      const onError = () => { /* ignore: close will handle reconnect */ };
+      const onError = () => {
+        debugLog("relay", "relay_error", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "error");
+      };
 
       ws.addEventListener("open", onOpen);
       ws.addEventListener("message", onMessage);
       ws.addEventListener("close", onClose);
       ws.addEventListener("error", onError);
     } catch (e) {
+      debugLog("relay", "relay_error", {
+        relay: url,
+        reconnectAttempts: conn.reconnectAttempts,
+        reason: e instanceof Error ? e.name : "websocket_create_failed"
+      }, "error");
       logger.warn("create websocket failed for relay", url, e);
     }
   };
@@ -203,12 +273,20 @@ function ensureRelayConn(url: string): RelayConn {
   return conn;
 }
 
-function sendRaw(conn: RelayConn, payload: any) {
+function sendRaw(conn: RelayConn, payload: any): "sent" | "queued" {
   const s = JSON.stringify(payload);
   if (conn.ready && conn.ws) {
-    try { conn.ws.send(s); } catch (e) { conn.queue.push(s); }
+    try {
+      conn.ws.send(s);
+      logWireSend(conn, s);
+      return "sent";
+    } catch (e) {
+      conn.queue.push(s);
+      return "queued";
+    }
   } else {
     conn.queue.push(s);
+    return "queued";
   }
 }
 
@@ -224,6 +302,7 @@ export function subscribe(relays: string[], filtersArray: any[]) {
     const conn = ensureRelayConn(url);
     const subId = "sub_" + Math.random().toString(36).slice(2, 10);
     conn.subs.set(subId, { filters, handlers: new Set(), eoseHandlers: new Set() });
+    debugLog("subscription", "subscription_created", subscriptionDiagnostic(conn, subId, filters), "info");
     sendRaw(conn, ["REQ", subId, ...filters]);
     perRelaySubIds.push({ url, subId });
   }
@@ -251,6 +330,7 @@ export function subscribe(relays: string[], filtersArray: any[]) {
         const conn = relaysMap[url];
         if (!conn) continue;
         try { sendRaw(conn, ["CLOSE", subId]); } catch {}
+        debugLog("subscription", "subscription_closed", subscriptionDiagnostic(conn, subId), "info");
         conn.subs.delete(subId);
       }
     }
@@ -264,6 +344,14 @@ export function subscribe(relays: string[], filtersArray: any[]) {
 export async function publish(relays: string[], event: any): Promise<Array<{ relay: string; ok: boolean; reason?: any; ts: number }>> {
   const promises = relays.map(async (url) => {
     const conn = ensureRelayConn(url);
+    const diagnostic = eventDiagnostic(conn, event);
+    debugLog("publish", "publish_start", diagnostic, "info");
+    debugLog("publish", "publish_waiting_connection", {
+      ...diagnostic,
+      ready: conn.ready,
+      queueLength: conn.queue.length,
+      wsReadyState: conn.ws?.readyState ?? null
+    });
     const waited = await new Promise<boolean>((resolve) => {
       const start = Date.now();
       const check = () => {
@@ -273,23 +361,55 @@ export async function publish(relays: string[], event: any): Promise<Array<{ rel
       };
       check();
     });
+    debugLog("publish", waited ? "publish_connection_ready" : "publish_connection_timeout", {
+      ...diagnostic,
+      waited,
+      ready: conn.ready,
+      queueLength: conn.queue.length,
+      wsReadyState: conn.ws?.readyState ?? null
+    }, waited ? "debug" : "warn");
 
     const id = event.id || (Math.random().toString(36).slice(2, 10));
     const okPromise = new Promise<{ ok: boolean; msg?: any }>((resolve) => {
-      const h = (res: any) => resolve({ ok: !!res.ok, msg: res.msg });
+      const h = (res: any) => {
+        const ok = !!res.ok;
+        debugLog("publish", ok ? "publish_ok" : "publish_rejected", {
+          ...diagnostic,
+          reason: res.msg
+        }, ok ? "info" : "warn");
+        resolve({ ok, msg: res.msg });
+      };
       conn.okHandlers.set(id, h);
       setTimeout(() => {
         if (conn.okHandlers.has(id)) {
           conn.okHandlers.delete(id);
+          debugLog("publish", "publish_timeout", {
+            ...diagnostic,
+            ready: conn.ready,
+            queueLength: conn.queue.length,
+            wsReadyState: conn.ws?.readyState ?? null
+          }, "warn");
           resolve({ ok: false, msg: "timeout" });
         }
       }, PUBLISH_TIMEOUT);
     });
 
     try {
-      sendRaw(conn, ["EVENT", event]);
+      const delivery = sendRaw(conn, ["EVENT", event]);
+      if (delivery === "queued") {
+        debugLog("publish", "publish_send_queued", {
+          ...diagnostic,
+          ready: conn.ready,
+          queueLength: conn.queue.length,
+          wsReadyState: conn.ws?.readyState ?? null
+        }, "warn");
+      }
     } catch (e) {
       conn.okHandlers.delete(id);
+      debugLog("publish", "publish_rejected", {
+        ...diagnostic,
+        reason: e instanceof Error ? e.name : "send_failed"
+      }, "error");
       return { relay: url, ok: false, reason: e, ts: Date.now() };
     }
 
@@ -342,6 +462,11 @@ export function reconnectRelay(url: string) {
     r.ready = false;
     r.okHandlers.clear();
   } catch (e) {
+    debugLog("relay", "relay_error", {
+      relay: url,
+      reconnectAttempts: r.reconnectAttempts,
+      reason: e instanceof Error ? e.name : "reconnect_failed"
+    }, "error");
     logger.warn("reconnectRelay error", e);
   }
 }

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
   sent: string[] = [];
+  readyState = 0;
   private listeners: Record<string, Array<(event: any) => void>> = {};
 
   constructor(readonly url: string) {
@@ -15,7 +17,11 @@ class MockWebSocket {
 
   send(payload: string) { this.sent.push(payload); }
   close() { this.emit("close", {}); }
-  emit(name: string, event: any) { this.listeners[name]?.forEach(callback => callback(event)); }
+  emit(name: string, event: any) {
+    if (name === "open") this.readyState = 1;
+    if (name === "close") this.readyState = 3;
+    this.listeners[name]?.forEach(callback => callback(event));
+  }
 }
 
 afterEach(() => {
@@ -24,6 +30,54 @@ afterEach(() => {
   MockWebSocket.instances = [];
 });
 describe("relay reconnect", () => {
+  it("records connection, wire send, and relay OK for publish", async () => {
+    vi.useFakeTimers();
+    setActivePinia(createPinia());
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { setTimeout, clearTimeout }
+    });
+    const { publish } = await import("@/nostr/relays");
+    const { useDebugLogsStore } = await import("@/stores/debugLogs");
+    const event = { id: "e".repeat(64), kind: 1059, created_at: 123, tags: [["p", "b".repeat(64)]], content: "encrypted" };
+    const resultPromise = publish(["wss://publish.test"], event);
+    const socket = MockWebSocket.instances[0];
+    socket.emit("open", {});
+    await vi.advanceTimersByTimeAsync(200);
+    socket.emit("message", { data: JSON.stringify(["OK", event.id, true, "saved"]) });
+
+    await expect(resultPromise).resolves.toMatchObject([{ relay: "wss://publish.test", ok: true }]);
+    const entries = useDebugLogsStore().entries;
+    expect(entries.map(entry => entry.event)).toEqual(expect.arrayContaining([
+      "relay_connecting", "relay_connected", "publish_start", "publish_waiting_connection",
+      "publish_connection_ready", "publish_event_sent", "publish_ok"
+    ]));
+    expect(JSON.stringify(entries)).not.toContain("encrypted");
+  });
+
+  it("records waited=false and socket state when connection and publish time out", async () => {
+    vi.useFakeTimers();
+    setActivePinia(createPinia());
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { setTimeout, clearTimeout }
+    });
+    const { publish } = await import("@/nostr/relays");
+    const { useDebugLogsStore } = await import("@/stores/debugLogs");
+    const resultPromise = publish(["wss://offline.test"], {
+      id: "f".repeat(64), kind: 1059, created_at: 123, tags: [["p", "b".repeat(64)]], content: "encrypted"
+    });
+
+    await vi.advanceTimersByTimeAsync(4300);
+    await vi.advanceTimersByTimeAsync(5100);
+    await expect(resultPromise).resolves.toMatchObject([{ relay: "wss://offline.test", ok: false, reason: "timeout" }]);
+    const connectionTimeout = useDebugLogsStore().entries.find(entry => entry.event === "publish_connection_timeout");
+    expect(connectionTimeout?.data).toMatchObject({ waited: false, ready: false, queueLength: 0, wsReadyState: 0 });
+    expect(useDebugLogsStore().entries.map(entry => entry.event)).toContain("publish_timeout");
+  });
+
   it("logs safe NIP-17 envelope metadata when a relay delivers kind 1059", async () => {
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
     Object.defineProperty(globalThis, "window", {
