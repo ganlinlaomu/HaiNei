@@ -103,8 +103,10 @@ export const usePostsStore = defineStore("posts", {
       } catch (e) {
         logger.warn("saving outbox to messages store failed", e);
         try {
-          const legacy = JSON.parse(localStorage.getItem("nostr-outbox") || "[]");
-          localStorage.setItem("nostr-outbox", JSON.stringify([out, ...legacy]));
+          const fallbackKey = `nostr_outbox_${targetPk}`;
+          const existing = JSON.parse(localStorage.getItem(fallbackKey) || "[]");
+          const scopedOutbox = Array.isArray(existing) ? [out, ...existing].slice(0, 500) : [out];
+          localStorage.setItem(fallbackKey, JSON.stringify(scopedOutbox));
         } catch {}
       }
 
