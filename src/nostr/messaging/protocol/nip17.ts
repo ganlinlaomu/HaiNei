@@ -8,7 +8,8 @@ import {
   type UnsignedEvent
 } from "nostr-tools";
 import { deriveConversationId, normalizePubkey, recipientPubkeys, replyReferences, verifySignedEvent } from "./common";
-import type { EncodedMessage, MessageProtocolAdapter, OutgoingMessage, EncodeContext } from "./types";
+import type { CanonicalMessage, EncodedMessage, MessageProtocolAdapter, OutgoingMessage, EncodeContext } from "./types";
+import { logger } from "@/utils/logger";
 
 export const GIFT_WRAP_KIND = 1059;
 export const SEAL_KIND = 13;
@@ -35,38 +36,90 @@ function encryptWithEphemeralKey(secretKey: Uint8Array, pubkey: string, plaintex
   return nip44.v2.encrypt(plaintext, key);
 }
 
+function eventDiagnostic(event: NostrEvent, account: string, stage: string, reason?: string) {
+  return {
+    stage,
+    eventId: event.id?.slice(0, 12) || "unknown",
+    eventKind: event.kind,
+    account: account.slice(0, 12) || "unknown",
+    ...(reason ? { reason } : {})
+  };
+}
+
+function decodeFailed(event: NostrEvent, account: string, stage: string, reason: string): null {
+  logger.warn("[nip17] decode_failed", eventDiagnostic(event, account, stage, reason));
+  return null;
+}
+
+function errorKind(error: unknown): string {
+  return error instanceof Error ? error.name || "Error" : "unknown_error";
+}
+
 export const nip17Adapter: MessageProtocolAdapter = {
   name: "nip17",
   canDecode: event => event.kind === GIFT_WRAP_KIND || event.kind === RUMOR_KIND,
   async decode(event, context) {
+    const accountInput = typeof context.accountPubkey === "string" ? context.accountPubkey : "";
+    logger.debug("[nip17] wrap_received", eventDiagnostic(event, accountInput, "wrap-received"));
     try {
       const account = normalizePubkey(context.accountPubkey);
       let rumor: Rumor;
-      let transportEvent = event;
+      const transportEvent = event;
 
       if (event.kind === GIFT_WRAP_KIND) {
-        if (!context.nip44Decrypt || !validateEvent(event) || !verifySignedEvent(event)) return null;
+        if (!context.nip44Decrypt) return decodeFailed(event, account, "outer-validation", "nip44_decrypt_unavailable");
+        if (!validateEvent(event)) return decodeFailed(event, account, "outer-validation", "invalid_event_shape");
+        if (!verifySignedEvent(event)) return decodeFailed(event, account, "outer-validation", "invalid_event_signature");
         const outerRecipients = recipientPubkeys(event.tags);
-        if (outerRecipients.length !== 1 || outerRecipients[0] !== account) return null;
+        if (outerRecipients.length !== 1) return decodeFailed(event, account, "outer-recipient", "expected_exactly_one_recipient");
+        if (outerRecipients[0] !== account) return decodeFailed(event, account, "outer-recipient", "recipient_mismatch");
+        logger.debug("[nip17] outer_recipient_valid", eventDiagnostic(event, account, "outer-recipient"));
 
-        const sealValue = parseObject(await context.nip44Decrypt(event.pubkey, event.content));
-        if (!sealValue || !validateEvent(sealValue) || sealValue.kind !== SEAL_KIND || sealValue.tags.length !== 0) return null;
+        let sealPlaintext: string;
+        try {
+          sealPlaintext = await context.nip44Decrypt(event.pubkey, event.content);
+        } catch (error) {
+          return decodeFailed(event, account, "outer-decrypt", errorKind(error));
+        }
+        logger.debug("[nip17] outer_decrypt_success", eventDiagnostic(event, account, "outer-decrypt"));
+        const sealValue = parseObject(sealPlaintext);
+        if (!sealValue) return decodeFailed(event, account, "seal-validation", "invalid_seal_json");
+        if (!validateEvent(sealValue)) return decodeFailed(event, account, "seal-validation", "invalid_seal_shape");
+        if (sealValue.kind !== SEAL_KIND) return decodeFailed(event, account, "seal-validation", "invalid_seal_kind");
+        if (sealValue.tags.length !== 0) return decodeFailed(event, account, "seal-validation", "seal_tags_not_empty");
         const seal = sealValue as unknown as NostrEvent;
-        if (!verifySignedEvent(seal)) return null;
+        if (!verifySignedEvent(seal)) return decodeFailed(event, account, "seal-validation", "invalid_seal_signature");
+        logger.debug("[nip17] seal_valid", eventDiagnostic(event, account, "seal-validation"));
 
-        const rumorValue = parseObject(await context.nip44Decrypt(seal.pubkey, seal.content));
-        if (!rumorValue || "sig" in rumorValue || !validateEvent(rumorValue)) return null;
+        let rumorPlaintext: string;
+        try {
+          rumorPlaintext = await context.nip44Decrypt(seal.pubkey, seal.content);
+        } catch (error) {
+          return decodeFailed(event, account, "rumor-decrypt", errorKind(error));
+        }
+        logger.debug("[nip17] rumor_decrypt_success", eventDiagnostic(event, account, "rumor-decrypt"));
+        const rumorValue = parseObject(rumorPlaintext);
+        if (!rumorValue) return decodeFailed(event, account, "rumor-validation", "invalid_rumor_json");
+        if ("sig" in rumorValue) return decodeFailed(event, account, "rumor-validation", "rumor_must_be_unsigned");
+        if (!validateEvent(rumorValue)) return decodeFailed(event, account, "rumor-validation", "invalid_rumor_shape");
         rumor = rumorValue as unknown as Rumor;
-        if (rumor.kind !== RUMOR_KIND || rumor.pubkey !== seal.pubkey || rumor.id !== getEventHash(rumor)) return null;
+        if (rumor.kind !== RUMOR_KIND) return decodeFailed(event, account, "rumor-validation", "invalid_rumor_kind");
+        if (rumor.pubkey !== seal.pubkey) return decodeFailed(event, account, "rumor-validation", "seal_sender_mismatch");
+        if (rumor.id !== getEventHash(rumor)) return decodeFailed(event, account, "rumor-validation", "invalid_rumor_id");
       } else {
-        if (!validateEvent(event) || !verifySignedEvent(event)) return null;
+        if (!validateEvent(event)) return decodeFailed(event, account, "rumor-validation", "invalid_rumor_shape");
+        if (!verifySignedEvent(event)) return decodeFailed(event, account, "rumor-validation", "invalid_rumor_signature");
         rumor = event as unknown as Rumor;
       }
+      logger.debug("[nip17] rumor_valid", eventDiagnostic(event, account, "rumor-validation"));
 
       const recipients = recipientPubkeys(rumor.tags);
-      if (rumor.pubkey !== account && !recipients.includes(account)) return null;
+      if (rumor.pubkey !== account && !recipients.includes(account)) {
+        return decodeFailed(event, account, "recipient-validation", "account_not_in_rumor");
+      }
+      logger.debug("[nip17] recipient_match", eventDiagnostic(event, account, "recipient-validation"));
       const participants = [rumor.pubkey, ...recipients];
-      return {
+      const decoded: CanonicalMessage = {
         id: rumor.id,
         senderPubkey: rumor.pubkey,
         recipientPubkeys: recipients,
@@ -82,8 +135,14 @@ export const nip17Adapter: MessageProtocolAdapter = {
         tags: rumor.tags,
         rawEvent: transportEvent
       };
-    } catch {
-      return null;
+      logger.debug("[nip17] decode_success", {
+        ...eventDiagnostic(event, account, "decode-success"),
+        logicalMessageId: rumor.id.slice(0, 12),
+        sender: rumor.pubkey.slice(0, 12)
+      });
+      return decoded;
+    } catch (error) {
+      return decodeFailed(event, accountInput, "unexpected", errorKind(error));
     }
   },
   encode: buildNip17Message

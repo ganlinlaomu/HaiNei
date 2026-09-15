@@ -132,6 +132,18 @@ function ensureRelayConn(url: string): RelayConn {
         if (t === "EVENT") {
           const subId = data[1];
           const event = data[2];
+          if (event?.kind === 1059) {
+            const recipient = Array.isArray(event.tags)
+              ? event.tags.find((tag: unknown) => Array.isArray(tag) && tag[0] === "p")?.[1]
+              : undefined;
+            logger.debug("[relay] nip17_event", {
+              relay: url,
+              subId,
+              eventId: typeof event.id === "string" ? event.id.slice(0, 12) : "unknown",
+              recipient: typeof recipient === "string" ? recipient.slice(0, 12) : "missing",
+              created_at: event.created_at
+            });
+          }
           const s = conn.subs.get(subId);
           if (s) {
             for (const h of s.handlers) {

@@ -24,6 +24,37 @@ afterEach(() => {
   MockWebSocket.instances = [];
 });
 describe("relay reconnect", () => {
+  it("logs safe NIP-17 envelope metadata when a relay delivers kind 1059", async () => {
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { setTimeout, clearTimeout }
+    });
+    const { logger } = await import("@/utils/logger");
+    const debug = vi.spyOn(logger, "debug").mockImplementation(() => {});
+    const { subscribe } = await import("@/nostr/relays");
+    const subscription = subscribe(["wss://relay.test"], [{ kinds: [1059], "#p": ["b".repeat(64)] }]);
+    subscription.on("event", () => {});
+    const socket = MockWebSocket.instances[0];
+    socket.emit("open", {});
+    const request = JSON.parse(socket.sent.find(payload => JSON.parse(payload)[0] === "REQ")!);
+    socket.emit("message", { data: JSON.stringify([
+      "EVENT",
+      request[1],
+      { id: "e".repeat(64), kind: 1059, created_at: 123, tags: [["p", "b".repeat(64)]], content: "secret" }
+    ]) });
+
+    expect(debug).toHaveBeenCalledWith("[relay] nip17_event", {
+      relay: "wss://relay.test",
+      subId: request[1],
+      eventId: "e".repeat(12),
+      recipient: "b".repeat(12),
+      created_at: 123
+    });
+    expect(JSON.stringify(debug.mock.calls)).not.toContain("secret");
+    subscription.unsub();
+  });
+
   it("replays active REQ with the original subscription id", async () => {
     vi.useFakeTimers();
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
