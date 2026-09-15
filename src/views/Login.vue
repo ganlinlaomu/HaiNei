@@ -1,365 +1,778 @@
 <template>
-  <div class="card login-card">
+  <main class="login-card">
     <div class="login-center">
-      <h1 class="title">海内</h1>
+      <header class="brand">
+        <h1>海内</h1>
+        <p class="brand-subtitle">纯 · 知己</p>
+        <p v-if="pageMode === 'login'" class="brand-tagline">只与你选择的人连接</p>
+      </header>
 
-      <div class="login-info">
-        <p>纯·知己</p> 
-      </div>
+      <section v-if="pageMode === 'restoring'" class="state-panel restoring-panel">
+        <p class="status-message" role="status" aria-live="polite">正在恢复会话…</p>
+      </section>
 
-      <div v-if="needsUnlock" class="unlock-form">
-        <div class="unlock-message">
-          <span class="unlock-icon">🔒</span>
-          <p>私钥已加密，请输入密码解锁</p>
+      <form v-else-if="pageMode === 'unlock'" class="unlock-form" @submit.prevent="doUnlock">
+        <div class="welcome-block">
+          <p class="welcome-title">欢迎回来</p>
+          <p class="account-id" :title="shortAccount">{{ shortAccount }}</p>
         </div>
 
+        <label class="field-label" for="unlock-password">本地保护密码</label>
         <input
+          id="unlock-password"
           ref="unlockPasswordEl"
           v-model="unlockPassword"
           class="input"
           type="password"
-          placeholder="输入解锁密码"
+          autocomplete="current-password"
+          placeholder="输入本地保护密码"
           :disabled="loading"
-          @keyup.enter="doUnlock"
-          style="margin-top:12px;"
         />
 
-        <div style="margin-top:12px;">
-          <button
-            class="btn btn-primary"
-            @click="doUnlock"
-            :disabled="loading"
-          >
-            {{ loading ? "解锁中..." : "解锁" }}
-          </button>
+        <button class="btn btn-primary" type="submit" :disabled="loading">
+          {{ loading ? "正在解锁…" : "解锁" }}
+        </button>
 
-          <button
-            class="btn btn-cancel"
-            style="margin-left:8px"
-            @click="cancelUnlock"
-            :disabled="loading"
-          >
-            退出账号
-          </button>
-        </div>
-      </div>
+        <button class="btn btn-text" type="button" :disabled="loading" @click="switchAccount">
+          切换账号
+        </button>
+      </form>
 
-      <div v-else class="login-actions">
-        <div v-if="!showNsec && !showBunker" class="main-buttons">
-          <button class="btn" @click="loginWithExtension" :disabled="loading">
-            <span class="btn-icon">🔌</span> 插件登录 (NIP-07)
-          </button>
-
-          <button class="btn" @click="showNsecLogin" :disabled="loading">
-            <span class="btn-icon">🔑</span> 私钥登录
-          </button>
-
-          <button class="btn" @click="showBunkerLogin" :disabled="loading">
-            <span class="btn-icon">🔐</span> Bunker 登录
-          </button>
-        </div>
-
-        <div v-if="showNsec" class="form card">
-          <label>私钥 (nsec 或 hex)</label>
-          <input
-            ref="nsecInputEl"
-            v-model="nsecInput"
-            class="input"
-            type="password"
-            placeholder="nsec1... 或 64位十六进制"
-            :disabled="loading"
-          />
-
-          <label style="margin-top:12px;">加密密码（可选）</label>
-          <input
-            v-model="nsecPassword"
-            class="input"
-            type="password"
-            placeholder="设置密码以加密保存私钥"
-            :disabled="loading"
-            @keyup.enter="doLoginNsec"
-          />
-
-          <div class="small-tip">
-            设置密码后，私钥将加密保存在本地 IndexedDB 中。
-          </div>
-
-          <div class="form-ops">
-            <button class="btn btn-primary" @click="doLoginNsec" :disabled="loading">
-              {{ loading ? "登录中..." : "确认登录" }}
+      <form v-else class="login-form" @submit.prevent="doLoginNsec">
+        <div class="field-group">
+          <label class="field-label" for="private-key">私钥</label>
+          <div class="private-key-field">
+            <input
+              id="private-key"
+              ref="nsecInputEl"
+              v-model="nsecInput"
+              class="input private-key-input"
+              :type="showPrivateKey ? 'text' : 'password'"
+              placeholder="nsec1... / 64 位 hex"
+              autocapitalize="none"
+              autocomplete="off"
+              autocorrect="off"
+              spellcheck="false"
+              inputmode="text"
+              autofocus
+              :disabled="loading"
+            />
+            <button
+              class="visibility-button"
+              type="button"
+              :aria-label="showPrivateKey ? '隐藏私钥' : '显示私钥'"
+              :title="showPrivateKey ? '隐藏私钥' : '显示私钥'"
+              :disabled="loading"
+              @click="showPrivateKey = !showPrivateKey"
+            >
+              <span aria-hidden="true">👁</span>
             </button>
-            <button class="btn btn-cancel" @click="cancelNsec" :disabled="loading">取消</button>
           </div>
-        </div>
 
-        <div v-if="showBunker" class="form card">
-          <label>Bunker URL 或 NIP-05</label>
-          <input
-            ref="bunkerInputEl"
-            v-model="bunkerInput"
-            class="input"
-            placeholder="bunker://... 或 name@domain.com"
-            :disabled="loading"
-            @keyup.enter="doLoginBunker"
-          />
-          <div class="small-tip">输入远程签名器地址或 NIP-05 标识符。</div>
-
-          <div class="form-ops">
-            <button class="btn btn-primary" @click="doLoginBunker" :disabled="loading">
-              {{ loading ? "连接中..." : "开始连接" }}
+          <div class="key-actions">
+            <button class="paste-button" type="button" :disabled="loading" @click="pastePrivateKey">
+              粘贴私钥
             </button>
-            <button class="btn btn-cancel" @click="cancelBunker" :disabled="loading">取消</button>
+            <span v-if="recognizedKeyType" class="recognized-key" aria-live="polite">
+              已识别 {{ recognizedKeyType }} 私钥
+            </span>
           </div>
         </div>
-      </div>
+
+        <div class="encryption-section">
+          <button
+            class="accordion-button"
+            type="button"
+            :aria-expanded="saveEncrypted"
+            aria-controls="local-password-fields"
+            :disabled="loading"
+            @click="saveEncrypted = !saveEncrypted"
+          >
+            <span class="disclosure" aria-hidden="true">{{ saveEncrypted ? "▾" : "▸" }}</span>
+            在本机加密保存私钥
+          </button>
+
+          <div v-if="saveEncrypted" id="local-password-fields" class="password-fields">
+            <label class="field-label" for="local-password">本地保护密码</label>
+            <input
+              id="local-password"
+              v-model="nsecPassword"
+              class="input"
+              type="password"
+              autocomplete="new-password"
+              placeholder="输入密码"
+              :disabled="loading"
+            />
+
+            <label class="field-label" for="confirm-password">确认密码</label>
+            <input
+              id="confirm-password"
+              v-model="confirmPassword"
+              class="input"
+              type="password"
+              autocomplete="new-password"
+              placeholder="再次输入密码"
+              :disabled="loading"
+            />
+
+            <p class="password-note">启用后，下次打开 HaiNei 时只需输入这个密码解锁。</p>
+            <p class="password-note muted">这个密码只用于本机加密，不是 Nostr 密码，也不会上传。</p>
+          </div>
+        </div>
+
+        <button class="btn btn-primary login-button" type="submit" :disabled="loading">
+          {{ loading ? "正在登录…" : "登录" }}
+        </button>
+
+        <div class="divider" aria-hidden="true"><span>或</span></div>
+
+        <button
+          class="btn btn-secondary"
+          type="button"
+          :class="{ 'plugin-unavailable': !pluginDetected }"
+          :disabled="loading"
+          @click="loginWithExtension"
+        >
+          使用浏览器插件登录
+        </button>
+        <p class="plugin-label">NIP-07</p>
+        <p class="plugin-status" :class="{ detected: pluginDetected }">
+          {{ pluginDetected ? "已检测到浏览器插件" : "当前未检测到插件" }}
+        </p>
+
+        <p class="privacy-note">私钥只保存在你的设备中</p>
+      </form>
+
+      <p v-if="loginStatus && pageMode !== 'restoring'" class="status-message" role="status" aria-live="polite">
+        {{ loginStatus }}
+      </p>
 
       <transition name="shake">
-        <div v-if="errorMessage" class="error-message">
+        <div v-if="errorMessage" class="error-message" role="alert" aria-live="polite">
           {{ errorMessage }}
         </div>
       </transition>
     </div>
-  </div>
+  </main>
 </template>
 
-<script lang="ts">
-import { defineComponent, ref, onMounted, watch, nextTick, computed } from "vue";
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { nip19 } from "nostr-tools";
+import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
-import { useRouter } from "vue-router";
 import { logger } from "@/utils/logger";
 
-export default defineComponent({
-  name: "LoginView",
-  setup() {
-    const ks = useKeyStore();
-    const router = useRouter();
+type LoginMethod = "private-key" | "nip07" | "unlock";
 
-    // 状态控制
-    const showBunker = ref(false);
-    const showNsec = ref(false);
-    const loading = ref(false);
-    const errorMessage = ref("");
+const ks = useKeyStore();
+const route = useRoute();
+const router = useRouter();
 
-    // 输入绑定
-    const bunkerInput = ref("");
-    const nsecInput = ref("");
-    const nsecPassword = ref("");
-    const unlockPassword = ref("");
+const loading = ref(false);
+const errorMessage = ref("");
+const loginStatus = ref("");
+const nsecInput = ref("");
+const showPrivateKey = ref(false);
+const saveEncrypted = ref(false);
+const nsecPassword = ref("");
+const confirmPassword = ref("");
+const unlockPassword = ref("");
+const pluginDetected = ref(typeof window !== "undefined" && !!window.nostr);
+const unlockInProgress = ref(false);
 
-    // 元素引用
-    const bunkerInputEl = ref<HTMLInputElement | null>(null);
-    const nsecInputEl = ref<HTMLInputElement | null>(null);
-    const unlockPasswordEl = ref<HTMLInputElement | null>(null);
+const nsecInputEl = ref<HTMLInputElement | null>(null);
+const unlockPasswordEl = ref<HTMLInputElement | null>(null);
 
-    // 计算属性：判断是否处于“已记住所选账号但未解锁私钥”的状态
-    const needsUnlock = computed(() => {
-      // 逻辑：LocalStorage 有 pkHex 且标记为 isEncrypted，但内存中没有 skHex
-      return ks.pkHex && ks.isEncrypted && !ks.isUnlocked;
-    });
+let pluginDetectionTimer: number | undefined;
+let pluginDetectionStopTimer: number | undefined;
 
-    onMounted(async () => {
-      // 1. 如果完全登录且解锁，直接去首页
-      if (ks.isLoggedIn && ks.isUnlocked) {
-        router.replace("/");
-        return;
-      }
-      
-      // 2. 如果需要解锁，自动聚焦
-      if (needsUnlock.value) {
-        await nextTick();
-        unlockPasswordEl.value?.focus();
-      }
-    });
+const needsUnlock = computed(() => !!ks.pkHex && ks.isEncrypted && !ks.isUnlocked);
+const pageMode = computed<"restoring" | "unlock" | "login">(() => {
+  if (ks.isRestoring) return "restoring";
+  if (needsUnlock.value || unlockInProgress.value) return "unlock";
+  return "login";
+});
 
-    // 自动聚焦监听
-    watch(showBunker, async (v) => v && (await nextTick(), bunkerInputEl.value?.focus()));
-    watch(showNsec, async (v) => v && (await nextTick(), nsecInputEl.value?.focus()));
+const recognizedKeyType = computed(() => {
+  const value = nsecInput.value.trim();
+  if (value.startsWith("nsec1")) return "nsec";
+  if (/^[0-9a-fA-F]{64}$/.test(value)) return "hex";
+  return "";
+});
 
-    /**
-     * 核心登录/解锁处理包装器
-     */
-    async function handleLoginAction(task: () => Promise<void>) {
-      errorMessage.value = "";
-      loading.value = true;
-      try {
-        await task();
-        // 登录成功后跳转。注意：Store 内部的 afterLogin 已确保数据库打开
-        router.replace("/");
-      } catch (e: any) {
-        logger.error("[Login] Action failed", e);
-        errorMessage.value = e.message || "操作失败，请重试";
-      } finally {
-        loading.value = false;
-      }
-    }
-
-    // --- 登录逻辑 ---
-
-    const loginWithExtension = () => handleLoginAction(() => ks.loginWithExtension());
-
-    const doLoginNsec = () => {
-      const sk = nsecInput.value.trim();
-      if (!sk) return (errorMessage.value = "请输入私钥");
-      handleLoginAction(() => ks.loginWithNsec(sk, nsecPassword.value.trim() || undefined));
-    };
-
-    const doLoginBunker = () => {
-      const input = bunkerInput.value.trim();
-      if (!input) return (errorMessage.value = "请输入地址");
-      handleLoginAction(() => ks.loginWithBunker(input));
-    };
-
-    const doUnlock = () => {
-      const pwd = unlockPassword.value.trim();
-      if (!pwd) return (errorMessage.value = "请输入密码");
-      handleLoginAction(() => ks.unlockWithPassword(pwd));
-    };
-
-    // --- 取消/重置逻辑 ---
-
-    const cancelNsec = () => (showNsec.value = false, nsecInput.value = "", nsecPassword.value = "");
-    const cancelBunker = () => (showBunker.value = false, bunkerInput.value = "");
-    const cancelUnlock = () => {
-      ks.logout(); // 清理本地存储的账号信息，回到初始登录页
-      unlockPassword.value = "";
-    };
-
-    const showNsecLogin = () => (showNsec.value = true, showBunker.value = false);
-    const showBunkerLogin = () => (showBunker.value = true, showNsec.value = false);
-
-    return {
-      ks, needsUnlock, showBunker, showNsec, loading, errorMessage,
-      bunkerInput, nsecInput, nsecPassword, unlockPassword,
-      bunkerInputEl, nsecInputEl, unlockPasswordEl,
-      loginWithExtension, doLoginNsec, doLoginBunker, doUnlock,
-      cancelNsec, cancelBunker, cancelUnlock, showNsecLogin, showBunkerLogin
-    };
+const shortAccount = computed(() => {
+  const pubkey = ks.pkHex;
+  if (!pubkey) return "";
+  try {
+    const npub = nip19.npubEncode(pubkey);
+    return `${npub.slice(0, 12)}...${npub.slice(-6)}`;
+  } catch {
+    return `${pubkey.slice(0, 10)}...${pubkey.slice(-6)}`;
   }
 });
+
+function detectPlugin() {
+  pluginDetected.value = !!window.nostr;
+  if (pluginDetected.value && pluginDetectionTimer !== undefined) {
+    window.clearInterval(pluginDetectionTimer);
+    pluginDetectionTimer = undefined;
+  }
+}
+
+onMounted(async () => {
+  detectPlugin();
+  window.addEventListener("focus", detectPlugin);
+  pluginDetectionTimer = window.setInterval(detectPlugin, 500);
+  pluginDetectionStopTimer = window.setTimeout(() => {
+    if (pluginDetectionTimer !== undefined) {
+      window.clearInterval(pluginDetectionTimer);
+      pluginDetectionTimer = undefined;
+    }
+  }, 5000);
+
+  if (pageMode.value === "unlock") {
+    await nextTick();
+    unlockPasswordEl.value?.focus();
+  }
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("focus", detectPlugin);
+  if (pluginDetectionTimer !== undefined) window.clearInterval(pluginDetectionTimer);
+  if (pluginDetectionStopTimer !== undefined) window.clearTimeout(pluginDetectionStopTimer);
+});
+
+watch(pageMode, async (mode) => {
+  errorMessage.value = "";
+  loginStatus.value = "";
+  await nextTick();
+  if (mode === "unlock") unlockPasswordEl.value?.focus();
+});
+
+function clearSensitiveInputs() {
+  nsecInput.value = "";
+  nsecPassword.value = "";
+  confirmPassword.value = "";
+  unlockPassword.value = "";
+  showPrivateKey.value = false;
+  saveEncrypted.value = false;
+}
+
+function errorType(error: unknown) {
+  return error instanceof Error ? error.name : typeof error;
+}
+
+function logLoginFailure(method: LoginMethod, stage: string, error: unknown) {
+  logger.error("[Login] Action failed", {
+    method,
+    stage,
+    errorType: errorType(error)
+  });
+}
+
+function isSafeInternalRedirect(value: unknown): value is string {
+  return typeof value === "string"
+    && value.startsWith("/")
+    && !value.startsWith("//")
+    && !value.includes("\\")
+    && !/[\u0000-\u001f]/.test(value)
+    && router.resolve(value).path !== "/login";
+}
+
+async function finishLogin() {
+  const redirect = route.query.redirect;
+  clearSensitiveInputs();
+  await router.replace(isSafeInternalRedirect(redirect) ? redirect : "/");
+}
+
+function isValidPrivateKey(value: string) {
+  if (/^[0-9a-fA-F]{64}$/.test(value)) return true;
+  if (!value.startsWith("nsec1")) return false;
+  try {
+    const decoded = nip19.decode(value);
+    return decoded.type === "nsec" && decoded.data instanceof Uint8Array && decoded.data.length === 32;
+  } catch {
+    return false;
+  }
+}
+
+async function pastePrivateKey() {
+  errorMessage.value = "";
+  try {
+    if (!navigator.clipboard?.readText) throw new Error("clipboard_unavailable");
+    const text = (await navigator.clipboard.readText()).trim();
+    if (text) nsecInput.value = text;
+  } catch (error) {
+    logLoginFailure("private-key", "clipboard-read", error);
+    errorMessage.value = "无法自动读取剪贴板，请长按输入框粘贴私钥。";
+  }
+}
+
+async function doLoginNsec() {
+  if (loading.value) return;
+  errorMessage.value = "";
+
+  const privateKey = nsecInput.value.trim();
+  if (!privateKey) {
+    errorMessage.value = "请输入私钥";
+    return;
+  }
+  if (!isValidPrivateKey(privateKey)) {
+    errorMessage.value = "私钥格式不正确\n请输入 nsec1... 或 64 位十六进制私钥。";
+    return;
+  }
+  if (saveEncrypted.value && !nsecPassword.value) {
+    errorMessage.value = "请输入本地保护密码";
+    return;
+  }
+  if (saveEncrypted.value && nsecPassword.value !== confirmPassword.value) {
+    errorMessage.value = "两次输入的密码不一致";
+    return;
+  }
+
+  loading.value = true;
+  loginStatus.value = "正在登录…";
+  try {
+    await ks.loginWithNsec(privateKey, saveEncrypted.value ? nsecPassword.value : undefined);
+    await finishLogin();
+  } catch (error) {
+    logLoginFailure("private-key", "login", error);
+    errorMessage.value = "登录失败，请重试。";
+  } finally {
+    loading.value = false;
+    loginStatus.value = "";
+  }
+}
+
+async function loginWithExtension() {
+  if (loading.value) return;
+  errorMessage.value = "";
+  detectPlugin();
+  if (!pluginDetected.value) {
+    errorMessage.value = "当前浏览器未检测到 NIP-07 插件。\n请使用私钥登录，或在支持 NIP-07 的浏览器中打开 HaiNei。";
+    return;
+  }
+
+  loading.value = true;
+  loginStatus.value = "正在等待浏览器插件授权…";
+  try {
+    await ks.loginWithExtension();
+    await finishLogin();
+  } catch (error) {
+    logLoginFailure("nip07", "authorization", error);
+    errorMessage.value = "登录失败，请重试。";
+  } finally {
+    loading.value = false;
+    loginStatus.value = "";
+  }
+}
+
+async function doUnlock() {
+  if (loading.value) return;
+  errorMessage.value = "";
+  const password = unlockPassword.value;
+  if (!password) {
+    errorMessage.value = "请输入本地保护密码";
+    return;
+  }
+
+  loading.value = true;
+  unlockInProgress.value = true;
+  loginStatus.value = "正在解锁…";
+  try {
+    await ks.unlockWithPassword(password);
+    await finishLogin();
+  } catch (error) {
+    logLoginFailure("unlock", "decrypt", error);
+    errorMessage.value = "密码不正确，请重试。";
+  } finally {
+    loading.value = false;
+    unlockInProgress.value = false;
+    loginStatus.value = "";
+  }
+}
+
+function switchAccount() {
+  if (loading.value) return;
+  clearSensitiveInputs();
+  errorMessage.value = "";
+  loginStatus.value = "";
+  ks.logout();
+  nextTick(() => nsecInputEl.value?.focus());
+}
 </script>
 
 <style scoped>
 .login-card {
-  min-height: 90vh;
+  min-height: 100dvh;
+  overflow-y: auto;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  background: #0b1017;
+  color: #d8dee9;
+  padding-top: max(20px, env(safe-area-inset-top));
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .login-center {
   width: 100%;
-  max-width: 400px;
-  padding: 2rem;
+  max-width: 380px;
+  margin: auto;
+  padding: 32px 20px;
 }
 
-.title {
+.brand {
+  text-align: center;
+  margin-bottom: 36px;
+}
+
+.brand h1 {
+  margin: 0;
+  color: #e5e9f0;
   font-family: "Source Han Serif SC", "Songti SC", serif;
-  font-size: 3rem;
+  font-size: 2.75rem;
   font-weight: 400;
-  letter-spacing: 0.1em;
-  color: #d6d9e0;
-  margin-bottom: 0.5rem;
-  text-align: center;
+  letter-spacing: 0.12em;
 }
 
-.login-info {
-  text-align: center;
-  color: #9aa1ac;
-  letter-spacing: 0.2em;
-  margin-bottom: 2.5rem;
+.brand-subtitle {
+  margin: 8px 0 0;
+  color: #aab2c0;
+  font-size: 0.95rem;
+  letter-spacing: 0.22em;
 }
 
-.login-actions, .main-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
+.brand-tagline {
+  margin: 12px 0 0;
+  color: #697589;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
 }
 
-.btn {
+.login-form,
+.unlock-form,
+.state-panel {
   width: 100%;
-  padding: 14px;
-  border-radius: 12px;
-  border: 1px solid #2a3342;
-  background: transparent;
-  color: #c7cbd1;
-  font-size: 1rem;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
+  animation: slide-up 200ms ease-out;
 }
 
-.btn:hover:not(:disabled) {
-  background: #151b26;
-  border-color: #3a4458;
+.field-group {
+  margin-bottom: 18px;
 }
 
-.btn-primary {
-  background: #151b26;
-  border-color: #4a5568;
-  color: #fff;
-}
-
-.btn-cancel {
-  border: none;
-  color: #718096;
-  font-size: 0.9rem;
-}
-
-.form {
-  text-align: left;
-  animation: slideUp 0.3s ease-out;
-}
-
-.form label {
+.field-label {
+  display: block;
+  margin: 0 0 7px;
+  color: #aab2c0;
   font-size: 0.85rem;
-  color: #9aa1ac;
-  margin-left: 4px;
 }
 
 .input {
   width: 100%;
-  margin-top: 0.4rem;
-  margin-bottom: 1rem;
-  padding: 12px;
-  background: #0f141c;
-  border: 1px solid #2a3342;
-  border-radius: 10px;
-  color: #e5e7eb;
+  min-height: 48px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #2b3545;
+  border-radius: 12px;
+  outline: none;
+  background: #101720;
+  color: #edf1f7;
+  font-size: 16px;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
 }
 
-.small-tip {
+.input:focus {
+  border-color: #65748b;
+  box-shadow: 0 0 0 3px rgba(101, 116, 139, 0.16);
+}
+
+.input:disabled,
+.btn:disabled,
+.paste-button:disabled,
+.visibility-button:disabled,
+.accordion-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.private-key-field {
+  position: relative;
+}
+
+.private-key-input {
+  padding-right: 52px;
+}
+
+.visibility-button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: #9aa6b7;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.key-actions {
+  min-height: 34px;
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.paste-button {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid #303b4d;
+  border-radius: 9px;
+  background: transparent;
+  color: #b8c1cf;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.recognized-key {
+  color: #7eaa98;
   font-size: 0.75rem;
-  color: #64748b;
-  line-height: 1.4;
-  margin-bottom: 1.5rem;
+  text-align: right;
 }
 
-.error-message {
-  margin-top: 1.5rem;
-  padding: 12px;
-  border-radius: 10px;
-  background: rgba(220, 38, 38, 0.1);
-  border: 1px solid rgba(220, 38, 38, 0.2);
-  color: #f87171;
-  font-size: 0.9rem;
+.encryption-section {
+  margin: 2px 0 18px;
+}
+
+.accordion-button {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 0;
+  display: flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: #9da8b8;
+  font-size: 0.86rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.disclosure {
+  width: 20px;
+  color: #697589;
+}
+
+.password-fields {
+  padding: 10px 0 0 20px;
+  animation: slide-up 180ms ease-out;
+}
+
+.password-fields .input {
+  margin-bottom: 14px;
+}
+
+.password-note {
+  margin: 0 0 6px;
+  color: #8d99aa;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.password-note.muted {
+  color: #657184;
+}
+
+.btn {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  font-size: 0.96rem;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease, transform 120ms ease;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.btn-primary {
+  min-height: 50px;
+  border: 1px solid #718096;
+  background: #dce2ea;
+  color: #111821;
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #eef2f7;
+}
+
+.login-button {
+  margin-top: 2px;
+}
+
+.divider {
+  margin: 24px 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #586476;
+  font-size: 0.75rem;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: #252e3c;
+}
+
+.btn-secondary {
+  border: 1px solid #354154;
+  background: transparent;
+  color: #c3cad5;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: #526078;
+  background: #111923;
+}
+
+.btn-secondary.plugin-unavailable {
+  border-color: #293342;
+  color: #929dad;
+}
+
+.plugin-label {
+  margin: 8px 0 0;
+  color: #748095;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
   text-align: center;
 }
 
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(10px); }
+.plugin-status {
+  margin: 5px 0 0;
+  color: #687487;
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.plugin-status.detected {
+  color: #7eaa98;
+}
+
+.privacy-note {
+  margin: 28px 0 0;
+  color: #697589;
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+.welcome-block {
+  margin-bottom: 26px;
+  text-align: center;
+}
+
+.welcome-title {
+  margin: 0 0 10px;
+  color: #cbd2dd;
+  font-size: 1rem;
+}
+
+.account-id {
+  margin: 0;
+  color: #7e899a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.unlock-form .btn-primary {
+  margin-top: 18px;
+}
+
+.btn-text {
+  min-height: 44px;
+  margin-top: 8px;
+  border: 0;
+  background: transparent;
+  color: #7f8b9d;
+  font-size: 0.86rem;
+}
+
+.restoring-panel {
+  padding: 12px 0;
+}
+
+.status-message {
+  margin: 16px 0 0;
+  color: #8793a5;
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.error-message {
+  margin-top: 14px;
+  padding: 11px 12px;
+  border: 1px solid rgba(204, 112, 112, 0.28);
+  border-radius: 10px;
+  background: rgba(132, 53, 53, 0.14);
+  color: #dfa0a0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  text-align: center;
+  white-space: pre-line;
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(7px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* 抖动动画 */
 .shake-enter-active {
-  animation: shake 0.4s;
+  animation: shake 200ms ease-out;
 }
+
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-5px); }
-  75% { transform: translateX(5px); }
+  35% { transform: translateX(-3px); }
+  70% { transform: translateX(3px); }
+}
+
+@media (max-height: 700px) {
+  .login-center {
+    margin: 0 auto;
+    padding-top: 24px;
+  }
+
+  .brand {
+    margin-bottom: 28px;
+  }
+
+  .brand h1 {
+    font-size: 2.35rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-form,
+  .unlock-form,
+  .state-panel,
+  .password-fields,
+  .shake-enter-active {
+    animation: none;
+  }
 }
 </style>
