@@ -45,19 +45,10 @@ function genRandomSkHex(): string {
   return toHex(arr);
 }
 function safeGeneratePrivateKey(): string {
-  if (nostr && typeof (nostr as any).generatePrivateKey === "function") {
-    try { return (nostr as any).generatePrivateKey(); } catch {}
-  }
-  return genRandomSkHex();
+  try { return toHex(nostr.generateSecretKey()); } catch { return genRandomSkHex(); }
 }
 async function safeGetPublicKey(skHex: string): Promise<string> {
-  if (nostr && typeof (nostr as any).getPublicKey === "function") {
-    try { return (nostr as any).getPublicKey(skHex); } catch (e) { throw e; }
-  }
-  if (nostr && (nostr as any).secp256k1 && typeof (nostr as any).secp256k1.getPublicKey === "function") {
-    try { return (nostr as any).secp256k1.getPublicKey(skHex); } catch (e) { throw e; }
-  }
-  throw new Error("当前 nostr-tools 构建不支持从私钥派生公钥，请提供兼容的 nostr-tools，或在登录时输入公钥。");
+  return nostr.getPublicKey(nostr.utils.hexToBytes(skHex));
 }
 
 export const useKeyStore = defineStore("keys", {
@@ -96,6 +87,13 @@ export const useKeyStore = defineStore("keys", {
         default:
           return false;
       }
+    },
+    supportsNip44(): boolean {
+      if (!this.isLoggedIn) return false;
+      if (this.loginMethod === "sk") return !!this.skHex;
+      if (this.loginMethod === "nip07") return !!window.nostr?.nip44?.encrypt && !!window.nostr?.nip44?.decrypt;
+      if (this.loginMethod === "nip46") return !!this.bunkerSigner;
+      return false;
     }
   },
   actions: {
@@ -235,6 +233,40 @@ export const useKeyStore = defineStore("keys", {
       }
     },
 
+    async nip44Decrypt(senderPubHex: string, ciphertext: string): Promise<string> {
+      if (!this.pkHex || !this.loginMethod) throw new Error("未登录，无法解密消息");
+      if (this.loginMethod === "sk") {
+        if (!this.skHex) throw new Error("私钥登录但未找到私钥");
+        const conversationKey = nostr.nip44.v2.utils.getConversationKey(nostr.utils.hexToBytes(this.skHex), senderPubHex);
+        return nostr.nip44.v2.decrypt(ciphertext, conversationKey);
+      }
+      if (this.loginMethod === "nip07") {
+        if (!window.nostr?.nip44?.decrypt) throw new Error("浏览器插件不支持 NIP-44 解密");
+        return window.nostr.nip44.decrypt(senderPubHex, ciphertext);
+      }
+      if (this.loginMethod === "nip46" && this.bunkerSigner) {
+        return this.bunkerSigner.nip44Decrypt(senderPubHex, ciphertext);
+      }
+      throw new Error("当前登录方式不支持 NIP-44");
+    },
+
+    async nip44Encrypt(recipientPubHex: string, plaintext: string): Promise<string> {
+      if (!this.pkHex || !this.loginMethod) throw new Error("未登录，无法加密消息");
+      if (this.loginMethod === "sk") {
+        if (!this.skHex) throw new Error("私钥登录但未找到私钥");
+        const conversationKey = nostr.nip44.v2.utils.getConversationKey(nostr.utils.hexToBytes(this.skHex), recipientPubHex);
+        return nostr.nip44.v2.encrypt(plaintext, conversationKey);
+      }
+      if (this.loginMethod === "nip07") {
+        if (!window.nostr?.nip44?.encrypt) throw new Error("浏览器插件不支持 NIP-44 加密");
+        return window.nostr.nip44.encrypt(recipientPubHex, plaintext);
+      }
+      if (this.loginMethod === "nip46" && this.bunkerSigner) {
+        return this.bunkerSigner.nip44Encrypt(recipientPubHex, plaintext);
+      }
+      throw new Error("当前登录方式不支持 NIP-44");
+    },
+
     /**
      * Unified event signing that works with all login methods
      * @param event - The event template to sign
@@ -251,7 +283,7 @@ export const useKeyStore = defineStore("keys", {
           if (!this.skHex) {
             throw new Error("私钥登录但未找到私钥");
           }
-          return finalizeEvent(event, this.skHex);
+          return finalizeEvent(event, nostr.utils.hexToBytes(this.skHex));
 
         case "nip07":
           // Use browser extension

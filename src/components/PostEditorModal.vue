@@ -722,7 +722,7 @@ export default defineComponent({
             }));
         
         // Publish the message to relays
-        const { signed } = await posts.publishNip44PerMessage(recips, fullContent);
+        const { message } = await posts.sendDirectMessage(recips, fullContent);
 
         // Add message to inbox with _localMeta immediately after publishing
         // This executes as soon as the await resolves, minimizing the race condition
@@ -730,10 +730,16 @@ export default defineComponent({
         // handles duplicate detection and intelligently preserves _localMeta regardless
         // of arrival order.
         msgs.addInbox({
-          id: signed.id,
+          id: message.id,
           pubkey: keys.pkHex,
-          created_at: signed.created_at,
+          created_at: message.createdAt,
           content: fullContent,
+          protocol: message.protocol,
+          transportKind: message.transportKind,
+          transportEventId: message.transportEventId,
+          rumorId: message.rumorId,
+          recipientPubkeys: message.recipientPubkeys,
+          conversationId: message.conversationId,
           _localMeta: {
             groupCount: groupsMeta.length,
             groups: groupsMeta
