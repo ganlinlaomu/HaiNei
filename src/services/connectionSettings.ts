@@ -1,0 +1,419 @@
+export type RelaySource = "user" | "nip65" | "default";
+export type MediaServerType = "blossom" | "imgbed" | "custom";
+export type MediaServerSource = "user" | "default";
+
+export interface SyncMetadata {
+  updatedAt: number;
+  updatedBy?: string;
+  deleted?: boolean;
+  syncCreatedAt?: number;
+  syncEventId?: string;
+}
+
+export interface RelayConfig extends SyncMetadata {
+  url: string;
+  read: boolean;
+  write: boolean;
+  enabled: boolean;
+  source: RelaySource;
+  addedAt: number;
+  lastConnectedAt?: number;
+  lastFailureAt?: number;
+  successCount?: number;
+  failureCount?: number;
+  latency?: number;
+}
+
+export interface MediaServer extends SyncMetadata {
+  id: string;
+  type: MediaServerType;
+  url: string;
+  token?: string;
+  enabled: boolean;
+  priority: number;
+  source: MediaServerSource;
+  addedAt: number;
+  lastSuccessAt?: number;
+  lastFailureAt?: number;
+  failureCount?: number;
+}
+
+export interface ConnectionSettings {
+  relays: RelayConfig[];
+  mediaServers: MediaServer[];
+}
+
+export interface SyncEventMetadata {
+  createdAt: number;
+  eventId: string;
+}
+
+export const SETTINGS_VERSION = 1;
+export const RELAY_SYNC_IDENTIFIER = "hainei-relays";
+export const MEDIA_SYNC_IDENTIFIER = "hainei-media";
+export const DEVICE_ID_STORAGE_KEY = "hainei_device_id";
+export const ACTIVE_RELAY_CONFIGS_KEY = "hainei_active_relay_configs";
+
+export const DEFAULT_RELAY_URLS = [
+  "wss://relay.damus.io",
+  "wss://relay.0xchat.com"
+] as const;
+
+export const DEFAULT_MEDIA_SERVERS: ReadonlyArray<Pick<MediaServer, "id" | "type" | "url">> = [
+  {
+    id: "default:blossom.lostr.space",
+    type: "blossom",
+    url: "https://blossom.lostr.space"
+  }
+];
+
+const RELAY_SOURCE_ORDER: Record<RelaySource, number> = {
+  user: 0,
+  nip65: 1,
+  default: 2
+};
+
+const MEDIA_SOURCE_ORDER: Record<MediaServerSource, number> = {
+  user: 0,
+  default: 1
+};
+
+const BACKOFF_DELAYS = [30_000, 60_000, 300_000, 900_000, 1_800_000];
+
+export function getOrCreateDeviceId(storage: Storage = localStorage): string {
+  const existing = storage.getItem(DEVICE_ID_STORAGE_KEY)?.trim();
+  if (existing) return existing;
+  const id = typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `device-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  storage.setItem(DEVICE_ID_STORAGE_KEY, id);
+  return id;
+}
+
+export function normalizeRelayUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  const withScheme = /^wss?:\/\//i.test(trimmed) ? trimmed : `wss://${trimmed}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (parsed.protocol !== "wss:" && parsed.protocol !== "ws:") return "";
+    parsed.hash = "";
+    parsed.search = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+export function normalizeMediaUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+export function defaultRelayConfigs(): RelayConfig[] {
+  return DEFAULT_RELAY_URLS.map(url => ({
+    url,
+    read: true,
+    write: true,
+    enabled: true,
+    source: "default",
+    addedAt: 0,
+    updatedAt: 0,
+    updatedBy: "builtin"
+  }));
+}
+
+export function defaultMediaServers(): MediaServer[] {
+  return DEFAULT_MEDIA_SERVERS.map((server, index) => ({
+    ...server,
+    enabled: true,
+    priority: 1_000 + index,
+    source: "default",
+    addedAt: 0,
+    updatedAt: 0,
+    updatedBy: "builtin"
+  }));
+}
+
+export function createDefaultConnectionSettings(): ConnectionSettings {
+  return { relays: defaultRelayConfigs(), mediaServers: defaultMediaServers() };
+}
+
+function relayFromUnknown(value: unknown, now: number, deviceId: string): RelayConfig | null {
+  if (typeof value === "string") {
+    const url = normalizeRelayUrl(value);
+    return url ? {
+      url, read: true, write: true, enabled: true, source: "user",
+      addedAt: now, updatedAt: now, updatedBy: deviceId
+    } : null;
+  }
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<RelayConfig>;
+  const url = normalizeRelayUrl(String(item.url || ""));
+  if (!url) return null;
+  const source: RelaySource = item.source === "nip65" || item.source === "default" ? item.source : "user";
+  return {
+    ...item,
+    url,
+    read: item.read !== false,
+    write: item.write !== false,
+    enabled: item.enabled !== false,
+    source,
+    addedAt: Number.isFinite(Number(item.addedAt)) ? Number(item.addedAt) : now,
+    updatedAt: Number.isFinite(Number(item.updatedAt)) ? Number(item.updatedAt) : now,
+    updatedBy: item.updatedBy || deviceId,
+    deleted: item.deleted === true
+  };
+}
+
+function mediaFromUnknown(value: unknown, index: number, now: number, deviceId: string): MediaServer | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<MediaServer> & { token?: string };
+  const url = normalizeMediaUrl(String(item.url || ""));
+  if (!url) return null;
+  const type: MediaServerType = item.type === "imgbed" || item.type === "custom" ? item.type : "blossom";
+  const source: MediaServerSource = item.source === "default" ? "default" : "user";
+  return {
+    ...item,
+    id: String(item.id || `media:${type}:${url}`),
+    type,
+    url,
+    token: typeof item.token === "string" ? item.token : "",
+    enabled: item.enabled !== false,
+    priority: Number.isFinite(item.priority) ? Number(item.priority) : index,
+    source,
+    addedAt: Number.isFinite(Number(item.addedAt)) ? Number(item.addedAt) : now,
+    updatedAt: Number.isFinite(Number(item.updatedAt)) ? Number(item.updatedAt) : now,
+    updatedBy: item.updatedBy || deviceId,
+    deleted: item.deleted === true
+  };
+}
+
+function dedupeRelays(items: RelayConfig[]): RelayConfig[] {
+  const byUrl = new Map<string, RelayConfig>();
+  for (const item of items) {
+    const current = byUrl.get(item.url);
+    if (!current || compareSyncMetadata(item, current) >= 0) byUrl.set(item.url, item);
+  }
+  return [...byUrl.values()];
+}
+
+function dedupeMedia(items: MediaServer[]): MediaServer[] {
+  const byId = new Map<string, MediaServer>();
+  for (const item of items) {
+    const current = byId.get(item.id);
+    if (!current || compareSyncMetadata(item, current) >= 0) byId.set(item.id, item);
+  }
+  return [...byId.values()];
+}
+
+export function migrateConnectionSettings(
+  value: unknown,
+  options: {
+    now?: number;
+    deviceId: string;
+    legacyRelays?: unknown;
+    legacyMediaServers?: unknown;
+  }
+): ConnectionSettings {
+  const now = options.now ?? Date.now();
+  const root = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const relayInput = Array.isArray(root.relays)
+    ? root.relays
+    : Array.isArray(options.legacyRelays) ? options.legacyRelays : [];
+  const mediaInput = Array.isArray(root.mediaServers)
+    ? root.mediaServers
+    : Array.isArray(root.blossomServers)
+      ? root.blossomServers
+      : Array.isArray(options.legacyMediaServers) ? options.legacyMediaServers : [];
+
+  const migratedRelays = relayInput
+    .map(item => relayFromUnknown(item, now, options.deviceId))
+    .filter((item): item is RelayConfig => !!item);
+  const migratedMedia = mediaInput
+    .map((item, index) => mediaFromUnknown(item, index, now, options.deviceId))
+    .filter((item): item is MediaServer => !!item);
+
+  for (const fallback of defaultRelayConfigs()) {
+    if (!migratedRelays.some(item => item.url === fallback.url)) migratedRelays.push(fallback);
+  }
+  for (const fallback of defaultMediaServers()) {
+    if (!migratedMedia.some(item => item.id === fallback.id || item.url === fallback.url)) migratedMedia.push(fallback);
+  }
+
+  return {
+    relays: dedupeRelays(migratedRelays),
+    mediaServers: dedupeMedia(migratedMedia)
+  };
+}
+
+export function relayBackoffMs(failureCount = 0): number {
+  if (failureCount <= 0) return 0;
+  return BACKOFF_DELAYS[Math.min(failureCount - 1, BACKOFF_DELAYS.length - 1)];
+}
+
+function relayHealthScore(item: RelayConfig, now: number): number {
+  const inBackoff = item.lastFailureAt
+    ? now - item.lastFailureAt < relayBackoffMs(item.failureCount || 0)
+    : false;
+  const failurePenalty = Math.min(item.failureCount || 0, 20) * 1_000;
+  const latencyPenalty = Math.min(item.latency || 0, 10_000);
+  const successBonus = item.lastConnectedAt ? Math.max(0, 10_000 - Math.floor((now - item.lastConnectedAt) / 60_000)) : 0;
+  return (inBackoff ? 1_000_000 : 0) + failurePenalty + latencyPenalty - successBonus;
+}
+
+export function rankRelayConfigs(items: RelayConfig[], now = Date.now()): RelayConfig[] {
+  return items
+    .filter(item => item.enabled && !item.deleted && (item.read || item.write))
+    .slice()
+    .sort((a, b) =>
+      (RELAY_SOURCE_ORDER[a.source] - RELAY_SOURCE_ORDER[b.source])
+      || (relayHealthScore(a, now) - relayHealthScore(b, now))
+      || a.url.localeCompare(b.url)
+    );
+}
+
+export function selectRelayConfigs(items: RelayConfig[], max = 6, now = Date.now()): RelayConfig[] {
+  const ranked = rankRelayConfigs(items, now);
+  if (ranked.length <= max) return ranked;
+  const selected = ranked.slice(0, max);
+  const fallback = ranked.find(item => item.source === "default");
+  if (fallback && !selected.some(item => item.url === fallback.url)) selected[max - 1] = fallback;
+  return selected;
+}
+
+export function rankMediaServers(items: MediaServer[], now = Date.now()): MediaServer[] {
+  return items
+    .filter(item => item.enabled && !item.deleted)
+    .slice()
+    .sort((a, b) =>
+      (MEDIA_SOURCE_ORDER[a.source] - MEDIA_SOURCE_ORDER[b.source])
+      || (Number(!!a.lastFailureAt && now - a.lastFailureAt < relayBackoffMs(a.failureCount || 0))
+        - Number(!!b.lastFailureAt && now - b.lastFailureAt < relayBackoffMs(b.failureCount || 0)))
+      || (a.priority - b.priority)
+      || ((a.failureCount || 0) - (b.failureCount || 0))
+      || a.url.localeCompare(b.url)
+    );
+}
+
+export function compareSyncMetadata(a: SyncMetadata, b: SyncMetadata): number {
+  if (a.updatedAt !== b.updatedAt) return a.updatedAt - b.updatedAt;
+  const eventTime = (a.syncCreatedAt || 0) - (b.syncCreatedAt || 0);
+  if (eventTime !== 0) return eventTime;
+  return String(a.syncEventId || "").localeCompare(String(b.syncEventId || ""));
+}
+
+function withEventMetadata<T extends SyncMetadata>(item: T, metadata?: SyncEventMetadata): T {
+  return metadata ? {
+    ...item,
+    syncCreatedAt: metadata.createdAt,
+    syncEventId: metadata.eventId
+  } : item;
+}
+
+function mergeItems<T extends SyncMetadata>(
+  local: T[],
+  remote: T[],
+  keyFor: (item: T) => string,
+  metadata?: SyncEventMetadata
+): T[] {
+  const merged = new Map(local.map(item => [keyFor(item), item]));
+  for (const raw of remote) {
+    const item = withEventMetadata(raw, metadata);
+    const key = keyFor(item);
+    const current = merged.get(key);
+    if (!current || compareSyncMetadata(item, current) > 0) merged.set(key, item);
+  }
+  return [...merged.values()];
+}
+
+export function mergeRelayConfigs(local: RelayConfig[], remote: RelayConfig[], metadata?: SyncEventMetadata): RelayConfig[] {
+  return mergeItems(local, remote, item => item.url, metadata);
+}
+
+export function mergeMediaServers(local: MediaServer[], remote: MediaServer[], metadata?: SyncEventMetadata): MediaServer[] {
+  return mergeItems(local, remote, item => item.id, metadata);
+}
+
+export function relayConfigsFromNip65(
+  tags: unknown,
+  metadata: SyncEventMetadata,
+  accountPubkey: string,
+  current: RelayConfig[]
+): RelayConfig[] {
+  if (!Array.isArray(tags)) return current;
+  const updatedAt = metadata.createdAt * 1_000;
+  const parsed = new Map<string, { read: boolean; write: boolean }>();
+  for (const tag of tags) {
+    if (!Array.isArray(tag) || tag[0] !== "r" || typeof tag[1] !== "string") continue;
+    const url = normalizeRelayUrl(tag[1]);
+    if (!url) continue;
+    const marker = tag[2];
+    const access = parsed.get(url) || { read: false, write: false };
+    if (marker === "read") access.read = true;
+    else if (marker === "write") access.write = true;
+    else { access.read = true; access.write = true; }
+    parsed.set(url, access);
+  }
+
+  const next = [...current];
+  for (const [url, access] of parsed) {
+    const existing = next.find(item => item.url === url);
+    if (existing?.source === "user") continue;
+    const incoming: RelayConfig = {
+      ...(existing || {} as RelayConfig),
+      url,
+      read: access.read,
+      write: access.write,
+      enabled: existing?.enabled !== false,
+      source: "nip65",
+      addedAt: existing?.addedAt || updatedAt,
+      updatedAt,
+      updatedBy: `nip65:${accountPubkey}`,
+      deleted: false
+    };
+    const index = next.findIndex(item => item.url === url);
+    if (index >= 0) next[index] = withEventMetadata(incoming, metadata);
+    else next.push(withEventMetadata(incoming, metadata));
+  }
+
+  return next.map(item => {
+    if (item.source !== "nip65" || parsed.has(item.url)) return item;
+    if (item.updatedAt > updatedAt) return item;
+    return withEventMetadata({
+      ...item,
+      deleted: true,
+      updatedAt,
+      updatedBy: `nip65:${accountPubkey}`
+    }, metadata);
+  });
+}
+
+export async function runMediaFailover<T>(
+  servers: MediaServer[],
+  attempt: (server: MediaServer) => Promise<T>,
+  report?: (server: MediaServer, ok: boolean) => void
+): Promise<{ result: T; server: MediaServer }> {
+  const ranked = rankMediaServers(servers);
+  let lastError: unknown;
+  for (const server of ranked) {
+    try {
+      const result = await attempt(server);
+      report?.(server, true);
+      return { result, server };
+    } catch (error) {
+      lastError = error;
+      report?.(server, false);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("所有媒体服务器均上传失败");
+}

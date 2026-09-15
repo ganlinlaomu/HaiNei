@@ -1,290 +1,522 @@
 import { defineStore } from "pinia";
 import { useKeyStore } from "./keys";
 import {
+  disconnectRelay,
   getRelaysFromStorage,
-  subscribe,
+  onRelayConnectionState,
   publish,
   reconnectRelay,
-  disconnectRelay
+  subscribe
 } from "@/nostr/relays";
+import { setMediaHealthReporter } from "@/utils/blossom";
 import { logger } from "@/utils/logger";
 import { closeSubscription } from "@/utils/closeSubscription";
+import {
+  ACTIVE_RELAY_CONFIGS_KEY,
+  DEFAULT_MEDIA_SERVERS,
+  DEFAULT_RELAY_URLS,
+  MEDIA_SYNC_IDENTIFIER,
+  RELAY_SYNC_IDENTIFIER,
+  SETTINGS_VERSION,
+  createDefaultConnectionSettings,
+  getOrCreateDeviceId,
+  mergeMediaServers,
+  mergeRelayConfigs,
+  migrateConnectionSettings,
+  normalizeMediaUrl,
+  normalizeRelayUrl,
+  rankMediaServers,
+  relayConfigsFromNip65,
+  selectRelayConfigs,
+  type ConnectionSettings,
+  type MediaServer,
+  type MediaServerType,
+  type RelayConfig
+} from "@/services/connectionSettings";
 
-/* ------------------------------------------------------------------ */
-/* types */
-/* ------------------------------------------------------------------ */
+export type { MediaServer, MediaServerType, RelayConfig };
 
-export type BlossomServer = {
-  url: string;
-  token: string;
-};
-
-export type AppSettings = {
-  relays: string[];
-  blossomServers: BlossomServer[];
-};
+type SettingsDomain = "relays" | "media";
 
 type StoredSettingsData = {
-  settings: AppSettings;
+  version: number;
+  settings: ConnectionSettings;
   lastSyncTimestamp: number;
 };
 
-function storageKeyFor(pkHex?: string | null) {
+type SettingsSyncPayload<T> = {
+  version: number;
+  type: string;
+  items: T[];
+};
+
+let relayHealthUnsubscribe: (() => void) | null = null;
+
+export function storageKeyFor(pkHex?: string | null) {
   if (!pkHex) return null;
-  return `nostr_settings_${pkHex}`;
+  return `nostr_settings_${pkHex.toLowerCase()}`;
 }
 
-/* ------------------------------------------------------------------ */
-/* store */
-/* ------------------------------------------------------------------ */
+function readJsonArray(key: string): unknown[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function readLegacyRelays(): unknown[] {
+  const raw = localStorage.getItem("custom-relays");
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // The historic format was newline-delimited.
+  }
+  return raw.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+}
+
+function syncStampItem<T extends RelayConfig | MediaServer>(item: T, createdAt: number, eventId: string): T {
+  return { ...item, syncCreatedAt: createdAt, syncEventId: eventId };
+}
 
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
-    settings: {
-      relays: [],
-      blossomServers: []
-    } as AppSettings,
-
-    loadedFor: "" as string,
-
+    settings: createDefaultConnectionSettings() as ConnectionSettings,
+    loadedFor: "",
+    deviceId: "",
     syncing: false,
     syncError: "",
     lastSyncTimestamp: 0,
-
-    _isFetching: false
+    _isFetching: false,
+    _publishTimer: null as number | null,
+    _pendingDomains: [] as SettingsDomain[]
   }),
 
   getters: {
-    relayList: (s) => s.settings.relays,
-    blossomList: (s) => s.settings.blossomServers
+    relayList: (state) => state.settings.relays
+      .filter(item => !item.deleted)
+      .slice()
+      .sort((a, b) => {
+        const source = { user: 0, nip65: 1, default: 2 };
+        return source[a.source] - source[b.source] || a.url.localeCompare(b.url);
+      }),
+    mediaList: (state) => {
+      const visible = state.settings.mediaServers.filter(item => !item.deleted);
+      const enabled = rankMediaServers(visible);
+      return enabled.concat(visible.filter(item => !item.enabled));
+    },
+    activeRelays: (state) => selectRelayConfigs(state.settings.relays),
+    activeMediaServers: (state) => rankMediaServers(state.settings.mediaServers)
   },
 
   actions: {
-    /* ================================================================
-     * reset — 切账号 / 登出必用
-     * ================================================================ */
     reset() {
-      this.settings = { relays: [], blossomServers: [] };
+      const activeRuntimeRelays = getRelaysFromStorage();
+      if (this._publishTimer !== null) window.clearTimeout(this._publishTimer);
+      this._publishTimer = null;
+      this._pendingDomains = [];
+      relayHealthUnsubscribe?.();
+      relayHealthUnsubscribe = null;
+      setMediaHealthReporter();
+      this.settings = createDefaultConnectionSettings();
       this.loadedFor = "";
+      this.deviceId = "";
       this.syncing = false;
       this.syncError = "";
       this.lastSyncTimestamp = 0;
       this._isFetching = false;
       try {
+        for (const url of activeRuntimeRelays) disconnectRelay(url);
+        localStorage.removeItem(ACTIVE_RELAY_CONFIGS_KEY);
         localStorage.removeItem("custom-relays");
         localStorage.removeItem("blossom_servers");
         localStorage.removeItem("blossom_upload_url");
         localStorage.removeItem("blossom_token");
-        window.dispatchEvent(new CustomEvent("blossom-config-updated", {
-          detail: { servers: [] }
-        }));
-      } catch (e) {
-        logger.warn("[settings] clear global mirrors failed", e);
+        window.dispatchEvent(new CustomEvent("blossom-config-updated", { detail: { servers: [] } }));
+      } catch (error) {
+        logger.warn("[settings] clear runtime mirrors failed", error);
       }
     },
 
-    /* ================================================================
-     * load — 按 pk 隔离
-     * ================================================================ */
     async load(pk?: string) {
-      const ks = useKeyStore();
-      const targetPk = pk ?? ks.pkHex;
-
+      const keyStore = useKeyStore();
+      const targetPk = (pk ?? keyStore.pkHex).toLowerCase();
       if (!targetPk) {
         this.reset();
         return;
       }
-
-      // 🔥 切账号
-      if (this.loadedFor !== targetPk) {
-        this.reset();
-      }
-
       if (this.loadedFor === targetPk) return;
+
+      const canUseGlobalLegacy = !this.loadedFor
+        && localStorage.getItem("pkHex")?.toLowerCase() === targetPk;
+      const legacyRelays = canUseGlobalLegacy ? readLegacyRelays() : [];
+      const legacyMedia = canUseGlobalLegacy ? readJsonArray("blossom_servers") : [];
+      const legacySingleMedia = canUseGlobalLegacy && !legacyMedia.length
+        ? [{
+            url: localStorage.getItem("blossom_upload_url") || "",
+            token: localStorage.getItem("blossom_token") || ""
+          }]
+        : [];
+
+      if (this.loadedFor !== targetPk) this.reset();
       this.loadedFor = targetPk;
+      this.deviceId = getOrCreateDeviceId();
 
       const key = storageKeyFor(targetPk);
-      let hasLocal = false;
-
-      /* ---------- local ---------- */
+      let storedValue: unknown;
       try {
         const raw = key ? localStorage.getItem(key) : null;
         if (raw) {
-          const parsed = JSON.parse(raw) as StoredSettingsData;
-          if (parsed?.settings) {
-            this.settings = parsed.settings;
-            this.lastSyncTimestamp = parsed.lastSyncTimestamp || 0;
-            this.applySettings();
-            hasLocal = true;
+          const parsed = JSON.parse(raw) as Partial<StoredSettingsData>;
+          storedValue = parsed.settings;
+          this.lastSyncTimestamp = Number(parsed.lastSyncTimestamp) || 0;
+        }
+      } catch (error) {
+        logger.warn("[settings] local settings were invalid; defaults restored", {
+          account: targetPk.slice(0, 8),
+          errorType: error instanceof Error ? error.name : typeof error
+        });
+      }
+
+      this.settings = migrateConnectionSettings(storedValue, {
+        deviceId: this.deviceId,
+        legacyRelays,
+        legacyMediaServers: legacyMedia.length ? legacyMedia : legacySingleMedia
+      });
+      this.save();
+      this.applySettings();
+      this.bindHealthTracking();
+
+      // Remote sync is deliberately non-blocking: local/default settings are ready now.
+      void this.fetchFromRelays();
+    },
+
+    bindHealthTracking() {
+      relayHealthUnsubscribe?.();
+      relayHealthUnsubscribe = onRelayConnectionState(event => {
+        if (!this.loadedFor) return;
+        const relay = this.settings.relays.find(item => item.url === event.url);
+        if (!relay || relay.deleted) return;
+        if (event.connected) {
+          relay.lastConnectedAt = event.at;
+          relay.successCount = (relay.successCount || 0) + 1;
+          relay.failureCount = 0;
+          if (typeof event.latency === "number") relay.latency = event.latency;
+        } else if (event.failed) {
+          relay.lastFailureAt = event.at;
+          relay.failureCount = (relay.failureCount || 0) + 1;
+        }
+        this.save();
+        this.applySettings(false);
+      });
+
+      setMediaHealthReporter((serverId, ok, at) => {
+        const server = this.settings.mediaServers.find(item => item.id === serverId);
+        if (!server || server.deleted) return;
+        if (ok) {
+          server.lastSuccessAt = at;
+          server.failureCount = 0;
+        } else {
+          server.lastFailureAt = at;
+          server.failureCount = (server.failureCount || 0) + 1;
+        }
+        this.save();
+        this.applySettings(false);
+      });
+    },
+
+    applySettings(connectNewRelays = true) {
+      const previousRelays = new Set(getRelaysFromStorage());
+      const activeRelays = selectRelayConfigs(this.settings.relays);
+      const activeUrls = activeRelays.map(item => item.url);
+      const activeSet = new Set(activeUrls);
+
+      try {
+        localStorage.setItem(ACTIVE_RELAY_CONFIGS_KEY, JSON.stringify(activeRelays));
+        localStorage.setItem("custom-relays", activeUrls.join("\n"));
+        for (const url of previousRelays) {
+          if (!activeSet.has(url)) disconnectRelay(url);
+        }
+        if (connectNewRelays) {
+          for (const url of activeUrls) {
+            if (!previousRelays.has(url)) reconnectRelay(url);
           }
         }
-      } catch (e) {
-        logger.error("settings local load failed", e);
-      }
-
-      /* ---------- relay bootstrap ---------- */
-      if (!hasLocal) {
-        await this.bootstrapFetch();
-      }
-    },
-
-    /* ================================================================
-     * bootstrapFetch
-     * ================================================================ */
-    async bootstrapFetch() {
-      const ks = useKeyStore();
-      if (!ks.isLoggedIn || ks.pkHex !== this.loadedFor) return;
-
-      const prev = this.syncing;
-      this.syncing = false;
-      try {
-        await this.fetchFromRelays();
-      } finally {
-        this.syncing = prev;
-      }
-    },
-
-    /* ================================================================
-     * apply
-     * ================================================================ */
-    applySettings() {
-      try {
-        localStorage.setItem("custom-relays", this.settings.relays.join("\n"));
-        for (const r of this.settings.relays) {
-          try { reconnectRelay(r); } catch (e) { logger.warn(`[settings] relay reconnect failed relay=${r}`, e); }
-        }
-      } catch (e) {
-        logger.error("apply relay failed", e);
+      } catch (error) {
+        logger.warn("[settings] apply relay configuration failed", {
+          account: this.loadedFor.slice(0, 8),
+          errorType: error instanceof Error ? error.name : typeof error
+        });
       }
 
       try {
-        localStorage.setItem(
-          "blossom_servers",
-          JSON.stringify(this.settings.blossomServers)
-        );
-
-        const first = this.settings.blossomServers[0];
+        const activeMedia = rankMediaServers(this.settings.mediaServers);
+        localStorage.setItem("blossom_servers", JSON.stringify(activeMedia));
+        const first = activeMedia[0];
         if (first) {
           localStorage.setItem("blossom_upload_url", first.url);
           localStorage.setItem("blossom_token", first.token || "");
+        } else {
+          localStorage.removeItem("blossom_upload_url");
+          localStorage.removeItem("blossom_token");
         }
-
-        window.dispatchEvent(
-          new CustomEvent("blossom-config-updated", {
-            detail: { servers: this.settings.blossomServers }
-          })
-        );
-      } catch (e) {
-        logger.error("apply blossom failed", e);
+        window.dispatchEvent(new CustomEvent("blossom-config-updated", { detail: { servers: activeMedia } }));
+      } catch (error) {
+        logger.warn("[settings] apply media configuration failed", {
+          account: this.loadedFor.slice(0, 8),
+          errorType: error instanceof Error ? error.name : typeof error
+        });
       }
     },
 
-    /* ================================================================
-     * save
-     * ================================================================ */
     save() {
       const key = storageKeyFor(this.loadedFor);
       if (!key) return;
-
       const data: StoredSettingsData = {
+        version: SETTINGS_VERSION,
         settings: this.settings,
         lastSyncTimestamp: this.lastSyncTimestamp
       };
-
       try {
         localStorage.setItem(key, JSON.stringify(data));
-      } catch {}
+      } catch (error) {
+        logger.warn("[settings] local save failed", {
+          account: this.loadedFor.slice(0, 8),
+          errorType: error instanceof Error ? error.name : typeof error
+        });
+      }
     },
 
-    /* ================================================================
-     * update
-     * ================================================================ */
-    updateRelays(relays: string[]) {
-      const next = [...new Set(relays.map(value => value.trim()).filter(Boolean))];
-      const previous = this.settings.relays;
-      for (const relay of previous) {
-        if (!next.includes(relay)) disconnectRelay(relay);
-      }
-      this.settings.relays = next;
-      localStorage.setItem("custom-relays", next.join("\n"));
-      for (const relay of next) {
-        if (!previous.includes(relay)) reconnectRelay(relay);
-      }
+    changed(domains: SettingsDomain[]) {
       this.save();
-      if (useKeyStore().supportsNip04) {
-        this.publishToRelays().catch(() => {});
-      }
+      this.applySettings();
+      this.schedulePublish(domains);
     },
 
-    updateBlossomServers(servers: BlossomServer[]) {
-      this.settings.blossomServers = [...servers];
-      this.save();
-      if (useKeyStore().supportsNip04) {
-        this.publishToRelays().catch(() => {});
+    addRelay(input: string) {
+      const url = normalizeRelayUrl(input);
+      if (!url) return false;
+      const now = Date.now();
+      const existing = this.settings.relays.find(item => item.url === url);
+      if (existing) {
+        Object.assign(existing, {
+          read: true,
+          write: true,
+          enabled: true,
+          source: existing.source === "default" ? "default" : "user",
+          deleted: false,
+          updatedAt: now,
+          updatedBy: this.deviceId,
+          syncCreatedAt: undefined,
+          syncEventId: undefined
+        } satisfies Partial<RelayConfig>);
+      } else {
+        this.settings.relays.push({
+          url,
+          read: true,
+          write: true,
+          enabled: true,
+          source: "user",
+          addedAt: now,
+          updatedAt: now,
+          updatedBy: this.deviceId
+        });
       }
+      this.changed(["relays"]);
+      return true;
     },
 
-    /* ================================================================
-     * publish
-     * ================================================================ */
-    async publishToRelays(): Promise<boolean> {
-      const ks = useKeyStore();
-      if (!ks.isLoggedIn || ks.pkHex !== this.loadedFor) return false;
+    updateRelay(url: string, patch: Partial<Pick<RelayConfig, "read" | "write" | "enabled">>) {
+      const relay = this.settings.relays.find(item => item.url === url && !item.deleted);
+      if (!relay) return;
+      Object.assign(relay, patch, {
+        updatedAt: Date.now(),
+        updatedBy: this.deviceId,
+        syncCreatedAt: undefined,
+        syncEventId: undefined
+      });
+      this.changed(["relays"]);
+    },
 
+    deleteRelay(url: string) {
+      const relay = this.settings.relays.find(item => item.url === url && !item.deleted);
+      if (!relay || relay.source === "default" || (DEFAULT_RELAY_URLS as readonly string[]).includes(relay.url)) return false;
+      Object.assign(relay, {
+        deleted: true,
+        enabled: false,
+        updatedAt: Date.now(),
+        updatedBy: this.deviceId,
+        syncCreatedAt: undefined,
+        syncEventId: undefined
+      });
+      this.changed(["relays"]);
+      return true;
+    },
+
+    addMediaServer(type: MediaServerType, input: string, token = "") {
+      const url = normalizeMediaUrl(input);
+      if (!url) return false;
+      const now = Date.now();
+      const existing = this.settings.mediaServers.find(item => item.url === url && item.type === type);
+      if (existing) {
+        Object.assign(existing, {
+          token,
+          enabled: true,
+          source: existing.source === "default" ? "default" : "user",
+          deleted: false,
+          updatedAt: now,
+          updatedBy: this.deviceId,
+          syncCreatedAt: undefined,
+          syncEventId: undefined
+        } satisfies Partial<MediaServer>);
+      } else {
+        this.settings.mediaServers.push({
+          id: typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `media-${now}-${Math.random()}`,
+          type,
+          url,
+          token,
+          enabled: true,
+          priority: 0,
+          source: "user",
+          addedAt: now,
+          updatedAt: now,
+          updatedBy: this.deviceId
+        });
+      }
+      this.changed(["media"]);
+      return true;
+    },
+
+    updateMediaServer(id: string, patch: Partial<Pick<MediaServer, "enabled" | "priority" | "token">>) {
+      const server = this.settings.mediaServers.find(item => item.id === id && !item.deleted);
+      if (!server) return;
+      Object.assign(server, patch, {
+        updatedAt: Date.now(),
+        updatedBy: this.deviceId,
+        syncCreatedAt: undefined,
+        syncEventId: undefined
+      });
+      this.changed(["media"]);
+    },
+
+    setPrimaryMediaServer(id: string) {
+      const now = Date.now();
+      let changed = false;
+      for (const server of this.settings.mediaServers) {
+        if (server.deleted || server.source !== "user") continue;
+        const priority = server.id === id ? 0 : Math.max(1, server.priority);
+        if (priority === server.priority) continue;
+        Object.assign(server, {
+          priority,
+          updatedAt: now,
+          updatedBy: this.deviceId,
+          syncCreatedAt: undefined,
+          syncEventId: undefined
+        });
+        changed = true;
+      }
+      if (changed) this.changed(["media"]);
+    },
+
+    deleteMediaServer(id: string) {
+      const server = this.settings.mediaServers.find(item => item.id === id && !item.deleted);
+      if (!server
+        || server.source === "default"
+        || DEFAULT_MEDIA_SERVERS.some(item => item.id === server.id || item.url === server.url)) return false;
+      Object.assign(server, {
+        deleted: true,
+        enabled: false,
+        updatedAt: Date.now(),
+        updatedBy: this.deviceId,
+        syncCreatedAt: undefined,
+        syncEventId: undefined
+      });
+      this.changed(["media"]);
+      return true;
+    },
+
+    schedulePublish(domains: SettingsDomain[]) {
+      const keyStore = useKeyStore();
+      if (!keyStore.supportsNip44 || keyStore.pkHex !== this.loadedFor) return;
+      this._pendingDomains = [...new Set([...this._pendingDomains, ...domains])];
+      if (this._publishTimer !== null) window.clearTimeout(this._publishTimer);
+      this._publishTimer = window.setTimeout(() => {
+        const pending = [...this._pendingDomains];
+        this._pendingDomains = [];
+        this._publishTimer = null;
+        void this.publishToRelays(pending);
+      }, 1_500);
+    },
+
+    async publishToRelays(domains: SettingsDomain[] = ["relays", "media"]): Promise<boolean> {
+      const keyStore = useKeyStore();
+      if (!keyStore.isLoggedIn || !keyStore.supportsNip44 || keyStore.pkHex !== this.loadedFor) return false;
+      const account = keyStore.pkHex;
       this.syncing = true;
       this.syncError = "";
+      let allSucceeded = true;
 
       try {
-        const encrypted = await ks.nip04Encrypt(
-          ks.pkHex,
-          JSON.stringify(this.settings)
-        );
-
-        const event = await ks.signEvent({
-          kind: 30000,
-          created_at: Math.floor(Date.now() / 1000),
-          tags: [["d", "close-settings"]],
-          content: encrypted
-        });
-
-        const result = await publish(getRelaysFromStorage(), event);
-        if (!result.some(r => r.ok)) {
-          this.syncError = "所有 relay 发布失败";
-          return false;
+        for (const domain of [...new Set(domains)]) {
+          const items = domain === "relays" ? this.settings.relays : this.settings.mediaServers;
+          const identifier = domain === "relays" ? RELAY_SYNC_IDENTIFIER : MEDIA_SYNC_IDENTIFIER;
+          const payload: SettingsSyncPayload<RelayConfig | MediaServer> = {
+            version: SETTINGS_VERSION,
+            type: identifier,
+            items
+          };
+          const encrypted = await keyStore.nip44Encrypt(account, JSON.stringify(payload));
+          const event = await keyStore.signEvent({
+            kind: 30078,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [["d", identifier], ["client", "HaiNei"]],
+            content: encrypted
+          });
+          const results = await publish(getRelaysFromStorage("write"), event);
+          if (!results.some(result => result.ok)) {
+            allSucceeded = false;
+            continue;
+          }
+          if (domain === "relays") {
+            this.settings.relays = this.settings.relays.map(item => syncStampItem(item, event.created_at, event.id));
+          } else {
+            this.settings.mediaServers = this.settings.mediaServers.map(item => syncStampItem(item, event.created_at, event.id));
+          }
+          this.lastSyncTimestamp = Math.max(this.lastSyncTimestamp, event.created_at);
+          this.save();
         }
-
-        this.lastSyncTimestamp = event.created_at;
-        this.save();
-        return true;
-      } catch (e: any) {
-        this.syncError = e.message || "发布失败";
+        if (!allSucceeded) this.syncError = "部分设置同步失败，本地配置已生效";
+        return allSucceeded;
+      } catch (error) {
+        this.syncError = "设置同步失败，本地配置已生效";
+        logger.warn("[settings] encrypted publish failed", {
+          account: account.slice(0, 8),
+          errorType: error instanceof Error ? error.name : typeof error
+        });
         return false;
       } finally {
         this.syncing = false;
       }
     },
 
-    /* ================================================================
-     * fetch
-     * ================================================================ */
     async fetchFromRelays(): Promise<boolean> {
-      const ks = useKeyStore();
-      if (!ks.isLoggedIn || ks.pkHex !== this.loadedFor) return false;
-      if (this._isFetching) return false;
-      const accountPk = ks.pkHex;
+      const keyStore = useKeyStore();
+      if (!keyStore.isLoggedIn || keyStore.pkHex !== this.loadedFor || this._isFetching) return false;
+      const account = keyStore.pkHex;
+      const relays = getRelaysFromStorage("read");
+      if (!relays.length) return false;
 
       this._isFetching = true;
       this.syncing = true;
       this.syncError = "";
-
       try {
-        const relays = getRelaysFromStorage();
-        const sub = subscribe(relays, [{
-          kinds: [30000],
-          authors: [ks.pkHex],
-          "#d": ["close-settings"],
-          limit: 1
-        }]);
+        const sub = subscribe(relays, [
+          { kinds: [30078], authors: [account], "#d": [RELAY_SYNC_IDENTIFIER, MEDIA_SYNC_IDENTIFIER], limit: 20 },
+          { kinds: [10002], authors: [account], limit: 5 }
+        ]);
 
         return await new Promise(resolve => {
           const expectedRelays = new Set(relays);
@@ -293,60 +525,92 @@ export const useSettingsStore = defineStore("settings", {
           let finished = false;
           let timer: ReturnType<typeof setTimeout>;
 
-          const finish = async (reason: "eose" | "timeout" | "no-relays") => {
+          const finish = async () => {
             if (finished) return;
             finished = true;
             clearTimeout(timer);
             closeSubscription(sub);
-            logger.info(`[settings] fetch complete account=${accountPk.slice(0, 8)} reason=${reason} eose=${completedRelays.size}/${expectedRelays.size} candidates=${candidates.size}`);
-
-            if (ks.pkHex !== accountPk || this.loadedFor !== accountPk) {
-              logger.warn(`[account] settings fetch discarded account=${accountPk.slice(0, 8)}`);
+            if (keyStore.pkHex !== account || this.loadedFor !== account) {
               resolve(false);
               return;
             }
 
             const ordered = [...candidates.values()].sort((a, b) =>
-              (b.created_at - a.created_at) || String(a.id).localeCompare(String(b.id))
+              (Number(a.created_at) - Number(b.created_at)) || String(a.id).localeCompare(String(b.id))
             );
-            for (const candidate of ordered) {
+            let changed = false;
+            let newestNip65: any = null;
+            for (const event of ordered) {
+              if (event.kind === 10002) {
+                newestNip65 = event;
+                continue;
+              }
+              if (event.kind !== 30078 || !keyStore.supportsNip44) continue;
+              const identifier = event.tags?.find((tag: unknown) =>
+                Array.isArray(tag) && tag[0] === "d"
+              )?.[1];
+              if (identifier !== RELAY_SYNC_IDENTIFIER && identifier !== MEDIA_SYNC_IDENTIFIER) continue;
               try {
-                const dec = await ks.nip04Decrypt(accountPk, candidate.content);
-                if (ks.pkHex !== accountPk || this.loadedFor !== accountPk) {
-                  logger.warn(`[account] settings decrypt discarded account=${accountPk.slice(0, 8)} event=${candidate.id?.slice(0, 8)}`);
-                  resolve(false);
-                  return;
+                const decrypted = await keyStore.nip44Decrypt(account, event.content);
+                const payload = JSON.parse(decrypted) as SettingsSyncPayload<unknown>;
+                if (!payload || !Array.isArray(payload.items) || payload.type !== identifier) continue;
+                const migrated = migrateConnectionSettings(
+                  identifier === RELAY_SYNC_IDENTIFIER
+                    ? { relays: payload.items }
+                    : { mediaServers: payload.items },
+                  { deviceId: this.deviceId }
+                );
+                const metadata = { createdAt: Number(event.created_at) || 0, eventId: String(event.id || "") };
+                if (identifier === RELAY_SYNC_IDENTIFIER) {
+                  this.settings.relays = mergeRelayConfigs(this.settings.relays, migrated.relays, metadata);
+                } else {
+                  this.settings.mediaServers = mergeMediaServers(this.settings.mediaServers, migrated.mediaServers, metadata);
                 }
-                const parsed = JSON.parse(dec);
-                if (!parsed || !Array.isArray(parsed.relays) || !Array.isArray(parsed.blossomServers)) continue;
-                this.settings = parsed;
-                this.lastSyncTimestamp = candidate.created_at;
-                this.save();
-                this.applySettings();
-                resolve(true);
-                return;
-              } catch (e) {
-                logger.warn(`[settings] candidate invalid event=${candidate.id?.slice(0, 8)}`, e);
+                this.lastSyncTimestamp = Math.max(this.lastSyncTimestamp, metadata.createdAt);
+                changed = true;
+              } catch (error) {
+                logger.warn("[settings] ignored invalid encrypted settings event", {
+                  event: String(event.id || "").slice(0, 8),
+                  errorType: error instanceof Error ? error.name : typeof error
+                });
               }
             }
-            this.syncError = candidates.size ? "解密失败" : "";
-            resolve(false);
+
+            if (newestNip65) {
+              this.settings.relays = relayConfigsFromNip65(
+                newestNip65.tags,
+                {
+                  createdAt: Number(newestNip65.created_at) || 0,
+                  eventId: String(newestNip65.id || "")
+                },
+                account,
+                this.settings.relays
+              );
+              changed = true;
+            }
+
+            if (changed) {
+              this.save();
+              this.applySettings();
+            }
+            resolve(changed);
           };
-          timer = setTimeout(() => void finish("timeout"), 5000);
 
-          sub.on("event", e => {
-            if (ks.pkHex !== accountPk || this.loadedFor !== accountPk) return;
-            if (e?.id) candidates.set(e.id, e);
+          timer = setTimeout(() => void finish(), 5_000);
+          sub.on("event", event => {
+            if (event?.id) candidates.set(event.id, event);
           });
-
           sub.on("eose", (relayUrl: string) => {
             completedRelays.add(relayUrl);
-            logger.debug(`[settings] EOSE relay=${relayUrl} count=${completedRelays.size}/${expectedRelays.size}`);
-            if (completedRelays.size >= expectedRelays.size) void finish("eose");
+            if (completedRelays.size >= expectedRelays.size) void finish();
           });
-
-          if (expectedRelays.size === 0) void finish("no-relays");
         });
+      } catch (error) {
+        logger.warn("[settings] remote sync failed; local settings remain active", {
+          account: account.slice(0, 8),
+          errorType: error instanceof Error ? error.name : typeof error
+        });
+        return false;
       } finally {
         this.syncing = false;
         this._isFetching = false;

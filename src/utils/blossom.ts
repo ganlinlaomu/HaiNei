@@ -15,10 +15,24 @@
 //   import { uploadImageToBlossom, getBlossomConfig } from "@/utils/blossom";
 //   await uploadImageToBlossom(file, { signEvent: async evt => signedEvt, onProgress(p){}, timeoutMs: 60000 })
 
+import {
+  DEFAULT_MEDIA_SERVERS,
+  rankMediaServers,
+  runMediaFailover,
+  type MediaServer,
+  type MediaServerType
+} from "@/services/connectionSettings";
+
 export const DEFAULT_BLOSSOM_SERVERS = [
-  { url: "blsm.bostr.shop", token: "" },
-  { url: "blossom.lostr.space", token: "" }
+  { url: DEFAULT_MEDIA_SERVERS[0].url, token: "" }
 ];
+
+type MediaHealthReporter = (serverId: string, ok: boolean, at: number) => void;
+let mediaHealthReporter: MediaHealthReporter | undefined;
+
+export function setMediaHealthReporter(reporter?: MediaHealthReporter) {
+  mediaHealthReporter = reporter;
+}
 
 function normalizeBlossomUploadUrl(input: string): string {
   let url = input.trim();
@@ -44,21 +58,31 @@ export async function getBlossomConfig(): Promise<{
   token: string | null;
   timeoutMs: number;
   authHeaderName: string; // header name to send signed auth event; default "Authorization"
-  servers: Array<{ url: string; token: string }>; // List of all configured servers
+  servers: MediaServer[]; // Ordered active upload servers
 }> {
   try {
     // Try to get servers list first (new format)
     const serversJson = localStorage.getItem("blossom_servers");
-    let servers: Array<{ url: string; token: string }> = [];
+    const hasExplicitServerList = serversJson !== null;
+    let servers: MediaServer[] = [];
     
     if (serversJson) {
       try {
         const parsed = JSON.parse(serversJson);
         if (Array.isArray(parsed)) {
-          servers = parsed.map((s: any) => ({
+          servers = parsed.map((s: any, index: number) => ({
+            ...s,
+            id: String(s.id || `legacy-media-${index}-${s.url || ""}`),
+            type: (["blossom", "imgbed", "custom"].includes(s.type) ? s.type : "blossom") as MediaServerType,
             url: normalizeBlossomUploadUrl(s.url || ""),
-            token: (s.token || "").trim()
-          })).filter(s => s.url);
+            token: (s.token || "").trim(),
+            enabled: s.enabled !== false,
+            priority: Number.isFinite(s.priority) ? Number(s.priority) : index,
+            source: s.source === "default" ? "default" : "user",
+            addedAt: Number(s.addedAt) || 0,
+            updatedAt: Number(s.updatedAt) || 0,
+            deleted: s.deleted === true
+          })).filter((s: MediaServer) => s.url && s.enabled && !s.deleted);
         }
       } catch (e) {
         console.warn("Failed to parse blossom_servers", e);
@@ -66,31 +90,47 @@ export async function getBlossomConfig(): Promise<{
     }
     
     // Fallback to single server config (old format)
-    if (servers.length === 0) {
+    if (servers.length === 0 && !hasExplicitServerList) {
       const rawUrl = (localStorage.getItem("blossom_upload_url") || "").trim();
       const token = (localStorage.getItem("blossom_token") || "").trim();
       if (rawUrl) {
         servers.push({
+          id: `legacy-media-${rawUrl}`,
+          type: "blossom",
           url: normalizeBlossomUploadUrl(rawUrl),
-          token
+          token,
+          enabled: true,
+          priority: 0,
+          source: "user",
+          addedAt: 0,
+          updatedAt: 0
         });
       }
     }
     
     // If still no servers, use defaults
-    if (servers.length === 0) {
-      servers = DEFAULT_BLOSSOM_SERVERS.map(s => ({
+    if (servers.length === 0 && !hasExplicitServerList) {
+      servers = DEFAULT_BLOSSOM_SERVERS.map((s, index) => ({
+        id: DEFAULT_MEDIA_SERVERS[index]?.id || `default-media-${index}`,
+        type: "blossom" as const,
         url: normalizeBlossomUploadUrl(s.url),
-        token: s.token
+        token: s.token,
+        enabled: true,
+        priority: 1_000 + index,
+        source: "default" as const,
+        addedAt: 0,
+        updatedAt: 0
       }));
     }
+
+    servers = rankMediaServers(servers);
     
     const timeoutMs = parseInt(localStorage.getItem("blossom_timeout_ms") || "") || 60000;
     const authHeaderName = (localStorage.getItem("blossom_auth_header") || "Authorization").trim() || "Authorization";
     
     // Return first server as default for backward compatibility
     const url = servers.length > 0 ? servers[0].url : null;
-    const token = servers.length > 0 ? servers[0].token : null;
+    const token = servers.length > 0 ? servers[0].token || "" : null;
     
     return { url, token, timeoutMs, authHeaderName, servers };
   } catch {
@@ -341,30 +381,8 @@ export async function uploadImageToBlossom(
 }
 
 /**
- * Shuffle an array using Fisher-Yates algorithm
- */
-function shuffleArray<T>(array: T[]): T[] {
-  const shuffled = [...array];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
-}
-
-/**
- * Restore localStorage values to their original state
- */
-function restoreLocalStorage(originalUrl: string | null, originalToken: string | null) {
-  if (originalUrl !== null) localStorage.setItem("blossom_upload_url", originalUrl);
-  else localStorage.removeItem("blossom_upload_url");
-  if (originalToken !== null) localStorage.setItem("blossom_token", originalToken);
-  else localStorage.removeItem("blossom_token");
-}
-
-/**
  * uploadImageToBlossomWithFallback
- * Tries to upload to multiple Blossom servers in random order until one succeeds.
+ * Tries configured media servers in deterministic priority order until one succeeds.
  * - file: File to upload
  * - options: Same as uploadImageToBlossom plus optional servers list
  * Returns: Upload result from the first successful server
@@ -375,61 +393,38 @@ export async function uploadImageToBlossomWithFallback(
     signEvent?: (evt:any) => Promise<any> | any;
     onProgress?: (p:number)=>void;
     timeoutMs?: number;
-    servers?: Array<{ url: string; token: string }>; // Optional server list override
+    servers?: Array<Partial<MediaServer> & { url: string; token?: string }>;
   }
 ): Promise<{ url: string; sha256?: string; size?: number; type?: string; uploaded?: number; serverUsed?: string }> {
   const cfg = await getBlossomConfig();
-  const serverList = options?.servers || cfg.servers;
+  const serverList: MediaServer[] = (options?.servers || cfg.servers).map((server, index) => ({
+    id: server.id || `override-media-${index}-${server.url}`,
+    type: server.type || "blossom",
+    url: server.url,
+    token: server.token || "",
+    enabled: server.enabled !== false,
+    priority: Number.isFinite(server.priority) ? Number(server.priority) : index,
+    source: server.source === "default" ? "default" : "user",
+    addedAt: Number(server.addedAt) || 0,
+    updatedAt: Number(server.updatedAt) || 0,
+    deleted: server.deleted === true,
+    lastSuccessAt: server.lastSuccessAt,
+    lastFailureAt: server.lastFailureAt,
+    failureCount: server.failureCount
+  }));
   
   if (!serverList || serverList.length === 0) {
     throw makeDetailedError("未配置 Blossom 图床服务器");
   }
 
-  // Randomize server order to distribute load
-  const randomizedServers = shuffleArray(serverList);
-  const errors: Array<{ server: string; error: any }> = [];
-  
-  // Try each server in random order
-  for (let i = 0; i < randomizedServers.length; i++) {
-    const server = randomizedServers[i];
-    const serverUrl = normalizeBlossomUploadUrl(server.url);
-    
-    // Temporarily override localStorage for this upload attempt
-    const originalUrl = localStorage.getItem("blossom_upload_url");
-    const originalToken = localStorage.getItem("blossom_token");
-    
-    try {
-      // Attempt upload with explicit server URL and token
-      const result = await uploadImageToBlossom(file, {
-        ...options,
-        uploadUrl: serverUrl,
-        uploadToken: server.token || ""
-      });
-      
-      // Success! Return result with server info
-      return { ...result, serverUsed: serverUrl };
-    } catch (err: any) {
-      // Restore original values after failure
-      restoreLocalStorage(originalUrl, originalToken);
-      
-      // Log error and try next server
-      const errorMsg = err && err.message ? err.message : String(err);
-      errors.push({ server: serverUrl, error: errorMsg });
-      console.warn(`Upload to ${serverUrl} failed (attempt ${i + 1}/${randomizedServers.length}):`, errorMsg);
-      
-      // If this was the last server, throw combined error
-      if (i === randomizedServers.length - 1) {
-        const errorSummary = errors.map(e => `${e.server}: ${e.error}`).join("; ");
-        throw makeDetailedError(
-          `所有 ${randomizedServers.length} 个 Blossom 服务器均上传失败`,
-          { errors, summary: errorSummary }
-        );
-      }
-      
-      // Otherwise continue to next server
-    }
-  }
-  
-  // Should never reach here, but just in case
-  throw makeDetailedError("未知上传错误");
+  const { result, server } = await runMediaFailover(
+    serverList,
+    current => uploadImageToBlossom(file, {
+      ...options,
+      uploadUrl: normalizeBlossomUploadUrl(current.url),
+      uploadToken: current.token || ""
+    }),
+    (current, ok) => mediaHealthReporter?.(current.id, ok, Date.now())
+  );
+  return { ...result, serverUsed: normalizeBlossomUploadUrl(server.url) };
 }

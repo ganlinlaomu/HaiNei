@@ -8,6 +8,11 @@
 // - reconnectRelay(url): force reconnect of one relay
 import { logger } from "@/utils/logger";
 import { debugLog } from "@/utils/debugLog";
+import {
+  ACTIVE_RELAY_CONFIGS_KEY,
+  DEFAULT_RELAY_URLS,
+  type RelayConfig
+} from "@/services/connectionSettings";
 
 type RelayConn = {
   url: string;
@@ -20,14 +25,22 @@ type RelayConn = {
   reconnectAttempts: number;
   hasConnected: boolean;
   shouldReconnect: boolean;
+  connectStartedAt: number;
 };
 
 const CONNECT_TIMEOUT = 4000;
 const PUBLISH_TIMEOUT = 5000;
-const MAX_RECONNECT_DELAY = 30000;
+const RECONNECT_DELAYS = [30_000, 60_000, 300_000, 900_000, 1_800_000];
 
 const relaysMap: Record<string, RelayConn> = {};
-export type RelayConnectionEvent = { url: string; connected: boolean; reconnected: boolean; at: number };
+export type RelayConnectionEvent = {
+  url: string;
+  connected: boolean;
+  reconnected: boolean;
+  failed: boolean;
+  at: number;
+  latency?: number;
+};
 const connectionListeners = new Set<(event: RelayConnectionEvent) => void>();
 
 export function onRelayConnectionState(listener: (event: RelayConnectionEvent) => void) {
@@ -113,14 +126,28 @@ function replaySubscriptions(conn: RelayConn, ws: WebSocket, queuedReqIds: Set<s
 }
 
 export const DEFAULT_RELAYS = [
-  "wss://relay.damus.io",
-  "wss://relay.0xchat.com",
+  ...DEFAULT_RELAY_URLS
 ];
 
-export function getRelaysFromStorage() {
-  const raw = localStorage.getItem("custom-relays");
-  if (!raw) return DEFAULT_RELAYS.slice();
-  return raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+export function getRelaysFromStorage(mode: "read" | "write" | "both" = "both") {
+  try {
+    const structuredRaw = localStorage.getItem(ACTIVE_RELAY_CONFIGS_KEY);
+    if (structuredRaw !== null) {
+      const structured = JSON.parse(structuredRaw) as RelayConfig[];
+      if (!Array.isArray(structured)) throw new Error("invalid relay configuration mirror");
+      const matching = structured.filter(relay =>
+        relay.enabled !== false
+        && !relay.deleted
+        && (mode === "both" ? relay.read || relay.write : relay[mode])
+      );
+      return [...new Set(matching.map(relay => relay.url))];
+    }
+    const raw = localStorage.getItem("custom-relays");
+    if (raw) return [...new Set(raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))];
+  } catch {
+    // Defaults keep startup and offline restore usable when a mirror is corrupt.
+  }
+  return DEFAULT_RELAYS.slice();
 }
 
 function ensureRelayConn(url: string): RelayConn {
@@ -136,9 +163,26 @@ function ensureRelayConn(url: string): RelayConn {
     reconnectTimer: null,
     reconnectAttempts: 0,
     hasConnected: false,
-    shouldReconnect: true
+    shouldReconnect: true,
+    connectStartedAt: Date.now()
   };
   relaysMap[url] = conn;
+
+  const scheduleReconnect = (create: () => void) => {
+    if (!conn.shouldReconnect) return;
+    if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+    const attempt = conn.reconnectAttempts++;
+    const delay = RECONNECT_DELAYS[Math.min(attempt, RECONNECT_DELAYS.length - 1)];
+    debugLog("relay", "relay_reconnect_scheduled", {
+      relay: url,
+      reconnectAttempts: conn.reconnectAttempts,
+      delayMs: delay
+    }, "warn");
+    conn.reconnectTimer = window.setTimeout(() => {
+      conn.reconnectTimer = null;
+      create();
+    }, delay);
+  };
 
   const create = () => {
     if (!conn.shouldReconnect) return;
@@ -147,6 +191,7 @@ function ensureRelayConn(url: string): RelayConn {
       const ws = new WebSocket(url);
       conn.ws = ws;
       conn.ready = false;
+      conn.connectStartedAt = Date.now();
 
       const onOpen = () => {
         const reconnected = conn.hasConnected;
@@ -169,7 +214,15 @@ function ensureRelayConn(url: string): RelayConn {
           }
         }
         replaySubscriptions(conn, ws, queuedReqIds);
-        emitConnectionState({ url, connected: true, reconnected, at: Date.now() });
+        const at = Date.now();
+        emitConnectionState({
+          url,
+          connected: true,
+          reconnected,
+          failed: false,
+          at,
+          latency: Math.max(0, at - conn.connectStartedAt)
+        });
       };
 
       const onMessage = (ev: MessageEvent) => {
@@ -233,22 +286,17 @@ function ensureRelayConn(url: string): RelayConn {
         conn.ready = false;
         conn.ws = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
-        emitConnectionState({ url, connected: false, reconnected: conn.hasConnected, at: Date.now() });
+        emitConnectionState({
+          url,
+          connected: false,
+          reconnected: conn.hasConnected,
+          failed: conn.shouldReconnect,
+          at: Date.now()
+        });
         debugLog("relay", "relay_disconnected", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "warn");
         if (!conn.shouldReconnect) return;
         logger.warn(`[relay] disconnected relay=${url}; reconnect scheduled`);
-        const attempt = conn.reconnectAttempts++;
-        const baseDelay = Math.min(MAX_RECONNECT_DELAY, 1000 * (2 ** attempt));
-        const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4));
-        debugLog("relay", "relay_reconnect_scheduled", {
-          relay: url,
-          reconnectAttempts: conn.reconnectAttempts,
-          delayMs: delay
-        }, "warn");
-        conn.reconnectTimer = window.setTimeout(() => {
-          conn.reconnectTimer = null;
-          create();
-        }, delay);
+        scheduleReconnect(create);
       };
 
       const onError = () => {
@@ -266,6 +314,14 @@ function ensureRelayConn(url: string): RelayConn {
         reason: e instanceof Error ? e.name : "websocket_create_failed"
       }, "error");
       logger.warn("create websocket failed for relay", url, e);
+      emitConnectionState({
+        url,
+        connected: false,
+        reconnected: conn.hasConnected,
+        failed: true,
+        at: Date.now()
+      });
+      scheduleReconnect(create);
     }
   };
 
@@ -449,18 +505,16 @@ export function reconnectRelay(url: string) {
     return;
   }
   try {
-    r.shouldReconnect = true;
-    if (r.ws) {
-      try { r.ws.close(); } catch { }
-    } else if (!r.reconnectTimer) {
-      const subscriptions = r.subs;
-      delete relaysMap[url];
-      const replacement = ensureRelayConn(url);
-      replacement.subs = subscriptions;
-    }
-    // Preserve active subscriptions so the next socket can replay their REQs.
+    const subscriptions = r.subs;
+    r.shouldReconnect = false;
+    if (r.reconnectTimer) window.clearTimeout(r.reconnectTimer);
+    r.reconnectTimer = null;
+    try { r.ws?.close(); } catch {}
     r.ready = false;
     r.okHandlers.clear();
+    delete relaysMap[url];
+    const replacement = ensureRelayConn(url);
+    replacement.subs = subscriptions;
   } catch (e) {
     debugLog("relay", "relay_error", {
       relay: url,
