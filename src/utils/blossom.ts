@@ -1,15 +1,14 @@
 // Blossom client (BUD-02 / BUD-06 / BUD-01 compliant)
 // - HEAD /upload preflight using X-SHA-256, X-Content-Type, X-Content-Length
 // - If server requires authorization, create kind=24242 authorization event (adds expiration if missing),
-//   call signEvent callback to sign it, then send it as Authorization: Nostr <base64(json)>
-//   (BUD-01 requires Authorization event be base64 encoded and use the "Nostr" scheme).
+//   call signEvent callback to sign it, then send it as Authorization: Nostr <base64url(json)>
+//   (BUD-11 requires URL-safe Base64 without padding and the "Nostr" scheme).
 // - PUT /upload with raw binary body, returns Blob Descriptor { url, sha256, size, type, uploaded }
 //
 // Notes:
 // - signEvent callback must accept an event object and return the signed event object (with id, pubkey, sig).
 // - We add a default expiration (now + 1 hour) if none present on the event before calling signEvent.
-// - The Authorization header value is "Nostr <base64(json)>", where json is the signed event JSON.
-// - This file intentionally avoids guessing other encodings; BUD-01 prescribes the Nostr/BASE64 form.
+// - The Authorization header value is "Nostr <base64url(json)>", where json is the signed event JSON.
 //
 // Usage:
 //   import { uploadImageToBlossom, getBlossomConfig } from "@/utils/blossom";
@@ -160,14 +159,16 @@ function makeDetailedError(message: string, details?: any) {
   return err;
 }
 
-function base64EncodeUnicode(str: string) {
-  // browser-safe base64 of UTF-8 string
-  try {
-    return btoa(unescape(encodeURIComponent(str)));
-  } catch {
-    // fallback (should not normally happen in browser)
-    return btoa(str);
-  }
+export function buildBud11AuthorizationHeader(event: unknown): string {
+  const json = typeof event === "string" ? event : JSON.stringify(event);
+  const bytes = new TextEncoder().encode(json);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const base64url = btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+  return `Nostr ${base64url}`;
 }
 
 async function headProbe(uploadUrl: string, headers: Record<string,string>) {
@@ -274,25 +275,15 @@ export async function uploadImageToBlossom(
       throw makeDetailedError("签名事件无效：期望返回含有 kind=24242, pubkey, sig 的签名事件", { signed });
     }
 
-    // Per BUD-01: Authorization header MUST be base64 encoded and use scheme "Nostr"
-    let jsonStr: string;
-    try {
-      jsonStr = typeof signed === "string" ? signed : JSON.stringify(signed);
-    } catch {
-      jsonStr = String(signed);
-    }
-    const b64 = base64EncodeUnicode(jsonStr);
-    authorizationHeaderValue = `Nostr ${b64}`;
+    // BUD-11 requires URL-safe Base64 without padding.
+    authorizationHeaderValue = buildBud11AuthorizationHeader(signed);
 
     // retry HEAD with Authorization header
     const headersWithAuth = { ...baseHeaders };
     // If config.token is set as Authorization bearer, keep it in a separate header name scenario is unlikely.
-    // We send the signed event in configured header name (usually "Authorization")
-    headersWithAuth[cfg.authHeaderName] = authorizationHeaderValue;
-    // If there was also a token in uploadToken and cfg.authHeaderName !== "Authorization", keep Authorization token too
-    if (uploadToken && cfg.authHeaderName !== "Authorization") {
-      headersWithAuth["Authorization"] = uploadToken;
-    }
+    // BUD-11 fixes the header name to Authorization. Do not allow a stale
+    // local preference to silently move the signed event to another header.
+    headersWithAuth["Authorization"] = authorizationHeaderValue;
     head = await headProbe(uploadUrl, headersWithAuth);
   }
 
@@ -314,12 +305,13 @@ export async function uploadImageToBlossom(
     try {
       xhr.open("PUT", uploadUrl, true);
       try { xhr.setRequestHeader("Content-Type", type); } catch {}
-      // If uploadToken is present, keep Authorization header as token unless we used Authorization for signed event.
-      if (uploadToken && (!authorizationHeaderValue || cfg.authHeaderName !== "Authorization")) {
+      try { xhr.setRequestHeader("X-SHA-256", shaHex); } catch {}
+      // The signed BUD-11 event takes precedence over any legacy bearer token.
+      if (uploadToken && !authorizationHeaderValue) {
         try { xhr.setRequestHeader("Authorization", uploadToken); } catch {}
       }
       if (authorizationHeaderValue) {
-        try { xhr.setRequestHeader(cfg.authHeaderName, authorizationHeaderValue); } catch {}
+        try { xhr.setRequestHeader("Authorization", authorizationHeaderValue); } catch {}
       }
 
       xhr.upload.onprogress = (ev) => {
