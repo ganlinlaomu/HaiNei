@@ -9,7 +9,13 @@ import { debugLog } from "@/utils/debugLog";
 import { runPagedCatchup, type SubscribeForCatchup } from "./catchup";
 import { MessageIngestionPipeline, type DecodeMessage } from "./ingestion";
 import { calculateCatchupSince } from "./sorting";
-import type { MessageSource, MessageSyncOptions, SubscriptionLike, SyncStatus } from "./types";
+import {
+  INITIAL_HISTORY_MAX_BATCHES,
+  type MessageSource,
+  type MessageSyncOptions,
+  type SubscriptionLike,
+  type SyncStatus
+} from "./types";
 
 type ManagerDependencies = {
   repository?: SyncedMessageRepository;
@@ -117,8 +123,14 @@ export class MessageSyncManager {
 
     const state = await this.repository.getSyncState(accountPubkey);
     const nowSeconds = Math.floor(this.now() / 1000);
-    const since = calculateCatchupSince(state.highWatermarkCreatedAt, nowSeconds);
-    const filters = buildMessageSubscriptions(accountPubkey, options.authors, since);
+    // Realtime only needs to bridge the startup race. The separate bounded
+    // catch-up below owns full history repair; keeping that work out of the
+    // long-lived subscription prevents a new device from opening an unbounded
+    // stream from timestamp zero.
+    const realtimeSince = state.highWatermarkCreatedAt
+      ? calculateCatchupSince(state.highWatermarkCreatedAt, nowSeconds)
+      : nowSeconds;
+    const filters = buildMessageSubscriptions(accountPubkey, options.authors, realtimeSince);
 
     // Subscribe before catch-up so an event arriving during the historical query
     // is already covered. Both streams converge in the same idempotent pipeline.
@@ -176,8 +188,15 @@ export class MessageSyncManager {
         await this.setStatus("catching-up", sessionId);
         const state = await this.repository.getSyncState(options.accountPubkey);
         const nowSeconds = Math.floor(this.now() / 1000);
-        const since = calculateCatchupSince(state.highWatermarkCreatedAt, nowSeconds);
         const relays = relayUrl ? [relayUrl] : options.relays;
+        const relaySignature = [...new Set(relays)].sort().join("|");
+        const repairingHistory = !relayUrl && (
+          !state.historyBackfillCompletedAt
+          || state.historyBackfillRelaySignature !== relaySignature
+        );
+        const since = repairingHistory
+          ? 0
+          : calculateCatchupSince(state.highWatermarkCreatedAt, nowSeconds);
         const filters = buildMessageSubscriptions(options.accountPubkey, options.authors, since, nowSeconds)
           .map(filter => ({ ...filter, limit: 500 }));
         logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} session=${sessionId} phase=${activeSource} since=${since} until=${nowSeconds}`);
@@ -190,6 +209,7 @@ export class MessageSyncManager {
             return () => this.activeCatchupSubscriptions.delete(subscription);
           },
           signal: this.abortController?.signal,
+          maxBatches: repairingHistory ? INITIAL_HISTORY_MAX_BATCHES : undefined,
           isCurrent: () => this.isCurrent(sessionId, options.accountPubkey),
           onEvent: async (event, eventRelay) => {
             await this.pipeline?.ingestNostrEvent(event, { source: activeSource!, relayUrl: eventRelay });
@@ -199,7 +219,13 @@ export class MessageSyncManager {
         const completedAt = this.now();
         await this.repository.updateSyncState(options.accountPubkey, {
           lastSuccessfulSyncAt: completedAt,
-          lastCatchupCompletedAt: completedAt
+          lastCatchupCompletedAt: completedAt,
+          ...(repairingHistory && result.completedRelays.size > 0
+            ? {
+                historyBackfillCompletedAt: completedAt,
+                historyBackfillRelaySignature: relaySignature
+              }
+            : {})
         });
         for (const completedRelay of result.completedRelays) {
           await this.repository.updateRelayState(options.accountPubkey, completedRelay, {

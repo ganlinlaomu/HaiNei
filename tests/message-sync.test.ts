@@ -84,6 +84,7 @@ describe("reliable message persistence", () => {
   it("keeps same-second and late messages and sorts them deterministically", async () => {
     const repo = new SyncedMessageRepository(database());
     await repo.insertMessageIfAbsent(ACCOUNT_A, message("a", 1000));
+    expect(calculateCatchupSince(undefined, 2000)).toBe(0);
     expect(calculateCatchupSince((await repo.getSyncState(ACCOUNT_A)).highWatermarkCreatedAt, 2000)).toBe(970);
     await repo.insertMessageIfAbsent(ACCOUNT_A, message("c", 1000));
     await repo.insertMessageIfAbsent(ACCOUNT_A, message("later", 1005));
@@ -246,6 +247,8 @@ describe("message sync session", () => {
     expect(subscriptions).toHaveLength(2);
     expect(await repo.list(ACCOUNT_A)).toHaveLength(1);
     expect(visible).toEqual(["during-history"]);
+    expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillCompletedAt).toBe(2_000_000);
+    expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillRelaySignature).toBe("wss://a");
 
     relayObserver?.({ url: "wss://a", connected: true, reconnected: true, at: 2_000_100 });
     for (let attempt = 0; attempt < 20 && subscriptions.length < 3; attempt++) {
@@ -254,5 +257,15 @@ describe("message sync session", () => {
     manager.stop();
     expect(subscriptions.length).toBeGreaterThanOrEqual(3);
     expect(await repo.list(ACCOUNT_A)).toHaveLength(1);
+
+    await manager.start({
+      accountPubkey: ACCOUNT_A,
+      relays: ["wss://b"],
+      authors: [PEER, ACCOUNT_A],
+      decodeContext: { accountPubkey: ACCOUNT_A },
+      onMessage: value => { visible.push(value.id); }
+    });
+    expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillRelaySignature).toBe("wss://b");
+    manager.stop();
   });
 });

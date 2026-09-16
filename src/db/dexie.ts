@@ -85,6 +85,9 @@ export type RelaySyncStateRecord = {
 export type MessageSyncStateRecord = {
   accountPubkey: string;
   lastSuccessfulSyncAt?: number;
+  /** Marks completion of the bounded, one-time history repair for this device. */
+  historyBackfillCompletedAt?: number;
+  historyBackfillRelaySignature?: string;
   highWatermarkCreatedAt?: number;
   lastRealtimeConnectedAt?: number;
   lastCatchupCompletedAt?: number;

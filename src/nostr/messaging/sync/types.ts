@@ -1,7 +1,10 @@
 import type { CanonicalMessage, DecodeContext } from "@/nostr/messaging/protocol";
 
 export const SYNC_OVERLAP_SECONDS = 30;
-export const INITIAL_SYNC_WINDOW_SECONDS = 3 * 24 * 60 * 60;
+// A new installation has no trustworthy cursor. Fetch a bounded snapshot from
+// the beginning of relay retention so devices first opened on different days
+// converge on the same recent history instead of receiving different 3-day windows.
+export const INITIAL_HISTORY_MAX_BATCHES = 4;
 export const MAX_FUTURE_SKEW_SECONDS = 5 * 60;
 
 export type MessageSource = "history" | "realtime" | "reconnect" | "resume" | "manual" | "local-migration";
