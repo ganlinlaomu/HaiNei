@@ -8,10 +8,12 @@ import {
   rankRelayConfigs,
   relayConfigsFromNip65,
   runMediaFailover,
+  ACTIVE_RELAY_CONFIGS_KEY,
+  DEFAULT_RELAY_URLS,
   type MediaServer,
   type RelayConfig
 } from "@/services/connectionSettings";
-import { storageKeyFor, useSettingsStore } from "@/stores/settings";
+import { settingsSyncRelays, storageKeyFor, useSettingsStore } from "@/stores/settings";
 
 const NOW = 1_700_000_000_000;
 
@@ -155,6 +157,26 @@ describe("Media configuration", () => {
 });
 
 describe("per-item settings sync", () => {
+  it("always includes bootstrap defaults alongside website-specific Relay settings", () => {
+    const values = new Map<string, string>();
+    const storage: Storage = {
+      get length() { return values.size; },
+      clear: () => values.clear(),
+      getItem: key => values.get(key) ?? null,
+      key: index => [...values.keys()][index] ?? null,
+      removeItem: key => values.delete(key),
+      setItem: (key, value) => values.set(key, String(value))
+    };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+    storage.setItem(ACTIVE_RELAY_CONFIGS_KEY, JSON.stringify([
+      relay("wss://website-only.example", "user")
+    ]));
+    expect(settingsSyncRelays("read")).toEqual(expect.arrayContaining([
+      ...DEFAULT_RELAY_URLS,
+      "wss://website-only.example"
+    ]));
+  });
+
   it("lets a newer remote item replace local", () => {
     const local = relay("wss://same.example", "user", { updatedAt: 10, enabled: true });
     const remote = relay("wss://same.example", "user", { updatedAt: 20, enabled: false });

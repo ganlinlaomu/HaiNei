@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { useKeyStore } from "./keys";
 import {
   disconnectRelay,
+  DEFAULT_RELAYS,
   getRelaysFromStorage,
   onRelayConnectionState,
   publish,
@@ -42,6 +43,9 @@ type StoredSettingsData = {
   version: number;
   settings: ConnectionSettings;
   lastSyncTimestamp: number;
+  lastRelaySyncTimestamp?: number;
+  lastMediaSyncTimestamp?: number;
+  bootstrapSyncVersion?: number;
 };
 
 type SettingsSyncPayload<T> = {
@@ -55,6 +59,12 @@ let relayHealthUnsubscribe: (() => void) | null = null;
 export function storageKeyFor(pkHex?: string | null) {
   if (!pkHex) return null;
   return `nostr_settings_${pkHex.toLowerCase()}`;
+}
+
+export function settingsSyncRelays(mode: "read" | "write") {
+  // Every installation knows the bootstrap defaults. Always include them for
+  // settings transport so a new device can discover user-specific Relay config.
+  return [...new Set([...DEFAULT_RELAYS, ...getRelaysFromStorage(mode)])];
 }
 
 function readJsonArray(key: string): unknown[] {
@@ -90,6 +100,9 @@ export const useSettingsStore = defineStore("settings", {
     syncing: false,
     syncError: "",
     lastSyncTimestamp: 0,
+    lastRelaySyncTimestamp: 0,
+    lastMediaSyncTimestamp: 0,
+    bootstrapSyncVersion: 0,
     _isFetching: false,
     _publishTimer: null as number | null,
     _pendingDomains: [] as SettingsDomain[]
@@ -127,6 +140,9 @@ export const useSettingsStore = defineStore("settings", {
       this.syncing = false;
       this.syncError = "";
       this.lastSyncTimestamp = 0;
+      this.lastRelaySyncTimestamp = 0;
+      this.lastMediaSyncTimestamp = 0;
+      this.bootstrapSyncVersion = 0;
       this._isFetching = false;
       try {
         for (const url of activeRuntimeRelays) disconnectRelay(url);
@@ -173,6 +189,9 @@ export const useSettingsStore = defineStore("settings", {
           const parsed = JSON.parse(raw) as Partial<StoredSettingsData>;
           storedValue = parsed.settings;
           this.lastSyncTimestamp = Number(parsed.lastSyncTimestamp) || 0;
+          this.lastRelaySyncTimestamp = Number(parsed.lastRelaySyncTimestamp) || 0;
+          this.lastMediaSyncTimestamp = Number(parsed.lastMediaSyncTimestamp) || 0;
+          this.bootstrapSyncVersion = Number(parsed.bootstrapSyncVersion) || 0;
         }
       } catch (error) {
         logger.warn("[settings] local settings were invalid; defaults restored", {
@@ -191,7 +210,25 @@ export const useSettingsStore = defineStore("settings", {
       this.bindHealthTracking();
 
       // Remote sync is deliberately non-blocking: local/default settings are ready now.
-      void this.fetchFromRelays();
+      const fetchPromise = this.fetchFromRelays();
+
+      // v2 guarantees settings events are also published to bootstrap Relays.
+      // After first merging anything already remote, republish only domains that
+      // contain an actual legacy user change (not untouched built-in defaults).
+      if (storedValue && this.bootstrapSyncVersion < SETTINGS_VERSION) {
+        const migrationDomains: SettingsDomain[] = [];
+        if (this.settings.relays.some(item => item.updatedAt > 0 && item.updatedBy !== "builtin")) {
+          migrationDomains.push("relays");
+        }
+        if (this.settings.mediaServers.some(item => item.updatedAt > 0 && item.updatedBy !== "builtin")) {
+          migrationDomains.push("media");
+        }
+        if (migrationDomains.length) {
+          void fetchPromise.finally(() => {
+            if (this.loadedFor === targetPk) this.schedulePublish(migrationDomains);
+          });
+        }
+      }
     },
 
     bindHealthTracking() {
@@ -278,7 +315,10 @@ export const useSettingsStore = defineStore("settings", {
       const data: StoredSettingsData = {
         version: SETTINGS_VERSION,
         settings: this.settings,
-        lastSyncTimestamp: this.lastSyncTimestamp
+        lastSyncTimestamp: this.lastSyncTimestamp,
+        lastRelaySyncTimestamp: this.lastRelaySyncTimestamp,
+        lastMediaSyncTimestamp: this.lastMediaSyncTimestamp,
+        bootstrapSyncVersion: this.bootstrapSyncVersion
       };
       try {
         localStorage.setItem(key, JSON.stringify(data));
@@ -475,8 +515,12 @@ export const useSettingsStore = defineStore("settings", {
             tags: [["d", identifier], ["client", "HaiNei"]],
             content: encrypted
           });
-          const results = await publish(getRelaysFromStorage("write"), event);
-          if (!results.some(result => result.ok)) {
+          const results = await publish(settingsSyncRelays("write"), event);
+          const anySuccess = results.some(result => result.ok);
+          const bootstrapSuccess = results.some(result =>
+            result.ok && (DEFAULT_RELAYS as readonly string[]).includes(result.relay)
+          );
+          if (!anySuccess) {
             allSucceeded = false;
             continue;
           }
@@ -486,9 +530,21 @@ export const useSettingsStore = defineStore("settings", {
             this.settings.mediaServers = this.settings.mediaServers.map(item => syncStampItem(item, event.created_at, event.id));
           }
           this.lastSyncTimestamp = Math.max(this.lastSyncTimestamp, event.created_at);
+          if (bootstrapSuccess && domain === "relays") {
+            this.lastRelaySyncTimestamp = Math.max(this.lastRelaySyncTimestamp, event.created_at);
+          } else if (bootstrapSuccess) {
+            this.lastMediaSyncTimestamp = Math.max(this.lastMediaSyncTimestamp, event.created_at);
+          } else {
+            allSucceeded = false;
+          }
           this.save();
         }
-        if (!allSucceeded) this.syncError = "部分设置同步失败，本地配置已生效";
+        if (allSucceeded) {
+          this.bootstrapSyncVersion = SETTINGS_VERSION;
+          this.save();
+        } else {
+          this.syncError = "部分设置同步失败，本地配置已生效";
+        }
         return allSucceeded;
       } catch (error) {
         this.syncError = "设置同步失败，本地配置已生效";
@@ -506,7 +562,7 @@ export const useSettingsStore = defineStore("settings", {
       const keyStore = useKeyStore();
       if (!keyStore.isLoggedIn || keyStore.pkHex !== this.loadedFor || this._isFetching) return false;
       const account = keyStore.pkHex;
-      const relays = getRelaysFromStorage("read");
+      const relays = settingsSyncRelays("read");
       if (!relays.length) return false;
 
       this._isFetching = true;
@@ -563,8 +619,10 @@ export const useSettingsStore = defineStore("settings", {
                 const metadata = { createdAt: Number(event.created_at) || 0, eventId: String(event.id || "") };
                 if (identifier === RELAY_SYNC_IDENTIFIER) {
                   this.settings.relays = mergeRelayConfigs(this.settings.relays, migrated.relays, metadata);
+                  this.lastRelaySyncTimestamp = Math.max(this.lastRelaySyncTimestamp, metadata.createdAt);
                 } else {
                   this.settings.mediaServers = mergeMediaServers(this.settings.mediaServers, migrated.mediaServers, metadata);
+                  this.lastMediaSyncTimestamp = Math.max(this.lastMediaSyncTimestamp, metadata.createdAt);
                 }
                 this.lastSyncTimestamp = Math.max(this.lastSyncTimestamp, metadata.createdAt);
                 changed = true;
@@ -585,6 +643,10 @@ export const useSettingsStore = defineStore("settings", {
                 },
                 account,
                 this.settings.relays
+              );
+              this.lastRelaySyncTimestamp = Math.max(
+                this.lastRelaySyncTimestamp,
+                Number(newestNip65.created_at) || 0
               );
               changed = true;
             }

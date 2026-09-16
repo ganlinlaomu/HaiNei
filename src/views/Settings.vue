@@ -2,7 +2,15 @@
   <main class="settings-container">
     <div v-if="settings.syncing" class="sync-status">正在同步加密设置…</div>
     <div v-else-if="settings.syncError" class="sync-status sync-warning">{{ settings.syncError }}</div>
-    <div v-else-if="settings.lastSyncTimestamp" class="sync-status sync-ok">设置已通过 Nostr 加密同步</div>
+    <div
+      v-else-if="settings.lastRelaySyncTimestamp || settings.lastMediaSyncTimestamp"
+      class="sync-status sync-ok"
+    >
+      已载入同步设置：
+      <span v-if="settings.lastRelaySyncTimestamp">Relay</span>
+      <span v-if="settings.lastRelaySyncTimestamp && settings.lastMediaSyncTimestamp"> · </span>
+      <span v-if="settings.lastMediaSyncTimestamp">Media</span>
+    </div>
 
     <section class="card">
       <h2>设置</h2>
