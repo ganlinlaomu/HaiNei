@@ -612,7 +612,6 @@ export default defineComponent({
 
     function onClose() {
       ui.closePostEditor();
-      resetEditor();
     }
 
     // Store the element that triggered the modal for focus return
@@ -620,6 +619,7 @@ export default defineComponent({
 
     // Initialize when modal opens
     watch(() => ui.showPostEditor, async (show) => {
+      document.body.classList.toggle("post-editor-open", show);
       if (show) {
         // Store currently focused element to return focus later
         triggerElement = document.activeElement as HTMLElement;
@@ -661,6 +661,7 @@ export default defineComponent({
     });
 
     onBeforeUnmount(()=>{
+      document.body.classList.remove("post-editor-open");
       for (const it of uploads.value) {
         if (it.preview) { try { URL.revokeObjectURL(it.preview) } catch {} }
       }
@@ -799,9 +800,7 @@ export default defineComponent({
   display: flex;
   align-items: flex-end; /* start from bottom */
   justify-content: center;
-  background: rgba(0, 0, 0, 0.15);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
+  background: rgba(15, 23, 42, 0.38);
   z-index: 2000;
   outline: none;
 }
@@ -815,6 +814,7 @@ export default defineComponent({
   box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.12);
   transform: translateY(0);
   box-sizing: border-box;
+  contain: layout paint;
 }
 
 /* header */
@@ -841,6 +841,8 @@ export default defineComponent({
   max-height: 70vh;
   overflow-y: auto;
   box-sizing: border-box;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 .editor-textarea {
   width: 100%;
@@ -1214,13 +1216,13 @@ export default defineComponent({
 /* footer */
 .editor-footer { padding:10px 12px 20px; border-top:1px solid #f3f6f8; }
 
-/* slide up animation - slower and smoother */
+/* Keep the opening response short and compositor-only on mobile. */
 .slide-up-enter-active {
-  transition: all 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition: transform 180ms ease-out, opacity 160ms ease-out;
 }
 
 .slide-up-leave-active {
-  transition: all 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition: transform 160ms ease-in, opacity 140ms ease-in;
 }
 
 .slide-up-enter-from {
@@ -1244,6 +1246,13 @@ export default defineComponent({
   .editor-card { 
     border-radius:12px; 
     max-height:80vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide-up-enter-active,
+  .slide-up-leave-active {
+    transition-duration: 1ms;
   }
 }
 .error { margin-top:8px; color:#d00; font-size:13px; }
