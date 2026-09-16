@@ -48,7 +48,7 @@ export interface SyncEventMetadata {
   eventId: string;
 }
 
-export const SETTINGS_VERSION = 1;
+export const SETTINGS_VERSION = 2;
 export const RELAY_SYNC_IDENTIFIER = "hainei-relays";
 export const MEDIA_SYNC_IDENTIFIER = "hainei-media";
 export const DEVICE_ID_STORAGE_KEY = "hainei_device_id";
