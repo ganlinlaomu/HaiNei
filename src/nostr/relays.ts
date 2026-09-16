@@ -22,6 +22,7 @@ type RelayConn = {
   subs: Map<string, { filters: any[]; handlers: Set<(evt: any, relayUrl: string) => void>; eoseHandlers: Set<(relayUrl: string) => void> }>;
   okHandlers: Map<string, (res: any) => void>;
   reconnectTimer?: number | null;
+  connectTimer?: number | null;
   reconnectAttempts: number;
   hasConnected: boolean;
   shouldReconnect: boolean;
@@ -29,6 +30,7 @@ type RelayConn = {
 };
 
 const CONNECT_TIMEOUT = 4000;
+const CONNECTION_OPEN_TIMEOUT = 10_000;
 const PUBLISH_TIMEOUT = 5000;
 const RECONNECT_DELAYS = [30_000, 60_000, 300_000, 900_000, 1_800_000];
 
@@ -40,6 +42,16 @@ export type RelayConnectionEvent = {
   failed: boolean;
   at: number;
   latency?: number;
+};
+export type RelayRuntimeState = "connected" | "connecting" | "waiting-retry" | "disconnected";
+export type RelayRuntimeStatus = {
+  ready: boolean;
+  state: RelayRuntimeState;
+  queueLength: number;
+  subs: number;
+  okHandlers: number;
+  reconnectAttempts: number;
+  connectStartedAt: number;
 };
 const connectionListeners = new Set<(event: RelayConnectionEvent) => void>();
 
@@ -161,6 +173,7 @@ function ensureRelayConn(url: string): RelayConn {
     subs: new Map(),
     okHandlers: new Map(),
     reconnectTimer: null,
+    connectTimer: null,
     reconnectAttempts: 0,
     hasConnected: false,
     shouldReconnect: true,
@@ -192,8 +205,20 @@ function ensureRelayConn(url: string): RelayConn {
       conn.ws = ws;
       conn.ready = false;
       conn.connectStartedAt = Date.now();
+      if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
+      conn.connectTimer = window.setTimeout(() => {
+        if (conn.ws !== ws || conn.ready) return;
+        debugLog("relay", "relay_connection_timeout", {
+          relay: url,
+          reconnectAttempts: conn.reconnectAttempts,
+          timeoutMs: CONNECTION_OPEN_TIMEOUT
+        }, "warn");
+        try { ws.close(); } catch {}
+      }, CONNECTION_OPEN_TIMEOUT);
 
       const onOpen = () => {
+        if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
+        conn.connectTimer = null;
         const reconnected = conn.hasConnected;
         const reconnectAttempts = conn.reconnectAttempts;
         conn.ready = true;
@@ -283,6 +308,8 @@ function ensureRelayConn(url: string): RelayConn {
       };
 
       const onClose = () => {
+        if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
+        conn.connectTimer = null;
         conn.ready = false;
         conn.ws = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
@@ -479,16 +506,25 @@ export async function publish(relays: string[], event: any): Promise<Array<{ rel
 /**
  * inspectRelays(): return map of relay -> status
  */
-export function inspectRelays() {
-  const out: any = {};
+export function inspectRelays(): Record<string, RelayRuntimeStatus> {
+  const out: Record<string, RelayRuntimeStatus> = {};
   for (const url of Object.keys(relaysMap)) {
     const r = relaysMap[url];
+    const state: RelayRuntimeState = r.ready
+      ? "connected"
+      : r.reconnectTimer !== null
+        ? "waiting-retry"
+        : r.ws?.readyState === 0
+          ? "connecting"
+          : "disconnected";
     out[url] = {
       ready: r.ready,
+      state,
       queueLength: r.queue.length,
       subs: Array.from(r.subs.keys()).length,
       okHandlers: Array.from(r.okHandlers.keys()).length,
-      reconnectAttempts: r.reconnectAttempts
+      reconnectAttempts: r.reconnectAttempts,
+      connectStartedAt: r.connectStartedAt
     };
   }
   return out;
@@ -508,7 +544,9 @@ export function reconnectRelay(url: string) {
     const subscriptions = r.subs;
     r.shouldReconnect = false;
     if (r.reconnectTimer) window.clearTimeout(r.reconnectTimer);
+    if (r.connectTimer) window.clearTimeout(r.connectTimer);
     r.reconnectTimer = null;
+    r.connectTimer = null;
     try { r.ws?.close(); } catch {}
     r.ready = false;
     r.okHandlers.clear();
@@ -531,7 +569,9 @@ export function disconnectRelay(url: string) {
   if (!conn) return;
   conn.shouldReconnect = false;
   if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+  if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
   conn.reconnectTimer = null;
+  conn.connectTimer = null;
   conn.queue = [];
   conn.subs.clear();
   conn.okHandlers.clear();

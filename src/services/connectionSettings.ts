@@ -56,16 +56,22 @@ export const ACTIVE_RELAY_CONFIGS_KEY = "hainei_active_relay_configs";
 
 export const DEFAULT_RELAY_URLS = [
   "wss://relay.damus.io",
-  "wss://relay.0xchat.com"
+  "wss://relay.floonet.dev"
 ] as const;
 
 export const DEFAULT_MEDIA_SERVERS: ReadonlyArray<Pick<MediaServer, "id" | "type" | "url">> = [
   {
-    id: "default:blossom.lostr.space",
+    id: "default:blossom-imgbed.noster.workers.dev",
     type: "blossom",
-    url: "https://blossom.lostr.space"
+    url: "https://blossom-imgbed.noster.workers.dev"
   }
 ];
+
+const RETIRED_DEFAULT_RELAY_URLS = new Set(["wss://relay.0xchat.com"]);
+const RETIRED_DEFAULT_MEDIA = new Set([
+  "default:blossom.lostr.space",
+  "https://blossom.lostr.space"
+]);
 
 const RELAY_SOURCE_ORDER: Record<RelaySource, number> = {
   user: 0,
@@ -238,10 +244,13 @@ export function migrateConnectionSettings(
 
   const migratedRelays = relayInput
     .map(item => relayFromUnknown(item, now, options.deviceId))
-    .filter((item): item is RelayConfig => !!item);
+    .filter((item): item is RelayConfig => !!item)
+    .filter(item => item.source !== "default" || !RETIRED_DEFAULT_RELAY_URLS.has(item.url));
   const migratedMedia = mediaInput
     .map((item, index) => mediaFromUnknown(item, index, now, options.deviceId))
-    .filter((item): item is MediaServer => !!item);
+    .filter((item): item is MediaServer => !!item)
+    .filter(item => item.source !== "default"
+      || (!RETIRED_DEFAULT_MEDIA.has(item.id) && !RETIRED_DEFAULT_MEDIA.has(item.url)));
 
   for (const fallback of defaultRelayConfigs()) {
     if (!migratedRelays.some(item => item.url === fallback.url)) migratedRelays.push(fallback);
@@ -337,11 +346,14 @@ function mergeItems<T extends SyncMetadata>(
 }
 
 export function mergeRelayConfigs(local: RelayConfig[], remote: RelayConfig[], metadata?: SyncEventMetadata): RelayConfig[] {
-  return mergeItems(local, remote, item => item.url, metadata);
+  return mergeItems(local, remote, item => item.url, metadata)
+    .filter(item => item.source !== "default" || !RETIRED_DEFAULT_RELAY_URLS.has(item.url));
 }
 
 export function mergeMediaServers(local: MediaServer[], remote: MediaServer[], metadata?: SyncEventMetadata): MediaServer[] {
-  return mergeItems(local, remote, item => item.id, metadata);
+  return mergeItems(local, remote, item => item.id, metadata)
+    .filter(item => item.source !== "default"
+      || (!RETIRED_DEFAULT_MEDIA.has(item.id) && !RETIRED_DEFAULT_MEDIA.has(item.url)));
 }
 
 export function relayConfigsFromNip65(

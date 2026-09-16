@@ -9,6 +9,7 @@ import {
   relayConfigsFromNip65,
   runMediaFailover,
   ACTIVE_RELAY_CONFIGS_KEY,
+  DEFAULT_MEDIA_SERVERS,
   DEFAULT_RELAY_URLS,
   type MediaServer,
   type RelayConfig
@@ -47,6 +48,33 @@ function media(id: string, source: MediaServer["source"], patch: Partial<MediaSe
 }
 
 describe("Relay configuration", () => {
+  it("uses the current built-in Relay and media fallbacks", () => {
+    expect(DEFAULT_RELAY_URLS).toEqual([
+      "wss://relay.damus.io",
+      "wss://relay.floonet.dev"
+    ]);
+    expect(DEFAULT_MEDIA_SERVERS).toEqual([
+      expect.objectContaining({ url: "https://blossom-imgbed.noster.workers.dev" })
+    ]);
+  });
+
+  it("retires old built-in services without deleting matching user entries", () => {
+    const migrated = migrateConnectionSettings({
+      relays: [
+        relay("wss://relay.0xchat.com", "default", { updatedBy: "builtin" }),
+        relay("wss://relay.0xchat.com", "user")
+      ],
+      mediaServers: [
+        media("default:blossom.lostr.space", "default", { url: "https://blossom.lostr.space" })
+      ]
+    }, { deviceId: "device-a", now: NOW });
+    expect(migrated.relays.some(item => item.url === "wss://relay.0xchat.com" && item.source === "default")).toBe(false);
+    expect(migrated.relays.some(item => item.url === "wss://relay.0xchat.com" && item.source === "user")).toBe(true);
+    expect(migrated.relays.some(item => item.url === "wss://relay.floonet.dev" && item.source === "default")).toBe(true);
+    expect(migrated.mediaServers.some(item => item.url === "https://blossom.lostr.space")).toBe(false);
+    expect(migrated.mediaServers.some(item => item.url === "https://blossom-imgbed.noster.workers.dev")).toBe(true);
+  });
+
   it("always ranks user Relay above NIP-65 and defaults", () => {
     const ranked = rankRelayConfigs([
       relay("wss://default.example", "default", { latency: 1 }),

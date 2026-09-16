@@ -42,7 +42,7 @@
                 <div class="item-url">{{ relay.url }}</div>
                 <div class="meta-row">
                   <span class="pill">{{ relaySourceLabel(relay.source) }}</span>
-                  <span class="pill" :class="{ healthy: statuses[relay.url]?.ready, failed: relay.lastFailureAt && !statuses[relay.url]?.ready }">
+                  <span class="pill" :class="relayStatusTone(relay)">
                     {{ relayStatusLabel(relay) }}
                   </span>
                   <span v-if="relay.latency" class="pill">{{ relay.latency }}ms</span>
@@ -183,7 +183,12 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { inspectRelays, reconnectRelay } from "@/nostr/relays";
+import {
+  inspectRelays,
+  onRelayConnectionState,
+  reconnectRelay,
+  type RelayRuntimeStatus
+} from "@/nostr/relays";
 import { useKeyStore } from "@/stores/keys";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
@@ -213,11 +218,12 @@ const newRelay = ref("");
 const newMediaType = ref<MediaServerType>("blossom");
 const newMediaUrl = ref("");
 const newMediaToken = ref("");
-const statuses = reactive<Record<string, { ready?: boolean }>>({});
+const statuses = reactive<Record<string, RelayRuntimeStatus | undefined>>({});
 const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0 });
 const loadingCache = ref(false);
 const clearingCache = ref(false);
 let statusInterval: ReturnType<typeof setInterval> | null = null;
+let statusUnsubscribe: (() => void) | null = null;
 
 function relaySourceLabel(source: RelaySource) {
   return source === "user" ? "用户" : source === "nip65" ? "NIP-65" : "默认";
@@ -238,9 +244,21 @@ function isBuiltinMedia(server: MediaServer) {
 
 function relayStatusLabel(relay: RelayConfig) {
   if (!relay.enabled) return "已停用";
-  if (statuses[relay.url]?.ready) return "已连接";
-  if (relay.lastFailureAt) return "连接失败";
-  return "未连接";
+  const runtime = statuses[relay.url];
+  if (!runtime) return "未连接";
+  if (runtime.state === "connected") return "已连接";
+  if (runtime.state === "connecting") return "连接中…";
+  if (runtime.state === "waiting-retry") return "等待重连";
+  return relay.lastFailureAt ? "连接失败" : "未连接";
+}
+
+function relayStatusTone(relay: RelayConfig) {
+  const state = statuses[relay.url]?.state;
+  return {
+    healthy: state === "connected",
+    pending: state === "connecting" || state === "waiting-retry",
+    failed: state === "disconnected" && !!relay.lastFailureAt
+  };
 }
 
 function formatTimestamp(timestamp?: number) {
@@ -268,7 +286,7 @@ function toggleRelay(relay: RelayConfig, field: "enabled" | "read" | "write", ev
 
 function reconnect(url: string) {
   reconnectRelay(url);
-  window.setTimeout(refreshStatuses, 800);
+  refreshStatuses();
 }
 
 function addMediaServer() {
@@ -295,19 +313,26 @@ function refreshStatuses() {
   for (const url of Object.keys(statuses)) {
     if (!activeUrls.has(url)) delete statuses[url];
   }
-  for (const relay of relayList.value) statuses[relay.url] = current[relay.url] || { ready: false };
+  for (const relay of relayList.value) statuses[relay.url] = current[relay.url];
 }
 
 function startStatusPolling() {
-  if (statusInterval) return;
   refreshStatuses();
-  statusInterval = setInterval(refreshStatuses, 5_000);
+  if (!statusInterval) statusInterval = setInterval(refreshStatuses, 5_000);
+  if (!statusUnsubscribe) {
+    statusUnsubscribe = onRelayConnectionState(() => {
+      // onClose schedules retry immediately after emitting; next task observes
+      // the final connecting/backoff state rather than a transient disconnect.
+      window.setTimeout(refreshStatuses, 0);
+    });
+  }
 }
 
 function stopStatusPolling() {
-  if (!statusInterval) return;
-  clearInterval(statusInterval);
+  if (statusInterval) clearInterval(statusInterval);
   statusInterval = null;
+  statusUnsubscribe?.();
+  statusUnsubscribe = null;
 }
 
 async function refreshCacheStats() {
@@ -492,6 +517,11 @@ h3 {
 .pill.failed {
   background: #fee2e2;
   color: #b91c1c;
+}
+
+.pill.pending {
+  background: #fef3c7;
+  color: #92400e;
 }
 
 .control-row {

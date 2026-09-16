@@ -30,6 +30,38 @@ afterEach(() => {
   MockWebSocket.instances = [];
 });
 describe("relay reconnect", () => {
+  it("reports connecting, connected, and retry-wait states separately", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { setTimeout, clearTimeout }
+    });
+    const { inspectRelays, subscribe } = await import("@/nostr/relays");
+    const subscription = subscribe(["wss://state.test"], [{ kinds: [1] }]);
+    const socket = MockWebSocket.instances[0];
+    expect(inspectRelays()["wss://state.test"].state).toBe("connecting");
+    socket.emit("open", {});
+    expect(inspectRelays()["wss://state.test"].state).toBe("connected");
+    socket.emit("close", {});
+    expect(inspectRelays()["wss://state.test"].state).toBe("waiting-retry");
+    subscription.unsub();
+  });
+
+  it("moves a stalled connection into retry backoff", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { setTimeout, clearTimeout }
+    });
+    const { inspectRelays, subscribe } = await import("@/nostr/relays");
+    const subscription = subscribe(["wss://stalled.test"], [{ kinds: [1] }]);
+    await vi.advanceTimersByTimeAsync(10_100);
+    expect(inspectRelays()["wss://stalled.test"].state).toBe("waiting-retry");
+    subscription.unsub();
+  });
+
   it("records connection, wire send, and relay OK for publish", async () => {
     vi.useFakeTimers();
     setActivePinia(createPinia());
