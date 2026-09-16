@@ -1,5 +1,5 @@
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
-import { INITIAL_SYNC_WINDOW_SECONDS, SYNC_OVERLAP_SECONDS } from "./types";
+import { SYNC_OVERLAP_SECONDS } from "./types";
 
 type ComparableMessage = Pick<CanonicalMessage, "id" | "createdAt">;
 
@@ -19,5 +19,5 @@ export function isMessageAfter(
 export function calculateCatchupSince(highWatermark: number | undefined, nowSeconds: number): number {
   return highWatermark
     ? Math.max(0, highWatermark - SYNC_OVERLAP_SECONDS)
-    : Math.max(0, nowSeconds - INITIAL_SYNC_WINDOW_SECONDS);
+    : 0;
 }

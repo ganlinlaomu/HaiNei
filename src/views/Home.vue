@@ -164,6 +164,7 @@ import { getRelaysFromStorage } from "@/nostr/relays";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
 import { useNotificationsStore } from "@/stores/notifications";
+import { useSettingsStore } from "@/stores/settings";
 import { logger } from "@/utils/logger";
 import { formatRelativeTime } from "@/utils/format";
 import PostImagePreview from "@/components/PostImagePreview.vue";
@@ -199,6 +200,10 @@ const BOTTOM_NAV_HEIGHT = 80; // Must match --bottom-nav-height in styles.css
 const SCROLL_SAFE_OFFSET = 20; // Extra padding to ensure elements are fully visible
 const SCROLL_CONTAINER_SELECTOR = 'body > #app'; // Main scrollable container
 
+function compareHomeMessages(a: { id: string; created_at?: number }, b: { id: string; created_at?: number }) {
+  return (b.created_at || 0) - (a.created_at || 0) || String(a.id).localeCompare(String(b.id));
+}
+
 export default defineComponent({
   name: "Home",
   components: { PostImagePreview, VideoPlayer },
@@ -208,6 +213,7 @@ export default defineComponent({
     const msgs = useMessagesStore();
     const interactions = useInteractionsStore();
     const notifications = useNotificationsStore();
+    const settings = useSettingsStore();
     const readyForPending = ref(false);
     const route = useRoute();
     const realtimeSessionSince = ref(0);
@@ -217,12 +223,14 @@ export default defineComponent({
 
     const status = ref("未连接");
     let homeAccountPk = "";
+    let homeSyncGeneration = 0;
     const messageSync = new MessageSyncManager();
 
     const messagesRef = ref([] as any[]);
     const displayedMessages = ref([] as any[]);
     const pendingMessages = ref([] as any[]); // Messages fetched but not yet displayed
     const isInitialLoad = ref(true); // Track if this is the first load
+    const startupSyncing = ref(false);
     const showingSendMeta = ref<Set<string>>(new Set());
     
     // 分页相关状态
@@ -237,6 +245,7 @@ export default defineComponent({
     });
 
     function closeHomeSubscriptions() {
+      homeSyncGeneration++;
       messageSync.stop();
     }
 
@@ -248,6 +257,7 @@ export default defineComponent({
       lastSeenCreatedAt.value = 0;
       realtimeSessionSince.value = 0;
       notificationJumpDone.value = false;
+      startupSyncing.value = false;
       homeAccountPk = "";
     }
 
@@ -258,9 +268,7 @@ export default defineComponent({
         return false;
       }
 
-      messagesRef.value = [...msgs.inbox].sort(
-        (a, b) => (b.created_at || 0) - (a.created_at || 0)
-      );
+      messagesRef.value = [...msgs.inbox].sort(compareHomeMessages);
       displayedMessages.value = messagesRef.value.slice(0, PAGE_SIZE);
       currentPage.value = 1;
       isInitialLoad.value = false;
@@ -322,7 +330,7 @@ export default defineComponent({
           break;
         }
         // Merge based on timestamp, but de-duplicate by id
-        if ((array1[i].created_at || 0) >= (array2[j].created_at || 0)) {
+        if (compareHomeMessages(array1[i], array2[j]) <= 0) {
           if (!seenIds.has(array1[i].id)) {
             merged.push(array1[i]);
             seenIds.add(array1[i].id);
@@ -345,7 +353,7 @@ export default defineComponent({
       if (pendingMessages.value.length > 0) {
         logger.info(`手动显示 ${pendingMessages.value.length} 条待显示消息`);
         // Sort pending messages first
-        const sortedPending = [...pendingMessages.value].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+        const sortedPending = [...pendingMessages.value].sort(compareHomeMessages);
         // Use efficient merge with de-duplication
         const merged = mergeSortedMessagesWithDedup(sortedPending, displayedMessages.value);
         displayedMessages.value = merged;
@@ -367,12 +375,18 @@ export default defineComponent({
     
     function updateLocalRefs() {
   // ① 按时间排序 inbox
-  messagesRef.value = [...msgs.inbox].sort(
-    (a, b) => (b.created_at || 0) - (a.created_at || 0)
-  );
+  messagesRef.value = [...msgs.inbox].sort(compareHomeMessages);
 
   if (!readyForPending.value) {
     updateMessageTimeRange();
+    return;
+  }
+
+  // During startup/history repair, relay events are the device's baseline, not
+  // newly-arrived posts. Render the same newest page another device restores
+  // from disk instead of hiding the history behind the "new messages" prompt.
+  if (startupSyncing.value) {
+    reconcileStartupSnapshot(false);
     return;
   }
 
@@ -397,9 +411,7 @@ export default defineComponent({
 
   // ④ 自己的消息：直接显示（不走 pending）
   if (ownMessages.length > 0) {
-    const sortedOwn = ownMessages.sort(
-      (a, b) => (b.created_at || 0) - (a.created_at || 0)
-    );
+    const sortedOwn = ownMessages.sort(compareHomeMessages);
 
     displayedMessages.value = mergeSortedMessagesWithDedup(
       sortedOwn,
@@ -414,11 +426,21 @@ export default defineComponent({
       new Map(combined.map(m => [m.id, m])).values()
     );
 
-    pendingMessages.value = deduped.sort(
-      (a, b) => (b.created_at || 0) - (a.created_at || 0)
-    );
+    pendingMessages.value = deduped.sort(compareHomeMessages);
   }
 
+  updateMessageTimeRange();
+}
+
+function reconcileStartupSnapshot(updateWatermark: boolean) {
+  messagesRef.value = [...msgs.inbox].sort(compareHomeMessages);
+  const visibleCount = Math.max(PAGE_SIZE, displayedMessages.value.length);
+  displayedMessages.value = messagesRef.value.slice(0, visibleCount);
+  const visibleIds = new Set(displayedMessages.value.map(message => message.id));
+  pendingMessages.value = pendingMessages.value.filter(message => !visibleIds.has(message.id));
+  if (updateWatermark && messagesRef.value.length > 0) {
+    lastSeenCreatedAt.value = updateLastSeenToNewest(keys.pkHex, messagesRef.value);
+  }
   updateMessageTimeRange();
 }
   // --------------------
@@ -825,7 +847,7 @@ async function safeUpdateLocalRefs() {
           ? (friends.list || []).map((friend: any) => friend.pubkey)
           : [];
         logger.info(`好友列表加载完成: ${knownAuthors.length} 个好友`);
-        const relays = getRelaysFromStorage();
+        const relays = getRelaysFromStorage("read");
         logger.info(`使用中继: ${relays.join(', ')}`);
         await startRealtimeSubscription(knownAuthors, relays);
       } catch (e) {
@@ -836,11 +858,11 @@ async function safeUpdateLocalRefs() {
     
     // 阶段2：启动实时订阅
     async function startRealtimeSubscription(knownAuthors: string[], relays: string[]) {
-      const accountPk = keys.pkHex;
-      if (!accountPk) return;
+      const accountAtStart = keys.pkHex;
+      if (!accountAtStart) return;
+      const syncGeneration = ++homeSyncGeneration;
       try {
-        const accountAtStart = keys.pkHex;
-        if (!accountAtStart) return;
+        startupSyncing.value = true;
 realtimeSessionSince.value = Math.floor(Date.now() / 1000);
         await messageSync.start({
           accountPubkey: accountAtStart,
@@ -869,7 +891,11 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
             }
           }),
           onStatus: syncStatus => {
-            if (keys.pkHex !== accountAtStart) return;
+            if (keys.pkHex !== accountAtStart || syncGeneration !== homeSyncGeneration) return;
+            if (syncStatus === "live" || syncStatus === "error") {
+              reconcileStartupSnapshot(true);
+              startupSyncing.value = false;
+            }
             status.value = syncStatus === "live" ? "同步完成" :
               syncStatus === "catching-up" ? "获取历史消息中..." :
               syncStatus === "error" ? "同步失败" : "连接中";
@@ -878,6 +904,11 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
         
       } catch (e) {
         logger.error("startRealtimeSubscription failed", e);
+      } finally {
+        if (keys.pkHex === accountAtStart && syncGeneration === homeSyncGeneration && startupSyncing.value) {
+          reconcileStartupSnapshot(true);
+          startupSyncing.value = false;
+        }
       }
     }
     
@@ -959,6 +990,23 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
        startSub().catch(e => logger.error('Failed to restart subscription after friends change', e));
      }
    });
+
+   // Settings sync is intentionally non-blocking. A fresh device initially
+   // starts on bootstrap relays, then receives the account's relay set. Restart
+   // Home whenever that effective read-relay set changes so the synced settings
+   // actually affect content retrieval in the same session.
+   watch(
+     () => settings.activeRelays
+       .filter(relay => relay.read && relay.enabled && !relay.deleted)
+       .map(relay => relay.url)
+       .sort()
+       .join("|"),
+     (relaySignature, previousSignature) => {
+       if (!keys.isLoggedIn || !homeAccountPk || relaySignature === previousSignature) return;
+       logger.info("首页 Relay 配置已更新，重新同步内容");
+       startSub().catch(error => logger.error("Failed to restart subscription after relay change", error));
+     }
+   );
    
    
     // Watch for route query changes to handle notification jump state
