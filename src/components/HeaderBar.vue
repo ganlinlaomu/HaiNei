@@ -9,13 +9,22 @@
       </svg>
       <span class="nav-label">首页</span>
     </router-link>
-    <a class="nav-item" @click.prevent="handlePostClick">
+    <button
+      class="nav-item nav-button"
+      :class="{ 'composer-active': ui.showPostEditor }"
+      type="button"
+      aria-label="发帖"
+      :aria-expanded="String(ui.showPostEditor)"
+      @pointerdown="preloadPostEditor"
+      @focus="preloadPostEditor"
+      @click="handlePostClick"
+    >
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
         <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
       </svg>
       <span class="nav-label">发帖</span>
-    </a>
+    </button>
     <router-link class="nav-item" to="/friends" @click="handleNavigation">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
@@ -67,6 +76,7 @@ import { defineComponent, computed } from "vue";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import { useNotificationsStore } from "@/stores/notifications";
+import { preloadPostEditor } from "@/components/postEditorLoader";
 
 
 export default defineComponent({
@@ -93,7 +103,7 @@ export default defineComponent({
       ui.closePostEditor();
     }
     
-    return { isLoggedIn, shortPk, handlePostClick, handleNavigation, notifications, shouldShowBottomNav };
+    return { isLoggedIn, shortPk, handlePostClick, handleNavigation, notifications, shouldShowBottomNav, ui, preloadPostEditor };
   }
 });
 </script>
@@ -173,6 +183,18 @@ export default defineComponent({
     color 0.22s ease,
     background-color 0.22s ease,
     transform 0.22s ease;
+}
+
+.nav-button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.nav-item.composer-active {
+  color: #1976d2;
+  background: rgba(59, 130, 246, 0.08);
+  transform: scale(0.97);
 }
 
 /* hover / active（桌面 & Android） */
