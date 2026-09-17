@@ -16,6 +16,7 @@
 
 import {
   DEFAULT_MEDIA_SERVERS,
+  normalizeMediaUrl,
   rankMediaServers,
   runMediaFailover,
   type MediaServer,
@@ -73,15 +74,15 @@ export async function getBlossomConfig(): Promise<{
             ...s,
             id: String(s.id || `legacy-media-${index}-${s.url || ""}`),
             type: (["blossom", "imgbed", "custom"].includes(s.type) ? s.type : "blossom") as MediaServerType,
-            url: normalizeBlossomUploadUrl(s.url || ""),
-            token: (s.token || "").trim(),
+            url: normalizeMediaUrl(s.url || ""),
+            token: typeof s.token === "string" ? s.token.trim() : undefined,
             enabled: s.enabled !== false,
             priority: Number.isFinite(s.priority) ? Number(s.priority) : index,
             source: s.source === "default" ? "default" : "user",
             addedAt: Number(s.addedAt) || 0,
             updatedAt: Number(s.updatedAt) || 0,
             deleted: s.deleted === true
-          })).filter((s: MediaServer) => s.url && s.enabled && !s.deleted);
+          })).filter((s: MediaServer) => s.url);
         }
       } catch (e) {
         console.warn("Failed to parse blossom_servers", e);
@@ -96,7 +97,7 @@ export async function getBlossomConfig(): Promise<{
         servers.push({
           id: `legacy-media-${rawUrl}`,
           type: "blossom",
-          url: normalizeBlossomUploadUrl(rawUrl),
+          url: normalizeMediaUrl(rawUrl),
           token,
           enabled: true,
           priority: 0,
@@ -112,7 +113,7 @@ export async function getBlossomConfig(): Promise<{
       servers = DEFAULT_BLOSSOM_SERVERS.map((s, index) => ({
         id: DEFAULT_MEDIA_SERVERS[index]?.id || `default-media-${index}`,
         type: "blossom" as const,
-        url: normalizeBlossomUploadUrl(s.url),
+        url: normalizeMediaUrl(s.url),
         token: s.token,
         enabled: true,
         priority: 1_000 + index,
@@ -128,7 +129,7 @@ export async function getBlossomConfig(): Promise<{
     const authHeaderName = (localStorage.getItem("blossom_auth_header") || "Authorization").trim() || "Authorization";
     
     // Return first server as default for backward compatibility
-    const url = servers.length > 0 ? servers[0].url : null;
+    const url = servers.length > 0 ? normalizeBlossomUploadUrl(servers[0].url) : null;
     const token = servers.length > 0 ? servers[0].token || "" : null;
     
     return { url, token, timeoutMs, authHeaderName, servers };
@@ -388,6 +389,7 @@ export async function uploadImageToBlossomWithFallback(
     servers?: Array<Partial<MediaServer> & { url: string; token?: string }>;
   }
 ): Promise<{ url: string; sha256?: string; size?: number; type?: string; uploaded?: number; serverUsed?: string }> {
+  const reportHealth = mediaHealthReporter;
   const cfg = await getBlossomConfig();
   const serverList: MediaServer[] = (options?.servers || cfg.servers).map((server, index) => ({
     id: server.id || `override-media-${index}-${server.url}`,
@@ -416,7 +418,7 @@ export async function uploadImageToBlossomWithFallback(
       uploadUrl: normalizeBlossomUploadUrl(current.url),
       uploadToken: current.token || ""
     }),
-    (current, ok) => mediaHealthReporter?.(current.id, ok, Date.now())
+    (current, ok) => reportHealth?.(current.id, ok, Date.now())
   );
   return { ...result, serverUsed: normalizeBlossomUploadUrl(server.url) };
 }

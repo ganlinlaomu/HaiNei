@@ -194,7 +194,6 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import { clearAllCache, getCacheStats } from "@/utils/imageCache";
 import {
-  DEFAULT_MEDIA_SERVERS,
   DEFAULT_RELAY_URLS,
   type MediaServer,
   type MediaServerType,
@@ -238,8 +237,7 @@ function isBuiltinRelay(relay: RelayConfig) {
 }
 
 function isBuiltinMedia(server: MediaServer) {
-  return server.source === "default"
-    || DEFAULT_MEDIA_SERVERS.some(item => item.id === server.id || item.url === server.url);
+  return server.source === "default";
 }
 
 function relayStatusLabel(relay: RelayConfig) {
