@@ -148,29 +148,29 @@ describe("Media configuration", () => {
     const result = await runMediaFailover(
       [secondary, primary],
       async server => {
-        attempts.push(server.id);
-        if (server.id === "primary") throw new Error("offline");
+        attempts.push(server.url);
+        if (server.url === primary.url) throw new Error("offline");
         return "uploaded";
       },
-      (server, ok) => reports.push([server.id, ok])
+      (server, ok) => reports.push([server.url, ok])
     );
-    expect(attempts).toEqual(["primary", "secondary"]);
-    expect(result.server.id).toBe("secondary");
-    expect(reports).toEqual([["primary", false], ["secondary", true]]);
+    expect(attempts).toEqual([primary.url, secondary.url]);
+    expect(result.server.url).toBe(secondary.url);
+    expect(reports).toEqual([[primary.url, false], [secondary.url, true]]);
   });
 
   it("ranks every user media server above default fallback", () => {
     expect(rankMediaServers([
       media("default", "default", { priority: 0 }),
       media("user", "user", { priority: 99 })
-    ]).map(item => item.id)).toEqual(["user", "default"]);
+    ]).map(item => item.url)).toEqual(["https://user.example", "https://default.example"]);
   });
 
   it("temporarily lowers a failed server within the user tier", () => {
     expect(rankMediaServers([
       media("failed-primary", "user", { priority: 0, failureCount: 1, lastFailureAt: NOW }),
       media("healthy-secondary", "user", { priority: 1 })
-    ], NOW).map(item => item.id)).toEqual(["healthy-secondary", "failed-primary"]);
+    ], NOW).map(item => item.url)).toEqual(["https://healthy-secondary.example", "https://failed-primary.example"]);
   });
 
   it("never attempts a disabled media server", async () => {
@@ -180,7 +180,7 @@ describe("Media configuration", () => {
       media("fallback", "default")
     ], attempt);
     expect(attempt).toHaveBeenCalledTimes(1);
-    expect(attempt.mock.calls[0][0].id).toBe("fallback");
+    expect(attempt.mock.calls[0][0].url).toBe("https://fallback.example");
   });
 });
 

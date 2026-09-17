@@ -29,6 +29,8 @@ export interface MediaServer extends SyncMetadata {
   type: MediaServerType;
   url: string;
   token?: string;
+  tokenUpdatedAt?: number;
+  tokenUpdatedBy?: string;
   enabled: boolean;
   priority: number;
   source: MediaServerSource;
@@ -48,7 +50,7 @@ export interface SyncEventMetadata {
   eventId: string;
 }
 
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 export const RELAY_SYNC_IDENTIFIER = "hainei-relays";
 export const MEDIA_SYNC_IDENTIFIER = "hainei-media";
 export const DEVICE_ID_STORAGE_KEY = "hainei_device_id";
@@ -131,6 +133,7 @@ export function defaultRelayConfigs(): RelayConfig[] {
     read: true,
     write: true,
     enabled: true,
+    deleted: false,
     source: "default",
     addedAt: 0,
     updatedAt: 0,
@@ -141,7 +144,9 @@ export function defaultRelayConfigs(): RelayConfig[] {
 export function defaultMediaServers(): MediaServer[] {
   return DEFAULT_MEDIA_SERVERS.map((server, index) => ({
     ...server,
+    id: mediaServerId(server.type, server.url),
     enabled: true,
+    deleted: false,
     priority: 1_000 + index,
     source: "default",
     addedAt: 0,
@@ -190,15 +195,15 @@ function mediaFromUnknown(value: unknown, index: number, now: number, deviceId: 
   const source: MediaServerSource = item.source === "default" ? "default" : "user";
   return {
     ...item,
-    id: String(item.id || `media:${type}:${url}`),
+    id: mediaServerId(type, url),
     type,
     url,
-    token: typeof item.token === "string" ? item.token : "",
+    token: typeof item.token === "string" ? item.token : undefined,
     enabled: item.enabled !== false,
     priority: Number.isFinite(item.priority) ? Number(item.priority) : index,
     source,
     addedAt: Number.isFinite(Number(item.addedAt)) ? Number(item.addedAt) : now,
-    updatedAt: Number.isFinite(Number(item.updatedAt)) ? Number(item.updatedAt) : now,
+    updatedAt: Number.isFinite(Number(item.updatedAt)) ? Number(item.updatedAt) : 0,
     updatedBy: item.updatedBy || deviceId,
     deleted: item.deleted === true
   };
@@ -213,13 +218,47 @@ function dedupeRelays(items: RelayConfig[]): RelayConfig[] {
   return [...byUrl.values()];
 }
 
-function dedupeMedia(items: MediaServer[]): MediaServer[] {
+export function mediaServerId(type: MediaServerType, url: string): string {
+  return `media:${type}:${normalizeMediaUrl(url)}`;
+}
+
+// Identity is independent of installation, legacy UUID, and default/user source.
+// Keep tombstones through every merge, including merges from older clients.
+export function dedupeMedia(items: MediaServer[]): MediaServer[] {
   const byId = new Map<string, MediaServer>();
-  for (const item of items) {
-    const current = byId.get(item.id);
-    if (!current || compareSyncMetadata(item, current) >= 0) byId.set(item.id, item);
+  const credentials = new Map<string, MediaServer>();
+  const ordered = items.map(item => ({
+    ...item, url: normalizeMediaUrl(item.url), id: mediaServerId(item.type, item.url)
+  })).filter(item => item.url).sort((a, b) =>
+    (a.updatedAt - b.updatedAt)
+    || (Number(a.source === "user") - Number(b.source === "user"))
+    || (Number(!!a.deleted) - Number(!!b.deleted))
+    || compareSyncMetadata(a, b)
+    || String(a.updatedBy || "").localeCompare(String(b.updatedBy || ""))
+    || JSON.stringify([a.enabled, a.priority, a.token]).localeCompare(JSON.stringify([b.enabled, b.priority, b.token]))
+  );
+  for (const item of ordered) {
+    byId.set(item.id, item);
+    if (item.token === undefined) continue;
+    const candidate = {
+      ...item,
+      tokenUpdatedAt: item.tokenUpdatedAt ?? item.updatedAt,
+      tokenUpdatedBy: item.tokenUpdatedBy ?? item.updatedBy ?? ""
+    };
+    const current = credentials.get(item.id);
+    const comparison = !current ? 1 :
+      (candidate.tokenUpdatedAt - (current.tokenUpdatedAt ?? current.updatedAt))
+      || candidate.tokenUpdatedBy.localeCompare(current.tokenUpdatedBy || "")
+      || candidate.token!.localeCompare(current.token || "");
+    if (comparison > 0) credentials.set(item.id, candidate);
   }
-  return [...byId.values()];
+  return [...byId.values()].map(item => {
+    const credential = credentials.get(item.id);
+    // Keep the credential's own revision when filling a missing legacy token;
+    // otherwise an older token could acquire a newer configuration timestamp.
+    return credential ? { ...item, token: credential.token,
+      tokenUpdatedAt: credential.tokenUpdatedAt, tokenUpdatedBy: credential.tokenUpdatedBy } : item;
+  }).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export function migrateConnectionSettings(
@@ -256,7 +295,7 @@ export function migrateConnectionSettings(
     if (!migratedRelays.some(item => item.url === fallback.url)) migratedRelays.push(fallback);
   }
   for (const fallback of defaultMediaServers()) {
-    if (!migratedMedia.some(item => item.id === fallback.id || item.url === fallback.url)) migratedMedia.push(fallback);
+    if (!migratedMedia.some(item => item.id === fallback.id)) migratedMedia.push(fallback);
   }
 
   return {
@@ -301,7 +340,7 @@ export function selectRelayConfigs(items: RelayConfig[], max = 6, now = Date.now
 }
 
 export function rankMediaServers(items: MediaServer[], now = Date.now()): MediaServer[] {
-  return items
+  return dedupeMedia(items)
     .filter(item => item.enabled && !item.deleted)
     .slice()
     .sort((a, b) =>
@@ -351,7 +390,7 @@ export function mergeRelayConfigs(local: RelayConfig[], remote: RelayConfig[], m
 }
 
 export function mergeMediaServers(local: MediaServer[], remote: MediaServer[], metadata?: SyncEventMetadata): MediaServer[] {
-  return mergeItems(local, remote, item => item.id, metadata)
+  return dedupeMedia([...local, ...remote.map(item => withEventMetadata(item, metadata))])
     .filter(item => item.source !== "default"
       || (!RETIRED_DEFAULT_MEDIA.has(item.id) && !RETIRED_DEFAULT_MEDIA.has(item.url)));
 }
