@@ -1,4 +1,5 @@
 import { verifyEvent, type NostrEvent } from "nostr-tools";
+import { verifiedEventCache } from "@/services/nostrCache";
 
 const HEX_64 = /^[0-9a-f]{64}$/;
 
@@ -32,8 +33,11 @@ export async function deriveConversationId(participants: string[]): Promise<stri
 
 /** Rebuild the signed fields so nostr-tools cannot reuse a stale verifiedSymbol cache. */
 export function verifySignedEvent(event: NostrEvent): boolean {
+  const verificationKey = event.id ? `${event.id}:${event.sig}` : "";
+  const cached = verificationKey ? verifiedEventCache.get(verificationKey) : undefined;
+  if (cached !== undefined) return cached;
   try {
-    return verifyEvent({
+    const verified = verifyEvent({
       id: event.id,
       pubkey: event.pubkey,
       created_at: event.created_at,
@@ -42,7 +46,10 @@ export function verifySignedEvent(event: NostrEvent): boolean {
       content: event.content,
       sig: event.sig
     });
+    if (verificationKey) verifiedEventCache.set(verificationKey, verified);
+    return verified;
   } catch {
+    if (verificationKey) verifiedEventCache.set(verificationKey, false);
     return false;
   }
 }

@@ -12,6 +12,7 @@ import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { normalizeAccountPubkey } from "@/repositories/accountScope";
 import { isMessageAfter } from "@/nostr/messaging/sync/sorting";
 import { MAX_FUTURE_SKEW_SECONDS, type SyncStatus } from "@/nostr/messaging/sync/types";
+import { performanceCounters } from "@/services/nostrCache";
 
 export type InsertMessageResult = { inserted: boolean; record: SyncedMessageRecord };
 
@@ -38,7 +39,67 @@ function toRecord(accountPubkey: string, message: CanonicalMessage, nowMs: numbe
 }
 
 export class SyncedMessageRepository {
+  private pending = new Map<string, {
+    account: string;
+    message: CanonicalMessage;
+    nowMs: number;
+    resolve: (result: InsertMessageResult) => void;
+    reject: (error: unknown) => void;
+  }[]>();
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushScheduled = false;
+
   constructor(private readonly database: HaiNeiDatabase = db) {}
+
+  /** Queue message persistence so the realtime UI path never waits before rendering. */
+  enqueueMessage(accountPubkey: string, message: CanonicalMessage, nowMs = Date.now()): Promise<InsertMessageResult> {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const key = `${account}:${message.id}`;
+    return new Promise((resolve, reject) => {
+      const waiting = this.pending.get(key) || [];
+      waiting.push({ account, message, nowMs, resolve, reject });
+      this.pending.set(key, waiting);
+      performanceCounters.indexedDbQueueSize = this.pending.size;
+      if (this.pending.size >= 50) void this.flushWriteQueue();
+      else if (!this.flushScheduled) {
+        this.flushScheduled = true;
+        queueMicrotask(() => void this.flushWriteQueue());
+      }
+    });
+  }
+
+  async flushWriteQueue() {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+    this.flushScheduled = false;
+    if (!this.pending.size) return;
+    const batch = [...this.pending.entries()];
+    this.pending.clear();
+    performanceCounters.indexedDbQueueSize = 0;
+    const completed: Array<{ waiter: (typeof batch)[number][1][number]; result: InsertMessageResult }> = [];
+    try {
+      // Dexie nests these operations into one physical transaction while retaining
+      // the existing atomic insert/update semantics.
+      await this.database.transaction(
+        "rw",
+        this.database.syncedMessages,
+        this.database.conversationStates,
+        this.database.messageSyncStates,
+        async () => {
+          for (const [, waiters] of batch) {
+            let result: InsertMessageResult | undefined;
+            for (const waiter of waiters) {
+              result = await this.insertMessageIfAbsent(waiter.account, waiter.message, waiter.nowMs);
+              completed.push({ waiter, result });
+            }
+          }
+        }
+      );
+      for (const { waiter, result } of completed) waiter.resolve(result);
+    } catch (error) {
+      for (const [, waiters] of batch) for (const waiter of waiters) waiter.reject(error);
+    }
+  }
 
   async insertMessageIfAbsent(accountPubkey: string, message: CanonicalMessage, nowMs = Date.now()): Promise<InsertMessageResult> {
     const account = normalizeAccountPubkey(accountPubkey);
@@ -87,6 +148,17 @@ export class SyncedMessageRepository {
   async get(accountPubkey: string, messageId: string) {
     const account = normalizeAccountPubkey(accountPubkey);
     return this.database.syncedMessages.get([account, messageId]);
+  }
+
+  async getDecryptedEvent(accountPubkey: string, eventId: string): Promise<CanonicalMessage | null> {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const record = await this.database.decryptedEvents.get([account, eventId]);
+    return (record?.message as CanonicalMessage | undefined) || null;
+  }
+
+  async putDecryptedEvent(accountPubkey: string, eventId: string, message: CanonicalMessage) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    await this.database.decryptedEvents.put({ accountPubkey: account, eventId, message, decryptedAt: Date.now() });
   }
 
   async list(accountPubkey: string, limit?: number) {
@@ -231,3 +303,9 @@ export class SyncedMessageRepository {
 }
 
 export const syncedMessageRepository = new SyncedMessageRepository();
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  const flushPendingMessages = () => { void syncedMessageRepository.flushWriteQueue(); };
+  window.addEventListener("pagehide", flushPendingMessages);
+  window.addEventListener("beforeunload", flushPendingMessages);
+}

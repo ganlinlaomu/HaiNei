@@ -50,8 +50,7 @@ function media(id: string, source: MediaServer["source"], patch: Partial<MediaSe
 describe("Relay configuration", () => {
   it("uses the current built-in Relay and media fallbacks", () => {
     expect(DEFAULT_RELAY_URLS).toEqual([
-      "wss://relay.damus.io",
-      "wss://relay.floonet.dev"
+      "wss://nostr.dzo-hadar.ts.net"
     ]);
     expect(DEFAULT_MEDIA_SERVERS).toEqual([
       expect.objectContaining({ url: "https://blossom-imgbed.noster.workers.dev" })
@@ -70,7 +69,7 @@ describe("Relay configuration", () => {
     }, { deviceId: "device-a", now: NOW });
     expect(migrated.relays.some(item => item.url === "wss://relay.0xchat.com" && item.source === "default")).toBe(false);
     expect(migrated.relays.some(item => item.url === "wss://relay.0xchat.com" && item.source === "user")).toBe(true);
-    expect(migrated.relays.some(item => item.url === "wss://relay.floonet.dev" && item.source === "default")).toBe(true);
+    expect(migrated.relays.some(item => item.url === "wss://nostr.dzo-hadar.ts.net" && item.source === "default")).toBe(true);
     expect(migrated.mediaServers.some(item => item.url === "https://blossom.lostr.space")).toBe(false);
     expect(migrated.mediaServers.some(item => item.url === "https://blossom-imgbed.noster.workers.dev")).toBe(true);
   });

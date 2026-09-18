@@ -2,11 +2,9 @@ import { defineStore } from "pinia";
 import { useKeyStore } from "./keys";
 import {
   disconnectRelay,
-  DEFAULT_RELAYS,
   getRelaysFromStorage,
   onRelayConnectionState,
   publish,
-  reconnectRelay,
   subscribe
 } from "@/nostr/relays";
 import { setMediaHealthReporter } from "@/utils/blossom";
@@ -66,7 +64,7 @@ export function storageKeyFor(pkHex?: string | null) {
 export function settingsSyncRelays(mode: "read" | "write") {
   // Every installation knows the bootstrap defaults. Always include them for
   // settings transport so a new device can discover user-specific Relay config.
-  return [...new Set([...DEFAULT_RELAYS, ...getRelaysFromStorage(mode)])];
+  return [...new Set([...DEFAULT_RELAY_URLS, ...getRelaysFromStorage(mode)])];
 }
 
 function readJsonArray(key: string): unknown[] {
@@ -276,7 +274,7 @@ export const useSettingsStore = defineStore("settings", {
       });
     },
 
-    applySettings(connectNewRelays = true) {
+    applySettings(_connectNewRelays = false) {
       const previousRelays = new Set(getRelaysFromStorage());
       const activeRelays = selectRelayConfigs(this.settings.relays);
       const activeUrls = activeRelays.map(item => item.url);
@@ -288,11 +286,8 @@ export const useSettingsStore = defineStore("settings", {
         for (const url of previousRelays) {
           if (!activeSet.has(url)) disconnectRelay(url);
         }
-        if (connectNewRelays) {
-          for (const url of activeUrls) {
-            if (!previousRelays.has(url)) reconnectRelay(url);
-          }
-        }
+        // Relay objects are lazy: adding a URL must not open a WebSocket until
+        // subscribe, publish, or auth actually needs it.
       } catch (error) {
         logger.warn("[settings] apply relay configuration failed", {
           account: this.loadedFor.slice(0, 8),
@@ -540,7 +535,7 @@ export const useSettingsStore = defineStore("settings", {
           if (!isCurrent()) return false;
           const anySuccess = results.some(result => result.ok);
           const bootstrapSuccess = results.some(result =>
-            result.ok && (DEFAULT_RELAYS as readonly string[]).includes(result.relay)
+            result.ok && (DEFAULT_RELAY_URLS as readonly string[]).includes(result.relay)
           );
           if (!anySuccess) {
             allSucceeded = false;
