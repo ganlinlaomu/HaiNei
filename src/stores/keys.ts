@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import * as nostr from "nostr-tools";
 import { useRouter } from "vue-router";
 import { useFriendsStore } from "./friends";
+import { useFriendshipsStore } from "./friendships";
 import { useMessagesStore } from "./messages";
 import { useSettingsStore } from "./settings";
 import { useInteractionsStore } from "./interactions";
@@ -127,6 +128,11 @@ export const useKeyStore = defineStore("keys", {
         console.error(`[account] friends load failed account=${account}`, e);
       }
       try {
+        await useFriendshipsStore().load(pk);
+      } catch (e) {
+        console.error(`[account] friendships load failed account=${account}`, e);
+      }
+      try {
         await useMessagesStore().load(pk);
       } catch (e) {
         console.error(`[account] messages load failed account=${account}`, e);
@@ -150,6 +156,11 @@ export const useKeyStore = defineStore("keys", {
         useFriendsStore().reset(false);
       } catch (e) {
         console.error(`[account] friends reset failed account=${account}`, e);
+      }
+      try {
+        useFriendshipsStore().reset();
+      } catch (e) {
+        console.error(`[account] friendships reset failed account=${account}`, e);
       }
       try {
         useMessagesStore().reset(false);

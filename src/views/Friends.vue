@@ -14,7 +14,7 @@
     <!-- Friend List -->
     <div class="card">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <h3 style="margin: 0;">好友列表（{{ friends.sortedList.length }}）</h3>
+        <h3 style="margin: 0;">好友（{{ acceptedFriends.length }}）</h3>
         <button 
           class="btn-icon btn-add" 
           @click="startAdd"
@@ -24,9 +24,9 @@
           +
         </button>
       </div>
-      <div v-if="friends.sortedList.length === 0" class="small">还没有好友</div>
+      <div v-if="acceptedFriends.length === 0" class="small">还没有已确认好友</div>
       <div class="list" v-else>
-        <div v-for="f in friends.sortedList" :key="f.pubkey" class="friend-item">
+        <div v-for="f in acceptedFriends" :key="f.pubkey" class="friend-item">
           <div class="friend-info">
             <div><strong>{{ f.name }}</strong></div>
             <div class="small">
@@ -40,6 +40,36 @@
           <div class="friend-actions">
             <button class="btn-icon btn-edit" @click="startEdit(f)" title="编辑" aria-label="编辑好友">✎</button>
             <button class="btn-icon btn-delete" @click="confirmDelete(f)" title="删除" aria-label="删除好友">🗑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>收到的请求（{{ incomingRequests.length }}）</h3>
+      <div v-if="incomingRequests.length === 0" class="small">暂无收到的好友请求</div>
+      <div v-else class="list">
+        <div v-for="request in incomingRequests" :key="request.peerPubkey" class="friend-item">
+          <div class="friend-info">
+            <strong>{{ contactName(request.peerPubkey) }}</strong>
+            <div class="small">{{ request.peerPubkey.slice(0, 16) }}…</div>
+          </div>
+          <div class="friend-actions">
+            <button class="btn request-accept" @click="acceptRequest(request.peerPubkey)">接受</button>
+            <button class="btn btn-cancel" @click="rejectRequest(request.peerPubkey)">拒绝</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>已发送请求（{{ outgoingRequests.length }}）</h3>
+      <div v-if="outgoingRequests.length === 0" class="small">暂无等待确认的请求</div>
+      <div v-else class="list">
+        <div v-for="request in outgoingRequests" :key="request.peerPubkey" class="friend-item">
+          <div class="friend-info">
+            <strong>{{ contactName(request.peerPubkey) }}</strong>
+            <div class="small">等待对方接受</div>
           </div>
         </div>
       </div>
@@ -120,12 +150,14 @@ import { defineComponent, ref, onMounted, onBeforeUnmount, watch, computed } fro
 import { useFriendsStore, Friend } from "@/stores/friends";
 import { useUIStore } from "@/stores/ui";
 import { useKeyStore } from "@/stores/keys";
+import { useFriendshipsStore } from "@/stores/friendships";
 import { keyToHex } from "@/utils/format";
 
 export default defineComponent({
   name: "Friends",
   setup() {
     const friends = useFriendsStore();
+    const friendships = useFriendshipsStore();
     const ui = useUIStore();
     const keys = useKeyStore();
 
@@ -160,6 +192,10 @@ export default defineComponent({
       }
       return Array.from(groupSet).sort((a, b) => a.localeCompare(b, 'zh-CN'));
     });
+    const acceptedFriends = computed(() => friends.sortedList.filter(friend => friendships.isAccepted(friend.pubkey)));
+    const incomingRequests = computed(() => friendships.getIncomingRequests());
+    const outgoingRequests = computed(() => friendships.getOutgoingRequests());
+    const contactName = (pubkey: string) => friends.list.find(friend => friend.pubkey === pubkey)?.name || `${pubkey.slice(0, 8)}…`;
 
     // Filter groups based on current input
     const filteredGroups = computed(() => {
@@ -203,6 +239,7 @@ export default defineComponent({
 
     onMounted(async () => {
       await friends.load();
+      await friendships.load();
     });
 
     onBeforeUnmount(() => {
@@ -306,19 +343,12 @@ export default defineComponent({
           const group = groupInput.length > 0 ? groupInput : undefined;
 
           await friends.load();
-          const ok = friends.add({
-            pubkey: hexKey,
-            name: nameVal,
-            groups: group ? [group] : undefined,
-            group: group
-          });
-
-          if (ok) {
-            ui.addToast("好友已添加", 2000, "success");
-            closeModal();
-          } else {
-            ui.addToast("添加失败：该好友可能已存在", 2400, "error");
-          }
+          const existing = friends.list.find(friend => friend.pubkey === hexKey);
+          if (existing) friends.update(hexKey, { name: nameVal, groups: group ? [group] : undefined, group });
+          else friends.add({ pubkey: hexKey, name: nameVal, groups: group ? [group] : undefined, group });
+          await friendships.sendRequest(hexKey);
+          ui.addToast("好友请求已发送，等待对方接受", 2400, "success");
+          closeModal();
         }
       } catch (e) {
         console.error("Save friend error:", e);
@@ -328,11 +358,30 @@ export default defineComponent({
       }
     };
 
-    const confirmDelete = (friend: Friend) => {
+    const confirmDelete = async (friend: Friend) => {
       if (confirm(`确定要删除好友 "${friend.name}" 吗？`)) {
+        await friendships.removeFriend(friend.pubkey);
         const ok = friends.remove(friend.pubkey);
         if (ok) ui.addToast("已删除", 1500, "info");
         else ui.addToast("删除失败", 1500, "error");
+      }
+    };
+
+    const acceptRequest = async (pubkey: string) => {
+      try {
+        await friendships.acceptRequest(pubkey);
+        ui.addToast("已接受好友请求", 1800, "success");
+      } catch {
+        ui.addToast("接受失败，请稍后重试", 2000, "error");
+      }
+    };
+
+    const rejectRequest = async (pubkey: string) => {
+      try {
+        await friendships.rejectRequest(pubkey);
+        ui.addToast("已拒绝好友请求", 1500, "info");
+      } catch {
+        ui.addToast("拒绝失败，请稍后重试", 2000, "error");
       }
     };
 
@@ -377,6 +426,10 @@ export default defineComponent({
 
     return {
       friends,
+      acceptedFriends,
+      incomingRequests,
+      outgoingRequests,
+      contactName,
       showModal,
       editMode,
       formData,
@@ -388,6 +441,8 @@ export default defineComponent({
       closeModal,
       saveForm,
       confirmDelete,
+      acceptRequest,
+      rejectRequest,
       // Group autocomplete
       showGroupSuggestions,
       filteredGroups,
@@ -484,6 +539,10 @@ export default defineComponent({
 
 .btn-cancel {
   background: #6b7280;
+}
+
+.request-accept {
+  background: #16a34a;
 }
 
 .btn-icon {

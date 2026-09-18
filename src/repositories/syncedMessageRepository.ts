@@ -209,6 +209,15 @@ export class SyncedMessageRepository {
     });
   }
 
+  async advanceHighWatermark(accountPubkey: string, createdAt: number, nowMs = Date.now()) {
+    const nowSeconds = Math.floor(nowMs / 1000);
+    if (createdAt > nowSeconds + MAX_FUTURE_SKEW_SECONDS) return;
+    const current = await this.getSyncState(accountPubkey);
+    if (!current.highWatermarkCreatedAt || createdAt > current.highWatermarkCreatedAt) {
+      await this.updateSyncState(accountPubkey, { highWatermarkCreatedAt: createdAt });
+    }
+  }
+
   async updateRelayState(accountPubkey: string, relayUrl: string, patch: Partial<RelaySyncStateRecord>) {
     const account = normalizeAccountPubkey(accountPubkey);
     return this.database.transaction("rw", this.database.messageSyncStates, async () => {

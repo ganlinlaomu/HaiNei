@@ -1,10 +1,13 @@
 import type { CanonicalMessage } from "./protocol";
 import type { MessageIngestionMetadata } from "./sync/types";
 import { debugLog } from "@/utils/debugLog";
+import { isFriendshipControlMessage } from "@/nostr/messaging/friendshipControl";
 
 export type HomeMessageDelivery = {
   accountPubkey: string;
   currentAccount: () => string;
+  isAcceptedMessage?: (message: CanonicalMessage) => boolean;
+  processFriendshipMessage?: (message: CanonicalMessage) => boolean | Promise<boolean>;
   isInteraction: (message: CanonicalMessage) => boolean;
   processInteraction: (message: CanonicalMessage) => void | Promise<void>;
   mirrorMessage: (message: CanonicalMessage) => void;
@@ -12,9 +15,7 @@ export type HomeMessageDelivery = {
 };
 
 /**
- * Bridges durable sync into the Home UI. Decryption and recipient validation
- * are the authorization boundary; friend-list membership is intentionally not
- * an input to this delivery path.
+ * Bridges durable sync into the Home UI after friendship authorization.
  */
 export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
   return async (message: CanonicalMessage, metadata: MessageIngestionMetadata) => {
@@ -26,7 +27,16 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
     };
     if (delivery.currentAccount() !== delivery.accountPubkey) {
       debugLog("ui", "ui_stale_account_discarded", diagnostic, "warn");
-      return;
+      return false;
+    }
+    if (isFriendshipControlMessage(message)) {
+      await delivery.processFriendshipMessage?.(message);
+      debugLog("ui", "ui_friendship_control_routed", diagnostic, "info");
+      return false;
+    }
+    if (delivery.isAcceptedMessage && !delivery.isAcceptedMessage(message)) {
+      debugLog("ui", "ui_non_friend_discarded", diagnostic, "info");
+      return false;
     }
     if (delivery.isInteraction(message)) {
       try {
@@ -39,7 +49,7 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
         }, "error");
         throw error;
       }
-      return;
+      return true;
     }
     try {
       delivery.mirrorMessage(message);
@@ -63,5 +73,6 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
         throw error;
       }
     }
+    return true;
   };
 }

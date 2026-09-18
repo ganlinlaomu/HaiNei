@@ -1,7 +1,7 @@
 import Dexie, { type Table, type Transaction } from "dexie";
 
 export const APP_VERSION = "0.1.5";
-export const DB_VERSION = 5;
+export const DB_VERSION = 6;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -102,6 +102,19 @@ export type DecryptedEventRecord = {
   decryptedAt: number;
 };
 
+export type FriendshipState = "outgoing_pending" | "incoming_pending" | "accepted" | "blocked";
+
+export type FriendshipRecord = {
+  accountPubkey: string;
+  peerPubkey: string;
+  state: FriendshipState;
+  requestEventId?: string;
+  acceptedEventId?: string;
+  requestedAt?: number;
+  acceptedAt?: number;
+  updatedAt: number;
+};
+
 const ACCOUNT_SCOPED_KEY_PATTERNS = [
   /^nostr_(?:inbox|outbox|friends|notifications|settings)_([0-9a-f]{64})$/i,
   /^interactions_([0-9a-f]{64})$/i,
@@ -186,6 +199,7 @@ export class HaiNeiDatabase extends Dexie {
   conversationReadStates!: Table<ConversationReadStateRecord, [string, string]>;
   messageSyncStates!: Table<MessageSyncStateRecord, string>;
   decryptedEvents!: Table<DecryptedEventRecord, [string, string]>;
+  accountFriendships!: Table<FriendshipRecord, [string, string]>;
 
   constructor(name = DATABASE_NAME) {
     super(name);
@@ -246,6 +260,23 @@ export class HaiNeiDatabase extends Dexie {
       conversationReadStates: "[accountPubkey+conversationId], accountPubkey",
       messageSyncStates: "accountPubkey",
       decryptedEvents: "[accountPubkey+eventId], accountPubkey, [accountPubkey+decryptedAt]"
+    });
+
+    this.version(6).stores({
+      messages: "id, created_at, pubkey",
+      friends: "pubkey, name, group",
+      meta: "key",
+      imageCache: "url, timestamp",
+      accountMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+created_at], [accountPubkey+pubkey], [accountPubkey+pubkey+created_at]",
+      accountFriends: "[accountPubkey+pubkey], accountPubkey, [accountPubkey+name], [accountPubkey+group]",
+      accountMeta: "[accountPubkey+key], accountPubkey",
+      accountImageCache: "[accountPubkey+url], accountPubkey, [accountPubkey+timestamp]",
+      syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+createdAt], [accountPubkey+senderPubkey]",
+      conversationStates: "[accountPubkey+conversationId], accountPubkey, [accountPubkey+lastMessageAt]",
+      conversationReadStates: "[accountPubkey+conversationId], accountPubkey",
+      messageSyncStates: "accountPubkey",
+      decryptedEvents: "[accountPubkey+eventId], accountPubkey, [accountPubkey+decryptedAt]",
+      accountFriendships: "[accountPubkey+peerPubkey], accountPubkey, [accountPubkey+state], [accountPubkey+updatedAt]"
     });
   }
 }

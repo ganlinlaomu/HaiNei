@@ -30,7 +30,7 @@ export class MessageIngestionPipeline {
     private readonly accountPubkey: string,
     private readonly decodeContext: DecodeContext,
     private readonly isSessionCurrent: () => boolean,
-    private readonly onInserted?: (message: CanonicalMessage, metadata: MessageIngestionMetadata) => void | Promise<void>,
+    private readonly onInserted?: (message: CanonicalMessage, metadata: MessageIngestionMetadata) => boolean | void | Promise<boolean | void>,
     private readonly repository: SyncedMessageRepository = syncedMessageRepository,
     private readonly decode: DecodeMessage = decodeMessageEvent
   ) {}
@@ -118,17 +118,30 @@ export class MessageIngestionPipeline {
     // handles a message that was already restored from local history.
     const uiUpdate = this.onInserted ? (async () => {
       try {
-        await this.onInserted!(message, metadata);
+        const delivered = await this.onInserted!(message, metadata);
         debugLog("sync", "on_message_invoked", diagnostic);
+        return delivered;
       } catch (error) {
         debugLog("sync", "on_message_failed", {
           ...diagnostic,
           reason: error instanceof Error ? error.name || "Error" : "unknown_error"
         }, "warn");
+        return false;
       }
-    })() : Promise.resolve();
+    })() : Promise.resolve(undefined);
+    const delivered = await uiUpdate;
+    if (delivered === false) {
+      try {
+        await this.repository.advanceHighWatermark(this.accountPubkey, message.createdAt);
+      } catch (error) {
+        debugLog("storage", "storage_failed", {
+          ...diagnostic,
+          reason: error instanceof Error ? error.name || "Error" : "watermark_error"
+        }, "warn");
+      }
+      return { inserted: false, discarded: true };
+    }
     const persistence = this.repository.enqueueMessage(this.accountPubkey, message);
-    await uiUpdate;
     let result: Awaited<ReturnType<SyncedMessageRepository["insertMessageIfAbsent"]>>;
     try {
       result = await persistence;

@@ -70,7 +70,7 @@ describe("Relay configuration", () => {
     expect(migrated.relays.some(item => item.url === "wss://relay.0xchat.com" && item.source === "default")).toBe(false);
     expect(migrated.relays.some(item => item.url === "wss://relay.0xchat.com" && item.source === "user")).toBe(true);
     expect(migrated.relays.some(item => item.url === "wss://nostr.dzo-hadar.ts.net" && item.source === "default")).toBe(true);
-    expect(migrated.mediaServers.some(item => item.url === "https://blossom.lostr.space")).toBe(false);
+    expect(migrated.mediaServers.some(item => item.url === "https://blossom.lostr.space")).toBe(true);
     expect(migrated.mediaServers.some(item => item.url === "https://blossom-imgbed.noster.workers.dev")).toBe(true);
   });
 

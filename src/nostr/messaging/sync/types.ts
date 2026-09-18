@@ -26,6 +26,6 @@ export type MessageSyncOptions = {
   relays: string[];
   authors: string[];
   decodeContext: DecodeContext;
-  onMessage?: (message: CanonicalMessage, metadata: MessageIngestionMetadata) => void | Promise<void>;
+  onMessage?: (message: CanonicalMessage, metadata: MessageIngestionMetadata) => boolean | void | Promise<boolean | void>;
   onStatus?: (status: SyncStatus) => void;
 };

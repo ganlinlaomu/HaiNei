@@ -14,6 +14,7 @@ import { MessageSyncManager } from "@/nostr/messaging/sync";
 import type { MessageIngestionMetadata } from "@/nostr/messaging/sync/types";
 import { SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { logger } from "@/utils/logger";
+import { friendshipTags } from "@/nostr/messaging/friendshipControl";
 
 const A_SECRET = utils.hexToBytes("1".padStart(64, "0"));
 const B_SECRET = utils.hexToBytes("2".padStart(64, "0"));
@@ -55,11 +56,12 @@ function database() {
   return value;
 }
 
-async function giftWrap(senderSecret: Uint8Array, recipientPubkey: string, plaintext: string) {
+async function giftWrap(senderSecret: Uint8Array, recipientPubkey: string, plaintext: string, tags?: string[][]) {
   const senderPubkey = getPublicKey(senderSecret);
   const encoded = await nip17Adapter.encode!({
     recipientPubkeys: [recipientPubkey],
     plaintext,
+    tags,
     createdAt: 1_700_000_000
   }, {
     senderPubkey,
@@ -140,6 +142,7 @@ describe("NIP-17 relay to Home receive path", () => {
     const handler = createHomeMessageHandler({
       accountPubkey: ACCOUNT_B,
       currentAccount: () => ACCOUNT_B,
+      isAcceptedMessage: () => true,
       isInteraction: () => false,
       processInteraction: () => {},
       mirrorMessage: message => inbox.push(message),
@@ -162,8 +165,8 @@ describe("NIP-17 relay to Home receive path", () => {
     expect(await repository.get(ACCOUNT_B, encoded.message.id)).toBeTruthy();
   });
 
-  it("delivers when B's friend/author list does not contain A", async () => {
-    const { recipientWrap } = await giftWrap(A_SECRET, ACCOUNT_B, "not gated by friends");
+  it("does not deliver or persist a normal message from an unknown sender", async () => {
+    const { recipientWrap } = await giftWrap(A_SECRET, ACCOUNT_B, "blocked unknown message");
     const repository = new SyncedMessageRepository(database());
     const relay = new RelayHarness();
     const inbox: CanonicalMessage[] = [];
@@ -179,6 +182,8 @@ describe("NIP-17 relay to Home receive path", () => {
       onMessage: createHomeMessageHandler({
         accountPubkey: ACCOUNT_B,
         currentAccount: () => ACCOUNT_B,
+        isAcceptedMessage: () => false,
+        processFriendshipMessage: () => false,
         isInteraction: () => false,
         processInteraction: () => {},
         mirrorMessage: message => inbox.push(message),
@@ -191,9 +196,40 @@ describe("NIP-17 relay to Home receive path", () => {
     ]);
     expect(relay.subscriptions[0].filters[0]).not.toHaveProperty("authors");
     relay.deliver(recipientWrap, RELAYS[0]);
-    await waitFor(() => expect(inbox).toHaveLength(1));
-    expect(inbox[0].senderPubkey).toBe(ACCOUNT_A);
-    expect(notifications).toHaveLength(1);
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(inbox).toEqual([]);
+    expect(notifications).toEqual([]);
+    expect(await repository.list(ACCOUNT_B)).toEqual([]);
+  });
+
+  it("routes a friendship request from an unknown sender without creating a Home message", async () => {
+    const payload = JSON.stringify({ type: "friend_request", from: ACCOUNT_A, timestamp: 1_700_000_000 });
+    const { recipientWrap } = await giftWrap(A_SECRET, ACCOUNT_B, payload, friendshipTags("request"));
+    const repository = new SyncedMessageRepository(database());
+    const relay = new RelayHarness();
+    const controls: CanonicalMessage[] = [];
+    const inbox: CanonicalMessage[] = [];
+    await startReceiver({
+      accountPubkey: ACCOUNT_B,
+      privateKey: B_SECRET,
+      repository,
+      relay,
+      onMessage: createHomeMessageHandler({
+        accountPubkey: ACCOUNT_B,
+        currentAccount: () => ACCOUNT_B,
+        isAcceptedMessage: () => false,
+        processFriendshipMessage: message => { controls.push(message); return true; },
+        isInteraction: () => false,
+        processInteraction: () => {},
+        mirrorMessage: message => inbox.push(message),
+        notifyMessage: () => {}
+      })
+    });
+    relay.deliver(recipientWrap, RELAYS[0]);
+    await waitFor(() => expect(controls).toHaveLength(1));
+    expect(inbox).toEqual([]);
+    expect(await repository.list(ACCOUNT_B)).toEqual([]);
+    await waitFor(async () => expect((await repository.getSyncState(ACCOUNT_B)).highWatermarkCreatedAt).toBe(1_700_000_000));
   });
 
   it("also delivers the reverse B -> A direction", async () => {
@@ -207,12 +243,53 @@ describe("NIP-17 relay to Home receive path", () => {
       repository,
       relay,
       authors: [],
-      onMessage: message => { received.push(message); }
+      onMessage: createHomeMessageHandler({
+        accountPubkey: ACCOUNT_A,
+        currentAccount: () => ACCOUNT_A,
+        isAcceptedMessage: () => true,
+        processFriendshipMessage: () => false,
+        isInteraction: () => false,
+        processInteraction: () => {},
+        mirrorMessage: message => received.push(message),
+        notifyMessage: () => {}
+      })
     });
 
     relay.deliver(recipientWrap, RELAYS[1]);
     await waitFor(() => expect(received).toHaveLength(1));
     expect(received[0]).toMatchObject({ senderPubkey: ACCOUNT_B, plaintext: "hello A" });
+  });
+
+  it("blocks later inbound messages after friendship removal", async () => {
+    const first = await giftWrap(A_SECRET, ACCOUNT_B, "before removal");
+    const second = await giftWrap(A_SECRET, ACCOUNT_B, "after removal");
+    const repository = new SyncedMessageRepository(database());
+    const relay = new RelayHarness();
+    const inbox: CanonicalMessage[] = [];
+    let accepted = true;
+    await startReceiver({
+      accountPubkey: ACCOUNT_B,
+      privateKey: B_SECRET,
+      repository,
+      relay,
+      onMessage: createHomeMessageHandler({
+        accountPubkey: ACCOUNT_B,
+        currentAccount: () => ACCOUNT_B,
+        isAcceptedMessage: () => accepted,
+        processFriendshipMessage: () => false,
+        isInteraction: () => false,
+        processInteraction: () => {},
+        mirrorMessage: message => inbox.push(message),
+        notifyMessage: () => {}
+      })
+    });
+    relay.deliver(first.recipientWrap, RELAYS[0]);
+    await waitFor(() => expect(inbox).toHaveLength(1));
+    accepted = false;
+    relay.deliver(second.recipientWrap, RELAYS[0]);
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(inbox).toHaveLength(1);
+    expect(await repository.list(ACCOUNT_B)).toHaveLength(1);
   });
 
   it("merges two relay wraps for one rumor and invokes onMessage once", async () => {

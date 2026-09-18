@@ -159,6 +159,7 @@
 <script lang="ts">
 import { defineComponent, ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from "vue";
 import { useFriendsStore } from "@/stores/friends";
+import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { getRelaysFromStorage } from "@/nostr/relays";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
@@ -209,6 +210,7 @@ export default defineComponent({
   components: { PostImagePreview, VideoPlayer },
   setup() {
     const friends = useFriendsStore();
+    const friendships = useFriendshipsStore();
     const keys = useKeyStore();
     const msgs = useMessagesStore();
     const interactions = useInteractionsStore();
@@ -833,6 +835,7 @@ async function safeUpdateLocalRefs() {
         }
         try {
           await friends.load(accountPk);
+          await friendships.load(accountPk);
         } catch (error) {
           logger.warn("[message-sync] friend list unavailable; continuing receive sync", {
             account: accountPk.slice(0, 12),
@@ -875,6 +878,12 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
           onMessage: createHomeMessageHandler({
             accountPubkey: accountAtStart,
             currentAccount: () => keys.pkHex,
+            isAcceptedMessage: message => message.senderPubkey === accountAtStart
+              ? message.recipientPubkeys
+                  .filter(pubkey => pubkey !== accountAtStart)
+                  .every(pubkey => friendships.isAccepted(pubkey))
+              : friendships.isAccepted(message.senderPubkey),
+            processFriendshipMessage: message => friendships.processFriendshipMessage(message),
             isInteraction: isInteractionMessage,
             processInteraction: message => interactions.processCanonicalInteraction(message, accountAtStart),
             mirrorMessage: mirrorSyncedMessage,

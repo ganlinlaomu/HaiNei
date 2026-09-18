@@ -4,6 +4,7 @@ import { sendDirectMessage } from "@/nostr/messaging/service";
 import { useKeyStore } from "@/stores/keys";
 import { logger } from "@/utils/logger";
 import { useMessagesStore } from "@/stores/messages";
+import { useFriendshipsStore } from "@/stores/friendships";
 
 export const usePostsStore = defineStore("posts", {
   state: () => ({}),
@@ -16,6 +17,10 @@ export const usePostsStore = defineStore("posts", {
       if (requestedRecipients.length === 0) throw new Error("recipients 不能为空");
       const otherRecipients = requestedRecipients.filter(pubkey => pubkey !== accountAtStart);
       const recipientPubkeys = otherRecipients.length > 0 ? otherRecipients : [accountAtStart];
+      const friendships = useFriendshipsStore();
+      if (friendships.loadedFor !== accountAtStart) await friendships.load(accountAtStart);
+      const unauthorized = otherRecipients.find(pubkey => !friendships.isAccepted(pubkey));
+      if (unauthorized) throw new Error("只能向已互相确认的好友发送消息");
 
       const result = await sendDirectMessage({
         recipientPubkeys,

@@ -5,6 +5,7 @@ import { getRelaysFromStorage } from "@/nostr/relays";
 import { useKeyStore } from "@/stores/keys";
 import { useNotificationsStore } from "@/stores/notifications";
 import { logger } from "@/utils/logger";
+import { useFriendshipsStore } from "@/stores/friendships";
 
 export const INTERACTION_LABEL = "hainei-interaction";
 
@@ -115,6 +116,9 @@ export const useInteractionsStore = defineStore("interactions", {
     async _sendInteraction(interaction: Interaction, recipientPubkey: string) {
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
+      const friendships = useFriendshipsStore();
+      if (friendships.loadedFor !== key.pkHex) await friendships.load(key.pkHex);
+      if (!friendships.isAccepted(recipientPubkey)) throw new Error("只能与已互相确认的好友互动");
       await sendDirectMessage({
         recipientPubkeys: [recipientPubkey],
         content: JSON.stringify(interaction),
