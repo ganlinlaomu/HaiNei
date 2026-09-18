@@ -329,7 +329,7 @@ export function rankRelayConfigs(items: RelayConfig[], now = Date.now()): RelayC
     );
 }
 
-export function selectRelayConfigs(items: RelayConfig[], max = 6, now = Date.now()): RelayConfig[] {
+export function selectRelayConfigs(items: RelayConfig[], max = 5, now = Date.now()): RelayConfig[] {
   const ranked = rankRelayConfigs(items, now);
   if (ranked.length <= max) return ranked;
   const selected = ranked.slice(0, max);

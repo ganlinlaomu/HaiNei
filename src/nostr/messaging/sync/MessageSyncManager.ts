@@ -1,5 +1,6 @@
 import type { NostrEvent } from "nostr-tools";
-import { subscribe, onRelayConnectionState, type RelayConnectionEvent } from "@/nostr/relays";
+import { onRelayConnectionState, type RelayConnectionEvent } from "@/nostr/relays";
+import { nostrClient } from "@/services/nostrClient";
 import { buildMessageSubscriptions } from "@/nostr/messaging/subscriptions";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { syncedMessageRepository, type SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -46,7 +47,7 @@ export class MessageSyncManager {
 
   constructor(dependencies: ManagerDependencies = {}) {
     this.repository = dependencies.repository || syncedMessageRepository;
-    this.subscribeFn = dependencies.subscribe || subscribe;
+    this.subscribeFn = dependencies.subscribe || ((relays, filters) => nostrClient.subscribe(relays, filters));
     this.observeRelays = dependencies.observeRelays || onRelayConnectionState;
     this.decode = dependencies.decode;
     this.now = dependencies.now || Date.now;

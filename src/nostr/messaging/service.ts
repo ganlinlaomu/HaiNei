@@ -1,5 +1,5 @@
 import type { NostrEvent } from "nostr-tools";
-import { publish } from "@/nostr/relays";
+import { nostrClient } from "@/services/nostrClient";
 import { debugLog } from "@/utils/debugLog";
 import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./protocol";
 
@@ -54,7 +54,7 @@ export async function publishMessageEvents(events: NostrEvent[], relays: string[
       target: targetPubkey?.slice(0, 12) || "missing",
       relayCount: relays.length
     });
-    const results = await publish(relays, event);
+    const results = await nostrClient.publish(event, relays);
     return results.map(result => {
       debugLog("publish", "gift_wrap_publish_result", {
         eventId: event.id.slice(0, 12),

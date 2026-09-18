@@ -11,15 +11,23 @@ import { debugLog } from "@/utils/debugLog";
 import {
   ACTIVE_RELAY_CONFIGS_KEY,
   DEFAULT_RELAY_URLS,
+  normalizeRelayUrl,
   type RelayConfig
 } from "@/services/connectionSettings";
+import { performanceCounters } from "@/services/nostrCache";
 
 type RelayConn = {
   url: string;
   ws: WebSocket | null;
   ready: boolean;
   queue: string[];
-  subs: Map<string, { filters: any[]; handlers: Set<(evt: any, relayUrl: string) => void>; eoseHandlers: Set<(relayUrl: string) => void> }>;
+  subs: Map<string, {
+    filters: any[];
+    handlers: Set<(evt: any, relayUrl: string) => void>;
+    eoseHandlers: Set<(relayUrl: string) => void>;
+    settled: boolean;
+    eoseTimer?: ReturnType<typeof setTimeout>;
+  }>;
   okHandlers: Map<string, (res: any) => void>;
   reconnectTimer?: number | null;
   connectTimer?: number | null;
@@ -32,7 +40,9 @@ type RelayConn = {
 const CONNECT_TIMEOUT = 4000;
 const CONNECTION_OPEN_TIMEOUT = 10_000;
 const PUBLISH_TIMEOUT = 5000;
-const RECONNECT_DELAYS = [30_000, 60_000, 300_000, 900_000, 1_800_000];
+const RECONNECT_DELAYS = [1_000, 2_000];
+const MAX_RECONNECT_ATTEMPTS = 3;
+const EOSE_TIMEOUT = 8_000;
 
 const relaysMap: Record<string, RelayConn> = {};
 export type RelayConnectionEvent = {
@@ -125,6 +135,14 @@ function replaySubscriptions(conn: RelayConn, ws: WebSocket, queuedReqIds: Set<s
     // A subscription created while disconnected already has its REQ in the queue.
     if (queuedReqIds.has(subId)) continue;
     try {
+      sub.settled = false;
+      if (sub.eoseTimer) clearTimeout(sub.eoseTimer);
+      sub.eoseTimer = setTimeout(() => {
+        const active = conn.subs.get(subId);
+        if (!active || active.settled) return;
+        active.settled = true;
+        for (const handler of active.eoseHandlers) try { handler(conn.url); } catch {}
+      }, EOSE_TIMEOUT);
       ws.send(JSON.stringify(["REQ", subId, ...sub.filters]));
       debugLog("subscription", "subscription_replayed", subscriptionDiagnostic(conn, subId, sub.filters), "info");
       debugLog("subscription", "subscription_sent", subscriptionDiagnostic(conn, subId, sub.filters));
@@ -152,10 +170,10 @@ export function getRelaysFromStorage(mode: "read" | "write" | "both" = "both") {
         && !relay.deleted
         && (mode === "both" ? relay.read || relay.write : relay[mode])
       );
-      return [...new Set(matching.map(relay => relay.url))];
+      return [...new Set(matching.map(relay => normalizeRelayUrl(relay.url)).filter(Boolean))];
     }
     const raw = localStorage.getItem("custom-relays");
-    if (raw) return [...new Set(raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))];
+    if (raw) return [...new Set(raw.split(/\r?\n/).map(normalizeRelayUrl).filter(Boolean))];
   } catch {
     // Defaults keep startup and offline restore usable when a mirror is corrupt.
   }
@@ -163,6 +181,8 @@ export function getRelaysFromStorage(mode: "read" | "write" | "both" = "both") {
 }
 
 function ensureRelayConn(url: string): RelayConn {
+  url = normalizeRelayUrl(url);
+  if (!url) throw new Error("invalid relay URL");
   if (relaysMap[url]) return relaysMap[url];
 
   const conn: RelayConn = {
@@ -183,6 +203,9 @@ function ensureRelayConn(url: string): RelayConn {
 
   const scheduleReconnect = (create: () => void) => {
     if (!conn.shouldReconnect) return;
+    const hasDemand = conn.subs.size > 0 || conn.okHandlers.size > 0 || conn.queue.length > 0;
+    if (!hasDemand || conn.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     const attempt = conn.reconnectAttempts++;
     const delay = RECONNECT_DELAYS[Math.min(attempt, RECONNECT_DELAYS.length - 1)];
@@ -193,12 +216,15 @@ function ensureRelayConn(url: string): RelayConn {
     }, "warn");
     conn.reconnectTimer = window.setTimeout(() => {
       conn.reconnectTimer = null;
+      performanceCounters.relayReconnectCount++;
       create();
     }, delay);
   };
 
   const create = () => {
     if (!conn.shouldReconnect) return;
+    if (conn.ws?.readyState === 0 || conn.ws?.readyState === 1) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     debugLog("relay", "relay_connecting", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "info");
     try {
       const ws = new WebSocket(url);
@@ -225,6 +251,16 @@ function ensureRelayConn(url: string): RelayConn {
         conn.hasConnected = true;
         conn.reconnectAttempts = 0;
         debugLog("relay", "relay_connected", { relay: url, reconnectAttempts }, "info");
+        for (const [subId, sub] of conn.subs) {
+          sub.settled = false;
+          if (sub.eoseTimer) clearTimeout(sub.eoseTimer);
+          sub.eoseTimer = setTimeout(() => {
+            const active = conn.subs.get(subId);
+            if (!active || active.settled) return;
+            active.settled = true;
+            for (const handler of active.eoseHandlers) try { handler(url); } catch {}
+          }, EOSE_TIMEOUT);
+        }
         const queuedReqIds = queuedSubscriptionIds(conn.queue);
         // flush queue
         while (conn.queue.length) {
@@ -284,16 +320,18 @@ function ensureRelayConn(url: string): RelayConn {
               try { h(event, url); } catch (e) { logger.warn("handler error", e); }
             }
           }
-        } else if (t === "EOSE") {
+      } else if (t === "EOSE") {
           const subId = data[1];
           debugLog("subscription", "eose_received", subscriptionDiagnostic(conn, subId));
           const s = conn.subs.get(subId);
-          if (s) {
+          if (s && !s.settled) {
+            s.settled = true;
+            if (s.eoseTimer) clearTimeout(s.eoseTimer);
             for (const eh of s.eoseHandlers) {
               try { eh(url); } catch (e) { logger.warn("eose handler error", e); }
             }
           }
-        } else if (t === "OK") {
+      } else if (t === "OK") {
           const id = data[1];
           const ok = data[2];
           const msg = data[3];
@@ -303,7 +341,17 @@ function ensureRelayConn(url: string): RelayConn {
             conn.okHandlers.delete(id);
           }
         } else {
-          // ignore others
+          if (t === "CLOSED") {
+            const subId = data[1];
+            const s = conn.subs.get(subId);
+            if (s && !s.settled) {
+              s.settled = true;
+              if (s.eoseTimer) clearTimeout(s.eoseTimer);
+              for (const eh of s.eoseHandlers) {
+              try { eh(url); } catch (e) { logger.warn("closed handler error", e); }
+              }
+            }
+          }
         }
       };
 
@@ -322,7 +370,11 @@ function ensureRelayConn(url: string): RelayConn {
         });
         debugLog("relay", "relay_disconnected", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "warn");
         if (!conn.shouldReconnect) return;
-        logger.warn(`[relay] disconnected relay=${url}; reconnect scheduled`);
+        for (const sub of conn.subs.values()) if (!sub.settled) {
+          sub.settled = true;
+          if (sub.eoseTimer) clearTimeout(sub.eoseTimer);
+          for (const eh of sub.eoseHandlers) try { eh(url); } catch {}
+        }
         scheduleReconnect(create);
       };
 
@@ -379,15 +431,25 @@ function sendRaw(conn: RelayConn, payload: any): "sent" | "queued" {
  */
 export function subscribe(relays: string[], filtersArray: any[]) {
   const filters = Array.isArray(filtersArray) ? filtersArray : [filtersArray];
-  const perRelaySubIds: Array<{ url: string; subId: string } > = [];
+  const perRelaySubIds: Array<{ url: string; subId: string; timer: ReturnType<typeof setTimeout> } > = [];
 
-  for (const url of relays) {
+  for (const rawUrl of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
+    const url = rawUrl;
     const conn = ensureRelayConn(url);
     const subId = "sub_" + Math.random().toString(36).slice(2, 10);
-    conn.subs.set(subId, { filters, handlers: new Set(), eoseHandlers: new Set() });
+    conn.subs.set(subId, { filters, handlers: new Set(), eoseHandlers: new Set(), settled: false });
     debugLog("subscription", "subscription_created", subscriptionDiagnostic(conn, subId, filters), "info");
     sendRaw(conn, ["REQ", subId, ...filters]);
-    perRelaySubIds.push({ url, subId });
+    const timer = setTimeout(() => {
+      const active = conn.subs.get(subId);
+      if (!active || active.settled) return;
+      active.settled = true;
+      for (const handler of active.eoseHandlers) {
+        try { handler(url); } catch {}
+      }
+    }, EOSE_TIMEOUT);
+    conn.subs.get(subId)!.eoseTimer = timer;
+    perRelaySubIds.push({ url, subId, timer });
   }
 
   return {
@@ -409,12 +471,23 @@ export function subscribe(relays: string[], filtersArray: any[]) {
       }
     },
     unsub() {
-      for (const { url, subId } of perRelaySubIds) {
+      for (const { url, subId, timer } of perRelaySubIds) {
+        clearTimeout(timer);
         const conn = relaysMap[url];
         if (!conn) continue;
         try { sendRaw(conn, ["CLOSE", subId]); } catch {}
         debugLog("subscription", "subscription_closed", subscriptionDiagnostic(conn, subId), "info");
         conn.subs.delete(subId);
+        if (conn.subs.size === 0 && conn.okHandlers.size === 0) {
+          conn.shouldReconnect = false;
+          if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+          conn.reconnectTimer = null;
+          conn.queue = conn.queue.filter(message => {
+            try { return JSON.parse(message)?.[0] !== "REQ"; } catch { return true; }
+          });
+          try { conn.ws?.close(); } catch {}
+          delete relaysMap[url];
+        }
       }
     }
   };
@@ -425,7 +498,7 @@ export function subscribe(relays: string[], filtersArray: any[]) {
  * - returns Promise of array { relay, ok, reason?, ts }
  */
 export async function publish(relays: string[], event: any): Promise<Array<{ relay: string; ok: boolean; reason?: any; ts: number }>> {
-  const promises = relays.map(async (url) => {
+  const promises = [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))].map(async (url) => {
     const conn = ensureRelayConn(url);
     const diagnostic = eventDiagnostic(conn, event);
     debugLog("publish", "publish_start", diagnostic, "info");
@@ -497,6 +570,19 @@ export async function publish(relays: string[], event: any): Promise<Array<{ rel
     }
 
     const r = await okPromise;
+    conn.queue = conn.queue.filter(message => {
+      try {
+        const payload = JSON.parse(message);
+        return !(payload?.[0] === "EVENT" && payload?.[1]?.id === id);
+      } catch { return true; }
+    });
+    if (conn.subs.size === 0 && conn.okHandlers.size === 0) {
+      conn.shouldReconnect = false;
+      if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+      conn.reconnectTimer = null;
+      try { conn.ws?.close(); } catch {}
+      delete relaysMap[url];
+    }
     return { relay: url, ok: !!r.ok, reason: r.msg, ts: Date.now() };
   });
 
@@ -530,10 +616,27 @@ export function inspectRelays(): Record<string, RelayRuntimeStatus> {
   return out;
 }
 
+export function getRelayPerformanceDiagnostics() {
+  const states = Object.values(inspectRelays());
+  return {
+    activeRelayConnections: states.filter(state => state.ready || state.state === "connecting").length,
+    subscriptionCount: states.reduce((sum, state) => sum + state.subs, 0),
+    reconnectCount: performanceCounters.relayReconnectCount,
+    indexedDbQueueSize: performanceCounters.indexedDbQueueSize,
+    duplicateEventsDropped: performanceCounters.duplicateEventsDropped,
+    eventCacheHit: performanceCounters.eventCacheHit,
+    eventCacheMiss: performanceCounters.eventCacheMiss,
+    decryptCacheHit: performanceCounters.decryptCacheHit,
+    decryptCacheMiss: performanceCounters.decryptCacheMiss
+  };
+}
+
 /**
  * reconnectRelay(url): force reconnect by closing and recreating connection
  */
 export function reconnectRelay(url: string) {
+  url = normalizeRelayUrl(url);
+  if (!url) return;
   const r = relaysMap[url];
   if (!r) {
     // create a new connection proactively
@@ -565,6 +668,8 @@ export function reconnectRelay(url: string) {
 
 /** Permanently stop and forget a relay that was removed from settings. */
 export function disconnectRelay(url: string) {
+  url = normalizeRelayUrl(url);
+  if (!url) return;
   const conn = relaysMap[url];
   if (!conn) return;
   conn.shouldReconnect = false;
@@ -610,3 +715,20 @@ export const pool = {
     return sub;
   }
 };
+
+/** Resume only relays that still own logical subscriptions. */
+export function restoreRelayConnections() {
+  for (const [url, conn] of Object.entries(relaysMap)) {
+    if (conn.subs.size > 0 && !conn.ready && conn.ws?.readyState !== 0) reconnectRelay(url);
+  }
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("online", restoreRelayConnections);
+  window.addEventListener("pageshow", restoreRelayConnections);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") restoreRelayConnections();
+    });
+  }
+}

@@ -5,7 +5,7 @@ import path from "path";
 const DEFAULT_PORT = 5173;
 
 
-const rawAllowed = (process.env.ALLOWED_HOSTS ?? "localhost,127.0.0.1,pwa.lostr.space").trim();
+const rawAllowed = (process.env.ALLOWED_HOSTS ?? "localhost,127.0.0.1,raspberrypi.dzo-hadar.ts.net").trim();
 const ALLOWED_HOSTS = rawAllowed === "" ? [] : rawAllowed.split(",").map(s => s.trim());
 
 export default defineConfig({

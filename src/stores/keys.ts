@@ -22,6 +22,7 @@ import {
   type EncryptedData
 } from "@/utils/crypto";
 import { debugLog } from "@/utils/debugLog";
+import { clearAccountScopedCaches } from "@/services/nostrCache";
 
 /**
  * keys store with robust nostr-tools feature detection.
@@ -54,6 +55,7 @@ async function safeGetPublicKey(skHex: string): Promise<string> {
 
 function logAccountLogin(previousPubkey: string, pubkey: string, loginMethod: string) {
   if (previousPubkey && previousPubkey !== pubkey) {
+    clearAccountScopedCaches(previousPubkey);
     debugLog("account", "account_switch", {
       pubkeyPrefix: pubkey,
       previousPubkeyPrefix: previousPubkey,
@@ -110,6 +112,7 @@ export const useKeyStore = defineStore("keys", {
   },
   actions: {
     async loadAccountStores(pk: string) {
+      if (this.pkHex && this.pkHex !== pk) clearAccountScopedCaches(this.pkHex);
       const account = pk.slice(0, 8);
       // Settings must load first so no later store can use the previous account's
       // relay or Blossom mirrors during an account switch.
@@ -141,6 +144,7 @@ export const useKeyStore = defineStore("keys", {
     },
 
     resetAccountStores(currentPk: string) {
+      clearAccountScopedCaches(currentPk);
       const account = currentPk.slice(0, 8) || "none";
       try {
         useFriendsStore().reset(false);
