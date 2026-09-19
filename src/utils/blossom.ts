@@ -78,7 +78,11 @@ function normalizeHaiNeiServerBaseUrl(input: string): string {
 }
 
 function buildHaiNeiAccessCacheKey(accountPubkey: string, serverBaseUrl: string) {
-  return `${accountPubkey.trim().toLowerCase()}|${normalizeHaiNeiServerBaseUrl(serverBaseUrl)}`;
+  return `${normalizeHaiNeiAccessAccountPubkey(accountPubkey)}|${normalizeHaiNeiServerBaseUrl(serverBaseUrl)}`;
+}
+
+function normalizeHaiNeiAccessAccountPubkey(accountPubkey: string | undefined) {
+  return typeof accountPubkey === "string" ? accountPubkey.trim().toLowerCase() : "";
 }
 
 function isHaiNeiAccessTokenUsable(record?: HaiNeiAccessTokenRecord | null, now = Math.floor(Date.now() / 1000)) {
@@ -146,7 +150,8 @@ async function requestHaiNeiAccessToken(
   const cached = !forceRefresh ? getCachedHaiNeiAccessToken(accountPubkey, normalizedBase) : null;
   if (cached) return cached;
 
-  const inflightKey = accountPubkey ? buildHaiNeiAccessCacheKey(accountPubkey, normalizedBase) : `anon|${normalizedBase}`;
+  const normalizedAccountPubkey = normalizeHaiNeiAccessAccountPubkey(accountPubkey);
+  const inflightKey = normalizedAccountPubkey ? buildHaiNeiAccessCacheKey(normalizedAccountPubkey, normalizedBase) : `anon|${normalizedBase}`;
   if (!forceRefresh) {
     const inflight = haiNeiAccessTokenInflight.get(inflightKey);
     if (inflight) return inflight;
@@ -189,8 +194,8 @@ async function requestHaiNeiAccessToken(
     const record: HaiNeiAccessTokenRecord = { token, pubkey, scope, expiresAt, issuedAt };
     if (isHaiNeiAccessTokenUsable(record)) {
       haiNeiAccessTokenCache.set(buildHaiNeiAccessCacheKey(pubkey, normalizedBase), record);
-      if (accountPubkey && accountPubkey.trim().toLowerCase() !== pubkey) {
-        clearCachedHaiNeiAccessToken(accountPubkey, normalizedBase);
+      if (normalizedAccountPubkey && normalizedAccountPubkey !== pubkey) {
+        clearCachedHaiNeiAccessToken(normalizedAccountPubkey, normalizedBase);
       }
     }
     return record;
