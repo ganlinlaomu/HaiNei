@@ -7,8 +7,8 @@
     "build": "node scripts/update-app-version.js && node scripts/update-sw-version.js && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "deploy:cf:pages": "npm run build && npx wrangler pages deploy dist --commit-dirty=true",
-    "deploy:cf:worker": "npm run build && npx wrangler deploy --commit-dirty=true"
+    "deploy:cf:pages": "npm run build && wrangler pages deploy dist --commit-dirty=true",
+    "deploy:cf:worker": "npm run build && wrangler deploy --commit-dirty=true"
   },
   "dependencies": {
     "dexie": "^3.2.2",
@@ -22,6 +22,7 @@
     "fake-indexeddb": "^6.0.1",
     "typescript": "^5.4.2",
     "vite": "^5.0.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "wrangler": "^4.135.0"
   }
 }
