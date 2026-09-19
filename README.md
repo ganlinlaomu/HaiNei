@@ -52,10 +52,9 @@ npm run preview
 ```bash
 # 首次需要先登录并创建 Pages 项目
 npm exec wrangler login
-npm exec wrangler pages project create hainei
+export CF_PAGES_PROJECT_NAME=hainei
+npm exec wrangler pages project create "$CF_PAGES_PROJECT_NAME"
 
 # Cloudflare Pages
 npm run deploy:cf:pages
 ```
-
-如需使用其他 Pages 项目名，先设置 `CF_PAGES_PROJECT_NAME` 环境变量。

@@ -29,17 +29,14 @@ scp -r dist/* user@server:/var/www/html/
 # 首次需要先登录
 npm exec wrangler login
 
+# 设置 Pages 项目名（必填）
+export CF_PAGES_PROJECT_NAME=hainei
+
 # 首次创建 Pages 项目
-npm exec wrangler pages project create hainei
+npm exec wrangler pages project create "$CF_PAGES_PROJECT_NAME"
 
 # 构建并部署
 npm run deploy:cf:pages
-```
-
-如需部署到其他 Pages 项目，请先设置环境变量：
-
-```bash
-export CF_PAGES_PROJECT_NAME=your-project-name
 ```
 
 或在 Cloudflare Pages 控制台配置：
