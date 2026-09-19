@@ -50,11 +50,13 @@ npm run preview
 ## Cloudflare 部署
 
 ```bash
+# 首次需要先登录并创建 Pages 项目
+npx wrangler login
+npx wrangler pages project create hainei
+
 # Cloudflare Pages
 npm run deploy:cf:pages
 
 # Cloudflare Worker（静态资源）
 npm run deploy:cf:worker
 ```
-
-首次使用请先执行 `npx wrangler login`。

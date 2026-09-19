@@ -29,7 +29,10 @@ scp -r dist/* user@server:/var/www/html/
 # 首次需要先登录
 npx wrangler login
 
-# 构建并部署（首次会提示创建/选择项目）
+# 首次创建 Pages 项目
+npx wrangler pages project create hainei
+
+# 构建并部署
 npm run deploy:cf:pages
 ```
 
