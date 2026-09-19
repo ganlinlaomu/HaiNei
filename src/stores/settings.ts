@@ -18,6 +18,9 @@ import {
   SETTINGS_VERSION,
   createDefaultConnectionSettings,
   dedupeMedia,
+  effectiveMediaServers,
+  hasUsableMediaConfiguration,
+  hasUsableRelayConfiguration,
   mediaServerId,
   getOrCreateDeviceId,
   mergeMediaServers,
@@ -57,8 +60,9 @@ let relayHealthUnsubscribe: (() => void) | null = null;
 let cancelSettingsFetch: (() => void) | null = null;
 
 export function storageKeyFor(pkHex?: string | null) {
-  if (!pkHex) return null;
-  return `nostr_settings_${pkHex.toLowerCase()}`;
+  const normalized = typeof pkHex === "string" ? pkHex.trim().toLowerCase() : "";
+  if (!normalized) return null;
+  return `nostr_settings_${normalized}`;
 }
 
 export function settingsSyncRelays(mode: "read" | "write") {
@@ -98,12 +102,15 @@ export const useSettingsStore = defineStore("settings", {
     loadedFor: "",
     deviceId: "",
     syncing: false,
+    syncStatusText: "",
     syncError: "",
+    validationError: "",
     lastSyncTimestamp: 0,
     lastRelaySyncTimestamp: 0,
     lastMediaSyncTimestamp: 0,
     bootstrapSyncVersion: 0,
     _isFetching: false,
+    _syncJobs: 0,
     _sessionGeneration: 0,
     _publishTimer: null as number | null,
     _pendingDomains: [] as SettingsDomain[]
@@ -123,15 +130,35 @@ export const useSettingsStore = defineStore("settings", {
       return enabled.concat(visible.filter(item => !item.enabled));
     },
     activeRelays: (state) => selectRelayConfigs(state.settings.relays),
-    activeMediaServers: (state) => rankMediaServers(state.settings.mediaServers)
+    activeMediaServers: (state) => effectiveMediaServers(state.settings.mediaServers)
   },
 
   actions: {
+    _clearValidationError() {
+    this.validationError = "";
+    },
+
+    _setValidationError(message: string) {
+    this.validationError = message;
+    },
+
+    _beginSync(message: string) {
+    this._syncJobs += 1;
+    this.syncing = true;
+    this.syncStatusText = message;
+    },
+
+    _endSync() {
+    this._syncJobs = Math.max(0, this._syncJobs - 1);
+    this.syncing = this._syncJobs > 0;
+    if (!this.syncing) this.syncStatusText = "";
+    },
+
     reset() {
-      this._sessionGeneration++;
-      cancelSettingsFetch?.();
-      cancelSettingsFetch = null;
-      const activeRuntimeRelays = getRelaysFromStorage();
+    this._sessionGeneration++;
+    cancelSettingsFetch?.();
+    cancelSettingsFetch = null;
+    const activeRuntimeRelays = getRelaysFromStorage();
       if (this._publishTimer !== null) window.clearTimeout(this._publishTimer);
       this._publishTimer = null;
       this._pendingDomains = [];
@@ -142,12 +169,15 @@ export const useSettingsStore = defineStore("settings", {
       this.loadedFor = "";
       this.deviceId = "";
       this.syncing = false;
+      this.syncStatusText = "";
       this.syncError = "";
+      this.validationError = "";
       this.lastSyncTimestamp = 0;
       this.lastRelaySyncTimestamp = 0;
       this.lastMediaSyncTimestamp = 0;
       this.bootstrapSyncVersion = 0;
       this._isFetching = false;
+      this._syncJobs = 0;
       try {
         for (const url of activeRuntimeRelays) disconnectRelay(url);
         localStorage.removeItem(ACTIVE_RELAY_CONFIGS_KEY);
@@ -163,7 +193,9 @@ export const useSettingsStore = defineStore("settings", {
 
     async load(pk?: string) {
       const keyStore = useKeyStore();
-      const targetPk = (pk ?? keyStore.pkHex).toLowerCase();
+      const targetPk = typeof (pk ?? keyStore.pkHex) === "string"
+        ? String(pk ?? keyStore.pkHex).trim().toLowerCase()
+        : "";
       if (!targetPk) {
         this.reset();
         return;
@@ -171,7 +203,7 @@ export const useSettingsStore = defineStore("settings", {
       if (this.loadedFor === targetPk) return;
 
       const canUseGlobalLegacy = !this.loadedFor
-        && localStorage.getItem("pkHex")?.toLowerCase() === targetPk;
+        && (localStorage.getItem("pkHex") || "").trim().toLowerCase() === targetPk;
       const legacyRelays = canUseGlobalLegacy ? readLegacyRelays() : [];
       const legacyMedia = canUseGlobalLegacy ? readJsonArray("blossom_servers") : [];
       const legacySingleMedia = canUseGlobalLegacy && !legacyMedia.length
@@ -210,6 +242,7 @@ export const useSettingsStore = defineStore("settings", {
         legacyRelays,
         legacyMediaServers: legacyMedia.length ? legacyMedia : legacySingleMedia
       });
+      this._clearValidationError();
       this.save();
       this.applySettings();
       this.bindHealthTracking();
@@ -296,7 +329,7 @@ export const useSettingsStore = defineStore("settings", {
       }
 
       try {
-        const activeMedia = rankMediaServers(this.settings.mediaServers);
+        const activeMedia = effectiveMediaServers(this.settings.mediaServers);
         localStorage.setItem("blossom_servers", JSON.stringify(activeMedia));
         const first = activeMedia[0];
         if (first) {
@@ -345,7 +378,10 @@ export const useSettingsStore = defineStore("settings", {
 
     addRelay(input: string) {
       const url = normalizeRelayUrl(input);
-      if (!url) return false;
+      if (!url) {
+        this._setValidationError("请输入有效的 Relay 地址（仅支持 ws:// 或 wss://）。");
+        return false;
+      }
       const now = Date.now();
       const existing = this.settings.relays.find(item => item.url === url);
       if (existing) {
@@ -372,25 +408,42 @@ export const useSettingsStore = defineStore("settings", {
           updatedBy: this.deviceId
         });
       }
+      this._clearValidationError();
       this.changed(["relays"]);
       return true;
     },
 
     updateRelay(url: string, patch: Partial<Pick<RelayConfig, "read" | "write" | "enabled">>) {
       const relay = this.settings.relays.find(item => item.url === url && !item.deleted);
-      if (!relay) return;
+      if (!relay) return false;
+      const next = this.settings.relays.map(item =>
+        item.url === url && !item.deleted ? { ...item, ...patch } : item
+      );
+      if (!hasUsableRelayConfiguration(next)) {
+        this._setValidationError("请至少保留一个启用的读取 Relay 和一个启用的写入 Relay。");
+        return false;
+      }
       Object.assign(relay, patch, {
         updatedAt: Date.now(),
         updatedBy: this.deviceId,
         syncCreatedAt: undefined,
         syncEventId: undefined
       });
+      this._clearValidationError();
       this.changed(["relays"]);
+      return true;
     },
 
     deleteRelay(url: string) {
       const relay = this.settings.relays.find(item => item.url === url && !item.deleted);
       if (!relay || relay.source === "default" || (DEFAULT_RELAY_URLS as readonly string[]).includes(relay.url)) return false;
+      const next = this.settings.relays.map(item =>
+        item.url === url && !item.deleted ? { ...item, deleted: true, enabled: false } : item
+      );
+      if (!hasUsableRelayConfiguration(next)) {
+        this._setValidationError("无法删除最后一个可用 Relay，请先启用其他读取和写入 Relay。");
+        return false;
+      }
       Object.assign(relay, {
         deleted: true,
         enabled: false,
@@ -399,13 +452,17 @@ export const useSettingsStore = defineStore("settings", {
         syncCreatedAt: undefined,
         syncEventId: undefined
       });
+      this._clearValidationError();
       this.changed(["relays"]);
       return true;
     },
 
     addMediaServer(type: MediaServerType, input: string, token?: string) {
       const url = normalizeMediaUrl(input);
-      if (!url) return false;
+      if (!url) {
+        this._setValidationError("请输入有效的媒体服务器地址（仅支持 HTTPS，localhost 可使用 HTTP）。");
+        return false;
+      }
       const existing = this.settings.mediaServers.find(item => item.url === url && item.type === type);
       const now = Math.max(Date.now(), (existing?.updatedAt || 0) + 1);
       if (existing) {
@@ -435,13 +492,21 @@ export const useSettingsStore = defineStore("settings", {
           updatedBy: this.deviceId
         });
       }
+      this._clearValidationError();
       this.changed(["media"]);
       return true;
     },
 
     updateMediaServer(id: string, patch: Partial<Pick<MediaServer, "enabled" | "priority" | "token">>) {
       const server = this.settings.mediaServers.find(item => item.id === id && !item.deleted);
-      if (!server) return;
+      if (!server) return false;
+      const next = this.settings.mediaServers.map(item =>
+        item.id === id && !item.deleted ? { ...item, ...patch } : item
+      );
+      if (!hasUsableMediaConfiguration(next)) {
+        this._setValidationError("请至少保留一个启用的媒体服务器。");
+        return false;
+      }
       const now = Math.max(Date.now(), server.updatedAt + 1);
       Object.assign(server, patch, {
         ...(patch.token !== undefined ? { tokenUpdatedAt: now, tokenUpdatedBy: this.deviceId } : {}),
@@ -450,7 +515,9 @@ export const useSettingsStore = defineStore("settings", {
         syncCreatedAt: undefined,
         syncEventId: undefined
       });
+      this._clearValidationError();
       this.changed(["media"]);
+      return true;
     },
 
     setPrimaryMediaServer(id: string) {
@@ -475,6 +542,13 @@ export const useSettingsStore = defineStore("settings", {
     deleteMediaServer(id: string) {
       const server = this.settings.mediaServers.find(item => item.id === id && !item.deleted);
       if (!server || server.source === "default") return false;
+      const next = this.settings.mediaServers.map(item =>
+        item.id === id && !item.deleted ? { ...item, deleted: true, enabled: false } : item
+      );
+      if (!hasUsableMediaConfiguration(next)) {
+        this._setValidationError("无法删除最后一个可用媒体服务器，请先启用或添加其他服务器。");
+        return false;
+      }
       Object.assign(server, {
         deleted: true,
         enabled: false,
@@ -483,6 +557,7 @@ export const useSettingsStore = defineStore("settings", {
         syncCreatedAt: undefined,
         syncEventId: undefined
       });
+      this._clearValidationError();
       this.changed(["media"]);
       return true;
     },
@@ -508,7 +583,7 @@ export const useSettingsStore = defineStore("settings", {
       const isCurrent = () => this._sessionGeneration === generation && this.loadedFor === account && keyStore.pkHex === account;
       const snapshot: ConnectionSettings = JSON.parse(JSON.stringify(this.settings));
       const relays = settingsSyncRelays("write");
-      this.syncing = true;
+      this._beginSync("正在同步加密设置…");
       this.syncError = "";
       let allSucceeded = true;
 
@@ -576,7 +651,7 @@ export const useSettingsStore = defineStore("settings", {
         });
         return false;
       } finally {
-        if (isCurrent()) this.syncing = false;
+        if (isCurrent()) this._endSync();
       }
     },
 
@@ -590,7 +665,7 @@ export const useSettingsStore = defineStore("settings", {
       if (!relays.length) return false;
 
       this._isFetching = true;
-      this.syncing = true;
+      this._beginSync("正在从 Relay 拉取设置…");
       this.syncError = "";
       try {
         const sub = subscribe(relays, [
@@ -711,7 +786,7 @@ export const useSettingsStore = defineStore("settings", {
       } finally {
         if (isCurrent()) {
           cancelSettingsFetch = null;
-          this.syncing = false;
+          this._endSync();
           this._isFetching = false;
         }
       }

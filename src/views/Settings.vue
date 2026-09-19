@@ -1,18 +1,24 @@
 <template>
   <main class="settings-container">
-    <div v-if="settings.syncing" class="sync-status">正在同步加密设置…</div>
+    <div v-if="settings.syncing" class="sync-status">{{ settings.syncStatusText || "正在同步加密设置…" }}</div>
     <div v-else-if="settings.syncError" class="sync-status sync-warning">{{ settings.syncError }}</div>
     <div
       v-else-if="settings.lastRelaySyncTimestamp || settings.lastMediaSyncTimestamp"
       class="sync-status sync-ok"
     >
-      已载入同步设置：
-      <span v-if="settings.lastRelaySyncTimestamp">Relay</span>
+      已同步设置：
+      <span v-if="settings.lastRelaySyncTimestamp">Relay {{ formatSyncTimestamp(settings.lastRelaySyncTimestamp) }}</span>
       <span v-if="settings.lastRelaySyncTimestamp && settings.lastMediaSyncTimestamp"> · </span>
-      <span v-if="settings.lastMediaSyncTimestamp">Media</span>
+      <span v-if="settings.lastMediaSyncTimestamp">Media {{ formatSyncTimestamp(settings.lastMediaSyncTimestamp) }}</span>
     </div>
 
-    <section class="card">
+    <section v-if="!hasAccount" class="card">
+      <h2>设置</h2>
+      <p class="small">当前未登录，登录后即可管理 Relay、Media 与缓存配置。</p>
+      <button class="btn btn-primary" type="button" @click="router.push('/login')">前往登录</button>
+    </section>
+
+    <section v-else class="card">
       <h2>设置</h2>
 
       <div class="section">
@@ -73,6 +79,7 @@
           <div>
             <h3>Media / 图片服务器</h3>
             <p>按 Primary、其他用户服务器、默认 fallback 的顺序上传。</p>
+            <p>为保护上传 Token，媒体服务器仅支持 HTTPS；localhost 可用于本地调试。</p>
           </div>
         </div>
 
@@ -130,7 +137,7 @@
             <div class="control-row">
               <label><input type="checkbox" :checked="server.enabled" @change="toggleMediaServer(server, $event)" />启用</label>
               <button
-                v-if="server.source === 'user' && primaryMediaId !== server.id"
+                v-if="server.source === 'user' && server.enabled && primaryMediaId !== server.id"
                 class="text-button"
                 type="button"
                 @click="settings.setPrimaryMediaServer(server.id)"
@@ -181,7 +188,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
   inspectRelays,
@@ -206,6 +213,7 @@ const settings = useSettingsStore();
 const ui = useUIStore();
 const router = useRouter();
 
+const hasAccount = computed(() => !!keyStore.pkHex);
 const shortPk = computed(() => keyStore.pkHex ? `${keyStore.pkHex.slice(0, 8)}...${keyStore.pkHex.slice(-6)}` : "");
 const relayList = computed(() => settings.relayList);
 const mediaList = computed(() => settings.mediaList);
@@ -223,6 +231,7 @@ const loadingCache = ref(false);
 const clearingCache = ref(false);
 let statusInterval: ReturnType<typeof setInterval> | null = null;
 let statusUnsubscribe: (() => void) | null = null;
+let cacheRequestId = 0;
 
 function relaySourceLabel(source: RelaySource) {
   return source === "user" ? "用户" : source === "nip65" ? "NIP-65" : "默认";
@@ -263,9 +272,17 @@ function formatTimestamp(timestamp?: number) {
   return timestamp ? new Date(timestamp).toLocaleString() : "—";
 }
 
+function formatSyncTimestamp(timestamp?: number) {
+  return timestamp ? new Date(timestamp * 1000).toLocaleString() : "—";
+}
+
+function showValidationError(fallback: string) {
+  ui.addToast(settings.validationError || fallback, 2_500, "error");
+}
+
 function addRelay() {
   if (!settings.addRelay(newRelay.value)) {
-    ui.addToast("请输入有效的 Relay 地址", 2200, "error");
+    showValidationError("请输入有效的 Relay 地址");
     return;
   }
   newRelay.value = "";
@@ -274,12 +291,17 @@ function addRelay() {
 
 function removeRelay(relay: RelayConfig) {
   if (!confirm(`确定要删除 ${relay.url} 吗？`)) return;
-  settings.deleteRelay(relay.url);
+  if (!settings.deleteRelay(relay.url)) {
+    showValidationError("删除 Relay 失败");
+    return;
+  }
   delete statuses[relay.url];
 }
 
 function toggleRelay(relay: RelayConfig, field: "enabled" | "read" | "write", event: Event) {
-  settings.updateRelay(relay.url, { [field]: (event.target as HTMLInputElement).checked });
+  if (!settings.updateRelay(relay.url, { [field]: (event.target as HTMLInputElement).checked })) {
+    showValidationError("更新 Relay 失败");
+  }
 }
 
 function reconnect(url: string) {
@@ -289,7 +311,7 @@ function reconnect(url: string) {
 
 function addMediaServer() {
   if (!settings.addMediaServer(newMediaType.value, newMediaUrl.value, newMediaToken.value.trim())) {
-    ui.addToast("请输入有效的媒体服务器地址", 2200, "error");
+    showValidationError("请输入有效的媒体服务器地址");
     return;
   }
   newMediaUrl.value = "";
@@ -298,11 +320,15 @@ function addMediaServer() {
 
 function removeMediaServer(server: MediaServer) {
   if (!confirm(`确定要删除 ${server.url} 吗？`)) return;
-  settings.deleteMediaServer(server.id);
+  if (!settings.deleteMediaServer(server.id)) {
+    showValidationError("删除媒体服务器失败");
+  }
 }
 
 function toggleMediaServer(server: MediaServer, event: Event) {
-  settings.updateMediaServer(server.id, { enabled: (event.target as HTMLInputElement).checked });
+  if (!settings.updateMediaServer(server.id, { enabled: (event.target as HTMLInputElement).checked })) {
+    showValidationError("更新媒体服务器失败");
+  }
 }
 
 function refreshStatuses() {
@@ -334,26 +360,37 @@ function stopStatusPolling() {
 }
 
 async function refreshCacheStats() {
-  if (!keyStore.pkHex) return;
+  const account = keyStore.pkHex;
+  if (!account) {
+    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
+    return;
+  }
+  const requestId = ++cacheRequestId;
   loadingCache.value = true;
   try {
-    Object.assign(cacheStats, await getCacheStats(keyStore.pkHex));
+    const stats = await getCacheStats(account);
+    if (requestId !== cacheRequestId || keyStore.pkHex !== account) return;
+    Object.assign(cacheStats, stats);
   } catch {
-    ui.addToast("获取缓存统计失败", 2_000, "error");
+    if (requestId === cacheRequestId && keyStore.pkHex === account) {
+      ui.addToast("获取缓存统计失败", 2_000, "error");
+    }
   } finally {
-    loadingCache.value = false;
+    if (requestId === cacheRequestId) loadingCache.value = false;
   }
 }
 
 async function clearCache() {
-  if (!keyStore.pkHex || !confirm("确定要清空所有图片缓存吗？")) return;
+  const account = keyStore.pkHex;
+  if (!account || !confirm("确定要清空所有图片缓存吗？")) return;
   clearingCache.value = true;
   try {
-    await clearAllCache(keyStore.pkHex);
+    await clearAllCache(account);
+    if (keyStore.pkHex !== account) return;
     await refreshCacheStats();
-    ui.addToast("缓存已清空", 2_000, "success");
+    if (keyStore.pkHex === account) ui.addToast("缓存已清空", 2_000, "success");
   } catch {
-    ui.addToast("清空缓存失败", 2_000, "error");
+    if (keyStore.pkHex === account) ui.addToast("清空缓存失败", 2_000, "error");
   } finally {
     clearingCache.value = false;
   }
@@ -371,12 +408,24 @@ function doLogout() {
   location.href = "/#/login";
 }
 
-onMounted(async () => {
-  if (keyStore.pkHex && settings.loadedFor !== keyStore.pkHex) await settings.load(keyStore.pkHex);
+watch(() => keyStore.pkHex, async pk => {
+  cacheRequestId += 1;
+  if (!pk) {
+    settings.reset();
+    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
+    for (const url of Object.keys(statuses)) delete statuses[url];
+    return;
+  }
+  if (settings.loadedFor !== pk) await settings.load(pk);
+  if (keyStore.pkHex !== pk || settings.loadedFor !== pk) return;
   await refreshCacheStats();
+}, { immediate: true });
+
+onMounted(startStatusPolling);
+onActivated(() => {
   startStatusPolling();
+  void refreshCacheStats();
 });
-onActivated(startStatusPolling);
 onDeactivated(stopStatusPolling);
 onBeforeUnmount(stopStatusPolling);
 </script>

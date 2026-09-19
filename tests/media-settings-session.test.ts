@@ -144,6 +144,7 @@ describe("media identity migration", () => {
   });
 
   it("allows a default endpoint to become one user override with Primary and deletion", () => {
+    vi.setSystemTime(100);
     const store = activate(A);
     const url = DEFAULT_MEDIA_SERVERS[0].url;
     store.addMediaServer("blossom", url, "saved-token");
@@ -153,8 +154,9 @@ describe("media identity migration", () => {
     expect(store.mediaList.filter(item => item.url === url)).toEqual([
       expect.objectContaining({ id, source: "user", priority: 0, token: "saved-token" })
     ]);
-    expect(store.deleteMediaServer(id)).toBe(true);
-    expect(store.mediaList.some(item => item.url === url)).toBe(false);
+    expect(store.deleteMediaServer(id)).toBe(false);
+    expect(store.validationError).toContain("最后一个可用媒体服务器");
+    expect(store.mediaList.some(item => item.url === url)).toBe(true);
   });
 
   it("tries a duplicate endpoint only once before falling back", async () => {
@@ -183,6 +185,15 @@ describe("media identity migration", () => {
 });
 
 describe("settings session isolation", () => {
+  it("handles an empty account load by resetting instead of calling toLowerCase on null", async () => {
+    const store = activate(A);
+    await expect(store.load("")).resolves.toBeUndefined();
+    expect(store.loadedFor).toBe("");
+    mocks.key.pkHex = "";
+    await expect(store.load()).resolves.toBeUndefined();
+    expect(store.loadedFor).toBe("");
+  });
+
   it.each([B, A])("discards a suspended decrypt after switching to a new %s session", async target => {
     const handlers = new Map<string, (...args: any[]) => void>();
     const close = vi.fn();
@@ -257,5 +268,41 @@ describe("settings session isolation", () => {
     store.bindHealthTracking();
     oldReporter(mediaServerId("blossom", URL), false, Date.now());
     expect(store.settings.mediaServers[0].failureCount).toBeUndefined();
+  });
+
+  it("keeps syncing true until overlapping fetch and publish operations both finish", async () => {
+    const handlers = new Map<string, (...args: any[]) => void>();
+    const close = vi.fn();
+    const publishPending = deferred<any>();
+    mocks.subscribe.mockReturnValue({ on: (name: string, fn: (...args: any[]) => void) => handlers.set(name, fn), unsub: close });
+    mocks.publish.mockReturnValueOnce(publishPending.promise);
+    const store = activate(A);
+    const fetching = store.fetchFromRelays();
+    const sending = store.publishToRelays(["media"]);
+    await vi.waitFor(() => expect(mocks.publish).toHaveBeenCalledOnce());
+    expect(store.syncing).toBe(true);
+    for (const relay of DEFAULT_RELAY_URLS) handlers.get("eose")!(relay);
+    await fetching;
+    expect(store.syncing).toBe(true);
+    publishPending.resolve([{ relay: DEFAULT_RELAY_URLS[0], ok: true }]);
+    await sending;
+    expect(store.syncing).toBe(false);
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prevents disabling the last readable or writable relay", () => {
+    const store = activate(A);
+    const url = DEFAULT_RELAY_URLS[0];
+    expect(store.updateRelay(url, { read: false })).toBe(false);
+    expect(store.validationError).toContain("读取 Relay");
+    expect(store.updateRelay(url, { write: false })).toBe(false);
+    expect(store.validationError).toContain("写入 Relay");
+  });
+
+  it("prevents disabling the last enabled media server", () => {
+    const store = activate(A);
+    const id = store.mediaList[0].id;
+    expect(store.updateMediaServer(id, { enabled: false })).toBe(false);
+    expect(store.validationError).toContain("至少保留一个启用的媒体服务器");
   });
 });
