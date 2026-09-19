@@ -56,7 +56,4 @@ npx wrangler pages project create hainei
 
 # Cloudflare Pages
 npm run deploy:cf:pages
-
-# Cloudflare Worker（静态资源）
-npm run deploy:cf:worker
 ```

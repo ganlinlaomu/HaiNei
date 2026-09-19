@@ -41,18 +41,6 @@ npm run deploy:cf:pages
 - Build command: `npm run build`
 - Build output directory: `dist`
 
-### 方式 B: Cloudflare Worker（静态资源）
-
-仓库已提供 `wrangler.toml`，使用 Wrangler 的 **assets-only** 模式（无自定义 Worker 入口），把 `dist` 作为 Worker 静态资源目录并直接托管。
-
-```bash
-# 首次需要先登录
-npx wrangler login
-
-# 构建并发布 Worker
-npm run deploy:cf:worker
-```
-
 ## ✅ 部署后验证
 
 1. 访问应用 URL
