@@ -4,6 +4,7 @@ import {
   mergeMediaServers,
   mergeRelayConfigs,
   migrateConnectionSettings,
+  normalizeMediaUrl,
   rankMediaServers,
   rankRelayConfigs,
   relayConfigsFromNip65,
@@ -139,6 +140,11 @@ describe("Media configuration", () => {
     expect(legacy).toMatchObject({ source: "user", enabled: true, token: "token", type: "blossom" });
   });
 
+  it("rejects insecure remote media endpoints but keeps loopback HTTP for local debugging", () => {
+    expect(normalizeMediaUrl("http://media.example/upload")).toBe("");
+    expect(normalizeMediaUrl("http://localhost:3000/upload")).toBe("http://localhost:3000/upload");
+  });
+
   it("falls back after a Primary upload failure", async () => {
     const primary = media("primary", "user", { priority: 0 });
     const secondary = media("secondary", "user", { priority: 1 });
@@ -250,6 +256,12 @@ describe("per-item settings sync", () => {
     storage.set(storageKeyFor(accountB)!, JSON.stringify({ relays: ["wss://b.example"] }));
     expect(storageKeyFor(accountA)).not.toBe(storageKeyFor(accountB));
     expect(storage.get(storageKeyFor(accountB)!)).not.toContain("wss://a.example");
+  });
+
+  it("returns null storage keys for blank accounts", () => {
+    expect(storageKeyFor("")).toBeNull();
+    expect(storageKeyFor("   ")).toBeNull();
+    expect(storageKeyFor(null)).toBeNull();
   });
 
   it("does not expose account A settings after loading account B", async () => {

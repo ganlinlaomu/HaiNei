@@ -87,6 +87,13 @@ const MEDIA_SOURCE_ORDER: Record<MediaServerSource, number> = {
 
 const BACKOFF_DELAYS = [30_000, 60_000, 300_000, 900_000, 1_800_000];
 
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost"
+    || hostname === "127.0.0.1"
+    || hostname === "::1"
+    || hostname === "[::1]";
+}
+
 export function getOrCreateDeviceId(storage: Storage = localStorage): string {
   const existing = storage.getItem(DEVICE_ID_STORAGE_KEY)?.trim();
   if (existing) return existing;
@@ -118,12 +125,67 @@ export function normalizeMediaUrl(input: string): string {
   const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
   try {
     const parsed = new URL(withScheme);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
+    const secureHttp = parsed.protocol === "https:";
+    const insecureLoopback = parsed.protocol === "http:" && isLoopbackHostname(parsed.hostname);
+    if (!secureHttp && !insecureLoopback) return "";
+    if (parsed.username || parsed.password) return "";
     parsed.hash = "";
     return parsed.toString().replace(/\/$/, "");
   } catch {
     return "";
   }
+}
+
+function ensureDefaultRelayCandidates(items: RelayConfig[]): RelayConfig[] {
+  const next = dedupeRelays(items);
+  for (const fallback of defaultRelayConfigs()) {
+    if (!next.some(item => item.url === fallback.url)) next.push(fallback);
+  }
+  return next;
+}
+
+function ensureRelayModes(items: RelayConfig[]): RelayConfig[] {
+  const next = ensureDefaultRelayCandidates(items).map(item => ({ ...item }));
+  const hasRead = next.some(item => item.enabled && !item.deleted && item.read);
+  const hasWrite = next.some(item => item.enabled && !item.deleted && item.write);
+  if (hasRead && hasWrite) return next;
+  const fallbackUrl = DEFAULT_RELAY_URLS[0];
+  const fallbackIndex = next.findIndex(item => item.url === fallbackUrl);
+  if (fallbackIndex >= 0) {
+    next[fallbackIndex] = {
+      ...next[fallbackIndex],
+      enabled: true,
+      deleted: false,
+      read: hasRead ? next[fallbackIndex].read : true,
+      write: hasWrite ? next[fallbackIndex].write : true,
+      source: "default"
+    };
+  } else if (fallbackUrl) {
+    next.push({
+      ...defaultRelayConfigs()[0],
+      url: fallbackUrl,
+      enabled: true,
+      deleted: false,
+      read: true,
+      write: true,
+      source: "default"
+    });
+  }
+  return next;
+}
+
+export function hasUsableRelayConfiguration(items: RelayConfig[]): boolean {
+  const active = items.filter(item => item.enabled && !item.deleted);
+  return active.some(item => item.read) && active.some(item => item.write);
+}
+
+export function hasUsableMediaConfiguration(items: MediaServer[]): boolean {
+  return items.some(item => item.enabled && !item.deleted);
+}
+
+export function effectiveMediaServers(items: MediaServer[], now = Date.now()): MediaServer[] {
+  const ranked = rankMediaServers(items, now);
+  return ranked.length ? ranked : rankMediaServers(defaultMediaServers(), now);
 }
 
 export function defaultRelayConfigs(): RelayConfig[] {
@@ -330,7 +392,7 @@ export function rankRelayConfigs(items: RelayConfig[], now = Date.now()): RelayC
 }
 
 export function selectRelayConfigs(items: RelayConfig[], max = 5, now = Date.now()): RelayConfig[] {
-  const ranked = rankRelayConfigs(items, now);
+  const ranked = rankRelayConfigs(ensureRelayModes(items), now);
   if (ranked.length <= max) return ranked;
   const selected = ranked.slice(0, max);
   const fallback = ranked.find(item => item.source === "default");
