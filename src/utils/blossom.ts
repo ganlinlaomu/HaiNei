@@ -27,8 +27,27 @@ export const DEFAULT_BLOSSOM_SERVERS = [
   { url: DEFAULT_MEDIA_SERVERS[0].url, token: "" }
 ];
 
+const HAI_NEI_ACCESS_SCOPE = "blossom:upload";
+const HAI_NEI_ACCESS_TOKEN_SKEW_SECONDS = 5;
+
 type MediaHealthReporter = (serverId: string, ok: boolean, at: number) => void;
 let mediaHealthReporter: MediaHealthReporter | undefined;
+
+type HaiNeiAccessTokenRecord = {
+  token: string;
+  pubkey: string;
+  scope: string;
+  issuedAt: number;
+  expiresAt: number;
+};
+
+const haiNeiAccessTokenCache = new Map<string, HaiNeiAccessTokenRecord>();
+const haiNeiAccessTokenInflight = new Map<string, Promise<HaiNeiAccessTokenRecord>>();
+
+export function resetHaiNeiAccessTokenCacheForTests() {
+  haiNeiAccessTokenCache.clear();
+  haiNeiAccessTokenInflight.clear();
+}
 
 export function setMediaHealthReporter(reporter?: MediaHealthReporter) {
   mediaHealthReporter = reporter;
@@ -50,6 +69,149 @@ function normalizeBlossomUploadUrl(input: string): string {
 
   // 否则统一补 /upload
   return url + "/upload";
+}
+
+function normalizeHaiNeiServerBaseUrl(input: string): string {
+  const normalized = normalizeMediaUrl(input);
+  if (normalized) return normalized;
+  return input.replace(/\/upload\/?$/i, "").replace(/\/+$/, "");
+}
+
+function buildHaiNeiAccessCacheKey(accountPubkey: string, serverBaseUrl: string) {
+  return `${normalizeHaiNeiAccessAccountPubkey(accountPubkey)}|${normalizeHaiNeiServerBaseUrl(serverBaseUrl)}`;
+}
+
+function normalizeHaiNeiAccessAccountPubkey(accountPubkey: string | undefined) {
+  return typeof accountPubkey === "string" ? accountPubkey.trim().toLowerCase() : "";
+}
+
+function isHaiNeiAccessTokenUsable(record?: HaiNeiAccessTokenRecord | null, now = Math.floor(Date.now() / 1000)) {
+  return !!record && !!record.token && record.expiresAt > now + HAI_NEI_ACCESS_TOKEN_SKEW_SECONDS;
+}
+
+function getCachedHaiNeiAccessToken(accountPubkey: string | undefined, serverBaseUrl: string) {
+  if (!accountPubkey) return null;
+  const key = buildHaiNeiAccessCacheKey(accountPubkey, serverBaseUrl);
+  const cached = haiNeiAccessTokenCache.get(key);
+  if (!isHaiNeiAccessTokenUsable(cached)) {
+    haiNeiAccessTokenCache.delete(key);
+    return null;
+  }
+  return cached;
+}
+
+function clearCachedHaiNeiAccessToken(accountPubkey: string | undefined, serverBaseUrl: string) {
+  if (!accountPubkey) return;
+  haiNeiAccessTokenCache.delete(buildHaiNeiAccessCacheKey(accountPubkey, serverBaseUrl));
+}
+
+function buildHaiNeiApiUrl(serverBaseUrl: string, endpoint: "challenge" | "token") {
+  const normalizedBase = normalizeHaiNeiServerBaseUrl(serverBaseUrl);
+  if (!normalizedBase) throw new Error("无效的 HaiNei Access 服务器地址");
+  return new URL(`./api/hainei/${endpoint}`, `${normalizedBase}/`).toString();
+}
+
+function createHaiNeiAccessEvent(challenge: string, serverBaseUrl: string, defaultExpirySeconds = 3600) {
+  const now = Math.floor(Date.now() / 1000);
+  const tags: string[][] = [
+    ["t", "hainei_access"],
+    ["challenge", challenge],
+    ["expiration", String(now + defaultExpirySeconds)]
+  ];
+  try {
+    tags.push(["server", new URL(normalizeHaiNeiServerBaseUrl(serverBaseUrl)).hostname.toLowerCase()]);
+  } catch {}
+  return normalizeAuthEventForSigning({
+    content: "Authorize HaiNei Access upload",
+    tags
+  }, defaultExpirySeconds);
+}
+
+async function readHaiNeiJsonResponse(resp: Response, fallbackMessage: string) {
+  const text = await resp.text();
+  let body: any = null;
+  try { body = text ? JSON.parse(text) : null; } catch {}
+  if (!resp.ok) {
+    const message = body?.error || body?.message || `${fallbackMessage}，HTTP ${resp.status}`;
+    throw makeDetailedError(String(message), { status: resp.status, body, responseText: text });
+  }
+  return body;
+}
+
+async function requestHaiNeiAccessToken(
+  serverBaseUrl: string,
+  signEvent: (evt:any) => Promise<any> | any,
+  accountPubkey?: string,
+  forceRefresh = false
+): Promise<HaiNeiAccessTokenRecord> {
+  const normalizedBase = normalizeHaiNeiServerBaseUrl(serverBaseUrl);
+  if (!normalizedBase) throw new Error("无效的 HaiNei Access 服务器地址");
+
+  const cached = !forceRefresh ? getCachedHaiNeiAccessToken(accountPubkey, normalizedBase) : null;
+  if (cached) return cached;
+
+  const normalizedAccountPubkey = normalizeHaiNeiAccessAccountPubkey(accountPubkey);
+  const inflightKey = normalizedAccountPubkey ? buildHaiNeiAccessCacheKey(normalizedAccountPubkey, normalizedBase) : `anon|${normalizedBase}`;
+  if (!forceRefresh) {
+    const inflight = haiNeiAccessTokenInflight.get(inflightKey);
+    if (inflight) return inflight;
+  }
+
+  const promise = (async () => {
+    const challengeResp = await fetch(buildHaiNeiApiUrl(normalizedBase, "challenge"), {
+      method: "POST",
+      headers: { "Accept": "application/json" }
+    });
+    const challengeBody = await readHaiNeiJsonResponse(challengeResp, "获取 HaiNei Access challenge 失败");
+    const challenge = typeof challengeBody?.challenge === "string" ? challengeBody.challenge.trim().toLowerCase() : "";
+    if (!/^[0-9a-f]{64}$/.test(challenge)) {
+      throw makeDetailedError("HaiNei Access challenge 无效", { challenge: challengeBody?.challenge });
+    }
+
+    const signed = await signEvent(createHaiNeiAccessEvent(challenge, normalizedBase));
+    if (!signed || signed.kind !== 24242 || !signed.pubkey || !signed.sig) {
+      throw makeDetailedError("HaiNei Access 授权事件无效", { signed });
+    }
+
+    const tokenResp = await fetch(buildHaiNeiApiUrl(normalizedBase, "token"), {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ challenge, event: signed })
+    });
+    const tokenBody = await readHaiNeiJsonResponse(tokenResp, "获取 HaiNei Access upload token 失败");
+    const token = typeof tokenBody?.token === "string" ? tokenBody.token.trim() : "";
+    const pubkey = typeof tokenBody?.pubkey === "string" ? tokenBody.pubkey.trim().toLowerCase() : String(signed.pubkey).trim().toLowerCase();
+    const scope = typeof tokenBody?.scope === "string" ? tokenBody.scope.trim() : "";
+    const expiresAt = Number(tokenBody?.expiresAt);
+    const issuedAt = Number(tokenBody?.issuedAt) || Math.floor(Date.now() / 1000);
+    if (!token || !pubkey || scope !== HAI_NEI_ACCESS_SCOPE || !Number.isFinite(expiresAt)) {
+      throw makeDetailedError("HaiNei Access token 响应无效", { tokenBody });
+    }
+    if (normalizedAccountPubkey && pubkey !== normalizedAccountPubkey) {
+      throw makeDetailedError("HaiNei Access token 绑定的 pubkey 与当前账号不一致", {
+        expectedPubkey: normalizedAccountPubkey,
+        actualPubkey: pubkey
+      });
+    }
+
+    const record: HaiNeiAccessTokenRecord = { token, pubkey, scope, expiresAt, issuedAt };
+    if (isHaiNeiAccessTokenUsable(record)) {
+      haiNeiAccessTokenCache.set(buildHaiNeiAccessCacheKey(pubkey, normalizedBase), record);
+    }
+    return record;
+  })();
+
+  haiNeiAccessTokenInflight.set(inflightKey, promise);
+  try {
+    return await promise;
+  } finally {
+    if (haiNeiAccessTokenInflight.get(inflightKey) === promise) {
+      haiNeiAccessTokenInflight.delete(inflightKey);
+    }
+  }
 }
 
 
@@ -224,6 +386,8 @@ export async function uploadImageToBlossom(
   options?: {
     uploadUrl?: string;
     uploadToken?: string;
+    serverBaseUrl?: string;
+    accountPubkey?: string;
     signEvent?: (evt:any) => Promise<any> | any;
     onProgress?: (p:number)=>void;
     timeoutMs?: number;
@@ -232,6 +396,7 @@ export async function uploadImageToBlossom(
   const cfg = await getBlossomConfig();
   const uploadUrl = options?.uploadUrl ?? cfg.url;
   const uploadToken = options?.uploadToken ?? cfg.token ?? "";
+  const serverBaseUrl = normalizeHaiNeiServerBaseUrl(options?.serverBaseUrl || uploadUrl || "");
   
   if (!uploadUrl) throw makeDetailedError("未配置 blossom_upload_url");
 
@@ -246,7 +411,16 @@ export async function uploadImageToBlossom(
     "X-Content-Length": String(size),
     "X-Content-Type": type
   };
-  if (uploadToken) baseHeaders["Authorization"] = uploadToken;
+  let bearerAuthorizationHeaderValue: string | undefined;
+  if (uploadToken) {
+    baseHeaders["Authorization"] = uploadToken;
+  } else if (serverBaseUrl && typeof options?.signEvent === "function") {
+    try {
+      const record = await requestHaiNeiAccessToken(serverBaseUrl, options.signEvent, options?.accountPubkey);
+      bearerAuthorizationHeaderValue = ["Bearer", record.token].join(" ");
+      baseHeaders["Authorization"] = bearerAuthorizationHeaderValue;
+    } catch {}
+  }
 
   // 1) HEAD probe without auth
   let head = await headProbe(uploadUrl, baseHeaders);
@@ -254,7 +428,19 @@ export async function uploadImageToBlossom(
   // 2) If server requires auth (401/403) and signEvent provided, create authorization event, sign it,
   //    then put Authorization: Nostr <base64(json)> header and retry HEAD.
   let authorizationHeaderValue: string | undefined = undefined;
-  if ((head.status === 401 || head.status === 403) && typeof options?.signEvent === "function") {
+  if (head.status === 401 && !uploadToken && typeof options?.signEvent === "function") {
+    if (bearerAuthorizationHeaderValue && serverBaseUrl) {
+      clearCachedHaiNeiAccessToken(options?.accountPubkey, serverBaseUrl);
+      try {
+        const refreshed = await requestHaiNeiAccessToken(serverBaseUrl, options.signEvent, options?.accountPubkey, true);
+        bearerAuthorizationHeaderValue = ["Bearer", refreshed.token].join(" ");
+        const refreshedHeadHeaders = { ...baseHeaders, Authorization: bearerAuthorizationHeaderValue };
+        head = await headProbe(uploadUrl, refreshedHeadHeaders);
+      } catch {}
+    }
+  }
+
+  if ((head.status === 401 || head.status === 403) && !uploadToken && !bearerAuthorizationHeaderValue && typeof options?.signEvent === "function") {
     // create event skeleton per BUD-01/BUD-02: t tag "upload", x tag sha
     const evtSkeleton: any = {
       // kind, created_at and expiration handled in normalizeAuthEventForSigning
@@ -294,7 +480,7 @@ export async function uploadImageToBlossom(
   }
 
   // 3) Proceed to PUT /upload with raw file body (BUD-02). Include Authorization header if we have it.
-  const putResult: any = await new Promise((resolve, reject) => {
+  const sendPut = (authHeaderValue?: string) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let timer: any = null;
     const finish = (err?: any, result?: any) => {
@@ -307,12 +493,8 @@ export async function uploadImageToBlossom(
       xhr.open("PUT", uploadUrl, true);
       try { xhr.setRequestHeader("Content-Type", type); } catch {}
       try { xhr.setRequestHeader("X-SHA-256", shaHex); } catch {}
-      // The signed BUD-11 event takes precedence over any legacy bearer token.
-      if (uploadToken && !authorizationHeaderValue) {
-        try { xhr.setRequestHeader("Authorization", uploadToken); } catch {}
-      }
-      if (authorizationHeaderValue) {
-        try { xhr.setRequestHeader("Authorization", authorizationHeaderValue); } catch {}
+      if (authHeaderValue) {
+        try { xhr.setRequestHeader("Authorization", authHeaderValue); } catch {}
       }
 
       xhr.upload.onprogress = (ev) => {
@@ -370,6 +552,33 @@ export async function uploadImageToBlossom(
     }
   });
 
+  let effectiveAuthorizationHeaderValue = authorizationHeaderValue || bearerAuthorizationHeaderValue || (uploadToken || undefined);
+  let putResult: any;
+  try {
+    putResult = await sendPut(effectiveAuthorizationHeaderValue);
+  } catch (error: any) {
+    const status = Number(error?.details?.status);
+    if (
+      status === 401
+      && !uploadToken
+      && !authorizationHeaderValue
+      && bearerAuthorizationHeaderValue
+      && serverBaseUrl
+      && typeof options?.signEvent === "function"
+    ) {
+      clearCachedHaiNeiAccessToken(options?.accountPubkey, serverBaseUrl);
+      const refreshed = await requestHaiNeiAccessToken(serverBaseUrl, options.signEvent, options?.accountPubkey, true);
+      effectiveAuthorizationHeaderValue = ["Bearer", refreshed.token].join(" ");
+      const retryHead = await headProbe(uploadUrl, { ...baseHeaders, Authorization: effectiveAuthorizationHeaderValue });
+      if (!retryHead.ok) {
+        throw makeDetailedError(`HEAD /upload 被拒绝，HTTP ${retryHead.status}` + (retryHead.details?.reason ? `: ${retryHead.details.reason}` : ""), retryHead.details);
+      }
+      putResult = await sendPut(effectiveAuthorizationHeaderValue);
+    } else {
+      throw error;
+    }
+  }
+
   return putResult;
 }
 
@@ -383,6 +592,7 @@ export async function uploadImageToBlossom(
 export async function uploadImageToBlossomWithFallback(
   file: File,
   options?: {
+    accountPubkey?: string;
     signEvent?: (evt:any) => Promise<any> | any;
     onProgress?: (p:number)=>void;
     timeoutMs?: number;
@@ -414,9 +624,13 @@ export async function uploadImageToBlossomWithFallback(
   const { result, server } = await runMediaFailover(
     serverList,
     current => uploadImageToBlossom(file, {
-      ...options,
+      accountPubkey: options?.accountPubkey,
+      signEvent: options?.signEvent,
+      onProgress: options?.onProgress,
+      timeoutMs: options?.timeoutMs,
       uploadUrl: normalizeBlossomUploadUrl(current.url),
-      uploadToken: current.token || ""
+      uploadToken: current.token || "",
+      serverBaseUrl: current.url
     }),
     (current, ok) => reportHealth?.(current.id, ok, Date.now())
   );
