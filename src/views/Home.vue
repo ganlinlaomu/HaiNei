@@ -245,6 +245,12 @@ export default defineComponent({
     const remainingMessagesCount = computed(() => {
       return messagesRef.value.length - displayedMessages.value.length;
     });
+    const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
+    const acceptedAuthorsSignature = computed(() => acceptedFriends.value
+      .map(friend => friend.pubkey)
+      .filter(Boolean)
+      .sort()
+      .join("|"));
 
     function closeHomeSubscriptions() {
       homeSyncGeneration++;
@@ -846,10 +852,10 @@ async function safeUpdateLocalRefs() {
           logger.warn(`[account] subscription bootstrap discarded account=${accountPk?.slice(0, 8) || "none"}`);
           return;
         }
-        const knownAuthors = friends.loadedFor === accountPk
-          ? (friends.list || []).map((friend: any) => friend.pubkey)
+        const knownAuthors = friends.loadedFor === accountPk && friendships.loadedFor === accountPk
+          ? acceptedFriends.value.map(friend => friend.pubkey)
           : [];
-        logger.info(`好友列表加载完成: ${knownAuthors.length} 个好友`);
+        logger.info(`已确认好友加载完成: ${knownAuthors.length} 个好友`);
         const relays = getRelaysFromStorage("read");
         logger.info(`使用中继: ${relays.join(', ')}`);
         await startRealtimeSubscription(knownAuthors, relays);
@@ -989,15 +995,10 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
   { flush: "post" }
 );
    
-   // Watch for changes to friend list (add/remove) and restart subscriptions
-   // This ensures that when friends are added or removed, the subscription
-   // automatically updates to include/exclude them
-   watch(() => friends.version, (newVersion, oldVersion) => {
-     // Only restart if this is not the initial load
-     if (oldVersion !== undefined && !isInitialLoad.value) {
-       logger.info(`好友列表版本变化 (${oldVersion} -> ${newVersion})，重新启动订阅`);
-       startSub().catch(e => logger.error('Failed to restart subscription after friends change', e));
-     }
+   watch(acceptedAuthorsSignature, (signature, previousSignature) => {
+     if (signature === previousSignature || isInitialLoad.value || !keys.isLoggedIn) return;
+     logger.info("已确认好友列表变化，重新启动订阅");
+     startSub().catch(e => logger.error("Failed to restart subscription after accepted-friends change", e));
    });
 
    // Settings sync is intentionally non-blocking. A fresh device initially
