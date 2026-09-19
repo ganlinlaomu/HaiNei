@@ -7,8 +7,8 @@
     "build": "node scripts/update-app-version.js && node scripts/update-sw-version.js && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "deploy:cf:pages": "npm run build && wrangler pages deploy dist --project-name hainei --commit-dirty=true",
-    "deploy:cf:worker": "npm run build && wrangler deploy --commit-dirty=true"
+    "deploy:cf:pages": "npm run build && wrangler pages deploy dist --project-name hainei",
+    "deploy:cf:worker": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "dexie": "^3.2.2",

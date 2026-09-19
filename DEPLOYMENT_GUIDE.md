@@ -43,7 +43,7 @@ npm run deploy:cf:pages
 
 ### 方式 B: Cloudflare Worker（静态资源）
 
-仓库已提供 `wrangler.toml`，会把 `dist` 作为 Worker 资源目录。
+仓库已提供 `wrangler.toml`，使用 Wrangler 的 **assets-only** 模式（无自定义 Worker 入口），把 `dist` 作为 Worker 静态资源目录并直接托管。
 
 ```bash
 # 首次需要先登录
