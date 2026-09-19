@@ -428,7 +428,7 @@ export async function uploadImageToBlossom(
   // 2) If server requires auth (401/403) and signEvent provided, create authorization event, sign it,
   //    then put Authorization: Nostr <base64(json)> header and retry HEAD.
   let authorizationHeaderValue: string | undefined = undefined;
-  if ((head.status === 401 || head.status === 403) && !uploadToken && typeof options?.signEvent === "function") {
+  if (head.status === 401 && !uploadToken && typeof options?.signEvent === "function") {
     if (bearerAuthorizationHeaderValue && serverBaseUrl) {
       clearCachedHaiNeiAccessToken(options?.accountPubkey, serverBaseUrl);
       try {
