@@ -192,7 +192,7 @@ export default defineComponent({
       }
       return Array.from(groupSet).sort((a, b) => a.localeCompare(b, 'zh-CN'));
     });
-    const acceptedFriends = computed(() => friends.sortedList.filter(friend => friendships.isAccepted(friend.pubkey)));
+    const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
     const incomingRequests = computed(() => friendships.getIncomingRequests());
     const outgoingRequests = computed(() => friendships.getOutgoingRequests());
     const contactName = (pubkey: string) => friends.list.find(friend => friend.pubkey === pubkey)?.name || `${pubkey.slice(0, 8)}…`;
@@ -342,11 +342,11 @@ export default defineComponent({
           const groupInput = formData.value.groupsInput.trim();
           const group = groupInput.length > 0 ? groupInput : undefined;
 
+          await friendships.sendRequest(hexKey);
           await friends.load();
           const existing = friends.list.find(friend => friend.pubkey === hexKey);
           if (existing) friends.update(hexKey, { name: nameVal, groups: group ? [group] : undefined, group });
           else friends.add({ pubkey: hexKey, name: nameVal, groups: group ? [group] : undefined, group });
-          await friendships.sendRequest(hexKey);
           ui.addToast("好友请求已发送，等待对方接受", 2400, "success");
           closeModal();
         }

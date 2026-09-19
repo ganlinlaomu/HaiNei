@@ -120,7 +120,7 @@
                 :aria-pressed="String(allFriends)"
               >
                 全部好友
-                <span class="chip-count">{{ (friends.list || []).length }}</span>
+                <span class="chip-count">{{ acceptedFriends.length }}</span>
               </button>
               <div class="divider"></div>
               <div class="chips-scroll" role="list">
@@ -142,6 +142,9 @@
 
             <div class="recips-info">
               目标人数：<strong>{{ recipientsCount }}</strong>
+            </div>
+            <div v-if="acceptedFriends.length === 0" class="small recips-empty-hint">
+              暂无可发送的好友，当前仅会发送给自己。请先添加并完成好友确认。
             </div>
           </div>
 
@@ -169,6 +172,7 @@ import { defineComponent, ref, onBeforeUnmount, watch, nextTick, computed } from
 import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendsStore } from "@/stores/friends";
+import { useFriendshipsStore } from "@/stores/friendships";
 import { usePostsStore } from "@/stores/posts";
 import { useMessagesStore } from "@/stores/messages";
 import { useUIStore } from "@/stores/ui";
@@ -207,6 +211,7 @@ export default defineComponent({
     const route = useRoute();
     const keys = useKeyStore();
     const friends = useFriendsStore();
+    const friendships = useFriendshipsStore();
     const posts = usePostsStore();
     const msgs = useMessagesStore();
     const ui = useUIStore();
@@ -229,9 +234,11 @@ export default defineComponent({
       return hasText || hasUploadedImages || hasVideo;
     });
 
-    // groups derived from friends list
+    const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
+
+    // groups derived from accepted friends list
     const groups = computed(() => {
-      const list = friends.list || [];
+      const list = acceptedFriends.value;
       const order: string[] = [];
       const seen = new Set<string>();
       for (const f of list) {
@@ -248,7 +255,7 @@ export default defineComponent({
 
     const countByGroup = computed(() => {
       const map: Record<string, number> = {};
-      const list = friends.list || [];
+      const list = acceptedFriends.value;
       for (const f of list) {
         const tags = getFriendTags(f);
         for (const g of tags) {
@@ -268,7 +275,7 @@ export default defineComponent({
     }
 
     const recipients = computed(() => {
-      const list = friends.list || [];
+      const list = acceptedFriends.value;
       if (list.length === 0) return [] as string[];
       if (allFriends.value) return list.map((f: any) => f.pubkey).filter(Boolean);
       const sel = selectedSet.value;
@@ -631,6 +638,7 @@ export default defineComponent({
           return;
         }
         await friends.load();
+        await friendships.load();
         await msgs.load();
         allFriends.value = true;
         selectedGroups.value = [];
@@ -776,7 +784,7 @@ export default defineComponent({
     return {
       visible, content, sending, allFriends, selectedGroups, groups, countByGroup,
       canSend, textarea, overlay, error, onSend, onClose, toggleAll, toggleGroup,
-      recipientsCount, selectedSet, gLabel, friends, uploads, uploadEnabled, uploadingAny,
+      recipientsCount, selectedSet, gLabel, acceptedFriends, uploads, uploadEnabled, uploadingAny,
       onFilesSelected, insertImageUrl, removeUpload, checkBlossom,
       // Video support
       videoPreview, removeVideo, onPaste
@@ -1160,6 +1168,7 @@ export default defineComponent({
 .chip-count { background: rgba(0,0,0,0.06); padding:2px 6px; border-radius:999px; font-size:12px; margin-left:6px; }
 .divider { width:1px; height:28px; background: rgba(0,0,0,0.06); margin:0 6px; flex-shrink: 0; }
 .recips-info { margin-top:8px; color:#374151; font-size:13px; }
+.recips-empty-hint { margin-top: 6px; }
 
 /* action buttons */
 .action-buttons {

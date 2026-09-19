@@ -83,6 +83,12 @@ export const useFriendsStore = defineStore("friends", {
       return [...this.list].sort((a, b) =>
         (a.name || "").localeCompare(b.name || "", "zh-CN")
       );
+    },
+    getAcceptedList(): (isAccepted: (peerPubkey: string) => boolean) => Friend[] {
+      return isAccepted => {
+        if (typeof isAccepted !== "function") return [];
+        return this.sortedList.filter(friend => !!friend.pubkey && isAccepted(friend.pubkey));
+      };
     }
   },
 
