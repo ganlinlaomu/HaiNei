@@ -52,8 +52,20 @@ npm run preview
 ```bash
 # 首次需要先登录并创建 Pages 项目
 npm exec wrangler login
+
+# macOS / Linux
 export CF_PAGES_PROJECT_NAME=hainei
-npm exec wrangler pages project create "$CF_PAGES_PROJECT_NAME"
+
+# Windows PowerShell
+$env:CF_PAGES_PROJECT_NAME="hainei"
+
+# Windows CMD
+set CF_PAGES_PROJECT_NAME=hainei
+
+# 创建 Pages 项目
+npm exec wrangler pages project create "$CF_PAGES_PROJECT_NAME"     # macOS / Linux
+npm exec wrangler pages project create $env:CF_PAGES_PROJECT_NAME   # Windows PowerShell
+npm exec wrangler pages project create %CF_PAGES_PROJECT_NAME%      # Windows CMD
 
 # Cloudflare Pages
 npm run deploy:cf:pages

@@ -29,11 +29,19 @@ scp -r dist/* user@server:/var/www/html/
 # 首次需要先登录
 npm exec wrangler login
 
-# 设置 Pages 项目名（必填）
+# 设置 Pages 项目名（必填，macOS / Linux）
 export CF_PAGES_PROJECT_NAME=hainei
 
+# Windows PowerShell
+$env:CF_PAGES_PROJECT_NAME="hainei"
+
+# Windows CMD
+set CF_PAGES_PROJECT_NAME=hainei
+
 # 首次创建 Pages 项目
-npm exec wrangler pages project create "$CF_PAGES_PROJECT_NAME"
+npm exec wrangler pages project create "$CF_PAGES_PROJECT_NAME"     # macOS / Linux
+npm exec wrangler pages project create $env:CF_PAGES_PROJECT_NAME   # Windows PowerShell
+npm exec wrangler pages project create %CF_PAGES_PROJECT_NAME%      # Windows CMD
 
 # 构建并部署
 npm run deploy:cf:pages
