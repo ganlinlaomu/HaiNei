@@ -47,3 +47,14 @@ npm run build
 npm run preview
 ```
 
+## Cloudflare 部署
+
+```bash
+# Cloudflare Pages
+npm run deploy:cf:pages
+
+# Cloudflare Worker（静态资源）
+npm run deploy:cf:worker
+```
+
+首次使用请先执行 `npx wrangler login`。

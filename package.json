@@ -6,7 +6,9 @@
     "dev": "vite",
     "build": "node scripts/update-app-version.js && node scripts/update-sw-version.js && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "deploy:cf:pages": "npm run build && npx wrangler pages deploy dist --commit-dirty=true",
+    "deploy:cf:worker": "npm run build && npx wrangler deploy --commit-dirty=true"
   },
   "dependencies": {
     "dexie": "^3.2.2",

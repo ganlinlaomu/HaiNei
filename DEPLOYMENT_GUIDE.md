@@ -21,6 +21,35 @@ rsync -avz dist/ user@server:/var/www/html/
 scp -r dist/* user@server:/var/www/html/
 ```
 
+## ☁️ 部署到 Cloudflare
+
+### 方式 A: Cloudflare Pages
+
+```bash
+# 首次需要先登录
+npx wrangler login
+
+# 构建并部署（首次会提示创建/选择项目）
+npm run deploy:cf:pages
+```
+
+或在 Cloudflare Pages 控制台配置：
+- Framework preset: `None`
+- Build command: `npm run build`
+- Build output directory: `dist`
+
+### 方式 B: Cloudflare Worker（静态资源）
+
+仓库已提供 `wrangler.toml`，会把 `dist` 作为 Worker 资源目录。
+
+```bash
+# 首次需要先登录
+npx wrangler login
+
+# 构建并发布 Worker
+npm run deploy:cf:worker
+```
+
 ## ✅ 部署后验证
 
 1. 访问应用 URL
