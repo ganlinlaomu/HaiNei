@@ -21,6 +21,37 @@ rsync -avz dist/ user@server:/var/www/html/
 scp -r dist/* user@server:/var/www/html/
 ```
 
+## ☁️ 部署到 Cloudflare
+
+### 方式 A: Cloudflare Pages
+
+```bash
+# 首次需要先登录
+npm exec wrangler login
+
+# 设置 Pages 项目名（必填，macOS / Linux）
+export CF_PAGES_PROJECT_NAME=hainei
+
+# Windows PowerShell
+$env:CF_PAGES_PROJECT_NAME="hainei"
+
+# Windows CMD
+set CF_PAGES_PROJECT_NAME=hainei
+
+# 首次创建 Pages 项目
+npm exec wrangler pages project create "$CF_PAGES_PROJECT_NAME"     # macOS / Linux
+npm exec wrangler pages project create $env:CF_PAGES_PROJECT_NAME   # Windows PowerShell
+npm exec wrangler pages project create %CF_PAGES_PROJECT_NAME%      # Windows CMD
+
+# 构建并部署
+npm run deploy:cf:pages
+```
+
+或在 Cloudflare Pages 控制台配置：
+- Framework preset: `None`
+- Build command: `npm run build`
+- Build output directory: `dist`
+
 ## ✅ 部署后验证
 
 1. 访问应用 URL
