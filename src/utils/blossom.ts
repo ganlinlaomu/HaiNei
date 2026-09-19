@@ -29,6 +29,8 @@ export const DEFAULT_BLOSSOM_SERVERS = [
 
 const HAI_NEI_ACCESS_SCOPE = "blossom:upload";
 const HAI_NEI_ACCESS_TOKEN_SKEW_SECONDS = 5;
+const HAINEI_CLIENT_IDENTIFIER = "hainei";
+const HAINEI_CLIENT_VERSION = "1.0";
 
 type MediaHealthReporter = (serverId: string, ok: boolean, at: number) => void;
 let mediaHealthReporter: MediaHealthReporter | undefined;
@@ -116,7 +118,9 @@ function createHaiNeiAccessEvent(challenge: string, serverBaseUrl: string, defau
   const tags: string[][] = [
     ["t", "hainei_access"],
     ["challenge", challenge],
-    ["expiration", String(now + defaultExpirySeconds)]
+    ["expiration", String(now + defaultExpirySeconds)],
+    ["client", HAINEI_CLIENT_IDENTIFIER],
+    ["client_version", HAINEI_CLIENT_VERSION]
   ];
   try {
     tags.push(["server", new URL(normalizeHaiNeiServerBaseUrl(serverBaseUrl)).hostname.toLowerCase()]);
