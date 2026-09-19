@@ -440,7 +440,7 @@ export async function uploadImageToBlossom(
     }
   }
 
-  if ((head.status === 401 || head.status === 403) && typeof options?.signEvent === "function") {
+  if ((head.status === 401 || head.status === 403) && !uploadToken && !bearerAuthorizationHeaderValue && typeof options?.signEvent === "function") {
     // create event skeleton per BUD-01/BUD-02: t tag "upload", x tag sha
     const evtSkeleton: any = {
       // kind, created_at and expiration handled in normalizeAuthEventForSigning
