@@ -212,4 +212,32 @@ describe("HaiNei Access upload authorization", () => {
     expect(fetchMock.mock.calls.filter(call => String(call[0]).includes("/api/hainei/token"))).toHaveLength(2);
     expect(signEvent).toHaveBeenCalledTimes(2);
   });
+
+  it("rejects a token response bound to a different pubkey", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        challenge: "1".repeat(64),
+        expiresAt: 2_000_000_000,
+        ttlSeconds: 300
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        token: "wrong-pubkey-token",
+        scope: "blossom:upload",
+        pubkey: "b".repeat(64),
+        issuedAt: 1_900_000_000,
+        expiresAt: 4_102_444_800
+      }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+
+    const file = new File(["hello"], "hello.txt", { type: "text/plain" });
+    await expect(uploadImageToBlossom(file, {
+      uploadUrl: "https://media.example/upload",
+      serverBaseUrl: "https://media.example",
+      accountPubkey: "a".repeat(64),
+      signEvent
+    })).rejects.toThrow(/HTTP 401/);
+    expect(MockXMLHttpRequest.sentHeaders).toHaveLength(0);
+    expect(signEvent).toHaveBeenCalledTimes(2);
+  });
 });

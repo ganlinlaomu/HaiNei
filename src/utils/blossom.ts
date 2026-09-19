@@ -190,13 +190,16 @@ async function requestHaiNeiAccessToken(
     if (!token || !pubkey || scope !== HAI_NEI_ACCESS_SCOPE || !Number.isFinite(expiresAt)) {
       throw makeDetailedError("HaiNei Access token 响应无效", { tokenBody });
     }
+    if (normalizedAccountPubkey && pubkey !== normalizedAccountPubkey) {
+      throw makeDetailedError("HaiNei Access token 绑定的 pubkey 与当前账号不一致", {
+        expectedPubkey: normalizedAccountPubkey,
+        actualPubkey: pubkey
+      });
+    }
 
     const record: HaiNeiAccessTokenRecord = { token, pubkey, scope, expiresAt, issuedAt };
     if (isHaiNeiAccessTokenUsable(record)) {
       haiNeiAccessTokenCache.set(buildHaiNeiAccessCacheKey(pubkey, normalizedBase), record);
-      if (normalizedAccountPubkey && normalizedAccountPubkey !== pubkey) {
-        clearCachedHaiNeiAccessToken(normalizedAccountPubkey, normalizedBase);
-      }
     }
     return record;
   })();
