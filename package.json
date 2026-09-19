@@ -7,7 +7,7 @@
     "build": "node scripts/update-app-version.js && node scripts/update-sw-version.js && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "deploy:cf:pages": "npm run build && wrangler pages deploy dist --project-name ${CF_PAGES_PROJECT_NAME:-hainei}"
+    "deploy:cf:pages": "npm run build && node scripts/deploy-cloudflare-pages.js"
   },
   "dependencies": {
     "dexie": "^3.2.2",
@@ -22,6 +22,6 @@
     "typescript": "^5.4.2",
     "vite": "^5.0.0",
     "vitest": "^4.1.11",
-    "wrangler": "^3.114.17"
+    "wrangler": "3.114.17"
   }
 }
