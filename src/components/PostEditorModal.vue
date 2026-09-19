@@ -496,6 +496,7 @@ export default defineComponent({
         
         // Upload encrypted file with fallback to multiple servers
         const descriptor = await uploadImageToBlossomWithFallback(encryptedFile, {
+          accountPubkey: keys.pkHex || undefined,
           signEvent: signEventWrapper,
           onProgress: (p:number) => { updateUploadItem(item.id, { progress: p }); }
         });
@@ -543,6 +544,7 @@ export default defineComponent({
         
         // Upload encrypted file with fallback to multiple servers
         const descriptor = await uploadImageToBlossomWithFallback(encryptedFile, {
+          accountPubkey: keys.pkHex || undefined,
           signEvent: signEventWrapper,
           onProgress: (p:number) => { updateUploadItem(item.id, { progress: p }); }
         });

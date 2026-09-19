@@ -366,6 +366,7 @@ export default defineComponent({
         // Note: Videos are uploaded directly without resizing (unlike images in startUpload)
         // Video files should not be processed with image resizing logic
         const descriptor = await uploadImageToBlossomWithFallback(item.file, {
+          accountPubkey: keys.pkHex || undefined,
           signEvent: signEventWrapper,
           onProgress: (p:number) => { updateUploadItem(item.id, { progress: p }); }
         });
@@ -517,6 +518,7 @@ export default defineComponent({
           quality: 0.82
        });
         const descriptor = await uploadImageToBlossomWithFallback(resizedFile, {
+          accountPubkey: keys.pkHex || undefined,
           signEvent: signEventWrapper,
           onProgress: (p:number) => { updateUploadItem(item.id, { progress: p }); }
         });
