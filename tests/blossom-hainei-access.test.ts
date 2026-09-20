@@ -117,7 +117,9 @@ describe("HaiNei Access upload authorization", () => {
       tags: expect.arrayContaining([
         ["t", "hainei_access"],
         ["challenge", "c".repeat(64)],
-        ["server", "media.example"]
+        ["server", "media.example"],
+        ["client", "hainei"],
+        ["client_version", "1.0"]
       ])
     });
   });
