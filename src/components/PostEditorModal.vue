@@ -169,12 +169,18 @@ import { useUIStore } from "@/stores/ui";
 import { uploadImageToBlossomWithFallback, getBlossomConfig } from "@/utils/blossom";
 import { resizeImageFile } from "@/utils/imageResize";
 import { compressImageToTargetSize } from "@/utils/imageCompression";
-import { encodeEncryptedImageRef, type EncryptedImageMetadata } from "@/utils/encryptedImageRef";
+import {
+  encodeEncryptedImageRef,
+  variantToEncryptedImageRef,
+  type EncryptedImageMetadata,
+  type EncryptedImageVariant,
+} from "@/utils/encryptedImageRef";
 import { encodeEncryptedVideoRef, type EncryptedVideoMetadata } from "@/utils/encryptedVideoRef";
 import { encryptVideoFile, exportKeyToBase64 } from "@/utils/videoCrypto";
 import { bytesToBase64 } from "@/nostr/crypto";
 import { parseVideoUrl as parseVideoUrlUtil } from "@/utils/videoUtils";
 import { clearPostDraft, loadPostDraft, savePostDraft } from "@/utils/postDraft";
+import { storeImageInCache } from "@/utils/imageCache";
 
 // Video metadata format constants
 const VIDEO_METADATA_PREFIX = '[video:';
@@ -201,6 +207,15 @@ type UploadItem = {
   previewMime?: string;
   previewWidth?: number;
   previewHeight?: number;
+  previewMetadata?: EncryptedImageVariant;
+  previewEncryptedRef?: string;
+};
+
+type PreparedEncryptedImage = {
+  encryptedFile: File;
+  key: CryptoKey;
+  iv: string;
+  mime: string;
 };
 
 export default defineComponent({
@@ -484,12 +499,39 @@ export default defineComponent({
         const previewFile = await resizeImageFile(compressedFile, { maxSize: 960, quality: 0.76 });
         const [width, height] = await imageDimensions(compressedFile);
         const [previewWidth, previewHeight] = await imageDimensions(previewFile);
-        const original = await encryptAndUploadImage(compressedFile, p => {
-          updateUploadItem(item.id, { progress: Math.round(p * 0.7) });
+        const accountAtStart = keys.pkHex;
+        if (!accountAtStart) throw new Error("请先登录");
+        const [preparedOriginal, preparedPreview] = await Promise.all([
+          prepareEncryptedImage(compressedFile),
+          prepareEncryptedImage(previewFile),
+        ]);
+        let originalProgress = 0;
+        let previewProgress = 0;
+        const reportProgress = () => updateUploadItem(item.id, {
+          progress: Math.round(originalProgress * 0.7 + previewProgress * 0.3),
         });
-        const preview = await encryptAndUploadImage(previewFile, p => {
-          updateUploadItem(item.id, { progress: 70 + Math.round(p * 0.3) });
-        });
+        const [original, preview] = await Promise.all([
+          uploadPreparedImage(preparedOriginal, accountAtStart, progress => {
+            originalProgress = progress;
+            reportProgress();
+          }),
+          uploadPreparedImage(preparedPreview, accountAtStart, progress => {
+            previewProgress = progress;
+            reportProgress();
+          }),
+        ]);
+        if (keys.pkHex !== accountAtStart) throw new Error("账户已切换，请重新选择图片");
+        const previewMetadata: EncryptedImageVariant = {
+          url: preview.url,
+          mime: preview.mime,
+          alg: "AES-GCM",
+          iv: preview.iv,
+          key: await exportKeyToBase64(preview.key),
+          width: previewWidth,
+          height: previewHeight,
+        };
+        const previewEncryptedRef = variantToEncryptedImageRef(previewMetadata);
+        await storeImageInCache(accountAtStart, previewEncryptedRef, previewFile, preview.mime);
         
         // Store encryption metadata
         updateUploadItem(item.id, { 
@@ -507,6 +549,8 @@ export default defineComponent({
           previewMime: preview.mime,
           previewWidth,
           previewHeight,
+          previewMetadata,
+          previewEncryptedRef,
         });
       } catch (err:any) {
         console.error("upload error raw:", err);
@@ -525,7 +569,7 @@ export default defineComponent({
       return dimensions;
     }
 
-    async function encryptAndUploadImage(file: File, onProgress: (progress: number) => void) {
+    async function prepareEncryptedImage(file: File): Promise<PreparedEncryptedImage> {
       const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const encryptedBytes = await crypto.subtle.encrypt(
@@ -538,12 +582,20 @@ export default defineComponent({
         file.name.replace(/\.[^.]*$/, "") + ".enc",
         { type: "application/octet-stream" }
       );
-      const descriptor = await uploadImageToBlossomWithFallback(encryptedFile, {
-        accountPubkey: keys.pkHex || undefined,
+      return { encryptedFile, key, iv: bytesToBase64(iv), mime: file.type || "image/jpeg" };
+    }
+
+    async function uploadPreparedImage(
+      prepared: PreparedEncryptedImage,
+      accountPubkey: string,
+      onProgress: (progress: number) => void
+    ) {
+      const descriptor = await uploadImageToBlossomWithFallback(prepared.encryptedFile, {
+        accountPubkey,
         signEvent: signEventWrapper,
         onProgress,
       });
-      return { url: descriptor.url, key, iv: bytesToBase64(iv), mime: file.type || "image/jpeg" };
+      return { url: descriptor.url, key: prepared.key, iv: prepared.iv, mime: prepared.mime };
     }
 
     async function startVideoUpload(item: UploadItem) {
@@ -757,15 +809,12 @@ export default defineComponent({
                 width: img.width,
                 height: img.height,
               };
-              if (img.previewUrl && img.previewEncryptionKey && img.previewEncryptionIv && img.previewMime) {
+              if (img.previewMetadata) {
+                metadata.preview = img.previewMetadata;
+              } else if (img.previewUrl && img.previewEncryptionKey && img.previewEncryptionIv && img.previewMime) {
                 metadata.preview = {
-                  url: img.previewUrl,
-                  mime: img.previewMime,
-                  alg: "AES-GCM",
-                  iv: img.previewEncryptionIv,
-                  key: await exportKeyToBase64(img.previewEncryptionKey),
-                  width: img.previewWidth,
-                  height: img.previewHeight,
+                  url: img.previewUrl, mime: img.previewMime, alg: "AES-GCM", iv: img.previewEncryptionIv,
+                  key: await exportKeyToBase64(img.previewEncryptionKey), width: img.previewWidth, height: img.previewHeight,
                 };
               }
               

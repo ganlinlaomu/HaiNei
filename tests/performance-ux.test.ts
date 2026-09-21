@@ -4,7 +4,7 @@ import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { friendshipTags } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { useNotificationsStore } from "@/stores/notifications";
-import { decodeEncryptedImageRef, encodeEncryptedImageRef } from "@/utils/encryptedImageRef";
+import { decodeEncryptedImageRef, encodeEncryptedImageRef, variantToEncryptedImageRef } from "@/utils/encryptedImageRef";
 import { clearPostDraft, loadPostDraft, savePostDraft } from "@/utils/postDraft";
 import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
 
@@ -73,11 +73,13 @@ describe("encrypted image metadata", () => {
       .toMatchObject({ v: 1, url: variant.url });
   });
   it("parses preview/original metadata and dimensions", () => {
+    const preview = { ...variant, url: "https://media.test/preview.enc", width: 960, height: 640 };
     const decoded = decodeEncryptedImageRef(encodeEncryptedImageRef({
       v: 2, ...variant, width: 2400, height: 1600,
-      preview: { ...variant, url: "https://media.test/preview.enc", width: 960, height: 640 },
+      preview,
     }));
     expect(decoded?.preview).toMatchObject({ url: "https://media.test/preview.enc", width: 960, height: 640 });
+    expect(variantToEncryptedImageRef(decoded!.preview!)).toBe(variantToEncryptedImageRef(preview));
   });
 });
 
