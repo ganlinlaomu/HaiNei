@@ -12,7 +12,7 @@ DAILY_UPLOAD_BYTES = "1073741824"
 [[d1_databases]]
 binding = "DB"
 database_name = "blossom-imgbed-db"
-database_id = "REPLACE_WITH_EXISTING_BLOSSOM_D1_DATABASE_ID"
+database_id = "28adbba4-77ec-418e-af4b-6a1e91cbe927"
 
 [[services]]
 binding = "BLOSSOM"
