@@ -109,6 +109,23 @@ describe("friendship state and message authorization", () => {
     expect(mocks.send).toHaveBeenCalledTimes(2);
   });
 
+  it("shows an optimistic like immediately and does not duplicate it after publish", async () => {
+    let finishSend!: (value: any) => void;
+    mocks.send.mockImplementationOnce(() => new Promise(resolve => { finishSend = resolve; }));
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "accepted", updatedAt: 1 }];
+    const interactions = useInteractionsStore();
+    interactions.loadedFor = ACCOUNT;
+    const sending = interactions.sendLike("message-id", PEER);
+    expect(interactions.getLikeCount("message-id")).toBe(1);
+    expect(interactions.getLikes("message-id")[0].pending).toBe(true);
+    finishSend({ message: {}, events: [], relayResults: [] });
+    await sending;
+    expect(interactions.getLikeCount("message-id")).toBe(1);
+    expect(interactions.getLikes("message-id")[0].pending).toBeUndefined();
+  });
+
   it("accepts only a pending outgoing request and remove blocks later messages", async () => {
     const friendships = useFriendshipsStore();
     friendships.loadedFor = ACCOUNT;

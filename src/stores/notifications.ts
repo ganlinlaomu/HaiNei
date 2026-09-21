@@ -4,9 +4,9 @@ import { useInteractionsStore, type Comment } from "./interactions";
 
 export interface NotificationItem {
   id: string;
-  type: "like" | "comment";
+  type: "like" | "comment" | "friend_request";
   from: string;
-  messageId: string;
+  messageId?: string;
   commentId?: string;
   replyId?: string;
   created_at: number;
@@ -74,7 +74,8 @@ export const useNotificationsStore = defineStore("notifications", {
         // Normal posts belong in Home, not Notifications. Remove legacy
         // message notifications account-by-account as they are loaded.
         this.list = Array.isArray(stored)
-          ? stored.filter((item: NotificationItem & { type?: string }) => item?.type === "like" || item?.type === "comment")
+          ? stored.filter((item: NotificationItem & { type?: string }) =>
+              item?.type === "like" || item?.type === "comment" || item?.type === "friend_request")
           : [];
         if (Array.isArray(stored) && this.list.length !== stored.length) {
           localStorage.setItem(notificationsKeyFor(targetPk)!, JSON.stringify(this.list));
@@ -104,7 +105,7 @@ export const useNotificationsStore = defineStore("notifications", {
     refreshContent() {
       const interactions = useInteractionsStore();
       this.list.forEach(n => {
-        if (n.commentId && !n.commentContent) {
+        if (n.messageId && n.commentId && !n.commentContent) {
           const comment = interactions.getComments(n.messageId).find(c => c.id === n.commentId);
           if (comment) {
             n.commentContent = comment.text;
@@ -125,7 +126,7 @@ export const useNotificationsStore = defineStore("notifications", {
     },
 
     addNotification(n: NotificationItem) {
-      if (n.type !== "like" && n.type !== "comment") return;
+      if (n.type !== "like" && n.type !== "comment" && n.type !== "friend_request") return;
       // 这里的逻辑修复最重要：
       // 1. 检查是否重复
       if (this.list.some(x => x.id === n.id)) return;
@@ -136,7 +137,7 @@ export const useNotificationsStore = defineStore("notifications", {
       if (n.created_at < threeDaysAgo) return;
 
       // 3. 填充内容
-      if (n.commentId) {
+      if (n.messageId && n.commentId) {
         const interactions = useInteractionsStore();
         const comment = interactions.getComments(n.messageId).find(c => c.id === n.commentId);
         if (comment) {
@@ -153,6 +154,17 @@ export const useNotificationsStore = defineStore("notifications", {
       if (this.list.length > 200) this.list = this.list.slice(0, 200);
 
       this.save();
+    },
+
+    resolveFriendRequests(from: string) {
+      let changed = false;
+      this.list.forEach(item => {
+        if (item.type === "friend_request" && item.from === from && !item.read) {
+          item.read = true;
+          changed = true;
+        }
+      });
+      if (changed) this.save();
     },
 
     markAsRead(id: string) { 

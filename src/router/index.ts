@@ -8,6 +8,7 @@ const Settings = () => import("@/views/Settings.vue");
 const Notifications = () => import("@/views/Notifications.vue");
 const Debug = () => import("@/views/Debug.vue");
 import { useKeyStore } from "@/stores/keys";
+import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
 
 /**
  * Central router with route-level auth guard.
@@ -92,6 +93,10 @@ const router = createRouter({
 router.beforeEach(async (to, from, next) => {
   try {
     const keyStore = useKeyStore();
+    if (from.path === "/") {
+      const appContainer = document.querySelector("body > #app");
+      if (appContainer) saveHomeScroll(keyStore.pkHex, appContainer.scrollTop);
+    }
     
     // If store hasn't loaded keys from localStorage yet, try to restore session
     if (!keyStore.pkHex && !keyStore.loginMethod) {
@@ -147,7 +152,9 @@ router.afterEach((to, from) => {
   nextTick(() => {
     const appContainer = document.querySelector('body > #app');
     if (appContainer) {
-      appContainer.scrollTop = 0;
+      appContainer.scrollTop = to.path === "/"
+        ? loadHomeScroll(useKeyStore().pkHex)
+        : 0;
     }
   });
 });

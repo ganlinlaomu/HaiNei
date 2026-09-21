@@ -152,6 +152,17 @@
 
       <details class="settings-section">
         <summary class="section-heading">
+          <div><h3>数据使用 / Data Saver</h3><p>{{ settings.dataSaver ? "节省流量" : "标准" }}</p></div>
+        </summary>
+        <div class="data-mode" role="radiogroup" aria-label="数据使用模式">
+          <label><input type="radio" :checked="!settings.dataSaver" @change="settings.setDataSaver(false)" /> 标准</label>
+          <label><input type="radio" :checked="settings.dataSaver" @change="settings.setDataSaver(true)" /> 节省流量</label>
+        </div>
+        <p class="section-detail">节省流量模式会缩短图片预加载距离，并避免不必要的视频预加载。</p>
+      </details>
+
+      <details class="settings-section">
+        <summary class="section-heading">
           <div><h3>存储 / Cache</h3><p>{{ cacheStats.count }} 个图片文件 · {{ formatSize(cacheStats.size) }}</p></div>
         </summary>
         <div class="cache-info">
@@ -496,6 +507,22 @@ h3 {
   color: #64748b;
   font-size: 0.78rem;
   line-height: 1.5;
+}
+.data-mode {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0 10px;
+}
+.data-mode label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  color: #334155;
+  cursor: pointer;
 }
 .section-detail {
   margin: 0 0 14px;

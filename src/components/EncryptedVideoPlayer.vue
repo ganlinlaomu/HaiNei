@@ -1,7 +1,10 @@
 <template>
   <div ref="container" class="encrypted-video-player-container">
+    <div v-if="dataSaver && !started" class="video-loading manual-load">
+      <button type="button" @click="decryptAndLoad">加载视频</button>
+    </div>
     <!-- Loading state -->
-    <div v-if="loading" class="video-loading">
+    <div v-else-if="loading" class="video-loading">
       <div class="loading-spinner"></div>
       <div class="loading-text">解密视频中...</div>
     </div>
@@ -19,7 +22,7 @@
         :src="decryptedUrl"
         controls
         class="video-element"
-        preload="metadata"
+        :preload="dataSaver ? 'none' : 'metadata'"
         @loadedmetadata="onVideoLoaded"
         @error="onVideoError"
       >
@@ -30,7 +33,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, PropType } from 'vue';
+import { defineComponent, ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, PropType, watch } from 'vue';
 import { decryptVideoToBlob, importKeyFromBase64 } from '@/utils/videoCrypto';
 import type { EncryptedVideoMetadata } from '@/utils/encryptedVideoRef';
 
@@ -40,6 +43,10 @@ export default defineComponent({
     metadata: {
       type: Object as PropType<EncryptedVideoMetadata>,
       required: true
+    },
+    dataSaver: {
+      type: Boolean,
+      default: false
     }
   },
   setup(props) {
@@ -50,12 +57,12 @@ export default defineComponent({
     const container = ref<HTMLElement | null>(null);
     let observer: IntersectionObserver | null = null;
     let controller: AbortController | null = null;
-    let started = false;
+    const started = ref(false);
     let generation = 0;
 
     async function decryptAndLoad() {
-      if (started) return;
-      started = true;
+      if (started.value) return;
+      started.value = true;
       const run = ++generation;
       loading.value = true;
       error.value = null;
@@ -100,7 +107,7 @@ export default defineComponent({
     }
 
     function observeVisibility() {
-      if (started || observer || !container.value) return;
+      if (started.value || observer || !container.value || props.dataSaver) return;
       observer = new IntersectionObserver(entries => {
         if (!entries.some(entry => entry.isIntersecting)) return;
         observer?.disconnect();
@@ -118,7 +125,7 @@ export default defineComponent({
       observer = null;
       if (decryptedUrl.value) URL.revokeObjectURL(decryptedUrl.value);
       decryptedUrl.value = null;
-      started = false;
+      started.value = false;
       loading.value = true;
     }
 
@@ -137,6 +144,7 @@ export default defineComponent({
 
     onActivated(observeVisibility);
     onDeactivated(releaseVideo);
+    watch(() => props.dataSaver, enabled => { if (!enabled) observeVisibility(); });
 
     onBeforeUnmount(() => {
       releaseVideo();
@@ -148,6 +156,8 @@ export default defineComponent({
       decryptedUrl,
       container,
       videoElement,
+      started,
+      decryptAndLoad,
       onVideoLoaded,
       onVideoError
     };
@@ -176,6 +186,18 @@ export default defineComponent({
 
 .video-loading {
   background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
+}
+.manual-load button {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid rgba(255,255,255,.45);
+  border-radius: 22px;
+  color: #fff;
+  background: rgba(15,23,42,.72);
 }
 
 .video-loading > *,

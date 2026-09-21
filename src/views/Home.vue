@@ -26,118 +26,17 @@
     </div>
 
 
-    <div class="feed">
+    <div ref="feedElement" class="feed">
       <div v-if="displayedMessages.length === 0" class="empty-feed">还没有动态</div>
-      <article v-for="m in displayedMessages" :key="m.id" :id="`msg-${m.id}`" class="post-card">
-        <header class="post-author">
-          <div class="author-avatar" :style="{ backgroundColor: avatarColor(m.pubkey) }" aria-hidden="true">
-            {{ avatarInitial(m.pubkey) }}
-          </div>
-          <div class="author-copy">
-            <strong>{{ displayName(m.pubkey) }}</strong>
-            <time :datetime="new Date(m.created_at * 1000).toISOString()">{{ toLocalTime(m.created_at) }}</time>
-          </div>
-        </header>
-
-        <div v-if="textWithoutVideos(m.content)" class="message-text message-text-top">
-          {{ displayedPostText(m) }}
-          <button v-if="isLongPost(m)" class="expand-text" type="button" @click="togglePostText(m.id)">
-            {{ expandedPosts.has(m.id) ? "收起" : "全文" }}
-          </button>
-        </div>
-        <PostImagePreview v-if="m.content" :content="m.content" :showAll="true" class="post-images" />
-        <VideoPlayer v-if="extractVideoData(m.content)" :videoData="extractVideoData(m.content)" class="post-video" />
-
-        <div class="message-actions">
-          <button class="action-btn" type="button" @click="toggleLike(m)" :class="{ liked: isLiked(m.id) }" :aria-pressed="isLiked(m.id)">
-            <span>{{ isLiked(m.id) ? "已赞" : "赞" }}</span>
-            <span v-if="getLikeCount(m.id)" class="action-count">{{ getLikeCount(m.id) }}</span>
-          </button>
-          <button class="action-btn" type="button" @click="toggleComments(m.id)" :aria-expanded="showingComments.has(m.id)">
-            <span>评论</span>
-            <span v-if="getCommentCount(m.id)" class="action-count">{{ getCommentCount(m.id) }}</span>
-          </button>
-          <div v-if="m.pubkey === keys.pkHex && m._localMeta?.groupCount" class="send-meta">
-            <button class="action-btn visibility-btn" type="button" @click="toggleSendMeta(m.id)" :aria-expanded="showingSendMeta.has(m.id)">
-              {{ visibilityLabel(m) }}
-            </button>
-          </div>
-        </div>
-
-        <div class="message-expanded">
-
-           <!-- SEND META EXPANDED (like comments) -->
-<div
-  v-if="showingSendMeta.has(m.id)"
-  class="send-meta-panel"
->
-  <div class="send-meta-title">对谁可见:</div>
-
-  <div class="send-meta-groups">
-    <div
-      v-for="g in m._localMeta.groups"
-      :key="g.name"
-      class="send-meta-row"
-    >
-      <span class="group-name">{{ g.name }}</span>
-      <span class="group-count">{{ g.count }} 人</span>
-    </div>
-  </div>
-</div>
-
-          <!-- 评论区域 -->
-          <div v-if="showingComments.has(m.id)" class="comments-section">
-            <div class="comments-list">
-              <div v-for="comment in getComments(m.id)" :key="comment.id"  class="comment-thread">
-                <!-- 主评论 -->
-                <div class="comment-item" :id="`comment-${comment.id}`">
-                  <div class="comment-header small">
-                    <strong>{{ displayName(comment.author) }}</strong>
-                    <span class="muted"> · {{ toLocalTime(comment.timestamp) }}</span>
-                  </div>
-                  <div class="comment-text">{{ comment.text }}</div>
-                  <button class="reply-btn small" @click="startReply(m.id, comment.id, displayName(comment.author))">
-                    回复
-                  </button>
-                </div>
-                
-                <!-- 回复列表 -->
-                <div v-if="getReplies(m.id, comment.id).length > 0" class="replies-list">
-                  <div v-for="reply in getReplies(m.id, comment.id)" :key="reply.id" class="comment-item reply-item">
-                    <div class="comment-header small">
-                      <strong>{{ displayName(reply.author) }}</strong>
-                      <span class="muted"> · {{ toLocalTime(reply.timestamp) }}</span>
-                    </div>
-                    <div class="comment-text">{{ reply.text }}</div>
-                    <!-- 不显示回复按钮，因为只支持两层评论 -->
-                  </div>
-                </div>
-              </div>
-              <div v-if="getComments(m.id).length === 0" class="small muted">暂无评论</div>
-            </div>
-            
-            <!-- 评论输入框 -->
-            <div class="comment-input-container">
-              <div v-if="replyingTo[m.id]" class="replying-indicator small">
-                <span>正在回复...</span>
-                <button class="cancel-reply-btn" @click="cancelReply(m.id)">✕</button>
-              </div>
-              <div class="comment-input-wrapper">
-                <input 
-                  v-model="commentInputs[m.id]" 
-                  class="comment-input" 
-                  placeholder="写下你的评论..."
-                  :data-message-id="m.id"
-                  @keyup.enter="addComment(m.id)"
-                />
-                <button class="comment-submit" @click="addComment(m.id)" :disabled="!commentInputs[m.id]?.trim()">
-                  发送
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </article>
+      <div v-if="topSpacerHeight" class="virtual-spacer" :style="{ height: `${topSpacerHeight}px` }" aria-hidden="true"></div>
+      <PostCard
+        v-for="m in virtualMessages"
+        :key="m.id"
+        :message="m"
+        :open-comment-id="route.query.mid === m.id ? String(route.query.iid || '') : undefined"
+        @height="recordPostHeight"
+      />
+      <div v-if="bottomSpacerHeight" class="virtual-spacer" :style="{ height: `${bottomSpacerHeight}px` }" aria-hidden="true"></div>
       
       <!-- 加载更多按钮 -->
       <div v-if="hasMore" class="load-more-container">
@@ -155,7 +54,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from "vue";
+import { defineComponent, ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, computed, watch, nextTick } from "vue";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
@@ -165,8 +64,7 @@ import { isInteractionMessage, useInteractionsStore } from "@/stores/interaction
 import { useSettingsStore } from "@/stores/settings";
 import { logger } from "@/utils/logger";
 import { formatRelativeTime } from "@/utils/format";
-import PostImagePreview from "@/components/PostImagePreview.vue";
-import VideoPlayer from "@/components/VideoPlayer.vue";
+import PostCard from "@/components/PostCard.vue";
 import { useRoute } from "vue-router";
 import { usePullToRefresh } from "@/components/usePullToRefresh";
 import { getLastSeenCreatedAt, setLastSeenCreatedAt, updateLastSeenToNewest } from "@/utils/lastSeen";
@@ -174,7 +72,9 @@ import { extractVideoData as extractVideoDataUtil, getVideoUrlRemovalPatterns } 
 import { useRealtimeInboxReconcile } from "@/components/useRealtimeInboxReconcile";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
-import { createHomeMessageHandler } from "@/nostr/messaging/homeDelivery";
+import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
+import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
+import { useNotificationsStore } from "@/stores/notifications";
 
 
 // reuse the regex logic from extractImageUrls to strip out image markdown and plain image URLs
@@ -204,7 +104,7 @@ function compareHomeMessages(a: { id: string; created_at?: number }, b: { id: st
 
 export default defineComponent({
   name: "Home",
-  components: { PostImagePreview, VideoPlayer },
+  components: { PostCard },
   setup() {
     const friends = useFriendsStore();
     const friendships = useFriendshipsStore();
@@ -212,6 +112,7 @@ export default defineComponent({
     const msgs = useMessagesStore();
     const interactions = useInteractionsStore();
     const settings = useSettingsStore();
+    const notifications = useNotificationsStore();
     const readyForPending = ref(false);
     const route = useRoute();
     const realtimeSessionSince = ref(0);
@@ -226,6 +127,57 @@ export default defineComponent({
 
     const messagesRef = ref([] as any[]);
     const displayedMessages = ref([] as any[]);
+    const feedElement = ref<HTMLElement | null>(null);
+    const virtualStart = ref(0);
+    const virtualEnd = ref(12);
+    const postHeights = new Map<string, number>();
+    const ESTIMATED_POST_HEIGHT = 420;
+    const OVERSCAN_PX = 900;
+    const virtualMessages = computed(() => displayedMessages.value.slice(virtualStart.value, virtualEnd.value));
+    const rangeHeight = (start: number, end: number) => displayedMessages.value
+      .slice(start, end).reduce((sum, message) => sum + (postHeights.get(message.id) || ESTIMATED_POST_HEIGHT) + 10, 0);
+    const topSpacerHeight = computed(() => rangeHeight(0, virtualStart.value));
+    const bottomSpacerHeight = computed(() => rangeHeight(virtualEnd.value, displayedMessages.value.length));
+
+    function updateVirtualWindow() {
+      const scroller = document.querySelector(SCROLL_CONTAINER_SELECTOR) as HTMLElement | null;
+      if (!scroller || !feedElement.value || displayedMessages.value.length === 0) return;
+      const localTop = Math.max(0, scroller.scrollTop - feedElement.value.offsetTop);
+      const lowerBound = Math.max(0, localTop - OVERSCAN_PX);
+      const upperBound = localTop + scroller.clientHeight + OVERSCAN_PX;
+      let cursor = 0;
+      let start = 0;
+      while (start < displayedMessages.value.length) {
+        const height = (postHeights.get(displayedMessages.value[start].id) || ESTIMATED_POST_HEIGHT) + 10;
+        if (cursor + height >= lowerBound) break;
+        cursor += height;
+        start += 1;
+      }
+      let end = start;
+      while (end < displayedMessages.value.length && cursor < upperBound) {
+        cursor += (postHeights.get(displayedMessages.value[end].id) || ESTIMATED_POST_HEIGHT) + 10;
+        end += 1;
+      }
+      virtualStart.value = start;
+      virtualEnd.value = Math.max(start + 1, end);
+    }
+
+    function recordPostHeight(id: string, height: number) {
+      if (!height || Math.abs((postHeights.get(id) || 0) - height) < 1) return;
+      postHeights.set(id, height);
+    }
+
+    let scrollContainer: HTMLElement | null = null;
+    function attachVirtualScroll() {
+      detachVirtualScroll();
+      scrollContainer = document.querySelector(SCROLL_CONTAINER_SELECTOR) as HTMLElement | null;
+      scrollContainer?.addEventListener("scroll", updateVirtualWindow, { passive: true });
+      requestAnimationFrame(updateVirtualWindow);
+    }
+    function detachVirtualScroll() {
+      scrollContainer?.removeEventListener("scroll", updateVirtualWindow);
+      scrollContainer = null;
+    }
     const pendingMessages = ref([] as any[]); // Messages fetched but not yet displayed
     const isInitialLoad = ref(true); // Track if this is the first load
     const startupSyncing = ref(false);
@@ -744,6 +696,15 @@ async function safeUpdateLocalRefs() {
     return;
   }
 
+  const targetIndex = displayedMessages.value.findIndex(message => message.id === mid);
+  const jumpScroller = document.querySelector(SCROLL_CONTAINER_SELECTOR) as HTMLElement | null;
+  if (targetIndex >= 0 && jumpScroller && feedElement.value) {
+    virtualStart.value = Math.max(0, targetIndex - 2);
+    virtualEnd.value = Math.min(displayedMessages.value.length, targetIndex + 4);
+    jumpScroller.scrollTop = feedElement.value.offsetTop + rangeHeight(0, targetIndex);
+    await nextTick();
+  }
+
   // ② 如果是评论，强制展开评论区
   if (iid) {
     showingComments.value.add(mid);
@@ -924,6 +885,15 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
                   .every(pubkey => friendships.isAccepted(pubkey))
               : friendships.isAccepted(message.senderPubkey),
             processFriendshipMessage: message => friendships.processFriendshipMessage(message),
+            notifyFriendshipMessage: message => {
+              const notification = incomingFriendRequestNotification(message, accountAtStart);
+              if (notification) {
+                notifications.addNotification(notification);
+                return;
+              }
+              const control = decodeFriendshipControl(message);
+              if (control && control.action !== "request") notifications.resolveFriendRequests(message.senderPubkey);
+            },
             isInteraction: isInteractionMessage,
             processInteraction: message => interactions.processCanonicalInteraction(message, accountAtStart),
             mirrorMessage: mirrorSyncedMessage
@@ -951,6 +921,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
     }
     
    onMounted(async () => {
+     attachVirtualScroll();
      if (!keys.pkHex || homeAccountPk === keys.pkHex) return;
      try {
        await initializeHomeRuntime(keys.pkHex);
@@ -960,9 +931,12 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
    });
 
    onBeforeUnmount(() => {
+     detachVirtualScroll();
      closeHomeSubscriptions();
      clearHomeRuntimeState();
    });
+   onActivated(attachVirtualScroll);
+   onDeactivated(detachVirtualScroll);
 
   // 启动 Realtime Reconcile
     useRealtimeInboxReconcile({
@@ -987,6 +961,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
   },
   { immediate: true }
 );
+   watch(() => displayedMessages.value.length, () => nextTick(updateVirtualWindow));
    watch(
      () => keys.pkHex,
      (accountPk, previousPk) => {
@@ -1105,6 +1080,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
       isLoadingMore,
       loadMoreMessages,
       remainingMessagesCount
+      , virtualMessages, topSpacerHeight, bottomSpacerHeight, feedElement, recordPostHeight, route
       
     };
   }

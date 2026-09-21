@@ -65,6 +65,11 @@ export function storageKeyFor(pkHex?: string | null) {
   return `nostr_settings_${normalized}`;
 }
 
+export function dataSaverKeyFor(pkHex?: string | null) {
+  const normalized = typeof pkHex === "string" ? pkHex.trim().toLowerCase() : "";
+  return normalized ? `nostr_data_saver_${normalized}` : null;
+}
+
 export function settingsSyncRelays(mode: "read" | "write") {
   // Every installation knows the bootstrap defaults. Always include them for
   // settings transport so a new device can discover user-specific Relay config.
@@ -109,6 +114,7 @@ export const useSettingsStore = defineStore("settings", {
     lastRelaySyncTimestamp: 0,
     lastMediaSyncTimestamp: 0,
     bootstrapSyncVersion: 0,
+    dataSaver: false,
     _isFetching: false,
     _syncJobs: 0,
     _sessionGeneration: 0,
@@ -134,6 +140,13 @@ export const useSettingsStore = defineStore("settings", {
   },
 
   actions: {
+    setDataSaver(enabled: boolean) {
+      this.dataSaver = enabled;
+      const key = dataSaverKeyFor(this.loadedFor);
+      if (!key) return;
+      try { localStorage.setItem(key, enabled ? "1" : "0"); } catch {}
+    },
+
     _clearValidationError() {
     this.validationError = "";
     },
@@ -176,6 +189,7 @@ export const useSettingsStore = defineStore("settings", {
       this.lastRelaySyncTimestamp = 0;
       this.lastMediaSyncTimestamp = 0;
       this.bootstrapSyncVersion = 0;
+      this.dataSaver = false;
       this._isFetching = false;
       this._syncJobs = 0;
       try {
@@ -215,6 +229,9 @@ export const useSettingsStore = defineStore("settings", {
 
       if (this.loadedFor !== targetPk) this.reset();
       this.loadedFor = targetPk;
+      try {
+        this.dataSaver = localStorage.getItem(dataSaverKeyFor(targetPk)!) === "1";
+      } catch { this.dataSaver = false; }
       const generation = this._sessionGeneration;
       this.deviceId = getOrCreateDeviceId();
 

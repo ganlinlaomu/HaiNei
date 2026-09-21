@@ -48,7 +48,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div id="incoming-requests" class="card">
       <h3>收到的请求（{{ incomingRequests.length }}）</h3>
       <div v-if="incomingRequests.length === 0" class="small">暂无收到的好友请求</div>
       <div v-else class="list">
@@ -155,6 +155,8 @@ import { useUIStore } from "@/stores/ui";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { keyToHex } from "@/utils/format";
+import { useNotificationsStore } from "@/stores/notifications";
+import { useRoute } from "vue-router";
 
 export default defineComponent({
   name: "Friends",
@@ -163,6 +165,8 @@ export default defineComponent({
     const friendships = useFriendshipsStore();
     const ui = useUIStore();
     const keys = useKeyStore();
+    const notifications = useNotificationsStore();
+    const route = useRoute();
 
     const showModal = ref(false);
     const editMode = ref(false);
@@ -248,6 +252,9 @@ export default defineComponent({
     onMounted(async () => {
       await friends.load();
       await friendships.load();
+      if (route.query.section === "incoming") {
+        document.getElementById("incoming-requests")?.scrollIntoView({ block: "start" });
+      }
     });
 
     onBeforeUnmount(() => {
@@ -378,6 +385,7 @@ export default defineComponent({
     const acceptRequest = async (pubkey: string) => {
       try {
         await friendships.acceptRequest(pubkey);
+        notifications.resolveFriendRequests(pubkey);
         ui.addToast("已接受好友请求", 1800, "success");
       } catch {
         ui.addToast("接受失败，请稍后重试", 2000, "error");
@@ -387,6 +395,7 @@ export default defineComponent({
     const rejectRequest = async (pubkey: string) => {
       try {
         await friendships.rejectRequest(pubkey);
+        notifications.resolveFriendRequests(pubkey);
         ui.addToast("已拒绝好友请求", 1500, "info");
       } catch {
         ui.addToast("拒绝失败，请稍后重试", 2000, "error");

@@ -4,6 +4,7 @@
     <EncryptedVideoPlayer 
       v-if="isEncrypted && encryptedMetadata"
       :metadata="encryptedMetadata"
+      :data-saver="settings.dataSaver"
     />
     
     <!-- Direct video rendering without thumbnail -->
@@ -34,7 +35,7 @@
         :src="videoData.embedUrl"
         controls
         class="video-element"
-        preload="metadata"
+        :preload="settings.dataSaver ? 'none' : 'metadata'"
       >
         您的浏览器不支持视频播放。
       </video>
@@ -54,6 +55,7 @@ import { defineComponent, PropType, computed } from 'vue';
 import type { VideoData } from '@/utils/videoUtils';
 import { isEncryptedVideoRef, decodeEncryptedVideoRef } from '@/utils/encryptedVideoRef';
 import EncryptedVideoPlayer from './EncryptedVideoPlayer.vue';
+import { useSettingsStore } from '@/stores/settings';
 
 export default defineComponent({
   name: 'VideoPlayer',
@@ -67,6 +69,7 @@ export default defineComponent({
     }
   },
   setup(props) {
+    const settings = useSettingsStore();
     // Check if the video URL is an encrypted reference
     const isEncrypted = computed(() => {
       return isEncryptedVideoRef(props.videoData.url);
@@ -79,6 +82,7 @@ export default defineComponent({
     });
 
     return {
+      settings,
       isEncrypted,
       encryptedMetadata
     };

@@ -6,6 +6,7 @@
         :key="img.sourceUrl"
         :ref="el => setItemRef(el, idx)"
         class="gallery-item-wrapper"
+        :style="itemAspectStyle(img)"
       >
         <img
           v-if="img.status === 'loaded'"
@@ -39,7 +40,7 @@
       </div>
     </div>
 
-    <div v-else class="single-preview" :ref="el => setItemRef(el, 0)">
+    <div v-else class="single-preview" :ref="el => setItemRef(el, 0)" :style="itemAspectStyle(images[0])">
       <img
         v-if="images[0].status === 'loaded'"
         :src="images[0].url"
@@ -70,8 +71,9 @@
 import { computed, defineComponent, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import ImageViewer from "@/components/ImageViewer.vue";
 import { useKeyStore } from "@/stores/keys";
+import { useSettingsStore } from "@/stores/settings";
 import { base64ToBytes } from "@/nostr/crypto";
-import { decodeEncryptedImageRef, isEncryptedImageRef } from "@/utils/encryptedImageRef";
+import { decodeEncryptedImageRef, isEncryptedImageRef, variantToEncryptedImageRef } from "@/utils/encryptedImageRef";
 import { extractImageUrls } from "@/utils/extractImageUrls";
 import { getImageFromCache, storeImageInCache } from "@/utils/imageCache";
 
@@ -82,6 +84,11 @@ interface ImageItem {
   url: string;
   isEncrypted: boolean;
   status: LoadStatus;
+  originalSourceUrl: string;
+  originalUrl: string;
+  originalStatus: LoadStatus;
+  width?: number;
+  height?: number;
 }
 
 const MAX_VISIBLE_TILES = 4;
@@ -162,6 +169,7 @@ export default defineComponent({
   },
   setup(props) {
     const keys = useKeyStore();
+    const settings = useSettingsStore();
     const images = ref<ImageItem[]>([]);
     const objectUrls = new Set<string>();
     const itemRefs = ref<(HTMLElement | null)[]>([]);
@@ -169,6 +177,7 @@ export default defineComponent({
     const observer = ref<IntersectionObserver | null>(null);
     const loadGeneration = ref(0);
     const itemLoadPromises = new WeakMap<ImageItem, Promise<void>>();
+    const originalLoadPromises = new WeakMap<ImageItem, Promise<void>>();
     const viewerVisible = ref(false);
     const viewerIndex = ref(0);
     const viewerImageUrls = ref<string[]>([]);
@@ -230,6 +239,43 @@ export default defineComponent({
       }
     }
 
+    function loadOriginal(idx: number): Promise<void> {
+      const item = images.value[idx];
+      if (!item || item.originalStatus === "loaded") return Promise.resolve();
+      const existing = originalLoadPromises.get(item);
+      if (existing) return existing;
+      const task = performLoadOriginal(item, idx).finally(() => originalLoadPromises.delete(item));
+      originalLoadPromises.set(item, task);
+      return task;
+    }
+
+    async function performLoadOriginal(item: ImageItem, idx: number) {
+      if (item.originalSourceUrl === item.sourceUrl) {
+        await loadImage(idx);
+        if (item.status === "loaded") {
+          item.originalUrl = item.url;
+          item.originalStatus = "loaded";
+        }
+        return;
+      }
+      const generation = loadGeneration.value;
+      const accountAtStart = keys.pkHex;
+      if (!accountAtStart) { item.originalStatus = "error"; return; }
+      item.originalStatus = "loading";
+      try {
+        const blob = await getDecryptedBlob(accountAtStart, item.originalSourceUrl);
+        if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
+        const objectUrl = URL.createObjectURL(blob);
+        objectUrls.add(objectUrl);
+        item.originalUrl = objectUrl;
+        item.originalStatus = "loaded";
+      } catch (error) {
+        if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
+        if (!(error instanceof DOMException && error.name === "AbortError")) console.warn("Failed to load original image", error);
+        item.originalStatus = "error";
+      }
+    }
+
     function markFailed(idx: number) {
       if (images.value[idx]) images.value[idx].status = "error";
     }
@@ -243,12 +289,12 @@ export default defineComponent({
     }
 
     async function openViewer(index: number) {
-      await loadImage(index);
-      if (images.value[index]?.status !== "loaded") return;
+      await loadOriginal(index);
+      if (images.value[index]?.originalStatus !== "loaded") return;
 
       viewerAnchorIndex.value = index;
       viewerImageUrls.value = [
-        images.value[index].url,
+        images.value[index].originalUrl,
         ...images.value
           .filter((item, itemIndex) => itemIndex !== index && item.status === "loaded")
           .map(item => item.url)
@@ -260,13 +306,15 @@ export default defineComponent({
       // decrypt queue fills in the rest of the viewer in the background.
       images.value.forEach((_, itemIndex) => {
         if (itemIndex === index) return;
-        void loadImage(itemIndex).then(() => {
+        const backgroundLoad = settings.dataSaver ? loadImage(itemIndex) : loadOriginal(itemIndex);
+        void backgroundLoad.then(() => {
           if (!viewerVisible.value || viewerAnchorIndex.value !== index) return;
           viewerImageUrls.value = [
-            images.value[index].url,
+            images.value[index].originalUrl,
             ...images.value
-              .filter((item, candidateIndex) => candidateIndex !== index && item.status === "loaded")
-              .map(item => item.url)
+              .filter((item, candidateIndex) => candidateIndex !== index &&
+                (settings.dataSaver ? item.status === "loaded" : item.originalStatus === "loaded"))
+              .map(item => settings.dataSaver ? item.url : item.originalUrl)
           ];
         });
       });
@@ -294,7 +342,7 @@ export default defineComponent({
             observer.value?.unobserve(entry.target);
             itemIndexMap.delete(entry.target as HTMLElement);
           });
-        }, { root: null, rootMargin: "200px", threshold: 0.01 });
+        }, { root: null, rootMargin: settings.dataSaver ? "60px" : "200px", threshold: 0.01 });
         itemRefs.value.forEach(element => element && observer.value?.observe(element));
       });
     }
@@ -309,13 +357,31 @@ export default defineComponent({
       itemIndexMap.clear();
       const urls = extractImageUrls(props.content || "");
       const selected = props.showAll ? urls : urls.slice(0, 1);
-      images.value = selected.map(sourceUrl => ({
-        sourceUrl,
-        url: sourceUrl,
-        isEncrypted: isEncryptedImageRef(sourceUrl),
-        status: "idle"
-      }));
+      images.value = selected.map(originalSourceUrl => {
+        const metadata = isEncryptedImageRef(originalSourceUrl)
+          ? decodeEncryptedImageRef(originalSourceUrl)
+          : null;
+        const sourceUrl = metadata?.preview
+          ? variantToEncryptedImageRef(metadata.preview)
+          : originalSourceUrl;
+        return {
+          sourceUrl,
+          url: sourceUrl,
+          isEncrypted: isEncryptedImageRef(sourceUrl),
+          status: "idle" as LoadStatus,
+          originalSourceUrl,
+          originalUrl: originalSourceUrl,
+          originalStatus: "idle" as LoadStatus,
+          width: metadata?.preview?.width || metadata?.width,
+          height: metadata?.preview?.height || metadata?.height,
+        };
+      });
       setupObserver();
+    }
+
+    function itemAspectStyle(item?: ImageItem) {
+      if (images.value.length > 1 || !item?.width || !item.height) return undefined;
+      return { aspectRatio: `${item.width} / ${item.height}` };
     }
 
     watch([() => props.content, () => props.showAll], resetImages, { immediate: true });
@@ -323,6 +389,7 @@ export default defineComponent({
       if (previousAccount && account !== previousAccount) cancelAccountDecrypts(previousAccount);
       resetImages();
     });
+    watch(() => settings.dataSaver, setupObserver);
 
     onBeforeUnmount(() => {
       loadGeneration.value += 1;
@@ -343,7 +410,8 @@ export default defineComponent({
       markFailed,
       retryImage,
       openViewer,
-      closeViewer
+      closeViewer,
+      itemAspectStyle
     };
   }
 });

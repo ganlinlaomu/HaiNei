@@ -11,7 +11,21 @@
       </button>
     </header>
 
-    <div v-if="notifications.visibleList.length === 0" class="empty">
+    <div class="notification-tabs" role="tablist" aria-label="通知分类">
+      <button
+        v-for="tab in tabs"
+        :key="tab.value"
+        class="notification-tab"
+        :class="{ active: activeTab === tab.value }"
+        role="tab"
+        :aria-selected="activeTab === tab.value"
+        @click="activeTab = tab.value"
+      >
+        {{ tab.label }}
+      </button>
+    </div>
+
+    <div v-if="filteredNotifications.length === 0" class="empty">
       暂无通知
     </div>
 
@@ -165,7 +179,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive } from "vue";
+import { computed, reactive, ref } from "vue";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useFriendsStore } from "@/stores/friends";
 import { useRouter } from "vue-router";
@@ -177,6 +191,21 @@ const friends = useFriendsStore();
 const interactions = useInteractionsStore();
 const messagesStore = useMessagesStore();
 const router = useRouter();
+
+type NotificationTab = "all" | "comments" | "likes" | "friends";
+const activeTab = ref<NotificationTab>("all");
+const tabs: Array<{ value: NotificationTab; label: string }> = [
+  { value: "all", label: "全部" },
+  { value: "comments", label: "回复/评论" },
+  { value: "likes", label: "点赞" },
+  { value: "friends", label: "好友请求" },
+];
+const filteredNotifications = computed(() => notifications.visibleList.filter(item => {
+  if (activeTab.value === "comments") return item.type === "comment";
+  if (activeTab.value === "likes") return item.type === "like";
+  if (activeTab.value === "friends") return item.type === "friend_request";
+  return true;
+}));
 
 const friendsByPubkey = computed(() =>
   new Map(friends.sortedList.map(friend => [friend.pubkey, friend]))
@@ -198,7 +227,7 @@ const groups = computed(() => {
 
   const res = { today: [], yesterday: [], earlier: [] } as any;
 
-  [...notifications.visibleList]
+  [...filteredNotifications.value]
     .sort((a, b) => b.created_at - a.created_at)
     .forEach(n => {
       const t = n.created_at * 1000;
@@ -252,19 +281,27 @@ function displayName(pk: string) {
   return f?.name || pk.slice(0, 8) + "...";
 }
 function notificationIcon(n: any) {
-  return n.type === "like" ? "♥" : "💬";
+  if (n.type === "like") return "♥";
+  if (n.type === "friend_request") return "＋";
+  return "💬";
 }
 function notificationAction(n: any) {
   if (n.type === "like") return "点赞了你";
+  if (n.type === "friend_request") return "请求添加你为好友";
   return n.replyId ? "回复了你的评论" : "评论了你";
 }
 function go(n: any) {
   notifications.markAsRead(n.id);
+  if (n.type === "friend_request") {
+    router.push({ path: "/friends", query: { section: "incoming" } });
+    return;
+  }
   router.push({ path: "/", query: { mid: n.messageId, iid: n.commentId, rid: n.replyId } });
 }
 
 /* ---------- 评论/回复/点赞内容 ---------- */
 function getNotificationContent(n: any) {
+  if (n.type === "friend_request") return "前往好友页面处理请求";
   const allInteractions = interactions.getComments(n.messageId);
   const rootPost = messagesById.value.get(n.messageId);
   
@@ -319,6 +356,28 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+}
+.notification-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin: 0 -2px 10px;
+  padding: 2px;
+  scrollbar-width: none;
+}
+.notification-tabs::-webkit-scrollbar { display: none; }
+.notification-tab {
+  min-height: 36px;
+  padding: 0 13px;
+  flex: 0 0 auto;
+  border-radius: 18px;
+  color: #64748b;
+  background: #f1f5f9;
+  font-size: 13px;
+}
+.notification-tab.active {
+  color: #fff;
+  background: #2563eb;
 }
 .mark-read {
   font-size: 12px;

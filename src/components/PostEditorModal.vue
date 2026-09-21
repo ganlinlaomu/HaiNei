@@ -174,6 +174,7 @@ import { encodeEncryptedVideoRef, type EncryptedVideoMetadata } from "@/utils/en
 import { encryptVideoFile, exportKeyToBase64 } from "@/utils/videoCrypto";
 import { bytesToBase64 } from "@/nostr/crypto";
 import { parseVideoUrl as parseVideoUrlUtil } from "@/utils/videoUtils";
+import { clearPostDraft, loadPostDraft, savePostDraft } from "@/utils/postDraft";
 
 // Video metadata format constants
 const VIDEO_METADATA_PREFIX = '[video:';
@@ -192,6 +193,14 @@ type UploadItem = {
   encryptionKey?: CryptoKey;
   encryptionIv?: string;
   originalMime?: string;
+  width?: number;
+  height?: number;
+  previewUrl?: string;
+  previewEncryptionKey?: CryptoKey;
+  previewEncryptionIv?: string;
+  previewMime?: string;
+  previewWidth?: number;
+  previewHeight?: number;
 };
 
 export default defineComponent({
@@ -217,6 +226,16 @@ export default defineComponent({
     const allFriends = ref(true);
     const selectedGroups = ref<Array<string>>([]);
     const visibilityOpen = ref(false);
+    let draftPersistenceEnabled = false;
+
+    function persistDraft() {
+      if (!draftPersistenceEnabled || !keys.pkHex) return;
+      savePostDraft(keys.pkHex, {
+        content: content.value,
+        allFriends: allFriends.value,
+        selectedGroups: [...selectedGroups.value],
+      });
+    }
 
     const canSend = computed(() => {
       const hasText = content.value.trim().length > 0;
@@ -462,48 +481,32 @@ export default defineComponent({
         );
         
         const compressedFile = compressionResult.file;
-        
-        // Generate encryption key and IV
-        const encryptionKey = await crypto.subtle.generateKey(
-          { name: "AES-GCM", length: 256 },
-          true,
-          ["encrypt", "decrypt"]
-        );
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const originalMime = compressedFile.type || "image/jpeg";
-        
-        // Read file bytes
-        const fileBytes = new Uint8Array(await compressedFile.arrayBuffer());
-        
-        // Encrypt the bytes
-        const encryptedBytes = await crypto.subtle.encrypt(
-          { name: "AES-GCM", iv },
-          encryptionKey,
-          fileBytes
-        );
-        
-        // Create a new File from encrypted bytes with octet-stream type
-        const encryptedFile = new File(
-          [encryptedBytes],
-          compressedFile.name.replace(/\.[^.]*$/, '') + ".enc",
-          { type: "application/octet-stream" }
-        );
-        
-        // Upload encrypted file with fallback to multiple servers
-        const descriptor = await uploadImageToBlossomWithFallback(encryptedFile, {
-          accountPubkey: keys.pkHex || undefined,
-          signEvent: signEventWrapper,
-          onProgress: (p:number) => { updateUploadItem(item.id, { progress: p }); }
+        const previewFile = await resizeImageFile(compressedFile, { maxSize: 960, quality: 0.76 });
+        const [width, height] = await imageDimensions(compressedFile);
+        const [previewWidth, previewHeight] = await imageDimensions(previewFile);
+        const original = await encryptAndUploadImage(compressedFile, p => {
+          updateUploadItem(item.id, { progress: Math.round(p * 0.7) });
+        });
+        const preview = await encryptAndUploadImage(previewFile, p => {
+          updateUploadItem(item.id, { progress: 70 + Math.round(p * 0.3) });
         });
         
         // Store encryption metadata
         updateUploadItem(item.id, { 
-          url: descriptor.url, 
+          url: original.url,
           status: "done", 
           progress: 100,
-          encryptionKey,
-          encryptionIv: bytesToBase64(iv),
-          originalMime
+          encryptionKey: original.key,
+          encryptionIv: original.iv,
+          originalMime: original.mime,
+          width,
+          height,
+          previewUrl: preview.url,
+          previewEncryptionKey: preview.key,
+          previewEncryptionIv: preview.iv,
+          previewMime: preview.mime,
+          previewWidth,
+          previewHeight,
         });
       } catch (err:any) {
         console.error("upload error raw:", err);
@@ -513,6 +516,34 @@ export default defineComponent({
         updateUploadItem(item.id, { status: "error", errorShort, errorDetails });
         ui.addToast(`上传失败: ${errorShort}`, 3000, "error");
       }
+    }
+
+    async function imageDimensions(file: File): Promise<[number, number]> {
+      const bitmap = await createImageBitmap(file);
+      const dimensions: [number, number] = [bitmap.width, bitmap.height];
+      bitmap.close();
+      return dimensions;
+    }
+
+    async function encryptAndUploadImage(file: File, onProgress: (progress: number) => void) {
+      const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const encryptedBytes = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        key,
+        await file.arrayBuffer()
+      );
+      const encryptedFile = new File(
+        [encryptedBytes],
+        file.name.replace(/\.[^.]*$/, "") + ".enc",
+        { type: "application/octet-stream" }
+      );
+      const descriptor = await uploadImageToBlossomWithFallback(encryptedFile, {
+        accountPubkey: keys.pkHex || undefined,
+        signEvent: signEventWrapper,
+        onProgress,
+      });
+      return { url: descriptor.url, key, iv: bytesToBase64(iv), mime: file.type || "image/jpeg" };
     }
 
     async function startVideoUpload(item: UploadItem) {
@@ -638,8 +669,11 @@ export default defineComponent({
         await friends.load();
         await friendships.load();
         await msgs.load();
-        allFriends.value = true;
-        selectedGroups.value = [];
+        const draft = loadPostDraft(keys.pkHex);
+        content.value = draft?.content || "";
+        allFriends.value = draft?.allFriends ?? true;
+        selectedGroups.value = (draft?.selectedGroups || []).filter(group => groups.value.includes(group));
+        draftPersistenceEnabled = true;
         await nextTick();
         // Focus overlay to enable keyboard events (ESC key)
         if (overlay.value) {
@@ -650,6 +684,8 @@ export default defineComponent({
       } else {
         // The editor may also be closed by bottom navigation or another
         // programmatic route change, so cleanup cannot live only in onClose().
+        persistDraft();
+        draftPersistenceEnabled = false;
         resetEditor();
         // Return focus to trigger element when modal closes
         if (triggerElement && typeof triggerElement.focus === 'function') {
@@ -660,6 +696,12 @@ export default defineComponent({
       }
     }, { immediate: true });
 
+    watch([content, allFriends, selectedGroups], persistDraft, { deep: true });
+    const persistOnPageHide = () => persistDraft();
+    const persistOnVisibilityChange = () => { if (document.visibilityState === "hidden") persistDraft(); };
+    window.addEventListener("pagehide", persistOnPageHide);
+    document.addEventListener("visibilitychange", persistOnVisibilityChange);
+
     // PostEditorModal is mounted at App level and otherwise survives route
     // changes. Never leave it covering the destination page.
     watch(() => route.fullPath, () => {
@@ -667,6 +709,9 @@ export default defineComponent({
     });
 
     onBeforeUnmount(()=>{
+      persistDraft();
+      window.removeEventListener("pagehide", persistOnPageHide);
+      document.removeEventListener("visibilitychange", persistOnVisibilityChange);
       document.body.classList.remove("post-editor-open");
       for (const it of uploads.value) {
         if (it.preview) { try { URL.revokeObjectURL(it.preview) } catch {} }
@@ -703,13 +748,26 @@ export default defineComponent({
               const keyBase64 = bytesToBase64(new Uint8Array(keyBytes));
               
               const metadata: EncryptedImageMetadata = {
-                v: 1,
+                v: img.previewUrl && img.previewEncryptionKey && img.previewEncryptionIv ? 2 : 1,
                 url: img.url,
                 mime: img.originalMime,
                 alg: "AES-GCM",
                 iv: img.encryptionIv,
-                key: keyBase64
+                key: keyBase64,
+                width: img.width,
+                height: img.height,
               };
+              if (img.previewUrl && img.previewEncryptionKey && img.previewEncryptionIv && img.previewMime) {
+                metadata.preview = {
+                  url: img.previewUrl,
+                  mime: img.previewMime,
+                  alg: "AES-GCM",
+                  iv: img.previewEncryptionIv,
+                  key: await exportKeyToBase64(img.previewEncryptionKey),
+                  width: img.previewWidth,
+                  height: img.previewHeight,
+                };
+              }
               
               const encryptedRef = encodeEncryptedImageRef(metadata);
               fullContent += `![](${encryptedRef})\n`;
@@ -767,6 +825,8 @@ export default defineComponent({
         });
 
         ui.addToast("发送成功", 1200, "success");
+        draftPersistenceEnabled = false;
+        clearPostDraft(keys.pkHex);
         onClose();
         // Navigate to home page after modal close animation completes (220ms matches the slide-up-leave-active transition)
         setTimeout(()=>{ router.push('/'); }, 220);

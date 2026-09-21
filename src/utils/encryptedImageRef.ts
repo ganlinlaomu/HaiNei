@@ -3,13 +3,28 @@ import { bytesToBase64, base64ToBytes } from "@/nostr/crypto";
 /**
  * Encrypted image reference metadata
  */
-export interface EncryptedImageMetadata {
-  v: number;          // version (1)
+export interface EncryptedImageVariant {
   url: string;        // Blossom URL for encrypted blob
   mime: string;       // original mime type (e.g., "image/jpeg")
   alg: string;        // encryption algorithm ("AES-GCM")
   iv: string;         // base64-encoded IV (12 bytes for AES-GCM)
   key: string;        // base64-encoded key (32 bytes for AES-256)
+  width?: number;
+  height?: number;
+}
+
+export interface EncryptedImageMetadata extends EncryptedImageVariant {
+  v: 1 | 2;
+  preview?: EncryptedImageVariant;
+}
+
+function isVariant(value: unknown): value is EncryptedImageVariant {
+  const item = value as Partial<EncryptedImageVariant> | null;
+  return !!item && !!item.url && !!item.mime && item.alg === "AES-GCM" && !!item.iv && !!item.key;
+}
+
+export function variantToEncryptedImageRef(variant: EncryptedImageVariant): string {
+  return encodeEncryptedImageRef({ v: 1, ...variant });
 }
 
 /**
@@ -40,12 +55,9 @@ export function decodeEncryptedImageRef(ref: string): EncryptedImageMetadata | n
     
     // Basic validation
     if (
-      metadata.v !== 1 ||
-      !metadata.url ||
-      !metadata.mime ||
-      metadata.alg !== "AES-GCM" ||
-      !metadata.iv ||
-      !metadata.key
+      (metadata.v !== 1 && metadata.v !== 2) ||
+      !isVariant(metadata) ||
+      (metadata.preview !== undefined && !isVariant(metadata.preview))
     ) {
       console.error("Invalid encrypted image metadata:", metadata);
       return null;

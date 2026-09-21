@@ -15,6 +15,8 @@ export interface Like {
   author: string;
   timestamp: number;
   type: "like";
+  pending?: boolean;
+  failed?: boolean;
 }
 
 export interface Comment {
@@ -25,6 +27,8 @@ export interface Comment {
   timestamp: number;
   type: "comment";
   parentCommentId?: string;
+  pending?: boolean;
+  failed?: boolean;
 }
 
 export type Interaction = Like | Comment;
@@ -88,8 +92,14 @@ export const useInteractionsStore = defineStore("interactions", {
         id: newInteractionId(), messageId, author: key.pkHex,
         timestamp: Math.floor(Date.now() / 1000), type: "like"
       };
-      await this._sendInteraction(interaction, messageAuthor);
-      this._addInteraction(interaction);
+      this._addInteraction({ ...interaction, pending: true });
+      try {
+        await this._sendInteraction(interaction, messageAuthor);
+        this._replaceInteraction(interaction);
+      } catch (error) {
+        this._removeInteraction(interaction.messageId, interaction.id);
+        throw error;
+      }
     },
 
     async sendComment(messageId: string, messageAuthor: string, text: string, parentCommentId?: string) {
@@ -99,8 +109,14 @@ export const useInteractionsStore = defineStore("interactions", {
         id: newInteractionId(), messageId, author: key.pkHex, text: text.trim(),
         timestamp: Math.floor(Date.now() / 1000), type: "comment", parentCommentId
       };
-      await this._sendInteraction(interaction, messageAuthor);
-      this._addInteraction(interaction);
+      this._addInteraction({ ...interaction, pending: true });
+      try {
+        await this._sendInteraction(interaction, messageAuthor);
+        this._replaceInteraction(interaction);
+      } catch (error) {
+        this._removeInteraction(interaction.messageId, interaction.id);
+        throw error;
+      }
     },
 
     async removeLike(messageId: string, _messageAuthor: string) {
@@ -158,9 +174,30 @@ export const useInteractionsStore = defineStore("interactions", {
 
     _addInteraction(interaction: Interaction) {
       const items = this.interactions.get(interaction.messageId) || [];
-      if (items.some(item => item.id === interaction.id)) return;
+      if (items.some(item => item.id === interaction.id)) {
+        this._replaceInteraction(interaction);
+        return;
+      }
       if (interaction.type === "like" && items.some(item => item.type === "like" && item.author === interaction.author)) return;
       this.interactions.set(interaction.messageId, [...items, interaction]);
+      this._scheduleSave();
+    },
+
+    _replaceInteraction(interaction: Interaction) {
+      const items = this.interactions.get(interaction.messageId) || [];
+      const index = items.findIndex(item => item.id === interaction.id);
+      if (index < 0) return;
+      const next = [...items];
+      next[index] = interaction;
+      this.interactions.set(interaction.messageId, next);
+      this._scheduleSave();
+    },
+
+    _removeInteraction(messageId: string, interactionId: string) {
+      const items = this.interactions.get(messageId) || [];
+      const next = items.filter(item => item.id !== interactionId);
+      if (next.length === items.length) return;
+      this.interactions.set(messageId, next);
       this._scheduleSave();
     },
 
