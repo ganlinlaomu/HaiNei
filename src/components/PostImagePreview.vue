@@ -59,9 +59,9 @@
 
     <ImageViewer
       :visible="viewerVisible"
-      :images="imageUrls"
+      :images="viewerImageUrls"
       :initialIndex="viewerIndex"
-      @close="viewerVisible = false"
+      @close="closeViewer"
     />
   </div>
 </template>
@@ -168,8 +168,11 @@ export default defineComponent({
     const itemIndexMap = new Map<HTMLElement, number>();
     const observer = ref<IntersectionObserver | null>(null);
     const loadGeneration = ref(0);
+    const itemLoadPromises = new WeakMap<ImageItem, Promise<void>>();
     const viewerVisible = ref(false);
     const viewerIndex = ref(0);
+    const viewerImageUrls = ref<string[]>([]);
+    const viewerAnchorIndex = ref<number | null>(null);
 
     const visibleImages = computed(() => images.value.slice(0, MAX_VISIBLE_TILES));
     const hiddenCount = computed(() => Math.max(0, images.value.length - MAX_VISIBLE_TILES));
@@ -177,7 +180,6 @@ export default defineComponent({
       const count = visibleImages.value.length;
       return `gallery-${count === 1 ? "single" : count === 2 ? "two" : count === 3 ? "three" : "four"}`;
     });
-    const imageUrls = computed(() => images.value.filter(item => item.status === "loaded").map(item => item.url));
 
     function revokeObjectUrls() {
       objectUrls.forEach(url => URL.revokeObjectURL(url));
@@ -190,9 +192,17 @@ export default defineComponent({
       itemIndexMap.set(el, idx);
     }
 
-    async function loadImage(idx: number) {
+    function loadImage(idx: number): Promise<void> {
       const item = images.value[idx];
-      if (!item || item.status === "loading" || item.status === "loaded") return;
+      if (!item || item.status === "loaded") return Promise.resolve();
+      const existing = itemLoadPromises.get(item);
+      if (existing) return existing;
+      const task = performLoadImage(item, idx).finally(() => itemLoadPromises.delete(item));
+      itemLoadPromises.set(item, task);
+      return task;
+    }
+
+    async function performLoadImage(item: ImageItem, idx: number) {
       const generation = loadGeneration.value;
       item.status = "loading";
 
@@ -233,11 +243,38 @@ export default defineComponent({
     }
 
     async function openViewer(index: number) {
-      await Promise.all(images.value.map((_, idx) => loadImage(idx)));
-      const loadedBeforeTarget = images.value.slice(0, index).filter(item => item.status === "loaded").length;
-      if (images.value[index]?.status !== "loaded" || imageUrls.value.length === 0) return;
-      viewerIndex.value = loadedBeforeTarget;
+      await loadImage(index);
+      if (images.value[index]?.status !== "loaded") return;
+
+      viewerAnchorIndex.value = index;
+      viewerImageUrls.value = [
+        images.value[index].url,
+        ...images.value
+          .filter((item, itemIndex) => itemIndex !== index && item.status === "loaded")
+          .map(item => item.url)
+      ];
+      viewerIndex.value = 0;
       viewerVisible.value = true;
+
+      // Keep the clicked image stable at index 0 while the existing bounded
+      // decrypt queue fills in the rest of the viewer in the background.
+      images.value.forEach((_, itemIndex) => {
+        if (itemIndex === index) return;
+        void loadImage(itemIndex).then(() => {
+          if (!viewerVisible.value || viewerAnchorIndex.value !== index) return;
+          viewerImageUrls.value = [
+            images.value[index].url,
+            ...images.value
+              .filter((item, candidateIndex) => candidateIndex !== index && item.status === "loaded")
+              .map(item => item.url)
+          ];
+        });
+      });
+    }
+
+    function closeViewer() {
+      viewerVisible.value = false;
+      viewerAnchorIndex.value = null;
     }
 
     function setupObserver() {
@@ -265,6 +302,8 @@ export default defineComponent({
     function resetImages() {
       loadGeneration.value += 1;
       observer.value?.disconnect();
+      closeViewer();
+      viewerImageUrls.value = [];
       revokeObjectUrls();
       itemRefs.value = [];
       itemIndexMap.clear();
@@ -297,13 +336,14 @@ export default defineComponent({
       visibleImages,
       hiddenCount,
       galleryClass,
-      imageUrls,
+      viewerImageUrls,
       viewerVisible,
       viewerIndex,
       setItemRef,
       markFailed,
       retryImage,
-      openViewer
+      openViewer,
+      closeViewer
     };
   }
 });
