@@ -4,7 +4,7 @@ import { useInteractionsStore, type Comment } from "./interactions";
 
 export interface NotificationItem {
   id: string;
-  type: "like" | "comment" | "message";
+  type: "like" | "comment";
   from: string;
   messageId: string;
   commentId?: string;
@@ -70,7 +70,15 @@ export const useNotificationsStore = defineStore("notifications", {
       // 1. 加载基本列表
       try {
         const raw = localStorage.getItem(notificationsKeyFor(targetPk)!);
-        this.list = raw ? JSON.parse(raw) : [];
+        const stored = raw ? JSON.parse(raw) : [];
+        // Normal posts belong in Home, not Notifications. Remove legacy
+        // message notifications account-by-account as they are loaded.
+        this.list = Array.isArray(stored)
+          ? stored.filter((item: NotificationItem & { type?: string }) => item?.type === "like" || item?.type === "comment")
+          : [];
+        if (Array.isArray(stored) && this.list.length !== stored.length) {
+          localStorage.setItem(notificationsKeyFor(targetPk)!, JSON.stringify(this.list));
+        }
       } catch { this.list = []; }
 
       // 2. 加载屏蔽列表
@@ -117,6 +125,7 @@ export const useNotificationsStore = defineStore("notifications", {
     },
 
     addNotification(n: NotificationItem) {
+      if (n.type !== "like" && n.type !== "comment") return;
       // 这里的逻辑修复最重要：
       // 1. 检查是否重复
       if (this.list.some(x => x.id === n.id)) return;

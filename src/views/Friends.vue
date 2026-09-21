@@ -38,8 +38,11 @@
             </div>
           </div>
           <div class="friend-actions">
-            <button class="btn-icon btn-edit" @click="startEdit(f)" title="编辑" aria-label="编辑好友">✎</button>
-            <button class="btn-icon btn-delete" @click="confirmDelete(f)" title="删除" aria-label="删除好友">🗑</button>
+            <button class="more-button" type="button" :aria-expanded="openFriendMenu === f.pubkey" :aria-label="`${f.name} 的更多操作`" @click="toggleFriendMenu(f.pubkey)">更多</button>
+            <div v-if="openFriendMenu === f.pubkey" class="friend-menu">
+              <button type="button" @click="startEdit(f); openFriendMenu = ''">编辑资料</button>
+              <button type="button" class="danger" @click="confirmDelete(f); openFriendMenu = ''">删除好友</button>
+            </div>
           </div>
         </div>
       </div>
@@ -164,6 +167,7 @@ export default defineComponent({
     const showModal = ref(false);
     const editMode = ref(false);
     const saving = ref(false);
+    const openFriendMenu = ref("");
     const showSyncSuccess = ref(false);
     const isFadingOut = ref(false);
     let hideTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -196,6 +200,10 @@ export default defineComponent({
     const incomingRequests = computed(() => friendships.getIncomingRequests());
     const outgoingRequests = computed(() => friendships.getOutgoingRequests());
     const contactName = (pubkey: string) => friends.list.find(friend => friend.pubkey === pubkey)?.name || `${pubkey.slice(0, 8)}…`;
+
+    function toggleFriendMenu(pubkey: string) {
+      openFriendMenu.value = openFriendMenu.value === pubkey ? "" : pubkey;
+    }
 
     // Filter groups based on current input
     const filteredGroups = computed(() => {
@@ -434,6 +442,8 @@ export default defineComponent({
       editMode,
       formData,
       saving,
+      openFriendMenu,
+      toggleFriendMenu,
       showSyncSuccess,
       isFadingOut,
       startAdd,
@@ -506,11 +516,10 @@ export default defineComponent({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px;
+  min-height: 56px;
+  padding: 9px 4px;
   background: #fff;
-  border-radius: 10px;
-  margin-bottom: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  border-bottom: 1px solid #eef2f6;
 }
 
 .friend-info {
@@ -521,7 +530,44 @@ export default defineComponent({
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+  position: relative;
 }
+.more-button {
+  min-width: 44px;
+  min-height: 40px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+}
+.friend-menu {
+  position: absolute;
+  z-index: 20;
+  top: 42px;
+  right: 0;
+  min-width: 120px;
+  padding: 5px;
+  display: grid;
+  gap: 2px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+}
+.friend-menu button {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+.friend-menu button:hover { background: #f8fafc; }
+.friend-menu button.danger { color: #dc2626; }
 
 .btn {
   background: #1976d2;
@@ -680,10 +726,11 @@ export default defineComponent({
 
 .card {
   background: #fff;
-  padding: 16px;
+  padding: 14px;
   border-radius: 12px;
-  margin-bottom: 16px;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.04);
+  margin: 0 10px 10px;
+  border: 1px solid #e8edf3;
+  box-shadow: 0 2px 8px rgba(15,23,42,0.03);
 }
 
 .list {

@@ -11,7 +11,6 @@ export type HomeMessageDelivery = {
   isInteraction: (message: CanonicalMessage) => boolean;
   processInteraction: (message: CanonicalMessage) => void | Promise<void>;
   mirrorMessage: (message: CanonicalMessage) => void;
-  notifyMessage: (message: CanonicalMessage) => void;
 };
 
 /**
@@ -60,18 +59,6 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
         reason: error instanceof Error ? error.name : "ui_mirror_error"
       }, "error");
       throw error;
-    }
-    if (message.senderPubkey !== delivery.accountPubkey && metadata.source !== "local-migration") {
-      try {
-        delivery.notifyMessage(message);
-        debugLog("ui", "ui_notification_created", diagnostic, "info");
-      } catch (error) {
-        debugLog("ui", "ui_notification_failed", {
-          ...diagnostic,
-          reason: error instanceof Error ? error.name : "notification_error"
-        }, "error");
-        throw error;
-      }
     }
     return true;
   };

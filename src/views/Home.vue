@@ -26,46 +26,45 @@
     </div>
 
 
-    <div class="card">
-      <h4 style="margin: 0 0 12px 0;">好友动态</h4>
-      <div v-if="displayedMessages.length === 0" class="small">还没有消息</div>
-      <div class="list">
-        <div v-for="m in displayedMessages" :key="m.id" :id="`msg-${m.id}`" class="card">
-          <div class="small">
-            {{ displayName(m.pubkey) }}
-            <span class="muted"> · {{ toLocalTime(m.created_at) }}</span>
+    <div class="feed">
+      <div v-if="displayedMessages.length === 0" class="empty-feed">还没有动态</div>
+      <article v-for="m in displayedMessages" :key="m.id" :id="`msg-${m.id}`" class="post-card">
+        <header class="post-author">
+          <div class="author-avatar" :style="{ backgroundColor: avatarColor(m.pubkey) }" aria-hidden="true">
+            {{ avatarInitial(m.pubkey) }}
           </div>
-          <!-- 如果仍需显示文本（去除了图片 URL/Markdown），使用 textWithoutVideos -->
-          <div v-if="textWithoutVideos(m.content)" class="message-text message-text-top">{{ textWithoutVideos(m.content) }}</div>
-          <!-- 图片预览（9宫格展示多图） -->
-          <PostImagePreview v-if="m.content" :content="m.content" :showAll="true" :max="9" class="post-images" />
+          <div class="author-copy">
+            <strong>{{ displayName(m.pubkey) }}</strong>
+            <time :datetime="new Date(m.created_at * 1000).toISOString()">{{ toLocalTime(m.created_at) }}</time>
+          </div>
+        </header>
 
-          <!-- 视频预览 -->
-          <VideoPlayer v-if="extractVideoData(m.content)" :videoData="extractVideoData(m.content)" style="margin-top:8px;" />
-          
-          <!-- 操作按钮：点赞和评论 -->
-          <div class="message-actions">
-            <button class="action-btn" @click="toggleLike(m)" :class="{ 'liked': isLiked(m.id) }">
-              <span class="action-icon">{{ isLiked(m.id) ? '❤️' : '🤍' }}</span>
-              <span class="action-text">{{ getLikeCount(m.id) }}</span>
-            </button>
-            <button class="action-btn" @click="toggleComments(m.id)">
-              <span class="action-icon">💬</span>
-              <span class="action-text">{{ getCommentCount(m.id) }}</span>
-            </button>
-            <!-- SEND META (only author) -->
-            <div v-if="m._localMeta?.groupCount" class="send-meta">
-             <button
-               class="action-btn send-btn"
-               @click="toggleSendMeta(m.id)"
-             >
-               <span class="action-icon">👀</span>
-               <span class="action-text">{{ m._localMeta.groupCount }}</span>
-            </button>
-          </div>
+        <div v-if="textWithoutVideos(m.content)" class="message-text message-text-top">
+          {{ displayedPostText(m) }}
+          <button v-if="isLongPost(m)" class="expand-text" type="button" @click="togglePostText(m.id)">
+            {{ expandedPosts.has(m.id) ? "收起" : "全文" }}
+          </button>
+        </div>
+        <PostImagePreview v-if="m.content" :content="m.content" :showAll="true" class="post-images" />
+        <VideoPlayer v-if="extractVideoData(m.content)" :videoData="extractVideoData(m.content)" class="post-video" />
 
+        <div class="message-actions">
+          <button class="action-btn" type="button" @click="toggleLike(m)" :class="{ liked: isLiked(m.id) }" :aria-pressed="isLiked(m.id)">
+            <span>{{ isLiked(m.id) ? "已赞" : "赞" }}</span>
+            <span v-if="getLikeCount(m.id)" class="action-count">{{ getLikeCount(m.id) }}</span>
+          </button>
+          <button class="action-btn" type="button" @click="toggleComments(m.id)" :aria-expanded="showingComments.has(m.id)">
+            <span>评论</span>
+            <span v-if="getCommentCount(m.id)" class="action-count">{{ getCommentCount(m.id) }}</span>
+          </button>
+          <div v-if="m.pubkey === keys.pkHex && m._localMeta?.groupCount" class="send-meta">
+            <button class="action-btn visibility-btn" type="button" @click="toggleSendMeta(m.id)" :aria-expanded="showingSendMeta.has(m.id)">
+              {{ visibilityLabel(m) }}
+            </button>
           </div>
-<div class="message-expanded">
+        </div>
+
+        <div class="message-expanded">
 
            <!-- SEND META EXPANDED (like comments) -->
 <div
@@ -138,8 +137,7 @@
             </div>
           </div>
         </div>
-        </div>
-      </div>
+      </article>
       
       <!-- 加载更多按钮 -->
       <div v-if="hasMore" class="load-more-container">
@@ -164,7 +162,6 @@ import { useKeyStore } from "@/stores/keys";
 import { getRelaysFromStorage } from "@/nostr/relays";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
-import { useNotificationsStore } from "@/stores/notifications";
 import { useSettingsStore } from "@/stores/settings";
 import { logger } from "@/utils/logger";
 import { formatRelativeTime } from "@/utils/format";
@@ -214,7 +211,6 @@ export default defineComponent({
     const keys = useKeyStore();
     const msgs = useMessagesStore();
     const interactions = useInteractionsStore();
-    const notifications = useNotificationsStore();
     const settings = useSettingsStore();
     const readyForPending = ref(false);
     const route = useRoute();
@@ -295,6 +291,7 @@ export default defineComponent({
     
     // State for comments UI
     const showingComments = ref<Set<string>>(new Set());
+    const expandedPosts = ref<Set<string>>(new Set());
     const commentInputs = ref<Record<string, string>>({});
     const replyingTo = ref<Record<string, string>>({}); // messageId -> commentId being replied to
     const replyingToAuthor = ref<Record<string, string>>({}); // messageId -> author pubkey of comment being replied to
@@ -550,6 +547,43 @@ async function safeUpdateLocalRefs() {
       if (f && f.name && String(f.name).trim().length > 0) return f.name;
       // Return shortened public key as fallback
       return pubkey.slice(0, 8) + "...";
+    }
+
+    function avatarInitial(pubkey: string) {
+      const name = displayName(pubkey).trim();
+      return (name[0] || "?").toUpperCase();
+    }
+
+    function avatarColor(pubkey: string) {
+      let hash = 0;
+      for (let index = 0; index < pubkey.length; index++) hash = ((hash << 5) - hash + pubkey.charCodeAt(index)) | 0;
+      return `hsl(${Math.abs(hash) % 360} 48% 48%)`;
+    }
+
+    function isLongPost(message: InboxItem) {
+      const text = textWithoutVideos(message.content);
+      return Array.from(text).length > 280 || text.split("\n").length > 6;
+    }
+
+    function displayedPostText(message: InboxItem) {
+      const text = textWithoutVideos(message.content);
+      if (!isLongPost(message) || expandedPosts.value.has(message.id)) return text;
+      const lines = text.split("\n").slice(0, 6).join("\n");
+      const preview = Array.from(lines).slice(0, 280).join("").trimEnd();
+      return `${preview}…`;
+    }
+
+    function togglePostText(messageId: string) {
+      const next = new Set(expandedPosts.value);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      expandedPosts.value = next;
+    }
+
+    function visibilityLabel(message: InboxItem) {
+      const groups = message._localMeta?.groups || [];
+      if (groups.length === 1 && groups[0].name === "全部好友") return "全部好友";
+      return `${message._localMeta?.groupCount || groups.length} 个分组`;
     }
 
     function mirrorSyncedMessage(message: CanonicalMessage) {
@@ -892,18 +926,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
             processFriendshipMessage: message => friendships.processFriendshipMessage(message),
             isInteraction: isInteractionMessage,
             processInteraction: message => interactions.processCanonicalInteraction(message, accountAtStart),
-            mirrorMessage: mirrorSyncedMessage,
-            notifyMessage: message => {
-              notifications.addNotification({
-                id: `message:${message.id}`,
-                type: "message",
-                from: message.senderPubkey,
-                messageId: message.id,
-                created_at: message.createdAt,
-                read: false,
-                postContent: message.plaintext || ""
-              });
-            }
+            mirrorMessage: mirrorSyncedMessage
           }),
           onStatus: syncStatus => {
             if (keys.pkHex !== accountAtStart || syncGeneration !== homeSyncGeneration) return;
@@ -1035,6 +1058,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
     
 
     return { 
+      keys,
       displayedMessages,
       pendingMessages,
       messagesRef,
@@ -1043,6 +1067,13 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
       status, 
       shortRelay, 
       displayName, 
+      avatarInitial,
+      avatarColor,
+      isLongPost,
+      displayedPostText,
+      togglePostText,
+      expandedPosts,
+      visibilityLabel,
       textWithoutImages,
       textWithoutVideos,
       extractVideoData,
@@ -1169,43 +1200,99 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
 }
 
 .small { font-size:12px; color:#64748b; }
-.card { background: #fff; padding:12px; border-radius:10px; margin-bottom:12px; box-shadow: 0 4px 10px rgba(0,0,0,0.04); }
-.list { display:flex; flex-direction:column; gap:8px; }
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 8px 20px;
+}
+.post-card {
+  background: #fff;
+  padding: 14px;
+  border: 1px solid #e8edf3;
+  border-radius: 14px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.035);
+}
+.empty-feed {
+  padding: 56px 20px;
+  text-align: center;
+  color: #94a3b8;
+}
+.post-author {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.author-avatar {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+.author-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.author-copy strong { color: #172033; font-size: 14px; }
+.author-copy time { color: #94a3b8; font-size: 12px; }
 .muted { color: #94a3b8; font-size: 12px; margin-left:6px; }
 .message-text {
-  margin-top: 8px;
+  margin-top: 10px;
+  color: #202938;
+  font-size: 15px;
+  line-height: 1.62;
   white-space: pre-wrap;
   word-wrap: break-word;
   word-break: break-word;
   overflow-wrap: break-word;
   max-width: 100%;
 }
+.expand-text {
+  display: block;
+  min-height: 34px;
+  padding: 4px 0 0;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.post-video { margin-top: 10px; }
 
 .message-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 4px;
   width: 100%;
   margin-top: 12px;
-  padding-top: 8px;
+  padding-top: 9px;
   border-top: 1px solid #f1f5f9;
 }
 
 .message-expanded {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #f1f5f9;
+  margin-top: 0;
 }
 
 
 .action-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   background: transparent;
   border: none;
   cursor: pointer;
-  padding: 6px 12px;
+  min-height: 38px;
+  padding: 6px 11px;
   border-radius: 8px;
   transition: all 0.2s;
   font-size: 14px;
@@ -1220,13 +1307,8 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
   color: #ef4444;
 }
 
-.action-icon {
-  font-size: 16px;
-}
-
-.action-text {
-  font-size: 13px;
-}
+.action-count { color: #94a3b8; font-size: 12px; }
+.visibility-btn { color: #475569; }
 
 .comments-section {
   margin-top: 12px;
@@ -1379,11 +1461,8 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
 }
 
 .send-meta {
-  margin-left: auto;   /* ⭐ 推到最右 */
+  margin-left: auto;
   position: relative;
-}
-.send-btn {
-  padding: 6px 12px;   /* 和 action-btn 保持一致 */
 }
 
 
@@ -1479,5 +1558,16 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
 }
 .post-images {
   margin-top: 0;
+}
+
+@media (min-width: 640px) {
+  .feed { padding-right: 0; padding-left: 0; }
+  .post-card { padding: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-messages-notification,
+  .notification-icon,
+  .highlight { animation: none; }
 }
 </style>

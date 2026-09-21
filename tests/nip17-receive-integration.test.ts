@@ -133,20 +133,18 @@ afterEach(async () => {
 });
 
 describe("NIP-17 relay to Home receive path", () => {
-  it("delivers A -> B through relay, decode, Dexie, Home mirror and notification", async () => {
+  it("delivers A -> B through relay, decode, Dexie and Home without a post notification", async () => {
     const { recipientWrap, encoded } = await giftWrap(A_SECRET, ACCOUNT_B, "hello B");
     const repository = new SyncedMessageRepository(database());
     const relay = new RelayHarness();
     const inbox: CanonicalMessage[] = [];
-    const notifications: CanonicalMessage[] = [];
     const handler = createHomeMessageHandler({
       accountPubkey: ACCOUNT_B,
       currentAccount: () => ACCOUNT_B,
       isAcceptedMessage: () => true,
       isInteraction: () => false,
       processInteraction: () => {},
-      mirrorMessage: message => inbox.push(message),
-      notifyMessage: message => notifications.push(message)
+      mirrorMessage: message => inbox.push(message)
     });
     await startReceiver({ accountPubkey: ACCOUNT_B, privateKey: B_SECRET, repository, relay, onMessage: handler });
 
@@ -161,7 +159,6 @@ describe("NIP-17 relay to Home receive path", () => {
       transportKind: 1059
     });
     expect(inbox[0].recipientPubkeys).toContain(ACCOUNT_B);
-    expect(notifications).toHaveLength(1);
     expect(await repository.get(ACCOUNT_B, encoded.message.id)).toBeTruthy();
   });
 
@@ -170,7 +167,6 @@ describe("NIP-17 relay to Home receive path", () => {
     const repository = new SyncedMessageRepository(database());
     const relay = new RelayHarness();
     const inbox: CanonicalMessage[] = [];
-    const notifications: CanonicalMessage[] = [];
     const friendsOfB: string[] = [];
     expect(friendsOfB).not.toContain(ACCOUNT_A);
     await startReceiver({
@@ -186,8 +182,7 @@ describe("NIP-17 relay to Home receive path", () => {
         processFriendshipMessage: () => false,
         isInteraction: () => false,
         processInteraction: () => {},
-        mirrorMessage: message => inbox.push(message),
-        notifyMessage: message => notifications.push(message)
+        mirrorMessage: message => inbox.push(message)
       })
     });
 
@@ -198,7 +193,6 @@ describe("NIP-17 relay to Home receive path", () => {
     relay.deliver(recipientWrap, RELAYS[0]);
     await new Promise(resolve => setTimeout(resolve, 25));
     expect(inbox).toEqual([]);
-    expect(notifications).toEqual([]);
     expect(await repository.list(ACCOUNT_B)).toEqual([]);
   });
 
@@ -221,8 +215,7 @@ describe("NIP-17 relay to Home receive path", () => {
         processFriendshipMessage: message => { controls.push(message); return true; },
         isInteraction: () => false,
         processInteraction: () => {},
-        mirrorMessage: message => inbox.push(message),
-        notifyMessage: () => {}
+        mirrorMessage: message => inbox.push(message)
       })
     });
     relay.deliver(recipientWrap, RELAYS[0]);
@@ -250,8 +243,7 @@ describe("NIP-17 relay to Home receive path", () => {
         processFriendshipMessage: () => false,
         isInteraction: () => false,
         processInteraction: () => {},
-        mirrorMessage: message => received.push(message),
-        notifyMessage: () => {}
+        mirrorMessage: message => received.push(message)
       })
     });
 
@@ -279,8 +271,7 @@ describe("NIP-17 relay to Home receive path", () => {
         processFriendshipMessage: () => false,
         isInteraction: () => false,
         processInteraction: () => {},
-        mirrorMessage: message => inbox.push(message),
-        notifyMessage: () => {}
+        mirrorMessage: message => inbox.push(message)
       })
     });
     relay.deliver(first.recipientWrap, RELAYS[0]);
@@ -373,8 +364,7 @@ describe("NIP-17 relay to Home receive path", () => {
         currentAccount: () => ACCOUNT_B,
         isInteraction: () => false,
         processInteraction: () => {},
-        mirrorMessage: message => restoredInbox.push(message),
-        notifyMessage: () => {}
+        mirrorMessage: message => restoredInbox.push(message)
       })
     });
     expect(restoredInbox).toHaveLength(1);

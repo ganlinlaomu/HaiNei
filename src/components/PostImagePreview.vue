@@ -1,59 +1,154 @@
 <template>
-  <div class="post-image-preview" v-if="images.length > 0">
-    <img
-      v-if="!showAll"
-      :src="images[0].url"
-      :alt="altText"
-      class="post-image-first"
-      @error="onError(0)"
-      @click="openViewer(0)"
-      loading="lazy"
-    />
-    <div v-else class="gallery" :class="galleryClass">
-      <div 
-        v-for="(img, idx) in images" 
-        :key="idx"
-        class="gallery-item-wrapper"
+  <div v-if="images.length" class="post-image-preview">
+    <div v-if="showAll" class="gallery" :class="galleryClass">
+      <div
+        v-for="(img, idx) in visibleImages"
+        :key="img.sourceUrl"
         :ref="el => setItemRef(el, idx)"
+        class="gallery-item-wrapper"
       >
         <img
-          v-if="img.shouldLoad"
+          v-if="img.status === 'loaded'"
           :src="img.url"
           :alt="altText"
           class="gallery-item"
-          @error="onError(idx)"
-          @click="openViewer(idx)"
           loading="lazy"
+          decoding="async"
+          @error="markFailed(idx)"
+          @click="openViewer(idx)"
         />
-        <div v-else class="gallery-item gallery-item-placeholder">
-          <span class="loading-icon">⏳</span>
-        </div>
+        <button
+          v-else-if="img.status === 'error'"
+          class="gallery-state gallery-error"
+          type="button"
+          @click="retryImage(idx)"
+        >
+          <span>图片加载失败</span>
+          <span class="retry-label">点击重试</span>
+        </button>
+        <div v-else class="gallery-state gallery-skeleton" aria-label="图片加载中"></div>
+        <button
+          v-if="idx === visibleImages.length - 1 && hiddenCount > 0"
+          class="more-overlay"
+          type="button"
+          :aria-label="`查看其余 ${hiddenCount} 张图片`"
+          @click="openViewer(idx)"
+        >
+          +{{ hiddenCount }}
+        </button>
       </div>
     </div>
-    
-    <!-- Image Viewer Modal -->
+
+    <div v-else class="single-preview" :ref="el => setItemRef(el, 0)">
+      <img
+        v-if="images[0].status === 'loaded'"
+        :src="images[0].url"
+        :alt="altText"
+        class="post-image-first"
+        loading="lazy"
+        decoding="async"
+        @error="markFailed(0)"
+        @click="openViewer(0)"
+      />
+      <button v-else-if="images[0].status === 'error'" class="gallery-state gallery-error" type="button" @click="retryImage(0)">
+        <span>图片加载失败</span>
+        <span class="retry-label">点击重试</span>
+      </button>
+      <div v-else class="gallery-state gallery-skeleton" aria-label="图片加载中"></div>
+    </div>
+
     <ImageViewer
       :visible="viewerVisible"
       :images="imageUrls"
       :initialIndex="viewerIndex"
-      @close="closeViewer"
+      @close="viewerVisible = false"
     />
   </div>
 </template>
 
 <script lang="ts">
-import { defineComponent, computed, ref, onBeforeUnmount, watch, nextTick } from "vue";
-import { extractImageUrls } from "@/utils/extractImageUrls";
-import { decodeEncryptedImageRef, isEncryptedImageRef } from "@/utils/encryptedImageRef";
-import { base64ToBytes } from "@/nostr/crypto";
+import { computed, defineComponent, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import ImageViewer from "@/components/ImageViewer.vue";
-import { getImageFromCache, storeImageInCache } from "@/utils/imageCache";
 import { useKeyStore } from "@/stores/keys";
+import { base64ToBytes } from "@/nostr/crypto";
+import { decodeEncryptedImageRef, isEncryptedImageRef } from "@/utils/encryptedImageRef";
+import { extractImageUrls } from "@/utils/extractImageUrls";
+import { getImageFromCache, storeImageInCache } from "@/utils/imageCache";
+
+type LoadStatus = "idle" | "loading" | "loaded" | "error";
 
 interface ImageItem {
+  sourceUrl: string;
   url: string;
   isEncrypted: boolean;
-  shouldLoad: boolean; // 控制是否应该加载此图片
+  status: LoadStatus;
+}
+
+const MAX_VISIBLE_TILES = 4;
+const MAX_DECRYPT_CONCURRENCY = 3;
+let activeDecrypts = 0;
+const decryptQueue: Array<() => void> = [];
+const inFlightDecrypts = new Map<string, Promise<Blob>>();
+const decryptControllers = new Map<string, AbortController>();
+
+function drainDecryptQueue() {
+  while (activeDecrypts < MAX_DECRYPT_CONCURRENCY && decryptQueue.length) decryptQueue.shift()?.();
+}
+
+function withDecryptSlot<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    decryptQueue.push(() => {
+      activeDecrypts += 1;
+      task().then(resolve, reject).finally(() => {
+        activeDecrypts -= 1;
+        drainDecryptQueue();
+      });
+    });
+    drainDecryptQueue();
+  });
+}
+
+function cancelAccountDecrypts(account: string) {
+  if (!account) return;
+  for (const [key, controller] of decryptControllers) {
+    if (key.startsWith(`${account}:`)) controller.abort();
+  }
+}
+
+function getDecryptedBlob(account: string, encryptedRef: string): Promise<Blob> {
+  const taskKey = `${account}:${encryptedRef}`;
+  const existing = inFlightDecrypts.get(taskKey);
+  if (existing) return existing;
+
+  const controller = new AbortController();
+  decryptControllers.set(taskKey, controller);
+  const task = withDecryptSlot(async () => {
+    if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+    const cached = await getImageFromCache(account, encryptedRef);
+    if (cached) return cached.blob;
+
+    const metadata = decodeEncryptedImageRef(encryptedRef);
+    if (!metadata) throw new Error("Invalid encrypted image reference");
+    const response = await fetch(metadata.url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`Encrypted image request failed (${response.status})`);
+    const encryptedBytes = new Uint8Array(await response.arrayBuffer());
+    const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
+    const decrypted = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },
+      key,
+      encryptedBytes
+    );
+    if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+    const blob = new Blob([decrypted], { type: metadata.mime });
+    await storeImageInCache(account, encryptedRef, blob, metadata.mime);
+    return blob;
+  }).finally(() => {
+    inFlightDecrypts.delete(taskKey);
+    decryptControllers.delete(taskKey);
+  });
+
+  inFlightDecrypts.set(taskKey, task);
+  return task;
 }
 
 export default defineComponent({
@@ -63,354 +158,241 @@ export default defineComponent({
     content: { type: String, required: true },
     max: { type: Number, default: 9 },
     showAll: { type: Boolean, default: false },
-    altText: { type: String, default: "image" }
+    altText: { type: String, default: "动态图片" }
   },
   setup(props) {
     const keys = useKeyStore();
-    const extractedUrls = computed(() => extractImageUrls(props.content || ""));
     const images = ref<ImageItem[]>([]);
     const objectUrls = new Set<string>();
     const itemRefs = ref<(HTMLElement | null)[]>([]);
-    const itemIndexMap = new Map<HTMLElement, number>(); // 元素到索引的映射
+    const itemIndexMap = new Map<HTMLElement, number>();
     const observer = ref<IntersectionObserver | null>(null);
-    
-    // Image viewer state
+    const loadGeneration = ref(0);
     const viewerVisible = ref(false);
     const viewerIndex = ref(0);
-    
-    // Compute gallery class based on number of images for better browser compatibility
+
+    const visibleImages = computed(() => images.value.slice(0, MAX_VISIBLE_TILES));
+    const hiddenCount = computed(() => Math.max(0, images.value.length - MAX_VISIBLE_TILES));
     const galleryClass = computed(() => {
-      const count = images.value.length;
-      if (count === 1) return 'gallery-single';
-      if (count === 2) return 'gallery-two';
-      if (count === 4) return 'gallery-four';
-      return 'gallery-grid';
+      const count = visibleImages.value.length;
+      return `gallery-${count === 1 ? "single" : count === 2 ? "two" : count === 3 ? "three" : "four"}`;
     });
-    
-    // Get array of image URLs for viewer (只返回已加载的图片)
-    const imageUrls = computed(() => {
-      const urls: string[] = [];
-      for (const img of images.value) {
-        if (img.shouldLoad && img.url !== "") {
-          urls.push(img.url);
-        }
-      }
-      return urls;
-    });
+    const imageUrls = computed(() => images.value.filter(item => item.status === "loaded").map(item => item.url));
 
-    function setItemRef(el: any, idx: number) {
-      if (el) {
-        const element = el as HTMLElement;
-        itemRefs.value[idx] = element;
-        itemIndexMap.set(element, idx); // 建立映射
-      }
+    function revokeObjectUrls() {
+      objectUrls.forEach(url => URL.revokeObjectURL(url));
+      objectUrls.clear();
     }
 
-    function openViewer(index: number) {
-      // 点击图片时，确保该图片已加载
-      if (images.value[index] && !images.value[index].shouldLoad) {
-        images.value[index].shouldLoad = true;
-        // 等待图片加载后再打开查看器
-        nextTick(() => {
-          viewerIndex.value = index;
-          viewerVisible.value = true;
-        });
-      } else {
-        viewerIndex.value = index;
-        viewerVisible.value = true;
-      }
+    function setItemRef(el: unknown, idx: number) {
+      if (!(el instanceof HTMLElement)) return;
+      itemRefs.value[idx] = el;
+      itemIndexMap.set(el, idx);
     }
 
-    function closeViewer() {
-      viewerVisible.value = false;
-    }
+    async function loadImage(idx: number) {
+      const item = images.value[idx];
+      if (!item || item.status === "loading" || item.status === "loaded") return;
+      const generation = loadGeneration.value;
+      item.status = "loading";
 
-    async function processImageUrl(url: string): Promise<ImageItem> {
-      if (isEncryptedImageRef(url)) {
-        // 延迟解密，先返回占位符
-        return { url, isEncrypted: true, shouldLoad: false };
-      } else {
-        // Plain http(s) URL，也延迟加载
-        return { url, isEncrypted: false, shouldLoad: false };
-      }
-    }
-    
-    async function decryptAndLoadImage(item: ImageItem, idx: number): Promise<void> {
-      if (!item.isEncrypted || item.url === "" || item.shouldLoad) {
-        // 非加密图片或已加载，直接标记为应该显示
-        if (!item.shouldLoad) {
-          images.value[idx].shouldLoad = true;
-        }
-        return;
-      }
-      
-      // 解密加密图片
-      const metadata = decodeEncryptedImageRef(item.url);
-      if (!metadata) {
-        console.error("Invalid encrypted image reference format:", item.url);
-        images.value[idx].shouldLoad = true; // 标记为已尝试加载
+      if (!item.isEncrypted) {
+        if (generation === loadGeneration.value) item.status = "loaded";
         return;
       }
 
       const accountAtStart = keys.pkHex;
-      if (!accountAtStart) return;
-
+      if (!accountAtStart) {
+        item.status = "error";
+        return;
+      }
       try {
-        // Try to get from cache first
-        const cached = await getImageFromCache(accountAtStart, item.url);
-        if (keys.pkHex !== accountAtStart) return;
-        if (cached) {
-          // Cache hit! Use cached blob
-          const objectUrl = URL.createObjectURL(cached.blob);
-          objectUrls.add(objectUrl);
-          images.value[idx].url = objectUrl;
-          images.value[idx].shouldLoad = true;
-          return;
-        }
-
-        // Cache miss, fetch and decrypt
-        const response = await fetch(metadata.url);
-        if (keys.pkHex !== accountAtStart) return;
-        if (!response.ok) {
-          console.error("Failed to fetch encrypted image:", metadata.url, response.status);
-          images.value[idx].shouldLoad = true;
-          return;
-        }
-        
-        const encryptedBytes = new Uint8Array(await response.arrayBuffer());
-        
-        // Import key and decrypt
-        const keyBytes = base64ToBytes(metadata.key);
-        const key = await crypto.subtle.importKey(
-          "raw",
-          keyBytes,
-          "AES-GCM",
-          false,
-          ["decrypt"]
-        );
-        
-        const ivBytes = base64ToBytes(metadata.iv);
-        const decrypted = await crypto.subtle.decrypt(
-          { name: "AES-GCM", iv: ivBytes },
-          key,
-          encryptedBytes
-        );
-        
-        // Create blob and cache it
-        const blob = new Blob([decrypted], { type: metadata.mime });
-        if (keys.pkHex !== accountAtStart) return;
-        
-        // Store in cache asynchronously (don't wait)
-        storeImageInCache(accountAtStart, item.url, blob, metadata.mime).catch(e => {
-          console.warn("Failed to cache image:", e);
-        });
-        
-        // Create object URL from decrypted blob
+        const blob = await getDecryptedBlob(accountAtStart, item.sourceUrl);
+        if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
         const objectUrl = URL.createObjectURL(blob);
         objectUrls.add(objectUrl);
-        
-        // 更新图片 URL 并标记为应该加载
-        images.value[idx].url = objectUrl;
-        images.value[idx].shouldLoad = true;
+        item.url = objectUrl;
+        item.status = "loaded";
       } catch (error) {
-        console.error("Failed to decrypt image:", item.url, error);
-        images.value[idx].shouldLoad = true; // 即使失败也标记为已尝试
+        if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
+        if (!(error instanceof DOMException && error.name === "AbortError")) console.warn("Failed to load encrypted image", error);
+        item.status = "error";
       }
     }
 
-    async function loadImages() {
-      const urls = props.showAll 
-        ? extractedUrls.value.slice(0, props.max)
-        : extractedUrls.value.slice(0, 1);
-      
-      // Clear previous object URLs
-      objectUrls.forEach(url => {
-        try { 
-          URL.revokeObjectURL(url); 
-        } catch (error) {
-          console.error("Failed to revoke object URL:", url, error);
+    function markFailed(idx: number) {
+      if (images.value[idx]) images.value[idx].status = "error";
+    }
+
+    function retryImage(idx: number) {
+      const item = images.value[idx];
+      if (!item) return;
+      item.status = "idle";
+      item.url = item.sourceUrl;
+      void loadImage(idx);
+    }
+
+    async function openViewer(index: number) {
+      await Promise.all(images.value.map((_, idx) => loadImage(idx)));
+      const loadedBeforeTarget = images.value.slice(0, index).filter(item => item.status === "loaded").length;
+      if (images.value[index]?.status !== "loaded" || imageUrls.value.length === 0) return;
+      viewerIndex.value = loadedBeforeTarget;
+      viewerVisible.value = true;
+    }
+
+    function setupObserver() {
+      observer.value?.disconnect();
+      itemIndexMap.clear();
+      nextTick(() => {
+        if (typeof IntersectionObserver === "undefined") {
+          visibleImages.value.forEach((_, idx) => void loadImage(idx));
+          return;
         }
+        observer.value = new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            const idx = itemIndexMap.get(entry.target as HTMLElement);
+            if (idx === undefined) return;
+            void loadImage(idx);
+            observer.value?.unobserve(entry.target);
+            itemIndexMap.delete(entry.target as HTMLElement);
+          });
+        }, { root: null, rootMargin: "200px", threshold: 0.01 });
+        itemRefs.value.forEach(element => element && observer.value?.observe(element));
       });
-      objectUrls.clear();
+    }
+
+    function resetImages() {
+      loadGeneration.value += 1;
+      observer.value?.disconnect();
+      revokeObjectUrls();
       itemRefs.value = [];
       itemIndexMap.clear();
-      
-      // Process all image URLs (创建占位符)
-      const processed = await Promise.all(urls.map(processImageUrl));
-      images.value = processed;
-      
-      // 如果只显示第一张图片（showAll=false），立即加载
-      if (!props.showAll && images.value.length > 0) {
-        await decryptAndLoadImage(images.value[0], 0);
-      }
-      
-      // 设置 IntersectionObserver（仅在 showAll 模式下）
-      if (props.showAll) {
-        setupIntersectionObserver();
-      }
-    }
-    
-    function setupIntersectionObserver() {
-      // 清理旧的 observer 和映射
-      if (observer.value) {
-        observer.value.disconnect();
-      }
-      itemIndexMap.clear();
-      
-      // 等待 DOM 更新后再设置 observer
-      nextTick(() => {
-        observer.value = new IntersectionObserver(
-          (entries) => {
-            entries.forEach((entry) => {
-              if (entry.isIntersecting) {
-                // 使用映射快速查找索引 O(1)
-                const idx = itemIndexMap.get(entry.target as HTMLElement);
-                if (idx !== undefined && !images.value[idx].shouldLoad) {
-                  // 图片进入视口，开始加载
-                  decryptAndLoadImage(images.value[idx], idx);
-                  // 停止观察这个元素
-                  observer.value?.unobserve(entry.target);
-                  // 移除映射
-                  itemIndexMap.delete(entry.target as HTMLElement);
-                }
-              }
-            });
-          },
-          {
-            root: null,
-            rootMargin: '50px', // 提前 50px 开始加载
-            threshold: 0.01
-          }
-        );
-        
-        // 观察所有图片容器
-        itemRefs.value.forEach((ref) => {
-          if (ref && observer.value) {
-            observer.value.observe(ref);
-          }
-        });
-      });
+      const urls = extractImageUrls(props.content || "");
+      const selected = props.showAll ? urls : urls.slice(0, 1);
+      images.value = selected.map(sourceUrl => ({
+        sourceUrl,
+        url: sourceUrl,
+        isEncrypted: isEncryptedImageRef(sourceUrl),
+        status: "idle"
+      }));
+      setupObserver();
     }
 
-    // Watch for changes in content or display mode
-    watch([() => props.content, () => props.showAll, () => props.max], () => {
-      loadImages();
-    }, { immediate: true });
-
-    const failed = ref<Record<number, boolean>>({});
-
-    function onError(idx: number) {
-      failed.value[idx] = true;
-    }
-    
-    onBeforeUnmount(() => {
-      // Clean up observer
-      if (observer.value) {
-        observer.value.disconnect();
-        observer.value = null;
-      }
-      
-      // Clean up index map
-      itemIndexMap.clear();
-      
-      // Clean up object URLs
-      objectUrls.forEach(url => {
-        try { 
-          URL.revokeObjectURL(url); 
-        } catch (error) {
-          console.error("Failed to revoke object URL on unmount:", url, error);
-        }
-      });
-      objectUrls.clear();
+    watch([() => props.content, () => props.showAll], resetImages, { immediate: true });
+    watch(() => keys.pkHex, (account, previousAccount) => {
+      if (previousAccount && account !== previousAccount) cancelAccountDecrypts(previousAccount);
+      resetImages();
     });
 
-    return { 
-      images, 
-      onError, 
-      failed, 
-      galleryClass, 
-      viewerVisible, 
-      viewerIndex, 
-      imageUrls, 
-      openViewer, 
-      closeViewer,
-      setItemRef
+    onBeforeUnmount(() => {
+      loadGeneration.value += 1;
+      observer.value?.disconnect();
+      itemIndexMap.clear();
+      revokeObjectUrls();
+    });
+
+    return {
+      images,
+      visibleImages,
+      hiddenCount,
+      galleryClass,
+      imageUrls,
+      viewerVisible,
+      viewerIndex,
+      setItemRef,
+      markFailed,
+      retryImage,
+      openViewer
     };
   }
 });
 </script>
 
 <style scoped>
-.post-image-first {
-  max-width: 100%;
-  height: auto;
-  border-radius: 8px;
-  display: block;
-  margin: 8px 0;
-  cursor: pointer;
-  transition: opacity 0.2s ease;
-}
-.post-image-first:hover {
-  opacity: 0.9;
-}
 .gallery {
   display: grid;
   gap: 4px;
-  margin: 8px 0;
+  margin: 10px 0;
+  overflow: hidden;
+  border-radius: 12px;
 }
-/* Default 3-column grid for 3+ images */
-.gallery-grid {
-  grid-template-columns: repeat(3, 1fr);
+.gallery-two,
+.gallery-four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.gallery-three {
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: repeat(2, minmax(0, 150px));
 }
-/* Single image - full width */
-.gallery-single {
-  grid-template-columns: 1fr;
-}
-.gallery-single .gallery-item {
-  aspect-ratio: auto;
-  max-height: 400px;
-}
-/* Two images - 2 columns */
-.gallery-two {
-  grid-template-columns: repeat(2, 1fr);
-}
-/* Four images - 2x2 grid */
-.gallery-four {
-  grid-template-columns: repeat(2, 1fr);
-}
+.gallery-three .gallery-item-wrapper:first-child { grid-row: 1 / 3; }
 .gallery-item-wrapper {
-  width: 100%;
-  aspect-ratio: 1;
   position: relative;
+  min-width: 0;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: #eef2f6;
 }
-.gallery-item {
+.gallery-single .gallery-item-wrapper {
+  aspect-ratio: auto;
+  max-height: 550px;
+  background: #f3f5f7;
+}
+.gallery-item,
+.post-image-first {
+  display: block;
+  width: 100%;
+  cursor: pointer;
+  background: #f3f5f7;
+}
+.gallery-item { height: 100%; object-fit: cover; }
+.gallery-single .gallery-item,
+.post-image-first {
+  height: auto;
+  max-height: 550px;
+  object-fit: contain;
+}
+.single-preview { margin: 10px 0; }
+.post-image-first { border-radius: 12px; }
+.gallery-state {
   width: 100%;
   height: 100%;
-  border-radius: 6px;
-  object-fit: cover;
-  background: #f1f5f9;
-  cursor: pointer;
-  transition: opacity 0.2s ease;
+  min-height: 140px;
+  border: 0;
+  border-radius: inherit;
 }
-.gallery-item:hover {
-  opacity: 0.9;
+.gallery-skeleton {
+  background: linear-gradient(100deg, #edf1f5 25%, #f7f9fb 40%, #edf1f5 55%);
+  background-size: 220% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
 }
-.gallery-item-placeholder {
+.gallery-error {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
-  cursor: default;
+  gap: 4px;
+  color: #64748b;
+  background: #f1f5f9;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
 }
-.loading-icon {
-  font-size: 24px;
-  animation: pulse 1.5s ease-in-out infinite;
+.retry-label { color: #2563eb; font-size: 12px; }
+.more-overlay {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(15, 23, 42, 0.58);
+  color: #fff;
+  font-size: 28px;
+  font-weight: 650;
+  cursor: pointer;
 }
-@keyframes pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
-}
+@keyframes shimmer { to { background-position-x: -220%; } }
 @media (min-width: 720px) {
   .gallery { gap: 6px; }
+  .gallery-three { grid-template-rows: repeat(2, minmax(0, 190px)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gallery-skeleton { animation: none; }
 }
 </style>

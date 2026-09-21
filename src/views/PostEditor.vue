@@ -11,7 +11,7 @@
             v-model="content"
             ref="textarea"
             class="editor-textarea"
-            placeholder="写点什么...（将加密发送给你的好友）"
+            placeholder="分享此刻…"
             rows="8"
             @paste="onPaste"
           ></textarea>
@@ -22,18 +22,12 @@
               <label
                 class="upload-btn"
                 :class="{ disabled: !uploadEnabled || uploadingAny }"
-                :title="uploadEnabled ? (uploadingAny ? '上传中...' : '上传图片/视频') : '未配置媒体服务器'"
+                :title="uploadEnabled ? (uploadingAny ? '上传中…' : '添加照片或视频') : '请先在设置中配置媒体服务'"
               >
                 <input type="file" accept="image/*,video/*" multiple @change="onFilesSelected" :disabled="!uploadEnabled || uploadingAny" />
-                上传图片/视频
+                添加照片或视频
               </label>
-
-              <div class="upload-config-hint small">
-                Media:
-                <span v-if="uploadEnabled" class="ok">已配置</span>
-                <span v-else class="warn">未配置（请在设置中添加媒体服务器）</span>
-                <button class="check-btn" type="button" @click="checkBlossom" style="margin-left:8px;">检测配置</button>
-              </div>
+              <div v-if="!uploadEnabled" class="upload-config-hint small">请先在设置中配置图片与视频服务</div>
             </div>
 
             <div class="previews">
@@ -92,13 +86,12 @@
             </div>
           </div>
 
-          <!-- recipients chips -->
-          <div class="meta-row" style="margin-top:12px;">
-            <strong>对谁可见</strong>
-            <div class="small">默认全部好友；可点击分组进行多选。</div>
-          </div>
+          <button class="visibility-row" type="button" :aria-expanded="visibilityOpen" @click="visibilityOpen = !visibilityOpen">
+            <span>可见范围</span>
+            <span class="visibility-value">{{ visibilitySummary }} <span aria-hidden="true">›</span></span>
+          </button>
 
-          <div class="groups">
+          <div v-if="visibilityOpen" class="groups">
             <div class="chips-row">
               <button
                 class="chip"
@@ -147,9 +140,6 @@
           <div v-if="error" class="error">{{ error }}</div>
         </main>
 
-        <footer class="editor-footer">
-          <div class="small">提示：发出的消息会被加密并发布到已配置的 relays。</div>
-        </footer>
       </div>
     </div>
   </transition>
@@ -203,6 +193,7 @@ export default defineComponent({
     // recipients selection state
     const allFriends = ref(true);
     const selectedGroups = ref<Array<string>>([]);
+    const visibilityOpen = ref(false);
 
     const canSend = computed(() => {
       const hasText = content.value.trim().length > 0;
@@ -273,6 +264,10 @@ export default defineComponent({
       if (keys.pkHex) set.add(keys.pkHex);
       return set.size;
     });
+
+    const visibilitySummary = computed(() => allFriends.value
+      ? "全部好友"
+      : selectedGroups.value.length > 0 ? `${selectedGroups.value.length} 个分组` : "仅自己");
 
     function gLabel(g: string) {
       return g === "未分组" ? "未分组" : g;
@@ -632,6 +627,7 @@ export default defineComponent({
       visible, content, sending, allFriends, selectedGroups, groups, countByGroup,
       canSend, textarea, overlay, error, onSend, onClose, toggleAll, toggleGroup,
       recipientsCount, selectedSet, gLabel, acceptedFriends, uploads, uploadEnabled, uploadingAny,
+      visibilityOpen, visibilitySummary,
       onFilesSelected, insertImageUrl, removeUpload, checkBlossom,
       // Video support
       videoPreview, removeVideo, onPaste
@@ -664,8 +660,8 @@ export default defineComponent({
   width: 100%;
   max-width: 720px;
   background: #fff;
-  border-top-left-radius: 12px;
-  border-top-right-radius: 12px;
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
   box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.12);
   transform: translateY(0);
   box-sizing: border-box;
@@ -676,7 +672,7 @@ export default defineComponent({
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 12px;
+  padding: 14px 16px;
   border-bottom: 1px solid #eee;
 }
 .icon-btn {
@@ -691,7 +687,7 @@ export default defineComponent({
 
 /* body */
 .editor-body {
-  padding: 12px;
+  padding: 14px 16px 18px;
   max-height: 70vh;
   overflow-y: auto;
   box-sizing: border-box;
@@ -699,9 +695,9 @@ export default defineComponent({
 .editor-textarea {
   width: 100%;
   min-height: 140px;
-  padding: 10px;
-  border: 1px solid #e6edf3;
-  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
   resize: vertical;
   font-size: 16px;
   box-sizing: border-box;
@@ -729,8 +725,9 @@ export default defineComponent({
 .upload-btn {
   background: transparent;
   color: #3b82f6;
-  padding:8px 10px;
-  border-radius:8px;
+  min-height: 42px;
+  padding:10px 13px;
+  border-radius:10px;
   cursor:pointer;
   display:inline-block;
   border: 1px solid #3b82f6;
@@ -943,6 +940,24 @@ export default defineComponent({
 
 /* chips UI */
 .groups { margin-top:12px; }
+.visibility-row {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 14px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  border-top: 1px solid #edf1f5;
+  border-bottom: 1px solid #edf1f5;
+  background: transparent;
+  color: #1f2937;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.visibility-value { color: #64748b; }
 .chips-row { 
   display:flex; 
   align-items:center; 
@@ -989,8 +1004,9 @@ export default defineComponent({
 .cancel-btn {
   background: transparent;
   color: #ef4444;
+  min-height: 42px;
   padding: 8px 20px;
-  border-radius: 8px;
+  border-radius: 10px;
   border: 1px solid #ef4444;
   cursor: pointer;
   font-size: 14px;
@@ -1006,8 +1022,9 @@ export default defineComponent({
 .send-btn {
   background: transparent;
   color: #3b82f6;
-  padding: 8px 20px;
-  border-radius: 8px;
+  min-height: 42px;
+  padding: 8px 22px;
+  border-radius: 10px;
   border: 1px solid #3b82f6;
   cursor: pointer;
   font-size: 14px;
@@ -1045,6 +1062,16 @@ export default defineComponent({
     border-radius:12px; 
     max-height:80vh;
   }
+}
+@media (hover: none) {
+  .remove-btn { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .slide-up-enter-active,
+  .slide-up-leave-active,
+  .upload-btn,
+  .send-btn,
+  .cancel-btn { transition: none; }
 }
 .error { margin-top:8px; color:#d00; font-size:13px; }
 .small { color:#64748b; font-size:12px; }

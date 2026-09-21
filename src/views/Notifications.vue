@@ -252,11 +252,10 @@ function displayName(pk: string) {
   return f?.name || pk.slice(0, 8) + "...";
 }
 function notificationIcon(n: any) {
-  return n.type === "like" ? "❤️" : n.type === "message" ? "🔔" : "💬";
+  return n.type === "like" ? "♥" : "💬";
 }
 function notificationAction(n: any) {
   if (n.type === "like") return "点赞了你";
-  if (n.type === "message") return "发布了新消息";
   return n.replyId ? "回复了你的评论" : "评论了你";
 }
 function go(n: any) {
@@ -266,7 +265,6 @@ function go(n: any) {
 
 /* ---------- 评论/回复/点赞内容 ---------- */
 function getNotificationContent(n: any) {
-  if (n.type === "message") return summarizeNotificationText(n.postContent || "");
   const allInteractions = interactions.getComments(n.messageId);
   const rootPost = messagesById.value.get(n.messageId);
   

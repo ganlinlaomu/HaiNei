@@ -21,13 +21,14 @@
     <section v-else class="card">
       <h2>设置</h2>
 
-      <div class="section">
-        <div class="section-heading">
+      <details class="settings-section" open>
+        <summary class="section-heading">
           <div>
-            <h3>Relay</h3>
-            <p>用户 Relay 优先，NIP-65 次之，默认 Relay 仅用于 fallback。</p>
+            <h3>连接 / Relay</h3>
+            <p>{{ relayList.filter(relay => relay.enabled).length }} 个已启用 · 用户、NIP-65 与 fallback</p>
           </div>
-        </div>
+        </summary>
+        <p class="section-detail">用户 Relay 优先，NIP-65 次之，默认 Relay 仅用于 fallback。</p>
 
         <form class="add-form" @submit.prevent="addRelay">
           <input
@@ -72,16 +73,16 @@
             </div>
           </article>
         </div>
-      </div>
+      </details>
 
-      <div class="section">
-        <div class="section-heading">
+      <details class="settings-section">
+        <summary class="section-heading">
           <div>
-            <h3>Media / 图片服务器</h3>
-            <p>按 Primary、其他用户服务器、默认 fallback 的顺序上传。</p>
-            <p>为保护上传 Token，媒体服务器仅支持 HTTPS；localhost 可用于本地调试。</p>
+            <h3>图片与视频 / Media</h3>
+            <p>{{ mediaList.filter(server => server.enabled).length }} 个已启用 · Primary 与 fallback</p>
           </div>
-        </div>
+        </summary>
+        <p class="section-detail">按 Primary、其他用户服务器、默认 fallback 的顺序上传。媒体服务器仅支持 HTTPS；localhost 可用于本地调试。</p>
 
         <form class="media-add-form" @submit.prevent="addMediaServer">
           <select v-model="newMediaType" class="input compact-input">
@@ -147,10 +148,12 @@
             </div>
           </article>
         </div>
-      </div>
+      </details>
 
-      <div class="section">
-        <h3>缓存管理</h3>
+      <details class="settings-section">
+        <summary class="section-heading">
+          <div><h3>存储 / Cache</h3><p>{{ cacheStats.count }} 个图片文件 · {{ formatSize(cacheStats.size) }}</p></div>
+        </summary>
         <div class="cache-info">
           <div class="small">
             <div>图片缓存：{{ cacheStats.count }} 个文件</div>
@@ -166,23 +169,23 @@
             </button>
           </div>
         </div>
-      </div>
+      </details>
 
-      <div class="section">
-        <h3>账户</h3>
+      <details class="settings-section">
+        <summary class="section-heading"><div><h3>账户</h3><p>{{ shortPk }}</p></div></summary>
         <div class="account-row">
           <span class="small">已登录：{{ shortPk }}</span>
           <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
         </div>
-      </div>
+      </details>
 
-      <div class="section">
-        <h3>开发 / 诊断</h3>
+      <details class="settings-section">
+        <summary class="section-heading"><div><h3>高级设置 / Diagnostics</h3><p>Relay、NIP-17 与同步日志</p></div></summary>
         <div class="account-row">
           <span class="small">查看 Relay、NIP-17 与消息同步的本地实时日志</span>
           <button class="btn btn-secondary" type="button" @click="router.push('/debug')">系统诊断</button>
         </div>
-      </div>
+      </details>
     </section>
   </main>
 </template>
@@ -438,7 +441,9 @@ onBeforeUnmount(stopStatusPolling);
 }
 
 .card {
-  padding: 18px;
+  padding: 16px;
+  border: 1px solid #e8edf3;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.035);
 }
 
 h2,
@@ -456,20 +461,47 @@ h3 {
   font-size: 1rem;
 }
 
-.section {
-  padding: 20px 0;
+.settings-section {
+  padding: 0;
   border-top: 1px solid #e2e8f0;
 }
 
-.section:first-of-type {
+.settings-section:first-of-type {
   margin-top: 12px;
 }
 
+.section-heading {
+  min-height: 68px;
+  padding: 13px 28px 13px 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+.section-heading::-webkit-details-marker { display: none; }
+.section-heading::after {
+  content: "›";
+  position: absolute;
+  right: 4px;
+  color: #94a3b8;
+  font-size: 22px;
+  transform: rotate(90deg);
+  transition: transform 160ms ease;
+}
+.settings-section[open] > .section-heading::after { transform: rotate(-90deg); }
+
 .section-heading p {
-  margin-bottom: 14px;
+  margin: 2px 0 0;
   color: #64748b;
   font-size: 0.78rem;
   line-height: 1.5;
+}
+.section-detail {
+  margin: 0 0 14px;
+  color: #64748b;
+  font-size: 0.78rem;
+  line-height: 1.55;
 }
 
 .sync-status {
@@ -616,7 +648,13 @@ h3 {
 .cache-info {
   display: grid;
   gap: 12px;
+  padding-bottom: 16px;
 }
+
+.settings-section > .add-form,
+.settings-section > .media-add-form,
+.settings-section > .item-list,
+.settings-section > .account-row { margin-bottom: 16px; }
 
 .small {
   color: #64748b;
@@ -667,5 +705,9 @@ h3 {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section-heading::after { transition: none; }
 }
 </style>
