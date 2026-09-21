@@ -1,0 +1,22 @@
+name = "hainei-media"
+main = "src/index.ts"
+compatibility_date = "2026-09-15"
+
+[vars]
+AUTH_CHALLENGE_TTL_SECONDS = "300"
+UPLOAD_TOKEN_TTL_SECONDS = "3600"
+MAX_FILE_SIZE_BYTES = "26214400"
+DAILY_UPLOAD_COUNT = "100"
+DAILY_UPLOAD_BYTES = "1073741824"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "blossom-imgbed-db"
+database_id = "REPLACE_WITH_EXISTING_BLOSSOM_D1_DATABASE_ID"
+
+[[services]]
+binding = "BLOSSOM"
+service = "blossom-imgbed"
+
+# Set server-side only with:
+# npx wrangler secret put BLOSSOM_SERVICE_TOKEN --config worker/wrangler.toml
