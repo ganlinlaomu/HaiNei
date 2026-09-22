@@ -35,36 +35,22 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg>
       </button>
     </div>
+    <button v-if="commentCount > 3" class="view-comments" type="button" @click="openComments">查看全部 {{ commentCount }} 条评论</button>
     <div v-if="metaOpen" class="panel">
       <div class="muted">对谁可见:</div>
       <div v-for="group in message._localMeta?.groups || []" :key="group.name" class="meta-row"><span>{{ group.name }}</span><span>{{ group.count }} 人</span></div>
     </div>
-    <section v-if="commentsOpen" class="comments-section">
-      <div class="comments-list">
-        <div v-for="comment in rootComments" :key="comment.id" class="thread">
-          <div :id="`comment-${comment.id}`" class="comment-item">
-            <div class="comment-header"><button class="comment-author" type="button" @click="openAuthor(comment.author, $event)">{{ displayName(comment.author) }}</button><span class="muted"> · {{ formatRelativeTime(comment.timestamp) }}</span></div>
-            <div class="comment-text">{{ comment.text }}</div>
-            <span v-if="comment.pending" class="pending">发送中…</span>
-            <button class="reply" type="button" @click="startReply(comment.id, comment.author)">回复</button>
-          </div>
-          <div v-if="replies(comment.id).length" class="replies">
-            <div v-for="reply in replies(comment.id)" :key="reply.id" class="comment-item reply-item">
-              <div><button class="comment-author" type="button" @click="openAuthor(reply.author, $event)">{{ displayName(reply.author) }}</button><span class="muted"> · {{ formatRelativeTime(reply.timestamp) }}</span></div>
-              <div class="comment-text">{{ reply.text }}</div><span v-if="reply.pending" class="pending">发送中…</span>
-            </div>
-          </div>
-        </div>
-        <div v-if="!rootComments.length" class="muted">暂无评论</div>
-      </div>
-      <div v-if="replyingTo" class="replying"><span>正在回复…</span><button type="button" @click="cancelReply">✕</button></div>
-      <div class="input-row"><input v-model="commentInput" :data-message-id="message.id" placeholder="写下你的评论..." @keyup.enter="addComment" /><button type="button" :disabled="!commentInput.trim()" @click="addComment">发送</button></div>
-    </section>
+    <CommentSheet
+      :visible="commentsOpen"
+      :message="message"
+      :target-comment-id="openCommentId"
+      @close="closeComments"
+    />
   </article>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { InboxItem } from "@/stores/messages";
 import { useFriendsStore } from "@/stores/friends";
 import { useInteractionsStore } from "@/stores/interactions";
@@ -81,6 +67,8 @@ import ProfileAvatar from "./ProfileAvatar.vue";
 import PostImagePreview from "./PostImagePreview.vue";
 import VideoPlayer from "./VideoPlayer.vue";
 import { shouldSendDoubleTapLike } from "@/utils/feedCarousel";
+import CommentSheet from "./CommentSheet.vue";
+import { feedScrollAfterSheetClose } from "@/utils/commentThreads";
 
 const props = defineProps<{ message: InboxItem; openCommentId?: string }>();
 const emit = defineEmits<{ height: [id: string, height: number] }>();
@@ -91,7 +79,6 @@ const feedPreferences = useFeedPreferencesStore();
 const bookmarks = useBookmarksStore();
 const root = ref<HTMLElement | null>(null); const expanded = ref(false); const commentsOpen = ref(false); const metaOpen = ref(false);
 const menuOpen = ref(false);
-const commentInput = ref(""); const replyingTo = ref(""); const replyingAuthor = ref("");
 const patterns = getVideoUrlRemovalPatterns();
 const cleanText = computed(() => (props.message.content || "")
   .replace(/!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/gi, "")
@@ -103,7 +90,6 @@ const displayedText = computed(() => !isLong.value || expanded.value ? cleanText
 const video = computed(() => extractVideoData(props.message.content));
 const liked = computed(() => !!keys.pkHex && interactions.isLikedByUser(props.message.id, keys.pkHex));
 const likeCount = computed(() => interactions.getLikeCount(props.message.id)); const commentCount = computed(() => interactions.getCommentCount(props.message.id));
-const rootComments = computed(() => interactions.getComments(props.message.id).filter(comment => !comment.parentCommentId));
 const isOwn = computed(() => props.message.pubkey === keys.pkHex);
 const bookmarked = computed(() => bookmarks.isBookmarked(props.message.id));
 const visibilityLabel = computed(() => { const groups = props.message._localMeta?.groups || []; return groups.length === 1 && groups[0].name === "全部好友" ? "全部好友" : `${props.message._localMeta?.groupCount || groups.length} 个分组`; });
@@ -135,13 +121,29 @@ async function toggleBookmark() {
   try { await bookmarks.toggle(props.message.id); }
   catch { ui.addToast("收藏失败，请重试", 1800, "error"); }
 }
-function toggleComments() { metaOpen.value = false; commentsOpen.value = !commentsOpen.value; }
-function toggleMeta() { commentsOpen.value = false; metaOpen.value = !metaOpen.value; }
-function replies(id: string) { return interactions.getReplies(props.message.id, id); }
-function startReply(id: string, author: string) { commentsOpen.value = true; replyingTo.value = id; replyingAuthor.value = author; commentInput.value = `@${displayName(author)} `; }
-function cancelReply() { replyingTo.value = ""; replyingAuthor.value = ""; commentInput.value = ""; }
-async function addComment() { const text = commentInput.value.trim(); if (!text) return; const previous = commentInput.value; const parent = replyingTo.value || undefined; const recipient = replyingAuthor.value || props.message.pubkey; cancelReply(); try { await interactions.sendComment(props.message.id, recipient, text, parent); } catch { commentInput.value = previous; ui.addToast("评论发送失败", 1800, "error"); } }
-watch(() => props.openCommentId, value => { if (value) commentsOpen.value = true; }, { immediate: true });
+let feedScrollTop = 0;
+let sheetRoute = "";
+function feedScroller() { return document.querySelector("body > #app") as HTMLElement | null; }
+function openComments() {
+  if (!commentsOpen.value) {
+    feedScrollTop = feedScroller()?.scrollTop || 0;
+    sheetRoute = router.currentRoute.value.fullPath;
+  }
+  metaOpen.value = false;
+  commentsOpen.value = true;
+}
+function toggleComments() { openComments(); }
+function closeComments() {
+  commentsOpen.value = false;
+  void nextTick(() => {
+    const scroller = feedScroller();
+    if (scroller && router.currentRoute.value.fullPath === sheetRoute) {
+      scroller.scrollTop = feedScrollAfterSheetClose(feedScrollTop);
+    }
+  });
+}
+function toggleMeta() { if (commentsOpen.value) closeComments(); metaOpen.value = !metaOpen.value; }
+watch(() => props.openCommentId, value => { if (value) openComments(); }, { immediate: true });
 let observer: ResizeObserver | null = null;
 onMounted(() => { if (!root.value || typeof ResizeObserver === "undefined") return; observer = new ResizeObserver(entries => emit("height", props.message.id, entries[0]?.contentRect.height || 0)); observer.observe(root.value); });
 onBeforeUnmount(() => observer?.disconnect());
@@ -150,8 +152,8 @@ onBeforeUnmount(() => observer?.disconnect());
 <style scoped>
 .post-card{background:#fff;padding:14px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}
 .post-author{display:flex;align-items:center;gap:10px;position:relative}.author-copy{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:2px}.author-copy time,.muted{color:#94a3b8;font-size:12px}.profile-link,.comment-author{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.avatar-link{display:grid;place-items:center;min-width:44px;min-height:44px;margin:-3px}.name-link{min-height:24px;font-size:14px;font-weight:700;text-align:left}.comment-author{min-height:28px;font-weight:700}.profile-link:focus-visible,.comment-author:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}.overflow-wrap{position:relative;align-self:flex-start}.overflow-button{min-width:40px;min-height:40px;border:0;border-radius:8px;background:transparent;color:#64748b;font-weight:700;letter-spacing:1px}.overflow-menu{position:absolute;z-index:20;top:38px;right:0;min-width:160px;padding:5px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-shadow:0 10px 28px rgba(15,23,42,.16)}.overflow-menu button{display:block;width:100%;min-height:42px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:#334155;text-align:left}.overflow-menu button:active{background:#f1f5f9}
-.message-text{margin-top:10px;color:#202938;font-size:15px;line-height:1.62;white-space:pre-wrap;overflow-wrap:anywhere}.text-button,.reply{display:block;min-height:34px;padding:4px 0 0;border:0;background:transparent;color:#2563eb;font:inherit;font-size:13px}
+.message-text{margin-top:10px;color:#202938;font-size:15px;line-height:1.62;white-space:pre-wrap;overflow-wrap:anywhere}.text-button{display:block;min-height:34px;padding:4px 0 0;border:0;background:transparent;color:#2563eb;font:inherit;font-size:13px}
 .actions{display:flex;align-items:center;gap:4px;margin-top:8px;padding-top:7px;border-top:1px solid #f1f5f9}.action{min-height:42px;padding:6px 9px;border:0;border-radius:8px;background:transparent;color:#334155;font-size:14px}.icon-action{display:inline-flex;align-items:center;gap:5px}.icon-action svg{width:25px;height:25px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.action span{font-size:12px;color:#64748b}.action.liked{color:#ef4444}.action.liked svg,.action.bookmark.saved svg{fill:currentColor}.visibility{margin-left:auto;color:#475569}.bookmark{margin-left:auto}.visibility+.bookmark{margin-left:0}
-.panel,.comments-section{margin-top:10px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f8fafc}.meta-row{display:flex;justify-content:space-between;margin-top:6px;font-size:13px}.comments-list{display:flex;flex-direction:column;gap:8px;max-height:300px;overflow:auto;margin-bottom:10px}.thread{display:flex;flex-direction:column;gap:8px}.comment-item{padding:8px;border-radius:7px;background:#fff}.comment-text{font-size:13px;overflow-wrap:anywhere}.reply{min-height:30px;color:#64748b}.replies{display:flex;flex-direction:column;gap:8px;margin-left:24px;padding-left:12px;border-left:2px solid #e2e8f0}.reply-item{border:1px solid #e2e8f0}.pending{font-size:11px;color:#94a3b8}.replying{display:flex;justify-content:space-between;padding:4px 8px;border-radius:6px;background:#eff6ff;color:#1976d2;font-size:12px}.replying button{border:0;background:transparent}.input-row{display:flex;gap:8px;margin-top:8px}.input-row input{flex:1;min-width:0;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:16px}.input-row button{padding:8px 16px;border:0;border-radius:8px;background:#1976d2;color:#fff}.input-row button:disabled{opacity:.5}
+.panel{margin-top:10px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f8fafc}.meta-row{display:flex;justify-content:space-between;margin-top:6px;font-size:13px}.view-comments{min-height:34px;padding:2px 8px;border:0;background:transparent;color:#64748b;font-size:12px;text-align:left}
 @media(min-width:640px){.post-card{padding:16px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 </style>

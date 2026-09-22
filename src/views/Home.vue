@@ -740,6 +740,13 @@ async function safeUpdateLocalRefs() {
     return;
   }
 
+  // CommentSheet owns comment scrolling/highlighting. Keep the feed positioned
+  // on the post and avoid scrolling the background container behind the sheet.
+  if (iid) {
+    notificationJumpDone.value = true;
+    return;
+  }
+
   // ④ 滚动 + 高亮
   // Use custom scroll calculation to prevent bottom bar from disappearing
   // when scrolling to elements near the bottom
