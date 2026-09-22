@@ -23,22 +23,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useKeyStore } from "@/stores/keys";
-import {
-  ensureProfile,
-  markProfilePictureFailed,
-  profileDisplayName,
-  usableProfilePicture
-} from "@/services/profileCache";
+import { privateProfileDisplayName, profileAvatarInitial, useProfilesStore } from "@/stores/profiles";
+import { loadPrivateProfileAvatar } from "@/utils/profileAvatar";
 
 const props = withDefaults(defineProps<{ pubkey: string; localName?: string; size?: number }>(), { size: 38 });
 const keys = useKeyStore();
+const profiles = useProfilesStore();
 const imageLoaded = ref(false);
 const imageFailed = ref(false);
-const displayName = computed(() => profileDisplayName(keys.pkHex, props.pubkey, props.localName));
-const picture = computed(() => usableProfilePicture(keys.pkHex, props.pubkey));
-const initial = computed(() => (displayName.value.trim()[0] || "?").toUpperCase());
+const picture = ref("");
+const privateProfile = computed(() => profiles.getProfile(props.pubkey));
+const displayName = computed(() => privateProfileDisplayName(privateProfile.value?.nickname, props.pubkey, props.localName));
+const initial = computed(() => profileAvatarInitial(privateProfile.value?.nickname, props.pubkey, props.localName));
 const hue = computed(() => {
   let hash = 0;
   for (const char of props.pubkey) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
@@ -50,21 +48,37 @@ const avatarStyle = computed(() => ({
   "--avatar-color": `hsl(${hue.value} 48% 48%)`
 }));
 
-watch([() => keys.pkHex, () => props.pubkey], ([account, pubkey]) => {
+let objectUrl = "";
+let generation = 0;
+function clearObjectUrl() {
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = "";
+}
+
+watch([() => keys.pkHex, () => props.pubkey, () => privateProfile.value?.avatar], async ([account, _pubkey, avatar]) => {
+  const current = ++generation;
+  clearObjectUrl();
+  picture.value = "";
   imageLoaded.value = false;
   imageFailed.value = false;
-  ensureProfile(account, pubkey);
+  if (!account) return;
+  if (profiles.loadedFor !== account) await profiles.load(account);
+  if (!avatar || current !== generation || keys.pkHex !== account) return;
+  try {
+    const blob = await loadPrivateProfileAvatar(account, avatar);
+    if (current !== generation || keys.pkHex !== account) return;
+    objectUrl = URL.createObjectURL(blob);
+    picture.value = objectUrl;
+  } catch {
+    if (current === generation) imageFailed.value = true;
+  }
 }, { immediate: true });
-watch(picture, () => {
-  imageLoaded.value = false;
-  imageFailed.value = false;
-});
 
 function handleImageError() {
   imageLoaded.value = false;
   imageFailed.value = true;
-  markProfilePictureFailed(keys.pkHex, props.pubkey, picture.value);
 }
+onBeforeUnmount(() => { generation++; clearObjectUrl(); });
 </script>
 
 <style scoped>

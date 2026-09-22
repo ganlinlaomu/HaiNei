@@ -21,6 +21,11 @@
     <section v-else class="card">
       <h2>设置</h2>
 
+      <button class="profile-link" type="button" @click="router.push('/settings/profile')">
+        <span><strong>我的资料</strong><small>头像、昵称与简介 · 仅自己和已接受的好友可见</small></span>
+        <span aria-hidden="true">›</span>
+      </button>
+
       <details class="settings-section" open>
         <summary class="section-heading">
           <div>
@@ -476,6 +481,7 @@ h3 {
   padding: 0;
   border-top: 1px solid #e2e8f0;
 }
+.profile-link{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 0 4px;padding:13px 4px;border:0;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;background:transparent;text-align:left;color:#1e293b}.profile-link span:first-child{display:grid;gap:4px}.profile-link small{color:#64748b;font-size:.78rem}.profile-link span:last-child{color:#94a3b8;font-size:22px}
 
 .settings-section:first-of-type {
   margin-top: 12px;

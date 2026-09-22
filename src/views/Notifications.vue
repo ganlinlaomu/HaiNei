@@ -191,7 +191,7 @@ import { useMessagesStore } from "@/stores/messages";
 import NotificationTypeIcon from "@/components/NotificationTypeIcon.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { useKeyStore } from "@/stores/keys";
-import { localProfileName, profileDisplayName } from "@/services/profileCache";
+import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 
 const notifications = useNotificationsStore();
 const friends = useFriendsStore();
@@ -199,6 +199,7 @@ const interactions = useInteractionsStore();
 const messagesStore = useMessagesStore();
 const router = useRouter();
 const keys = useKeyStore();
+const profiles = useProfilesStore();
 
 type NotificationTab = "all" | "comments" | "likes" | "friends";
 const activeTab = ref<NotificationTab>("all");
@@ -285,9 +286,9 @@ function dismiss(n: any) {
   swipe[n.id] = 0;
 }
 function displayName(pk: string) {
-  return profileDisplayName(keys.pkHex, pk, localName(pk));
+  return privateProfileDisplayName(profiles.getProfile(pk)?.nickname, pk, localName(pk));
 }
-function localName(pk: string) { return localProfileName(pk, friendsByPubkey.value.get(pk)?.name); }
+function localName(pk: string) { return friendsByPubkey.value.get(pk)?.name; }
 function notificationIconType(n: any): "like" | "comment" | "reply" | "friend" {
   if (n.type === "like") return "like";
   if (n.type === "friend_request") return "friend";

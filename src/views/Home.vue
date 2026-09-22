@@ -75,6 +75,7 @@ import { MessageSyncManager } from "@/nostr/messaging/sync";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { useNotificationsStore } from "@/stores/notifications";
+import { useProfilesStore } from "@/stores/profiles";
 
 
 // reuse the regex logic from extractImageUrls to strip out image markdown and plain image URLs
@@ -113,6 +114,7 @@ export default defineComponent({
     const interactions = useInteractionsStore();
     const settings = useSettingsStore();
     const notifications = useNotificationsStore();
+    const profiles = useProfilesStore();
     const readyForPending = ref(false);
     const route = useRoute();
     const realtimeSessionSince = ref(0);
@@ -837,6 +839,7 @@ async function safeUpdateLocalRefs() {
         try {
           await friends.load(accountPk);
           await friendships.load(accountPk);
+          await profiles.load(accountPk);
         } catch (error) {
           logger.warn("[message-sync] friend list unavailable; continuing receive sync", {
             account: accountPk.slice(0, 12),
@@ -885,6 +888,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
                   .every(pubkey => friendships.isAccepted(pubkey))
               : friendships.isAccepted(message.senderPubkey),
             processFriendshipMessage: message => friendships.processFriendshipMessage(message),
+            processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
             notifyFriendshipMessage: message => {
               const notification = incomingFriendRequestNotification(message, accountAtStart);
               if (notification) {

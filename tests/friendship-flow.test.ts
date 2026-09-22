@@ -17,7 +17,8 @@ const mocks = vi.hoisted(() => ({
   send: vi.fn(),
   list: vi.fn(),
   put: vi.fn(),
-  delete: vi.fn()
+  delete: vi.fn(),
+  sendCurrentProfileTo: vi.fn()
 }));
 
 vi.mock("@/stores/keys", () => ({ useKeyStore: () => mocks.key }));
@@ -25,6 +26,9 @@ vi.mock("@/nostr/relays", () => ({ getRelaysFromStorage: () => ["wss://relay.tes
 vi.mock("@/nostr/messaging/service", () => ({ sendDirectMessage: mocks.send }));
 vi.mock("@/repositories/friendshipRepository", () => ({
   friendshipRepository: { list: mocks.list, put: mocks.put, delete: mocks.delete }
+}));
+vi.mock("@/stores/profiles", () => ({
+  useProfilesStore: () => ({ sendCurrentProfileTo: mocks.sendCurrentProfileTo })
 }));
 
 import { useFriendshipsStore } from "@/stores/friendships";
@@ -57,6 +61,7 @@ beforeEach(() => {
   mocks.list.mockResolvedValue([]);
   mocks.put.mockResolvedValue(undefined);
   mocks.delete.mockResolvedValue(undefined);
+  mocks.sendCurrentProfileTo.mockResolvedValue(undefined);
   mocks.send.mockImplementation(async (options: any) => ({
     message: {
       id: `sent-${options.tags?.[1]?.[1] || "normal"}`,
@@ -149,6 +154,16 @@ describe("friendship state and message authorization", () => {
     expect(friendships.getState(PEER)).toBe("accepted");
     expect(friends.list).toEqual([expect.objectContaining({ pubkey: PEER, name: `${PEER.slice(0, 8)}…` })]);
     expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ tags: friendshipTags("accept") }));
+    expect(mocks.sendCurrentProfileTo).toHaveBeenCalledWith(PEER);
+  });
+
+  it("sends the current profile when an outgoing request becomes accepted", async () => {
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "outgoing_pending", updatedAt: 1 }];
+    await friendships.processFriendshipMessage(message("accept"));
+    expect(friendships.getState(PEER)).toBe("accepted");
+    expect(mocks.sendCurrentProfileTo).toHaveBeenCalledWith(PEER);
   });
 
   it("clears pending state on reject", async () => {

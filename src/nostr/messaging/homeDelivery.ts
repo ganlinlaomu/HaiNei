@@ -2,6 +2,7 @@ import type { CanonicalMessage } from "./protocol";
 import type { MessageIngestionMetadata } from "./sync/types";
 import { debugLog } from "@/utils/debugLog";
 import { decodeFriendshipControl, isFriendshipControlMessage } from "@/nostr/messaging/friendshipControl";
+import { isHaiNeiProfileMessage } from "@/nostr/messaging/privateProfile";
 import type { NotificationItem } from "@/stores/notifications";
 
 export function incomingFriendRequestNotification(message: CanonicalMessage, accountPubkey: string): NotificationItem | null {
@@ -23,6 +24,7 @@ export type HomeMessageDelivery = {
   isAcceptedMessage?: (message: CanonicalMessage) => boolean;
   processFriendshipMessage?: (message: CanonicalMessage) => boolean | Promise<boolean>;
   notifyFriendshipMessage?: (message: CanonicalMessage) => void;
+  processProfileMessage?: (message: CanonicalMessage) => boolean | Promise<boolean>;
   isInteraction: (message: CanonicalMessage) => boolean;
   processInteraction: (message: CanonicalMessage) => void | Promise<void>;
   mirrorMessage: (message: CanonicalMessage) => void;
@@ -47,6 +49,11 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
       await delivery.processFriendshipMessage?.(message);
       delivery.notifyFriendshipMessage?.(message);
       debugLog("ui", "ui_friendship_control_routed", diagnostic, "info");
+      return false;
+    }
+    if (isHaiNeiProfileMessage(message)) {
+      await delivery.processProfileMessage?.(message);
+      debugLog("ui", "ui_private_profile_routed", diagnostic, "info");
       return false;
     }
     if (delivery.isAcceptedMessage && !delivery.isAcceptedMessage(message)) {

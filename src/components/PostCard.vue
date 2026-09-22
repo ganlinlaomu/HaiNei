@@ -51,7 +51,7 @@ import { useInteractionsStore } from "@/stores/interactions";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import { formatRelativeTime } from "@/utils/format";
-import { localProfileName, profileDisplayName } from "@/services/profileCache";
+import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { extractVideoData, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import PostImagePreview from "./PostImagePreview.vue";
@@ -60,6 +60,7 @@ import VideoPlayer from "./VideoPlayer.vue";
 const props = defineProps<{ message: InboxItem; openCommentId?: string }>();
 const emit = defineEmits<{ height: [id: string, height: number] }>();
 const keys = useKeyStore(); const friends = useFriendsStore(); const interactions = useInteractionsStore(); const ui = useUIStore();
+const profiles = useProfilesStore();
 const root = ref<HTMLElement | null>(null); const expanded = ref(false); const commentsOpen = ref(false); const metaOpen = ref(false);
 const commentInput = ref(""); const replyingTo = ref(""); const replyingAuthor = ref("");
 const patterns = getVideoUrlRemovalPatterns();
@@ -76,8 +77,8 @@ const likeCount = computed(() => interactions.getLikeCount(props.message.id)); c
 const rootComments = computed(() => interactions.getComments(props.message.id).filter(comment => !comment.parentCommentId));
 const isOwn = computed(() => props.message.pubkey === keys.pkHex);
 const visibilityLabel = computed(() => { const groups = props.message._localMeta?.groups || []; return groups.length === 1 && groups[0].name === "全部好友" ? "全部好友" : `${props.message._localMeta?.groupCount || groups.length} 个分组`; });
-function localName(pubkey: string) { if (pubkey === keys.pkHex) return "自己"; return localProfileName(pubkey, friends.list.find(friend => friend.pubkey === pubkey)?.name); }
-function displayName(pubkey: string) { return profileDisplayName(keys.pkHex, pubkey, localName(pubkey)); }
+function localName(pubkey: string) { if (pubkey === keys.pkHex) return "自己"; return friends.list.find(friend => friend.pubkey === pubkey)?.name; }
+function displayName(pubkey: string) { return privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey)); }
 async function toggleLike() { try { liked.value ? await interactions.removeLike(props.message.id, props.message.pubkey) : await interactions.sendLike(props.message.id, props.message.pubkey); } catch { ui.addToast("操作失败，请重试", 1800, "error"); } }
 function toggleComments() { metaOpen.value = false; commentsOpen.value = !commentsOpen.value; }
 function toggleMeta() { commentsOpen.value = false; metaOpen.value = !metaOpen.value; }

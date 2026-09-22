@@ -175,7 +175,7 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { useRoute } from "vue-router";
 import { formatRelativeTime } from "@/utils/format";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
-import { localProfileName, profileDisplayName } from "@/services/profileCache";
+import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 
 export default defineComponent({
   name: "Friends",
@@ -186,6 +186,7 @@ export default defineComponent({
     const keys = useKeyStore();
     const notifications = useNotificationsStore();
     const route = useRoute();
+    const profiles = useProfilesStore();
 
     const showModal = ref(false);
     const editMode = ref(false);
@@ -224,8 +225,8 @@ export default defineComponent({
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
     const incomingRequests = computed(() => friendships.getIncomingRequests());
     const outgoingRequests = computed(() => friendships.getOutgoingRequests());
-    const localContactName = (pubkey: string) => localProfileName(pubkey, friends.list.find(friend => friend.pubkey === pubkey)?.name);
-    const contactName = (pubkey: string) => profileDisplayName(keys.pkHex, pubkey, localContactName(pubkey));
+    const localContactName = (pubkey: string) => friends.list.find(friend => friend.pubkey === pubkey)?.name;
+    const contactName = (pubkey: string) => privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localContactName(pubkey));
     const requestAge = (timestamp: number) => formatRelativeTime(timestamp);
 
     function toggleFriendMenu(pubkey: string) {
@@ -275,6 +276,7 @@ export default defineComponent({
     onMounted(async () => {
       await friends.load();
       await friendships.load();
+      await profiles.load();
     });
     watch(() => route.query.section, section => {
       if (section === "incoming") activeSection.value = "incoming";

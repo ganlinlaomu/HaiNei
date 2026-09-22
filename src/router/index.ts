@@ -5,6 +5,7 @@ import Home from "@/views/Home.vue";
 // Lazy load less frequently accessed views
 const Friends = () => import("@/views/Friends.vue");
 const Settings = () => import("@/views/Settings.vue");
+const MyProfile = () => import("@/views/MyProfile.vue");
 const Notifications = () => import("@/views/Notifications.vue");
 const Debug = () => import("@/views/Debug.vue");
 import { useKeyStore } from "@/stores/keys";
@@ -52,6 +53,12 @@ const routes: Array<RouteRecordRaw> = [
     path: "/settings",
     name: "Settings",
     component: Settings,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/settings/profile",
+    name: "MyProfile",
+    component: MyProfile,
     meta: { requiresAuth: true }
   },
   {
