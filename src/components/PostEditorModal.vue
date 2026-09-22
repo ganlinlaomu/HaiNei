@@ -121,9 +121,8 @@
                   v-for="g in groups"
                   :key="g"
                   class="chip"
-                  :class="{ 'chip-selected': selectedSet.has(g) && !allFriends }"
+                  :class="{ 'chip-selected': selectedSet.has(g) }"
                   @click="toggleGroup(g)"
-                  :disabled="allFriends"
                   role="listitem"
                   type="button"
                 >
@@ -324,7 +323,7 @@ export default defineComponent({
 
     const visibilitySummary = computed(() => allFriends.value
       ? "全部好友"
-      : selectedGroups.value.length > 0 ? `${selectedGroups.value.length} 个分组` : "仅自己");
+      : selectedGroups.value.length > 0 ? `${selectedGroups.value.length} 个分组` : "仅自己可见");
 
     function gLabel(g: string) {
       return g === "未分组" ? "未分组" : g;
@@ -332,11 +331,15 @@ export default defineComponent({
 
     function toggleAll() {
       allFriends.value = !allFriends.value;
-      if (allFriends.value) selectedGroups.value = [];
+      selectedGroups.value = [];
     }
 
     function toggleGroup(g: string) {
-      if (allFriends.value) return;
+      if (allFriends.value) {
+        allFriends.value = false;
+        selectedGroups.value = [g];
+        return;
+      }
       const idx = selectedGroups.value.indexOf(g);
       if (idx === -1) selectedGroups.value.push(g);
       else selectedGroups.value.splice(idx, 1);
@@ -769,8 +772,6 @@ export default defineComponent({
         if (it.preview) { try { URL.revokeObjectURL(it.preview) } catch {} }
       }
     });
-
-    watch(()=>groups.value, (g)=>{ if (g.length===0) { allFriends.value = true; selectedGroups.value = [] } });
 
     async function onSend() {
       // Use pkHex check for consistency with onMounted and reliability
