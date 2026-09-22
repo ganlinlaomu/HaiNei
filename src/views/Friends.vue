@@ -33,9 +33,11 @@
       <div v-if="acceptedFriends.length === 0" class="small">还没有已确认好友</div>
       <div class="list" v-else>
         <div v-for="f in acceptedFriends" :key="f.pubkey" class="friend-item">
-          <ProfileAvatar :pubkey="f.pubkey" :local-name="localContactName(f.pubkey)" :size="38" />
+          <button class="friend-profile avatar-profile" type="button" :aria-label="`查看 ${contactName(f.pubkey)} 的资料`" @click="openFriendProfile(f.pubkey, $event)">
+            <ProfileAvatar :pubkey="f.pubkey" :local-name="localContactName(f.pubkey)" :size="38" />
+          </button>
           <div class="friend-info">
-            <div><strong>{{ contactName(f.pubkey) }}</strong></div>
+            <button class="friend-profile name-profile" type="button" @click="openFriendProfile(f.pubkey, $event)">{{ contactName(f.pubkey) }}</button>
             <div class="small">
               <span v-if="f.groups && f.groups.length > 0">
                 {{ f.groups[0] }}
@@ -172,10 +174,11 @@ import { useKeyStore } from "@/stores/keys";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { keyToHex } from "@/utils/format";
 import { useNotificationsStore } from "@/stores/notifications";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { formatRelativeTime } from "@/utils/format";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
+import { openProfile } from "@/utils/profileNavigation";
 
 export default defineComponent({
   name: "Friends",
@@ -186,6 +189,7 @@ export default defineComponent({
     const keys = useKeyStore();
     const notifications = useNotificationsStore();
     const route = useRoute();
+    const router = useRouter();
     const profiles = useProfilesStore();
 
     const showModal = ref(false);
@@ -231,6 +235,9 @@ export default defineComponent({
 
     function toggleFriendMenu(pubkey: string) {
       openFriendMenu.value = openFriendMenu.value === pubkey ? "" : pubkey;
+    }
+    function openFriendProfile(pubkey: string, event?: Event) {
+      return openProfile(router, keys.pkHex, pubkey, event);
     }
 
     // Filter groups based on current input
@@ -506,6 +513,7 @@ export default defineComponent({
       saving,
       openFriendMenu,
       toggleFriendMenu,
+      openFriendProfile,
       showSyncSuccess,
       isFadingOut,
       startAdd,
@@ -612,6 +620,7 @@ export default defineComponent({
   flex: 1;
   min-width: 0;
 }
+.friend-profile{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.avatar-profile{display:grid;place-items:center;min-width:44px;min-height:44px;margin:-3px}.name-profile{min-height:30px;font-weight:700;text-align:left}.friend-profile:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}
 
 .friend-actions {
   display: flex;

@@ -1,8 +1,10 @@
 <template>
   <article ref="root" :id="`msg-${message.id}`" class="post-card">
     <header class="post-author">
-      <ProfileAvatar :pubkey="message.pubkey" :local-name="localName(message.pubkey)" :size="38" />
-      <div class="author-copy"><strong>{{ displayName(message.pubkey) }}</strong><time :datetime="new Date(message.created_at * 1000).toISOString()">{{ formatRelativeTime(message.created_at) }}</time></div>
+      <button class="profile-link avatar-link" type="button" :aria-label="`查看 ${displayName(message.pubkey)} 的资料`" @click="openAuthor(message.pubkey, $event)">
+        <ProfileAvatar :pubkey="message.pubkey" :local-name="localName(message.pubkey)" :size="38" />
+      </button>
+      <div class="author-copy"><button class="profile-link name-link" type="button" @click="openAuthor(message.pubkey, $event)">{{ displayName(message.pubkey) }}</button><time :datetime="new Date(message.created_at * 1000).toISOString()">{{ formatRelativeTime(message.created_at) }}</time></div>
     </header>
     <div v-if="cleanText" class="message-text">
       {{ displayedText }}
@@ -23,14 +25,14 @@
       <div class="comments-list">
         <div v-for="comment in rootComments" :key="comment.id" class="thread">
           <div :id="`comment-${comment.id}`" class="comment-item">
-            <div class="comment-header"><strong>{{ displayName(comment.author) }}</strong><span class="muted"> · {{ formatRelativeTime(comment.timestamp) }}</span></div>
+            <div class="comment-header"><button class="comment-author" type="button" @click="openAuthor(comment.author, $event)">{{ displayName(comment.author) }}</button><span class="muted"> · {{ formatRelativeTime(comment.timestamp) }}</span></div>
             <div class="comment-text">{{ comment.text }}</div>
             <span v-if="comment.pending" class="pending">发送中…</span>
             <button class="reply" type="button" @click="startReply(comment.id, comment.author)">回复</button>
           </div>
           <div v-if="replies(comment.id).length" class="replies">
             <div v-for="reply in replies(comment.id)" :key="reply.id" class="comment-item reply-item">
-              <div><strong>{{ displayName(reply.author) }}</strong><span class="muted"> · {{ formatRelativeTime(reply.timestamp) }}</span></div>
+              <div><button class="comment-author" type="button" @click="openAuthor(reply.author, $event)">{{ displayName(reply.author) }}</button><span class="muted"> · {{ formatRelativeTime(reply.timestamp) }}</span></div>
               <div class="comment-text">{{ reply.text }}</div><span v-if="reply.pending" class="pending">发送中…</span>
             </div>
           </div>
@@ -53,6 +55,8 @@ import { useUIStore } from "@/stores/ui";
 import { formatRelativeTime } from "@/utils/format";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { extractVideoData, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
+import { openProfile } from "@/utils/profileNavigation";
+import { useRouter } from "vue-router";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import PostImagePreview from "./PostImagePreview.vue";
 import VideoPlayer from "./VideoPlayer.vue";
@@ -61,6 +65,7 @@ const props = defineProps<{ message: InboxItem; openCommentId?: string }>();
 const emit = defineEmits<{ height: [id: string, height: number] }>();
 const keys = useKeyStore(); const friends = useFriendsStore(); const interactions = useInteractionsStore(); const ui = useUIStore();
 const profiles = useProfilesStore();
+const router = useRouter();
 const root = ref<HTMLElement | null>(null); const expanded = ref(false); const commentsOpen = ref(false); const metaOpen = ref(false);
 const commentInput = ref(""); const replyingTo = ref(""); const replyingAuthor = ref("");
 const patterns = getVideoUrlRemovalPatterns();
@@ -79,6 +84,7 @@ const isOwn = computed(() => props.message.pubkey === keys.pkHex);
 const visibilityLabel = computed(() => { const groups = props.message._localMeta?.groups || []; return groups.length === 1 && groups[0].name === "全部好友" ? "全部好友" : `${props.message._localMeta?.groupCount || groups.length} 个分组`; });
 function localName(pubkey: string) { if (pubkey === keys.pkHex) return "自己"; return friends.list.find(friend => friend.pubkey === pubkey)?.name; }
 function displayName(pubkey: string) { return privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey)); }
+function openAuthor(pubkey: string, event?: Event) { return openProfile(router, keys.pkHex, pubkey, event); }
 async function toggleLike() { try { liked.value ? await interactions.removeLike(props.message.id, props.message.pubkey) : await interactions.sendLike(props.message.id, props.message.pubkey); } catch { ui.addToast("操作失败，请重试", 1800, "error"); } }
 function toggleComments() { metaOpen.value = false; commentsOpen.value = !commentsOpen.value; }
 function toggleMeta() { commentsOpen.value = false; metaOpen.value = !metaOpen.value; }
@@ -94,7 +100,7 @@ onBeforeUnmount(() => observer?.disconnect());
 
 <style scoped>
 .post-card{background:#fff;padding:14px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}
-.post-author{display:flex;align-items:center;gap:10px}.author-copy{display:flex;flex-direction:column;gap:2px}.author-copy strong{font-size:14px}.author-copy time,.muted{color:#94a3b8;font-size:12px}
+.post-author{display:flex;align-items:center;gap:10px}.author-copy{display:flex;flex-direction:column;align-items:flex-start;gap:2px}.author-copy time,.muted{color:#94a3b8;font-size:12px}.profile-link,.comment-author{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.avatar-link{display:grid;place-items:center;min-width:44px;min-height:44px;margin:-3px}.name-link{min-height:24px;font-size:14px;font-weight:700;text-align:left}.comment-author{min-height:28px;font-weight:700}.profile-link:focus-visible,.comment-author:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}
 .message-text{margin-top:10px;color:#202938;font-size:15px;line-height:1.62;white-space:pre-wrap;overflow-wrap:anywhere}.text-button,.reply{display:block;min-height:34px;padding:4px 0 0;border:0;background:transparent;color:#2563eb;font:inherit;font-size:13px}
 .actions{display:flex;align-items:center;gap:4px;margin-top:12px;padding-top:9px;border-top:1px solid #f1f5f9}.action{min-height:38px;padding:6px 11px;border:0;border-radius:8px;background:transparent;color:#64748b;font-size:14px}.action span{font-size:12px;color:#94a3b8}.action.liked{color:#ef4444}.visibility{margin-left:auto;color:#475569}
 .panel,.comments-section{margin-top:10px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f8fafc}.meta-row{display:flex;justify-content:space-between;margin-top:6px;font-size:13px}.comments-list{display:flex;flex-direction:column;gap:8px;max-height:300px;overflow:auto;margin-bottom:10px}.thread{display:flex;flex-direction:column;gap:8px}.comment-item{padding:8px;border-radius:7px;background:#fff}.comment-text{font-size:13px;overflow-wrap:anywhere}.reply{min-height:30px;color:#64748b}.replies{display:flex;flex-direction:column;gap:8px;margin-left:24px;padding-left:12px;border-left:2px solid #e2e8f0}.reply-item{border:1px solid #e2e8f0}.pending{font-size:11px;color:#94a3b8}.replying{display:flex;justify-content:space-between;padding:4px 8px;border-radius:6px;background:#eff6ff;color:#1976d2;font-size:12px}.replying button{border:0;background:transparent}.input-row{display:flex;gap:8px;margin-top:8px}.input-row input{flex:1;min-width:0;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:16px}.input-row button{padding:8px 16px;border:0;border-radius:8px;background:#1976d2;color:#fff}.input-row button:disabled{opacity:.5}

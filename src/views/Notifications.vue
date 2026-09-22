@@ -54,13 +54,15 @@
               @click="go(n)"
             >
               <div class="notification-identity">
-                <ProfileAvatar :pubkey="n.from" :local-name="localName(n.from)" :size="36" />
+                <button class="sender-avatar" type="button" :aria-label="`查看 ${displayName(n.from)} 的资料`" @click.stop="openSenderProfile(n.from, $event)">
+                  <ProfileAvatar :pubkey="n.from" :local-name="localName(n.from)" :size="36" />
+                </button>
                 <NotificationTypeIcon :kind="notificationIconType(n)" />
               </div>
 
               <div class="content">
                 <div class="text">
-                  <span class="from">{{ displayName(n.from) }}</span>
+                  <button class="from" type="button" @click.stop="openSenderProfile(n.from, $event)">{{ displayName(n.from) }}</button>
                   {{ notificationAction(n) }}
                 </div>
 
@@ -104,13 +106,15 @@
               @click="go(n)"
             >
               <div class="notification-identity">
-                <ProfileAvatar :pubkey="n.from" :local-name="localName(n.from)" :size="36" />
+                <button class="sender-avatar" type="button" :aria-label="`查看 ${displayName(n.from)} 的资料`" @click.stop="openSenderProfile(n.from, $event)">
+                  <ProfileAvatar :pubkey="n.from" :local-name="localName(n.from)" :size="36" />
+                </button>
                 <NotificationTypeIcon :kind="notificationIconType(n)" />
               </div>
 
               <div class="content">
                 <div class="text">
-                  <span class="from">{{ displayName(n.from) }}</span>
+                  <button class="from" type="button" @click.stop="openSenderProfile(n.from, $event)">{{ displayName(n.from) }}</button>
                   {{ notificationAction(n) }}
                 </div>
 
@@ -153,13 +157,15 @@
               @click="go(n)"
             >
               <div class="notification-identity">
-                <ProfileAvatar :pubkey="n.from" :local-name="localName(n.from)" :size="36" />
+                <button class="sender-avatar" type="button" :aria-label="`查看 ${displayName(n.from)} 的资料`" @click.stop="openSenderProfile(n.from, $event)">
+                  <ProfileAvatar :pubkey="n.from" :local-name="localName(n.from)" :size="36" />
+                </button>
                 <NotificationTypeIcon :kind="notificationIconType(n)" />
               </div>
 
               <div class="content">
                 <div class="text">
-                  <span class="from">{{ displayName(n.from) }}</span>
+                  <button class="from" type="button" @click.stop="openSenderProfile(n.from, $event)">{{ displayName(n.from) }}</button>
                   {{ notificationAction(n) }}
                 </div>
 
@@ -192,6 +198,7 @@ import NotificationTypeIcon from "@/components/NotificationTypeIcon.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
+import { openProfile } from "@/utils/profileNavigation";
 
 const notifications = useNotificationsStore();
 const friends = useFriendsStore();
@@ -289,6 +296,9 @@ function displayName(pk: string) {
   return privateProfileDisplayName(profiles.getProfile(pk)?.nickname, pk, localName(pk));
 }
 function localName(pk: string) { return friendsByPubkey.value.get(pk)?.name; }
+function openSenderProfile(pubkey: string, event: Event) {
+  return openProfile(router, keys.pkHex, pubkey, event);
+}
 function notificationIconType(n: any): "like" | "comment" | "reply" | "friend" {
   if (n.type === "like") return "like";
   if (n.type === "friend_request") return "friend";
@@ -449,6 +459,7 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   height: 38px;
   flex: 0 0 38px;
 }
+.sender-avatar{display:grid;place-items:center;width:44px;height:44px;margin:-3px;border:0;background:transparent;cursor:pointer}.sender-avatar:focus-visible,.from:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}
 .notification-identity :deep(.notification-type-icon) {
   position: absolute;
   right: -2px;
@@ -465,7 +476,14 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   flex: 1;
 }
 .from {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   font-weight: 600;
+  cursor: pointer;
 }
 .comment-content {
   font-size: 13px;

@@ -6,6 +6,7 @@ import Home from "@/views/Home.vue";
 const Friends = () => import("@/views/Friends.vue");
 const Settings = () => import("@/views/Settings.vue");
 const MyProfile = () => import("@/views/MyProfile.vue");
+const Profile = () => import("@/views/Profile.vue");
 const Notifications = () => import("@/views/Notifications.vue");
 const Debug = () => import("@/views/Debug.vue");
 import { useKeyStore } from "@/stores/keys";
@@ -59,6 +60,12 @@ const routes: Array<RouteRecordRaw> = [
     path: "/settings/profile",
     name: "MyProfile",
     component: MyProfile,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/profile/:pubkey",
+    name: "Profile",
+    component: Profile,
     meta: { requiresAuth: true }
   },
   {
