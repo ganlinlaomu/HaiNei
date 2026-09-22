@@ -19,12 +19,21 @@
       {{ displayedText }}
       <button v-if="isLong" class="text-button" type="button" @click="expanded = !expanded">{{ expanded ? "收起" : "全文" }}</button>
     </div>
-    <PostImagePreview v-if="message.content" :content="message.content" :show-all="true" />
+    <PostImagePreview v-if="message.content" :content="message.content" :show-all="true" @double-like="likeFromImage" />
     <VideoPlayer v-if="video" :video-data="video" />
     <div class="actions">
-      <button class="action" :class="{ liked }" type="button" :aria-pressed="liked" @click="toggleLike">{{ liked ? "已赞" : "赞" }} <span v-if="likeCount">{{ likeCount }}</span></button>
-      <button class="action" type="button" :aria-expanded="commentsOpen" @click="toggleComments">评论 <span v-if="commentCount">{{ commentCount }}</span></button>
+      <button class="action icon-action" :class="{ liked }" type="button" :aria-label="liked ? '取消点赞' : '点赞'" :aria-pressed="liked" @click="toggleLike">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z"/></svg>
+        <span v-if="likeCount">{{ likeCount }}</span>
+      </button>
+      <button class="action icon-action" type="button" aria-label="评论" :aria-expanded="commentsOpen" @click="toggleComments">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.5 9.6 9.6 0 0 1-4-.9L3 21l1.7-4.2A8.2 8.2 0 0 1 3 11.5a8.5 8.5 0 0 1 9-8.5 8.5 8.5 0 0 1 9 8.5Z"/></svg>
+        <span v-if="commentCount">{{ commentCount }}</span>
+      </button>
       <button v-if="isOwn && message._localMeta?.groupCount" class="action visibility" type="button" :aria-expanded="metaOpen" @click="toggleMeta">{{ visibilityLabel }}</button>
+      <button class="action icon-action bookmark" :class="{ saved: bookmarked }" type="button" :aria-label="bookmarked ? '取消收藏' : '收藏'" :aria-pressed="bookmarked" @click="toggleBookmark">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg>
+      </button>
     </div>
     <div v-if="metaOpen" class="panel">
       <div class="muted">对谁可见:</div>
@@ -67,9 +76,11 @@ import { extractVideoData, getVideoUrlRemovalPatterns } from "@/utils/videoUtils
 import { openProfile } from "@/utils/profileNavigation";
 import { useRouter } from "vue-router";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
+import { useBookmarksStore } from "@/stores/bookmarks";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import PostImagePreview from "./PostImagePreview.vue";
 import VideoPlayer from "./VideoPlayer.vue";
+import { shouldSendDoubleTapLike } from "@/utils/feedCarousel";
 
 const props = defineProps<{ message: InboxItem; openCommentId?: string }>();
 const emit = defineEmits<{ height: [id: string, height: number] }>();
@@ -77,6 +88,7 @@ const keys = useKeyStore(); const friends = useFriendsStore(); const interaction
 const profiles = useProfilesStore();
 const router = useRouter();
 const feedPreferences = useFeedPreferencesStore();
+const bookmarks = useBookmarksStore();
 const root = ref<HTMLElement | null>(null); const expanded = ref(false); const commentsOpen = ref(false); const metaOpen = ref(false);
 const menuOpen = ref(false);
 const commentInput = ref(""); const replyingTo = ref(""); const replyingAuthor = ref("");
@@ -93,6 +105,7 @@ const liked = computed(() => !!keys.pkHex && interactions.isLikedByUser(props.me
 const likeCount = computed(() => interactions.getLikeCount(props.message.id)); const commentCount = computed(() => interactions.getCommentCount(props.message.id));
 const rootComments = computed(() => interactions.getComments(props.message.id).filter(comment => !comment.parentCommentId));
 const isOwn = computed(() => props.message.pubkey === keys.pkHex);
+const bookmarked = computed(() => bookmarks.isBookmarked(props.message.id));
 const visibilityLabel = computed(() => { const groups = props.message._localMeta?.groups || []; return groups.length === 1 && groups[0].name === "全部好友" ? "全部好友" : `${props.message._localMeta?.groupCount || groups.length} 个分组`; });
 function localName(pubkey: string) { if (pubkey === keys.pkHex) return "自己"; return friends.list.find(friend => friend.pubkey === pubkey)?.name; }
 function displayName(pubkey: string) { return privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey)); }
@@ -110,6 +123,18 @@ async function copyText() {
   catch { ui.addToast("复制失败", 1500, "error"); }
 }
 async function toggleLike() { try { liked.value ? await interactions.removeLike(props.message.id, props.message.pubkey) : await interactions.sendLike(props.message.id, props.message.pubkey); } catch { ui.addToast("操作失败，请重试", 1800, "error"); } }
+let imageLikePending = false;
+async function likeFromImage() {
+  if (!shouldSendDoubleTapLike(liked.value, imageLikePending)) return;
+  imageLikePending = true;
+  try { await interactions.sendLike(props.message.id, props.message.pubkey); }
+  catch { ui.addToast("点赞失败，请重试", 1800, "error"); }
+  finally { imageLikePending = false; }
+}
+async function toggleBookmark() {
+  try { await bookmarks.toggle(props.message.id); }
+  catch { ui.addToast("收藏失败，请重试", 1800, "error"); }
+}
 function toggleComments() { metaOpen.value = false; commentsOpen.value = !commentsOpen.value; }
 function toggleMeta() { commentsOpen.value = false; metaOpen.value = !metaOpen.value; }
 function replies(id: string) { return interactions.getReplies(props.message.id, id); }
@@ -126,7 +151,7 @@ onBeforeUnmount(() => observer?.disconnect());
 .post-card{background:#fff;padding:14px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}
 .post-author{display:flex;align-items:center;gap:10px;position:relative}.author-copy{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:2px}.author-copy time,.muted{color:#94a3b8;font-size:12px}.profile-link,.comment-author{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.avatar-link{display:grid;place-items:center;min-width:44px;min-height:44px;margin:-3px}.name-link{min-height:24px;font-size:14px;font-weight:700;text-align:left}.comment-author{min-height:28px;font-weight:700}.profile-link:focus-visible,.comment-author:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}.overflow-wrap{position:relative;align-self:flex-start}.overflow-button{min-width:40px;min-height:40px;border:0;border-radius:8px;background:transparent;color:#64748b;font-weight:700;letter-spacing:1px}.overflow-menu{position:absolute;z-index:20;top:38px;right:0;min-width:160px;padding:5px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-shadow:0 10px 28px rgba(15,23,42,.16)}.overflow-menu button{display:block;width:100%;min-height:42px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:#334155;text-align:left}.overflow-menu button:active{background:#f1f5f9}
 .message-text{margin-top:10px;color:#202938;font-size:15px;line-height:1.62;white-space:pre-wrap;overflow-wrap:anywhere}.text-button,.reply{display:block;min-height:34px;padding:4px 0 0;border:0;background:transparent;color:#2563eb;font:inherit;font-size:13px}
-.actions{display:flex;align-items:center;gap:4px;margin-top:12px;padding-top:9px;border-top:1px solid #f1f5f9}.action{min-height:38px;padding:6px 11px;border:0;border-radius:8px;background:transparent;color:#64748b;font-size:14px}.action span{font-size:12px;color:#94a3b8}.action.liked{color:#ef4444}.visibility{margin-left:auto;color:#475569}
+.actions{display:flex;align-items:center;gap:4px;margin-top:8px;padding-top:7px;border-top:1px solid #f1f5f9}.action{min-height:42px;padding:6px 9px;border:0;border-radius:8px;background:transparent;color:#334155;font-size:14px}.icon-action{display:inline-flex;align-items:center;gap:5px}.icon-action svg{width:25px;height:25px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.action span{font-size:12px;color:#64748b}.action.liked{color:#ef4444}.action.liked svg,.action.bookmark.saved svg{fill:currentColor}.visibility{margin-left:auto;color:#475569}.bookmark{margin-left:auto}.visibility+.bookmark{margin-left:0}
 .panel,.comments-section{margin-top:10px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f8fafc}.meta-row{display:flex;justify-content:space-between;margin-top:6px;font-size:13px}.comments-list{display:flex;flex-direction:column;gap:8px;max-height:300px;overflow:auto;margin-bottom:10px}.thread{display:flex;flex-direction:column;gap:8px}.comment-item{padding:8px;border-radius:7px;background:#fff}.comment-text{font-size:13px;overflow-wrap:anywhere}.reply{min-height:30px;color:#64748b}.replies{display:flex;flex-direction:column;gap:8px;margin-left:24px;padding-left:12px;border-left:2px solid #e2e8f0}.reply-item{border:1px solid #e2e8f0}.pending{font-size:11px;color:#94a3b8}.replying{display:flex;justify-content:space-between;padding:4px 8px;border-radius:6px;background:#eff6ff;color:#1976d2;font-size:12px}.replying button{border:0;background:transparent}.input-row{display:flex;gap:8px;margin-top:8px}.input-row input{flex:1;min-width:0;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:16px}.input-row button{padding:8px 16px;border:0;border-radius:8px;background:#1976d2;color:#fff}.input-row button:disabled{opacity:.5}
 @media(min-width:640px){.post-card{padding:16px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 </style>

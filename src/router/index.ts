@@ -9,6 +9,7 @@ const MyProfile = () => import("@/views/MyProfile.vue");
 const Profile = () => import("@/views/Profile.vue");
 const Notifications = () => import("@/views/Notifications.vue");
 const Debug = () => import("@/views/Debug.vue");
+const Saved = () => import("@/views/Saved.vue");
 import { useKeyStore } from "@/stores/keys";
 import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
 
@@ -60,6 +61,12 @@ const routes: Array<RouteRecordRaw> = [
     path: "/settings/profile",
     name: "MyProfile",
     component: MyProfile,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/settings/saved",
+    name: "Saved",
+    component: Saved,
     meta: { requiresAuth: true }
   },
   {

@@ -1,22 +1,28 @@
 <template>
   <div v-if="images.length" class="post-image-preview">
-    <div v-if="showAll" class="gallery" :class="galleryClass">
+    <div class="carousel-shell" :style="carouselAspectStyle">
       <div
-        v-for="(img, idx) in visibleImages"
+        ref="carousel"
+        class="carousel"
+        :aria-label="images.length > 1 ? `图片轮播，共 ${images.length} 张` : undefined"
+        @scroll.passive="handleCarouselScroll"
+      >
+      <div
+        v-for="(img, idx) in images"
         :key="img.sourceUrl"
-        :ref="el => setItemRef(el, idx)"
-        class="gallery-item-wrapper"
-        :style="itemAspectStyle(img)"
+        class="carousel-slide"
+        role="group"
+        :aria-label="`第 ${idx + 1} 张，共 ${images.length} 张`"
       >
         <img
           v-if="img.status === 'loaded'"
           :src="img.url"
           :alt="altText"
-          class="gallery-item"
+          class="carousel-image"
           loading="lazy"
           decoding="async"
           @error="markFailed(idx)"
-          @click="openViewer(idx)"
+          @click="handleImageTap(idx)"
         />
         <button
           v-else-if="img.status === 'error'"
@@ -28,34 +34,16 @@
           <span class="retry-label">点击重试</span>
         </button>
         <div v-else class="gallery-state gallery-skeleton" aria-label="图片加载中"></div>
-        <button
-          v-if="idx === visibleImages.length - 1 && hiddenCount > 0"
-          class="more-overlay"
-          type="button"
-          :aria-label="`查看其余 ${hiddenCount} 张图片`"
-          @click="openViewer(idx)"
-        >
-          +{{ hiddenCount }}
-        </button>
       </div>
+      </div>
+      <span v-if="images.length > 1" class="carousel-counter">{{ activeIndex + 1 }}/{{ images.length }}</span>
+      <button v-if="images.length > 1 && activeIndex > 0" class="carousel-nav previous" type="button" aria-label="上一张" @click="goToSlide(activeIndex - 1)">‹</button>
+      <button v-if="images.length > 1 && activeIndex < images.length - 1" class="carousel-nav next" type="button" aria-label="下一张" @click="goToSlide(activeIndex + 1)">›</button>
+      <span v-if="heartVisible" :key="heartAnimationKey" class="heart-burst" aria-hidden="true">♥</span>
     </div>
 
-    <div v-else class="single-preview" :ref="el => setItemRef(el, 0)" :style="itemAspectStyle(images[0])">
-      <img
-        v-if="images[0].status === 'loaded'"
-        :src="images[0].url"
-        :alt="altText"
-        class="post-image-first"
-        loading="lazy"
-        decoding="async"
-        @error="markFailed(0)"
-        @click="openViewer(0)"
-      />
-      <button v-else-if="images[0].status === 'error'" class="gallery-state gallery-error" type="button" @click="retryImage(0)">
-        <span>图片加载失败</span>
-        <span class="retry-label">点击重试</span>
-      </button>
-      <div v-else class="gallery-state gallery-skeleton" aria-label="图片加载中"></div>
+    <div v-if="images.length > 1" class="carousel-dots" aria-hidden="true">
+      <span v-for="(_, idx) in images" :key="idx" :class="{ active: idx === activeIndex }"></span>
     </div>
 
     <ImageViewer
@@ -76,6 +64,11 @@ import { base64ToBytes } from "@/nostr/crypto";
 import { decodeEncryptedImageRef, isEncryptedImageRef, variantToEncryptedImageRef } from "@/utils/encryptedImageRef";
 import { extractImageUrls } from "@/utils/extractImageUrls";
 import { getImageFromCache, storeImageInCache } from "@/utils/imageCache";
+import {
+  adjacentSlideIndexes,
+  carouselActiveIndex,
+  isCarouselDoubleTap
+} from "@/utils/feedCarousel";
 
 type LoadStatus = "idle" | "loading" | "loaded" | "error";
 
@@ -91,7 +84,6 @@ interface ImageItem {
   height?: number;
 }
 
-const MAX_VISIBLE_TILES = 4;
 const MAX_DECRYPT_CONCURRENCY = 3;
 let activeDecrypts = 0;
 const decryptQueue: Array<() => void> = [];
@@ -167,14 +159,14 @@ export default defineComponent({
     showAll: { type: Boolean, default: false },
     altText: { type: String, default: "动态图片" }
   },
-  setup(props) {
+  emits: ["doubleLike"],
+  setup(props, { emit }) {
     const keys = useKeyStore();
     const settings = useSettingsStore();
     const images = ref<ImageItem[]>([]);
     const objectUrls = new Set<string>();
-    const itemRefs = ref<(HTMLElement | null)[]>([]);
-    const itemIndexMap = new Map<HTMLElement, number>();
-    const observer = ref<IntersectionObserver | null>(null);
+    const carousel = ref<HTMLElement | null>(null);
+    const activeIndex = ref(0);
     const loadGeneration = ref(0);
     const itemLoadPromises = new WeakMap<ImageItem, Promise<void>>();
     const originalLoadPromises = new WeakMap<ImageItem, Promise<void>>();
@@ -182,23 +174,16 @@ export default defineComponent({
     const viewerIndex = ref(0);
     const viewerImageUrls = ref<string[]>([]);
     const viewerAnchorIndex = ref<number | null>(null);
-
-    const visibleImages = computed(() => images.value.slice(0, MAX_VISIBLE_TILES));
-    const hiddenCount = computed(() => Math.max(0, images.value.length - MAX_VISIBLE_TILES));
-    const galleryClass = computed(() => {
-      const count = visibleImages.value.length;
-      return `gallery-${count === 1 ? "single" : count === 2 ? "two" : count === 3 ? "three" : "four"}`;
+    const heartVisible = ref(false);
+    const heartAnimationKey = ref(0);
+    const carouselAspectStyle = computed(() => {
+      const item = images.value[0];
+      return { aspectRatio: item?.width && item.height ? `${item.width} / ${item.height}` : "1 / 1" };
     });
 
     function revokeObjectUrls() {
       objectUrls.forEach(url => URL.revokeObjectURL(url));
       objectUrls.clear();
-    }
-
-    function setItemRef(el: unknown, idx: number) {
-      if (!(el instanceof HTMLElement)) return;
-      itemRefs.value[idx] = el;
-      itemIndexMap.set(el, idx);
     }
 
     function loadImage(idx: number): Promise<void> {
@@ -293,13 +278,10 @@ export default defineComponent({
       if (images.value[index]?.originalStatus !== "loaded") return;
 
       viewerAnchorIndex.value = index;
-      viewerImageUrls.value = [
-        images.value[index].originalUrl,
-        ...images.value
-          .filter((item, itemIndex) => itemIndex !== index && item.status === "loaded")
-          .map(item => item.url)
-      ];
-      viewerIndex.value = 0;
+      viewerImageUrls.value = images.value.map((item, itemIndex) =>
+        itemIndex === index || item.originalStatus === "loaded" ? item.originalUrl : item.url
+      );
+      viewerIndex.value = index;
       viewerVisible.value = true;
 
       // Keep the clicked image stable at index 0 while the existing bounded
@@ -309,13 +291,9 @@ export default defineComponent({
         const backgroundLoad = settings.dataSaver ? loadImage(itemIndex) : loadOriginal(itemIndex);
         void backgroundLoad.then(() => {
           if (!viewerVisible.value || viewerAnchorIndex.value !== index) return;
-          viewerImageUrls.value = [
-            images.value[index].originalUrl,
-            ...images.value
-              .filter((item, candidateIndex) => candidateIndex !== index &&
-                (settings.dataSaver ? item.status === "loaded" : item.originalStatus === "loaded"))
-              .map(item => settings.dataSaver ? item.url : item.originalUrl)
-          ];
+          viewerImageUrls.value = images.value.map((item, candidateIndex) =>
+            candidateIndex === index || item.originalStatus === "loaded" ? item.originalUrl : item.url
+          );
         });
       });
     }
@@ -325,36 +303,62 @@ export default defineComponent({
       viewerAnchorIndex.value = null;
     }
 
-    function setupObserver() {
-      observer.value?.disconnect();
-      itemIndexMap.clear();
-      nextTick(() => {
-        if (typeof IntersectionObserver === "undefined") {
-          visibleImages.value.forEach((_, idx) => void loadImage(idx));
-          return;
-        }
-        observer.value = new IntersectionObserver(entries => {
-          entries.forEach(entry => {
-            if (!entry.isIntersecting) return;
-            const idx = itemIndexMap.get(entry.target as HTMLElement);
-            if (idx === undefined) return;
-            void loadImage(idx);
-            observer.value?.unobserve(entry.target);
-            itemIndexMap.delete(entry.target as HTMLElement);
-          });
-        }, { root: null, rootMargin: settings.dataSaver ? "60px" : "200px", threshold: 0.01 });
-        itemRefs.value.forEach(element => element && observer.value?.observe(element));
+    function loadAround(index: number) {
+      adjacentSlideIndexes(index, images.value.length).forEach(itemIndex => void loadImage(itemIndex));
+    }
+
+    let scrollFrame = 0;
+    let lastScrolledAt = 0;
+    function handleCarouselScroll() {
+      lastScrolledAt = Date.now();
+      if (scrollFrame) return;
+      scrollFrame = requestAnimationFrame(() => {
+        scrollFrame = 0;
+        const element = carousel.value;
+        if (!element?.clientWidth) return;
+        activeIndex.value = carouselActiveIndex(element.scrollLeft, element.clientWidth, images.value.length);
       });
+    }
+
+    function goToSlide(index: number) {
+      const next = Math.max(0, Math.min(images.value.length - 1, index));
+      activeIndex.value = next;
+      carousel.value?.scrollTo({ left: next * (carousel.value.clientWidth || 0), behavior: "smooth" });
+    }
+
+    let tapTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastTapAt = 0;
+    let lastTapIndex = -1;
+    let heartTimer: ReturnType<typeof setTimeout> | null = null;
+    function handleImageTap(index: number) {
+      if (Date.now() - lastScrolledAt < 120) return;
+      const now = Date.now();
+      if (isCarouselDoubleTap(lastTapAt, lastTapIndex, now, index)) {
+        if (tapTimer) clearTimeout(tapTimer);
+        tapTimer = null;
+        lastTapAt = 0;
+        heartAnimationKey.value += 1;
+        heartVisible.value = true;
+        if (heartTimer) clearTimeout(heartTimer);
+        heartTimer = setTimeout(() => { heartVisible.value = false; }, 650);
+        emit("doubleLike");
+        return;
+      }
+      lastTapAt = now;
+      lastTapIndex = index;
+      if (tapTimer) clearTimeout(tapTimer);
+      tapTimer = setTimeout(() => {
+        tapTimer = null;
+        void openViewer(index);
+      }, 300);
     }
 
     function resetImages() {
       loadGeneration.value += 1;
-      observer.value?.disconnect();
       closeViewer();
       viewerImageUrls.value = [];
       revokeObjectUrls();
-      itemRefs.value = [];
-      itemIndexMap.clear();
+      activeIndex.value = 0;
       const urls = extractImageUrls(props.content || "");
       const selected = props.showAll ? urls : urls.slice(0, 1);
       images.value = selected.map(originalSourceUrl => {
@@ -376,12 +380,7 @@ export default defineComponent({
           height: metadata?.preview?.height || metadata?.height,
         };
       });
-      setupObserver();
-    }
-
-    function itemAspectStyle(item?: ImageItem) {
-      if (images.value.length > 1 || !item?.width || !item.height) return undefined;
-      return { aspectRatio: `${item.width} / ${item.height}` };
+      nextTick(() => loadAround(0));
     }
 
     watch([() => props.content, () => props.showAll], resetImages, { immediate: true });
@@ -389,77 +388,74 @@ export default defineComponent({
       if (previousAccount && account !== previousAccount) cancelAccountDecrypts(previousAccount);
       resetImages();
     });
-    watch(() => settings.dataSaver, setupObserver);
+    watch(activeIndex, loadAround);
 
     onBeforeUnmount(() => {
       loadGeneration.value += 1;
-      observer.value?.disconnect();
-      itemIndexMap.clear();
+      if (scrollFrame) cancelAnimationFrame(scrollFrame);
+      if (tapTimer) clearTimeout(tapTimer);
+      if (heartTimer) clearTimeout(heartTimer);
       revokeObjectUrls();
     });
 
     return {
       images,
-      visibleImages,
-      hiddenCount,
-      galleryClass,
+      carousel,
+      activeIndex,
+      carouselAspectStyle,
+      heartVisible,
+      heartAnimationKey,
       viewerImageUrls,
       viewerVisible,
       viewerIndex,
-      setItemRef,
       markFailed,
       retryImage,
-      openViewer,
+      handleImageTap,
+      handleCarouselScroll,
+      goToSlide,
       closeViewer,
-      itemAspectStyle
     };
   }
 });
 </script>
 
 <style scoped>
-.gallery {
-  display: grid;
-  gap: 4px;
-  margin: 10px 0;
+.carousel-shell {
+  position: relative;
+  width: 100%;
+  max-height: 550px;
+  margin: 10px 0 0;
   overflow: hidden;
   border-radius: 12px;
-}
-.gallery-two,
-.gallery-four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.gallery-three {
-  grid-template-columns: 2fr 1fr;
-  grid-template-rows: repeat(2, minmax(0, 150px));
-}
-.gallery-three .gallery-item-wrapper:first-child { grid-row: 1 / 3; }
-.gallery-item-wrapper {
-  position: relative;
-  min-width: 0;
-  aspect-ratio: 1;
-  overflow: hidden;
   background: #eef2f6;
 }
-.gallery-single .gallery-item-wrapper {
-  aspect-ratio: auto;
-  max-height: 550px;
-  background: #f3f5f7;
+.carousel {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
 }
-.gallery-item,
-.post-image-first {
+.carousel::-webkit-scrollbar { display: none; }
+.carousel-slide {
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+.carousel-image {
   display: block;
   width: 100%;
+  height: 100%;
+  object-fit: contain;
   cursor: pointer;
   background: #f3f5f7;
 }
-.gallery-item { height: 100%; object-fit: cover; }
-.gallery-single .gallery-item,
-.post-image-first {
-  height: auto;
-  max-height: 550px;
-  object-fit: contain;
-}
-.single-preview { margin: 10px 0; }
-.post-image-first { border-radius: 12px; }
 .gallery-state {
   width: 100%;
   height: 100%;
@@ -485,22 +481,28 @@ export default defineComponent({
   cursor: pointer;
 }
 .retry-label { color: #2563eb; font-size: 12px; }
-.more-overlay {
+.carousel-counter {
   position: absolute;
-  inset: 0;
-  border: 0;
+  top: 10px;
+  right: 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
   background: rgba(15, 23, 42, 0.58);
   color: #fff;
-  font-size: 28px;
-  font-weight: 650;
-  cursor: pointer;
+  font-size: 11px;
+}
+.carousel-dots { display:flex;justify-content:center;gap:5px;min-height:16px;padding-top:7px; }
+.carousel-dots span { width:6px;height:6px;border-radius:50%;background:#cbd5e1;transition:background 150ms ease,transform 150ms ease; }
+.carousel-dots span.active { background:#2563eb;transform:scale(1.1); }
+.carousel-nav { position:absolute;top:50%;width:32px;height:32px;margin-top:-16px;border:0;border-radius:50%;background:rgba(255,255,255,.88);color:#334155;font-size:24px;line-height:1;box-shadow:0 1px 5px rgba(15,23,42,.2);cursor:pointer; }
+.carousel-nav.previous { left:8px; }.carousel-nav.next { right:8px; }
+.heart-burst { position:absolute;left:50%;top:50%;color:#fff;font-size:72px;line-height:1;filter:drop-shadow(0 2px 8px rgba(0,0,0,.3));transform:translate(-50%,-50%);animation:heart-pop 650ms ease both;pointer-events:none; }
+@keyframes heart-pop { 0%{opacity:0;transform:translate(-50%,-50%) scale(.35)} 35%{opacity:1;transform:translate(-50%,-50%) scale(1.12)} 100%{opacity:0;transform:translate(-50%,-50%) scale(1)} }
+@media (hover:none) {
+  .carousel-nav { display:none; }
 }
 @keyframes shimmer { to { background-position-x: -220%; } }
-@media (min-width: 720px) {
-  .gallery { gap: 6px; }
-  .gallery-three { grid-template-rows: repeat(2, minmax(0, 190px)); }
-}
 @media (prefers-reduced-motion: reduce) {
-  .gallery-skeleton { animation: none; }
+  .gallery-skeleton,.heart-burst { animation: none; }
 }
 </style>
