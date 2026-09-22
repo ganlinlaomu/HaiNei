@@ -3,13 +3,20 @@ import Dexie from "dexie";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HaiNeiDatabase } from "@/db/dexie";
 import { createHomeMessageHandler } from "@/nostr/messaging/homeDelivery";
-import { encodeHaiNeiProfilePayload, HAI_NEI_PROFILE_TAGS } from "@/nostr/messaging/privateProfile";
+import {
+  encodeHaiNeiProfilePayload,
+  encodeHaiNeiProfileRequest,
+  HAI_NEI_PROFILE_REQUEST_TAGS,
+  HAI_NEI_PROFILE_TAGS,
+  isHaiNeiProfileRequest
+} from "@/nostr/messaging/privateProfile";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { ProfileRepository } from "@/repositories/profileRepository";
 import {
   acceptedProfileRecipients,
   privateProfileDisplayName,
   profileAvatarInitial,
+  shouldRespondToProfileRequest,
   validatedProfileForAccount
 } from "@/stores/profiles";
 
@@ -65,6 +72,38 @@ describe("HaiNei private profiles", () => {
     expect(processProfile).toHaveBeenCalledOnce();
     expect(mirror).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("routes a profile request without adding a Home item or notification", async () => {
+    const request = {
+      ...profileMessage(),
+      plaintext: encodeHaiNeiProfileRequest(),
+      tags: HAI_NEI_PROFILE_REQUEST_TAGS
+    };
+    const mirror = vi.fn();
+    const notify = vi.fn();
+    const processProfile = vi.fn(() => true);
+    const handler = createHomeMessageHandler({
+      accountPubkey: ACCOUNT,
+      currentAccount: () => ACCOUNT,
+      processFriendshipMessage: () => false,
+      notifyFriendshipMessage: notify,
+      processProfileMessage: processProfile,
+      isInteraction: () => false,
+      processInteraction: () => {},
+      mirrorMessage: mirror
+    });
+    expect(isHaiNeiProfileRequest(request)).toBe(true);
+    expect(await handler(request, { source: "realtime" })).toBe(false);
+    expect(processProfile).toHaveBeenCalledOnce();
+    expect(mirror).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    expect(shouldRespondToProfileRequest(request, ACCOUNT, pk => pk === FRIEND)).toBe(true);
+    expect(shouldRespondToProfileRequest(request, ACCOUNT, () => false)).toBe(false);
+
+    processProfile.mockClear();
+    expect(await handler(request, { source: "local-migration" })).toBe(false);
+    expect(processProfile).not.toHaveBeenCalled();
   });
 
   it("stores an owner's update and ignores stale or duplicate timestamps", async () => {

@@ -76,6 +76,8 @@ import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/n
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
+import { useFeedPreferencesStore } from "@/stores/feedPreferences";
+import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
 
 
 // reuse the regex logic from extractImageUrls to strip out image markdown and plain image URLs
@@ -115,12 +117,17 @@ export default defineComponent({
     const settings = useSettingsStore();
     const notifications = useNotificationsStore();
     const profiles = useProfilesStore();
+    const feedPreferences = useFeedPreferencesStore();
     const readyForPending = ref(false);
     const route = useRoute();
     const realtimeSessionSince = ref(0);
     const notificationJumpDone = ref(false);
     const lastSeenCreatedAt = ref(0); // Track the watermark for filtering pending messages
     const inboxSnapshot = computed(() => `${msgs.inbox.length}:${msgs.inbox[0]?.id || ""}`);
+    const feedPreferenceSnapshot = computed(() =>
+      `${[...feedPreferences.hiddenMessageIds].sort().join(",")}|${[...feedPreferences.mutedPubkeys].sort().join(",")}`
+    );
+    const visibleInbox = () => msgs.inbox.filter(message => feedPreferences.isVisible(message));
 
     const status = ref("未连接");
     let homeAccountPk = "";
@@ -221,12 +228,13 @@ export default defineComponent({
 
     async function initializeHomeRuntime(accountPk: string) {
       await msgs.load(accountPk);
+      await feedPreferences.load(accountPk);
       if (!accountPk || keys.pkHex !== accountPk || msgs.loadedFor !== accountPk) {
         logger.warn(`[account] Home initialization discarded account=${accountPk?.slice(0, 8) || "none"}`);
         return false;
       }
 
-      messagesRef.value = [...msgs.inbox].sort(compareHomeMessages);
+      messagesRef.value = visibleInbox().sort(compareHomeMessages);
       displayedMessages.value = messagesRef.value.slice(0, PAGE_SIZE);
       currentPage.value = 1;
       isInitialLoad.value = false;
@@ -334,7 +342,7 @@ export default defineComponent({
     
     function updateLocalRefs() {
   // ① 按时间排序 inbox
-  messagesRef.value = [...msgs.inbox].sort(compareHomeMessages);
+  messagesRef.value = visibleInbox().sort(compareHomeMessages);
 
   if (!readyForPending.value) {
     updateMessageTimeRange();
@@ -392,7 +400,7 @@ export default defineComponent({
 }
 
 function reconcileStartupSnapshot(updateWatermark: boolean) {
-  messagesRef.value = [...msgs.inbox].sort(compareHomeMessages);
+  messagesRef.value = visibleInbox().sort(compareHomeMessages);
   const visibleCount = Math.max(PAGE_SIZE, displayedMessages.value.length);
   displayedMessages.value = messagesRef.value.slice(0, visibleCount);
   const visibleIds = new Set(displayedMessages.value.map(message => message.id));
@@ -867,6 +875,7 @@ async function safeUpdateLocalRefs() {
     async function startRealtimeSubscription(knownAuthors: string[], relays: string[]) {
       const accountAtStart = keys.pkHex;
       if (!accountAtStart) return;
+      registerOutgoingPushSigner(accountAtStart, keys.signEvent.bind(keys));
       const syncGeneration = ++homeSyncGeneration;
       try {
         startupSyncing.value = true;
@@ -889,6 +898,11 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
               : friendships.isAccepted(message.senderPubkey),
             processFriendshipMessage: message => friendships.processFriendshipMessage(message),
             processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
+            processFeedControlMessage: message => feedPreferences.processTombstone(
+              message,
+              friendships.isAccepted,
+              messageId => msgs.inbox.find(item => item.id === messageId)?.pubkey
+            ),
             notifyFriendshipMessage: message => {
               const notification = incomingFriendRequestNotification(message, accountAtStart);
               if (notification) {
@@ -987,7 +1001,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
    
 
    watch(
-  inboxSnapshot,
+  [inboxSnapshot, feedPreferenceSnapshot],
   () => {
     if (!readyForPending.value) return;
 

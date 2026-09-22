@@ -72,11 +72,12 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, computed } from "vue";
+import { defineComponent, computed, watch } from "vue";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import { useNotificationsStore } from "@/stores/notifications";
 import { preloadPostEditor } from "@/components/postEditorLoader";
+import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 
 
 export default defineComponent({
@@ -94,6 +95,14 @@ export default defineComponent({
       if (keys.isEncrypted && !keys.isUnlocked) return false; // Needs to unlock
       return true; // Logged in and unlocked (or not encrypted)
     });
+
+    watch(
+      () => [keys.pkHex, notifications.loadedFor, notifications.unreadCount] as const,
+      ([account, loadedFor, unreadCount]) => {
+        void syncAppBadge(accountBadgeCount(account, loadedFor, unreadCount)).catch(() => undefined);
+      },
+      { immediate: true }
+    );
     
     function handlePostClick() {
       ui.openPostEditor();

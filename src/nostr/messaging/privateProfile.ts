@@ -4,6 +4,8 @@ import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 export const HAI_NEI_PROFILE_TYPE = "hainei-profile";
 export const HAI_NEI_PROFILE_VERSION = 1;
 export const HAI_NEI_PROFILE_TAGS = [["t", HAI_NEI_PROFILE_TYPE]];
+export const HAI_NEI_PROFILE_REQUEST_TYPE = "hainei-profile-request";
+export const HAI_NEI_PROFILE_REQUEST_TAGS = [["t", HAI_NEI_PROFILE_REQUEST_TYPE]];
 
 type HaiNeiProfilePayload = {
   type: typeof HAI_NEI_PROFILE_TYPE;
@@ -41,7 +43,18 @@ export function decodeHaiNeiProfileMessage(message: CanonicalMessage): HaiNeiPro
 }
 
 export function isHaiNeiProfileMessage(message: CanonicalMessage) {
-  return message.tags.some(tag => tag[0] === "t" && tag[1] === HAI_NEI_PROFILE_TYPE);
+  return message.tags.some(tag => tag[0] === "t" &&
+    (tag[1] === HAI_NEI_PROFILE_TYPE || tag[1] === HAI_NEI_PROFILE_REQUEST_TYPE));
+}
+
+export function isHaiNeiProfileRequest(message: CanonicalMessage) {
+  if (!message.tags.some(tag => tag[0] === "t" && tag[1] === HAI_NEI_PROFILE_REQUEST_TYPE)) return false;
+  try {
+    const value = JSON.parse(message.plaintext || "");
+    return value?.type === HAI_NEI_PROFILE_REQUEST_TYPE && value.version === HAI_NEI_PROFILE_VERSION;
+  } catch {
+    return false;
+  }
 }
 
 export function encodeHaiNeiProfilePayload(profile: HaiNeiProfile) {
@@ -53,4 +66,8 @@ export function encodeHaiNeiProfilePayload(profile: HaiNeiProfile) {
     avatar: profile.avatar,
     updatedAt: profile.updatedAt
   });
+}
+
+export function encodeHaiNeiProfileRequest() {
+  return JSON.stringify({ type: HAI_NEI_PROFILE_REQUEST_TYPE, version: HAI_NEI_PROFILE_VERSION });
 }

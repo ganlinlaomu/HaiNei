@@ -8,6 +8,7 @@ import { useSettingsStore } from "./settings";
 import { useInteractionsStore } from "./interactions";
 import { useNotificationsStore } from "./notifications";
 import { useProfilesStore } from "./profiles";
+import { useFeedPreferencesStore } from "./feedPreferences";
 import type { WindowNostr } from "nostr-tools/nip07";
 import { BunkerSigner, type BunkerPointer, parseBunkerInput } from "nostr-tools/nip46";
 import { finalizeEvent } from "nostr-tools";
@@ -25,6 +26,7 @@ import {
 } from "@/utils/crypto";
 import { debugLog } from "@/utils/debugLog";
 import { clearAccountScopedCaches } from "@/services/nostrCache";
+import { cancelOutgoingWorkForAccount } from "@/nostr/messaging/service";
 
 /**
  * keys store with robust nostr-tools feature detection.
@@ -139,6 +141,11 @@ export const useKeyStore = defineStore("keys", {
         console.error(`[account] profiles load failed account=${account}`, e);
       }
       try {
+        await useFeedPreferencesStore().load(pk);
+      } catch (e) {
+        console.error(`[account] feed preferences load failed account=${account}`, e);
+      }
+      try {
         await useMessagesStore().load(pk);
       } catch (e) {
         console.error(`[account] messages load failed account=${account}`, e);
@@ -157,6 +164,7 @@ export const useKeyStore = defineStore("keys", {
 
     resetAccountStores(currentPk: string) {
       clearAccountScopedCaches(currentPk);
+      cancelOutgoingWorkForAccount(currentPk);
       const account = currentPk.slice(0, 8) || "none";
       try {
         useFriendsStore().reset(false);
@@ -172,6 +180,11 @@ export const useKeyStore = defineStore("keys", {
         useProfilesStore().reset();
       } catch (e) {
         console.error(`[account] profiles reset failed account=${account}`, e);
+      }
+      try {
+        useFeedPreferencesStore().reset();
+      } catch (e) {
+        console.error(`[account] feed preferences reset failed account=${account}`, e);
       }
       try {
         useMessagesStore().reset(false);

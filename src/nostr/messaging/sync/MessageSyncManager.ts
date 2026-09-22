@@ -10,6 +10,7 @@ import { debugLog } from "@/utils/debugLog";
 import { runPagedCatchup, type SubscribeForCatchup } from "./catchup";
 import { MessageIngestionPipeline, type DecodeMessage } from "./ingestion";
 import { calculateCatchupSince } from "./sorting";
+import { retryOutgoingQueue } from "@/nostr/messaging/service";
 import {
   INITIAL_HISTORY_MAX_BATCHES,
   type MessageSource,
@@ -158,6 +159,7 @@ export class MessageSyncManager {
       if (!event.connected && this.connectedRelays.size === 0) void this.setStatus("offline", sessionId);
       if (event.connected && event.reconnected) {
         void this.repository.updateSyncState(accountPubkey, { lastRealtimeConnectedAt: event.at });
+        void retryOutgoingQueue(accountPubkey);
         void this.resume("reconnect", event.url);
       }
     });
@@ -268,11 +270,13 @@ export class MessageSyncManager {
     if (typeof window === "undefined" || typeof document === "undefined") return;
     this.foregroundHandler = () => {
       if (document.visibilityState === "hidden") return;
+      if (this.options) void retryOutgoingQueue(this.options.accountPubkey);
       void this.resume("resume");
     };
     document.addEventListener("visibilitychange", this.foregroundHandler);
     window.addEventListener("focus", this.foregroundHandler);
     window.addEventListener("pageshow", this.foregroundHandler);
+    window.addEventListener("online", this.foregroundHandler);
   }
 
   stop() {
@@ -289,6 +293,7 @@ export class MessageSyncManager {
       document.removeEventListener("visibilitychange", this.foregroundHandler);
       window.removeEventListener("focus", this.foregroundHandler);
       window.removeEventListener("pageshow", this.foregroundHandler);
+      window.removeEventListener("online", this.foregroundHandler);
     }
     this.foregroundHandler = null;
     this.connectedRelays.clear();

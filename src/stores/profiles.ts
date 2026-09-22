@@ -2,7 +2,14 @@ import { defineStore } from "pinia";
 import type { HaiNeiProfile } from "@/db/dexie";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { sendDirectMessage } from "@/nostr/messaging/service";
-import { decodeHaiNeiProfileMessage, encodeHaiNeiProfilePayload, HAI_NEI_PROFILE_TAGS } from "@/nostr/messaging/privateProfile";
+import {
+  decodeHaiNeiProfileMessage,
+  encodeHaiNeiProfilePayload,
+  encodeHaiNeiProfileRequest,
+  HAI_NEI_PROFILE_REQUEST_TAGS,
+  HAI_NEI_PROFILE_TAGS,
+  isHaiNeiProfileRequest
+} from "@/nostr/messaging/privateProfile";
 import { getRelaysFromStorage } from "@/nostr/relays";
 import { profileRepository } from "@/repositories/profileRepository";
 import { useKeyStore } from "@/stores/keys";
@@ -93,9 +100,33 @@ export const useProfilesStore = defineStore("profiles", {
       if (own) await this.sendProfile(own, [peerPubkey]);
     },
 
+    async requestCurrentProfile(peerPubkey: string) {
+      const keys = useKeyStore();
+      const account = normalized(keys.pkHex);
+      const peer = normalized(peerPubkey);
+      if (!account || !peer || !keys.supportsNip44) return;
+      await sendDirectMessage({
+        recipientPubkeys: [peer],
+        content: encodeHaiNeiProfileRequest(),
+        tags: HAI_NEI_PROFILE_REQUEST_TAGS,
+        relays: getRelaysFromStorage("write"),
+        context: {
+          senderPubkey: account,
+          nip44Encrypt: keys.nip44Encrypt.bind(keys),
+          signEvent: keys.signEvent.bind(keys)
+        }
+      });
+    },
+
     async processProfileMessage(message: CanonicalMessage, isAccepted: (pubkey: string) => boolean) {
       const account = this.loadedFor;
       if (!account) return false;
+      if (isHaiNeiProfileRequest(message)) {
+        if (!shouldRespondToProfileRequest(message, account, isAccepted)) return false;
+        const sender = normalized(message.senderPubkey);
+        await this.sendCurrentProfileTo(sender);
+        return true;
+      }
       const profile = validatedProfileForAccount(message, account, isAccepted);
       if (!profile) return false;
       await this.putLatest(profile);
@@ -103,6 +134,15 @@ export const useProfilesStore = defineStore("profiles", {
     }
   }
 });
+
+export function shouldRespondToProfileRequest(
+  message: CanonicalMessage,
+  accountPubkey: string,
+  isAccepted: (pubkey: string) => boolean
+) {
+  const sender = normalized(message.senderPubkey);
+  return isHaiNeiProfileRequest(message) && sender !== normalized(accountPubkey) && isAccepted(sender);
+}
 
 export function privateProfileDisplayName(profileNickname: string | undefined, pubkey: string, localName?: string) {
   const local = (localName || "").trim();

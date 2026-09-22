@@ -87,3 +87,25 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+
+self.addEventListener('push', (event) => {
+  event.waitUntil(self.registration.showNotification('HaiNei', {
+    body: '有新的活动',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    data: { url: '/#/notifications' }
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL('/#/notifications', self.location.origin).href;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (windows[0]) {
+      await windows[0].navigate(target);
+      return windows[0].focus();
+    }
+    return self.clients.openWindow(target);
+  })());
+});

@@ -5,6 +5,15 @@
         <ProfileAvatar :pubkey="message.pubkey" :local-name="localName(message.pubkey)" :size="38" />
       </button>
       <div class="author-copy"><button class="profile-link name-link" type="button" @click="openAuthor(message.pubkey, $event)">{{ displayName(message.pubkey) }}</button><time :datetime="new Date(message.created_at * 1000).toISOString()">{{ formatRelativeTime(message.created_at) }}</time></div>
+      <div class="overflow-wrap">
+        <button class="overflow-button" type="button" aria-label="动态操作" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">•••</button>
+        <div v-if="menuOpen" class="overflow-menu">
+          <button v-if="isOwn" type="button" @click="deleteOwnPost">删除此动态</button>
+          <button v-else type="button" @click="hidePost">隐藏此动态</button>
+          <button v-if="!isOwn" type="button" @click="muteAuthor">不看此人的动态</button>
+          <button type="button" @click="copyText">复制文字</button>
+        </div>
+      </div>
     </header>
     <div v-if="cleanText" class="message-text">
       {{ displayedText }}
@@ -57,6 +66,7 @@ import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { extractVideoData, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
 import { openProfile } from "@/utils/profileNavigation";
 import { useRouter } from "vue-router";
+import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import PostImagePreview from "./PostImagePreview.vue";
 import VideoPlayer from "./VideoPlayer.vue";
@@ -66,7 +76,9 @@ const emit = defineEmits<{ height: [id: string, height: number] }>();
 const keys = useKeyStore(); const friends = useFriendsStore(); const interactions = useInteractionsStore(); const ui = useUIStore();
 const profiles = useProfilesStore();
 const router = useRouter();
+const feedPreferences = useFeedPreferencesStore();
 const root = ref<HTMLElement | null>(null); const expanded = ref(false); const commentsOpen = ref(false); const metaOpen = ref(false);
+const menuOpen = ref(false);
 const commentInput = ref(""); const replyingTo = ref(""); const replyingAuthor = ref("");
 const patterns = getVideoUrlRemovalPatterns();
 const cleanText = computed(() => (props.message.content || "")
@@ -85,6 +97,18 @@ const visibilityLabel = computed(() => { const groups = props.message._localMeta
 function localName(pubkey: string) { if (pubkey === keys.pkHex) return "自己"; return friends.list.find(friend => friend.pubkey === pubkey)?.name; }
 function displayName(pubkey: string) { return privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey)); }
 function openAuthor(pubkey: string, event?: Event) { return openProfile(router, keys.pkHex, pubkey, event); }
+async function hidePost() { menuOpen.value = false; await feedPreferences.hide(props.message.id); ui.addToast("已在本机隐藏", 1600, "success"); }
+async function muteAuthor() { menuOpen.value = false; await feedPreferences.mute(props.message.pubkey); ui.addToast("已在本机隐藏该好友的动态", 1800, "success"); }
+async function deleteOwnPost() {
+  menuOpen.value = false;
+  try { await feedPreferences.tombstoneOwn(props.message); ui.addToast("已发送删除标记", 1800, "success"); }
+  catch { ui.addToast("动态已在本机隐藏，删除标记将稍后重试", 2200, "error"); }
+}
+async function copyText() {
+  menuOpen.value = false;
+  try { await navigator.clipboard.writeText(cleanText.value); ui.addToast("已复制", 1200, "success"); }
+  catch { ui.addToast("复制失败", 1500, "error"); }
+}
 async function toggleLike() { try { liked.value ? await interactions.removeLike(props.message.id, props.message.pubkey) : await interactions.sendLike(props.message.id, props.message.pubkey); } catch { ui.addToast("操作失败，请重试", 1800, "error"); } }
 function toggleComments() { metaOpen.value = false; commentsOpen.value = !commentsOpen.value; }
 function toggleMeta() { commentsOpen.value = false; metaOpen.value = !metaOpen.value; }
@@ -100,7 +124,7 @@ onBeforeUnmount(() => observer?.disconnect());
 
 <style scoped>
 .post-card{background:#fff;padding:14px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}
-.post-author{display:flex;align-items:center;gap:10px}.author-copy{display:flex;flex-direction:column;align-items:flex-start;gap:2px}.author-copy time,.muted{color:#94a3b8;font-size:12px}.profile-link,.comment-author{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.avatar-link{display:grid;place-items:center;min-width:44px;min-height:44px;margin:-3px}.name-link{min-height:24px;font-size:14px;font-weight:700;text-align:left}.comment-author{min-height:28px;font-weight:700}.profile-link:focus-visible,.comment-author:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}
+.post-author{display:flex;align-items:center;gap:10px;position:relative}.author-copy{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:2px}.author-copy time,.muted{color:#94a3b8;font-size:12px}.profile-link,.comment-author{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.avatar-link{display:grid;place-items:center;min-width:44px;min-height:44px;margin:-3px}.name-link{min-height:24px;font-size:14px;font-weight:700;text-align:left}.comment-author{min-height:28px;font-weight:700}.profile-link:focus-visible,.comment-author:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}.overflow-wrap{position:relative;align-self:flex-start}.overflow-button{min-width:40px;min-height:40px;border:0;border-radius:8px;background:transparent;color:#64748b;font-weight:700;letter-spacing:1px}.overflow-menu{position:absolute;z-index:20;top:38px;right:0;min-width:160px;padding:5px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-shadow:0 10px 28px rgba(15,23,42,.16)}.overflow-menu button{display:block;width:100%;min-height:42px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:#334155;text-align:left}.overflow-menu button:active{background:#f1f5f9}
 .message-text{margin-top:10px;color:#202938;font-size:15px;line-height:1.62;white-space:pre-wrap;overflow-wrap:anywhere}.text-button,.reply{display:block;min-height:34px;padding:4px 0 0;border:0;background:transparent;color:#2563eb;font:inherit;font-size:13px}
 .actions{display:flex;align-items:center;gap:4px;margin-top:12px;padding-top:9px;border-top:1px solid #f1f5f9}.action{min-height:38px;padding:6px 11px;border:0;border-radius:8px;background:transparent;color:#64748b;font-size:14px}.action span{font-size:12px;color:#94a3b8}.action.liked{color:#ef4444}.visibility{margin-left:auto;color:#475569}
 .panel,.comments-section{margin-top:10px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f8fafc}.meta-row{display:flex;justify-content:space-between;margin-top:6px;font-size:13px}.comments-list{display:flex;flex-direction:column;gap:8px;max-height:300px;overflow:auto;margin-bottom:10px}.thread{display:flex;flex-direction:column;gap:8px}.comment-item{padding:8px;border-radius:7px;background:#fff}.comment-text{font-size:13px;overflow-wrap:anywhere}.reply{min-height:30px;color:#64748b}.replies{display:flex;flex-direction:column;gap:8px;margin-left:24px;padding-left:12px;border-left:2px solid #e2e8f0}.reply-item{border:1px solid #e2e8f0}.pending{font-size:11px;color:#94a3b8}.replying{display:flex;justify-content:space-between;padding:4px 8px;border-radius:6px;background:#eff6ff;color:#1976d2;font-size:12px}.replying button{border:0;background:transparent}.input-row{display:flex;gap:8px;margin-top:8px}.input-row input{flex:1;min-width:0;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:16px}.input-row button{padding:8px 16px;border:0;border-radius:8px;background:#1976d2;color:#fff}.input-row button:disabled{opacity:.5}
