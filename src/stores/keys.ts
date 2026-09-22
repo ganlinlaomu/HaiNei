@@ -7,6 +7,7 @@ import { useMessagesStore } from "./messages";
 import { useSettingsStore } from "./settings";
 import { useInteractionsStore } from "./interactions";
 import { useNotificationsStore } from "./notifications";
+import { useProfilesStore } from "./profiles";
 import type { WindowNostr } from "nostr-tools/nip07";
 import { BunkerSigner, type BunkerPointer, parseBunkerInput } from "nostr-tools/nip46";
 import { finalizeEvent } from "nostr-tools";
@@ -133,6 +134,11 @@ export const useKeyStore = defineStore("keys", {
         console.error(`[account] friendships load failed account=${account}`, e);
       }
       try {
+        await useProfilesStore().load(pk);
+      } catch (e) {
+        console.error(`[account] profiles load failed account=${account}`, e);
+      }
+      try {
         await useMessagesStore().load(pk);
       } catch (e) {
         console.error(`[account] messages load failed account=${account}`, e);
@@ -161,6 +167,11 @@ export const useKeyStore = defineStore("keys", {
         useFriendshipsStore().reset();
       } catch (e) {
         console.error(`[account] friendships reset failed account=${account}`, e);
+      }
+      try {
+        useProfilesStore().reset();
+      } catch (e) {
+        console.error(`[account] profiles reset failed account=${account}`, e);
       }
       try {
         useMessagesStore().reset(false);

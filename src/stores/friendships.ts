@@ -12,6 +12,7 @@ import type { FriendshipRecord, FriendshipState } from "@/db/dexie";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendsStore } from "@/stores/friends";
 import { useNotificationsStore } from "@/stores/notifications";
+import { useProfilesStore } from "@/stores/profiles";
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
 
@@ -127,6 +128,7 @@ export const useFriendshipsStore = defineStore("friendships", {
       if (!friends.list.some(item => item.pubkey === peer)) {
         friends.add({ pubkey: peer, name: `${peer.slice(0, 8)}…` });
       }
+      void useProfilesStore().sendCurrentProfileTo(peer).catch(() => {});
       return result;
     },
 
@@ -174,8 +176,10 @@ export const useFriendshipsStore = defineStore("friendships", {
           });
         }
       } else if (control.action === "accept") {
+        const wasAccepted = this.getState(peer) === "accepted";
         if (selfMessage || this.getState(peer) === "outgoing_pending") {
           await this.setRecord(peer, "accepted", { acceptedEventId: message.id, acceptedAt: control.timestamp });
+          if (!wasAccepted) void useProfilesStore().sendCurrentProfileTo(peer).catch(() => {});
         }
       } else if (control.action === "cancel") {
         const cancellableState = selfMessage ? "outgoing_pending" : "incoming_pending";
