@@ -25,12 +25,25 @@ import { ref, onMounted, onUnmounted } from 'vue';
 const showUpdate = ref(false);
 const updating = ref(false);
 let registration: ServiceWorkerRegistration | null = null;
+let updateInFlight: Promise<void> | null = null;
+let reloadedForControllerChange = false;
+let initialCheckTimer: number | null = null;
+let updateInterval: number | null = null;
 
 /**
  * 核心检查逻辑：更灵敏地捕捉等待中的 SW
  */
-const checkForUpdate = async () => {
-  if (!('serviceWorker' in navigator)) return;
+const checkForUpdate = () => {
+  if (!('serviceWorker' in navigator)) return Promise.resolve();
+  if (updateInFlight) return updateInFlight;
+
+  updateInFlight = performUpdateCheck()
+    .catch(error => console.error('[PWA] 检查更新失败:', error))
+    .finally(() => { updateInFlight = null; });
+  return updateInFlight;
+};
+
+const performUpdateCheck = async () => {
 
   // 获取当前的注册状态
   registration = await navigator.serviceWorker.getRegistration();
@@ -74,7 +87,7 @@ const updateApp = async () => {
     // 兜底逻辑：如果没有 waiting 的，尝试重新检查一次
     await checkForUpdate();
     if (!registration?.waiting) {
-      window.location.reload(); // 实在没有就硬刷
+      updating.value = false;
       return;
     }
   }
@@ -85,33 +98,42 @@ const updateApp = async () => {
 };
 
 const handleControllerChange = () => {
+  if (reloadedForControllerChange) return;
+  reloadedForControllerChange = true;
   console.log('[PWA] 控制权移交成功，正在刷新应用...');
   window.location.reload();
+};
+
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'visible') void checkForUpdate();
 };
 
 onMounted(() => {
   if (!('serviceWorker' in navigator)) return;
 
   // 延迟检查，避免抢占首屏资源
-  setTimeout(checkForUpdate, 3000);
+  initialCheckTimer = window.setTimeout(() => void checkForUpdate(), 1000);
 
   // 🚀 灵敏度增强 1: 当用户把 PWA 从后台切回前台（或点击窗口）时立刻检查
   window.addEventListener('focus', checkForUpdate);
 
   // 🚀 灵敏度增强 2: 监听网络状态回到在线时检查
   window.addEventListener('online', checkForUpdate);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 
   navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
 
   // 定时检查（开发环境可缩短至 1 分钟以便测试）
-  const interval = setInterval(checkForUpdate, 5 * 60 * 1000);
+  updateInterval = window.setInterval(() => void checkForUpdate(), 5 * 60 * 1000);
+});
 
-  onUnmounted(() => {
-    clearInterval(interval);
-    window.removeEventListener('focus', checkForUpdate);
-    window.removeEventListener('online', checkForUpdate);
-    navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange);
-  });
+onUnmounted(() => {
+  if (updateInterval !== null) window.clearInterval(updateInterval);
+  if (initialCheckTimer !== null) window.clearTimeout(initialCheckTimer);
+  window.removeEventListener('focus', checkForUpdate);
+  window.removeEventListener('online', checkForUpdate);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  navigator.serviceWorker?.removeEventListener('controllerchange', handleControllerChange);
 });
 </script>
 

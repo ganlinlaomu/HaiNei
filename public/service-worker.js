@@ -2,13 +2,14 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = '0.1.5'; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.5"; // ⚠️ 更新代码时同步修改此版本号
+const BUILD_ID = "2026-09-22T00:02:58.804Z"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
-const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}`;
-const HTML_CACHE = `${CACHE_PREFIX}-html-${VERSION}`;
+const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
+const HTML_CACHE = `${CACHE_PREFIX}-html-${VERSION}-${BUILD_ID}`;
 
 self.addEventListener('install', (event) => {
-  console.log('[SW] install', VERSION);
+  console.log('[SW] install', VERSION, BUILD_ID);
   event.waitUntil(
     caches.open(ASSETS_CACHE).then((cache) =>
       cache.addAll([
@@ -21,7 +22,7 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  console.log('[SW] activate', VERSION);
+  console.log('[SW] activate', VERSION, BUILD_ID);
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(

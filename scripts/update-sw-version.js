@@ -3,7 +3,7 @@
 /**
  * Update Service Worker Version
  * 
- * This script updates the VERSION and BUILD_TIME in the service worker
+ * This script updates the VERSION and BUILD_ID in the service worker
  * to ensure proper cache invalidation on deployment.
  * 
  * Usage:
@@ -23,22 +23,33 @@ const PACKAGE_PATH = path.join(__dirname, '..', 'package.json');
 const packageJson = JSON.parse(fs.readFileSync(PACKAGE_PATH, 'utf8'));
 const version = packageJson.version;
 
-// Generate build time (ISO date format)
-const buildTime = new Date().toISOString().split('T')[0];
+// Cloudflare Pages exposes CF_PAGES_COMMIT_SHA. Include it for traceability and
+// retain the timestamp so redeploying the same commit is also byte-distinct.
+const commitSha = process.env.CF_PAGES_COMMIT_SHA || process.env.GITHUB_SHA || process.env.COMMIT_SHA;
+const buildTimestamp = new Date().toISOString();
+const buildId = commitSha ? `${commitSha.slice(0, 12)}-${buildTimestamp}` : buildTimestamp;
 
 // Read service worker file
 let swContent = fs.readFileSync(SW_PATH, 'utf8');
 
-// Update VERSION
-swContent = swContent.replace(
-  /const VERSION = ['"][^'"]+['"]/,
-  `const VERSION = '${version}'`
-);
+function replaceRequired(source, pattern, replacement, markerName) {
+  if (!pattern.test(source)) {
+    throw new Error(`Unable to update service worker: missing ${markerName} marker in ${SW_PATH}`);
+  }
+  return source.replace(pattern, replacement);
+}
 
-// Update BUILD_TIME
-swContent = swContent.replace(
-  /const BUILD_TIME = ['"][^'"]+['"]/,
-  `const BUILD_TIME = '${buildTime}'`
+swContent = replaceRequired(
+  swContent,
+  /const VERSION = ['"][^'"]+['"]/,
+  `const VERSION = ${JSON.stringify(version)}`,
+  'VERSION'
+);
+swContent = replaceRequired(
+  swContent,
+  /const BUILD_ID = ['"][^'"]+['"]/,
+  `const BUILD_ID = ${JSON.stringify(buildId)}`,
+  'BUILD_ID'
 );
 
 // Write back to file
@@ -46,4 +57,4 @@ fs.writeFileSync(SW_PATH, swContent, 'utf8');
 
 console.log(`✅ Service Worker version updated:`);
 console.log(`   VERSION: ${version}`);
-console.log(`   BUILD_TIME: ${buildTime}`);
+console.log(`   BUILD_ID: ${buildId}`);

@@ -59,7 +59,7 @@ if (versionChanged) {
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
       navigator.serviceWorker
-        .register("/service-worker.js")
+        .register("/service-worker.js", { updateViaCache: "none" })
         .then(() => {
           console.log("[main] Service Worker registered successfully");
         })
