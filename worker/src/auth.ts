@@ -34,6 +34,7 @@ export async function verifyAndConsumeChallenge(
   challengeValue: unknown,
   eventValue: unknown,
   now = Math.floor(Date.now() / 1000),
+  expectedAction = "hainei_media_session",
 ) {
   const challenge = typeof challengeValue === "string" ? challengeValue.trim().toLowerCase() : "";
   if (!CHALLENGE.test(challenge)) throw new HttpError(400, "invalid_challenge");
@@ -47,7 +48,7 @@ export async function verifyAndConsumeChallenge(
   const actions = tagValues(event, "t");
   const challenges = tagValues(event, "challenge");
   const expirations = tagValues(event, "expiration");
-  if (actions.length !== 1 || actions[0] !== "hainei_media_session") {
+  if (actions.length !== 1 || actions[0] !== expectedAction) {
     throw new HttpError(401, "invalid_auth_action");
   }
   if (challenges.length !== 1 || challenges[0] !== challenge) {
@@ -72,4 +73,3 @@ export async function verifyAndConsumeChallenge(
   if (Number(consumed.meta?.changes || 0) !== 1) throw new HttpError(409, "challenge_already_used");
   return event.pubkey;
 }
-

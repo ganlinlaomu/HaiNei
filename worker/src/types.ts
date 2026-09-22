@@ -1,6 +1,7 @@
 export interface D1Statement {
   bind(...values: unknown[]): D1Statement;
   first<T = Record<string, unknown>>(): Promise<T | null>;
+  all<T = Record<string, unknown>>(): Promise<{ results: T[] }>;
   run(): Promise<{ meta?: { changes?: number } }>;
 }
 
@@ -21,6 +22,9 @@ export interface Env {
   MAX_FILE_SIZE_BYTES?: string;
   DAILY_UPLOAD_COUNT?: string;
   DAILY_UPLOAD_BYTES?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
 }
 
 export class HttpError extends Error {
@@ -33,4 +37,3 @@ export function integerSetting(value: string | undefined, fallback: number, mini
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
 }
-

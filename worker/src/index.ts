@@ -1,5 +1,11 @@
 import { createChallenge, verifyAndConsumeChallenge } from "./auth";
 import { createMediaSession } from "./media";
+import {
+  getPushPublicKey,
+  removePushSubscription,
+  savePushSubscription,
+  triggerGenericPush,
+} from "./push";
 import { HttpError, type Env } from "./types";
 
 const CORS = {
@@ -32,6 +38,22 @@ export async function handleRequest(request: Request, env: Env) {
       const pubkey = await verifyAndConsumeChallenge(env, payload.challenge, payload.event);
       return json(await createMediaSession(env, pubkey, payload.fileSize), 201);
     }
+    if (path === "/api/push/public-key") return json(getPushPublicKey(env));
+    if (path === "/api/push/subscribe") {
+      const payload = await body(request);
+      const pubkey = await verifyAndConsumeChallenge(env, payload.challenge, payload.event, undefined, "hainei_push");
+      return json(await savePushSubscription(env, pubkey, payload.subscription), 201);
+    }
+    if (path === "/api/push/unsubscribe") {
+      const payload = await body(request);
+      const pubkey = await verifyAndConsumeChallenge(env, payload.challenge, payload.event, undefined, "hainei_push");
+      return json(await removePushSubscription(env, pubkey, payload.endpoint));
+    }
+    if (path === "/api/push/trigger") {
+      const payload = await body(request);
+      const pubkey = await verifyAndConsumeChallenge(env, payload.challenge, payload.event, undefined, "hainei_push");
+      return json(await triggerGenericPush(env, pubkey, payload.recipientPubkeys));
+    }
     return json({ error: "not_found" }, 404);
   } catch (error) {
     if (!(error instanceof HttpError)) console.error("HaiNei Worker request failed", error);
@@ -41,4 +63,3 @@ export async function handleRequest(request: Request, env: Env) {
 }
 
 export default { fetch: handleRequest };
-

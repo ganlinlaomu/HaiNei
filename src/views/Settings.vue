@@ -168,6 +168,19 @@
 
       <details class="settings-section">
         <summary class="section-heading">
+          <div><h3>后台推送</h3><p>{{ pushStatusText }}</p></div>
+        </summary>
+        <p class="section-detail">推送只包含“有新的活动”，不会包含好友、帖子或资料内容。</p>
+        <div class="account-row">
+          <span class="small">{{ pushSupported ? "需要你主动授权浏览器通知权限" : "当前浏览器不支持 Web Push" }}</span>
+          <button class="btn btn-secondary" type="button" :disabled="pushBusy || !pushSupported" @click="togglePush">
+            {{ pushBusy ? "处理中…" : pushEnabled ? "关闭推送" : "开启推送" }}
+          </button>
+        </div>
+      </details>
+
+      <details class="settings-section">
+        <summary class="section-heading">
           <div><h3>存储 / Cache</h3><p>{{ cacheStats.count }} 个图片文件 · {{ formatSize(cacheStats.size) }}</p></div>
         </summary>
         <div class="cache-info">
@@ -199,7 +212,12 @@
         <summary class="section-heading"><div><h3>高级设置 / Diagnostics</h3><p>Relay、NIP-17 与同步日志</p></div></summary>
         <div class="account-row">
           <span class="small">查看 Relay、NIP-17 与消息同步的本地实时日志</span>
-          <button class="btn btn-secondary" type="button" @click="router.push('/debug')">系统诊断</button>
+          <div class="button-row">
+            <button class="btn btn-secondary" type="button" :disabled="retryingQueue" @click="retryFailedQueue">
+              {{ retryingQueue ? "重试中…" : "重试发送" }}
+            </button>
+            <button class="btn btn-secondary" type="button" @click="router.push('/debug')">系统诊断</button>
+          </div>
         </div>
       </details>
     </section>
@@ -219,6 +237,13 @@ import { useKeyStore } from "@/stores/keys";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import { clearAllCache, getCacheStats } from "@/utils/imageCache";
+import { registerOutgoingPushSigner, retryFailedOutgoing } from "@/nostr/messaging/service";
+import {
+  disablePushNotifications,
+  enablePushNotifications,
+  pushEnabledForAccount,
+  supportsPushNotifications
+} from "@/services/pushNotifications";
 import {
   DEFAULT_RELAY_URLS,
   type MediaServer,
@@ -248,6 +273,13 @@ const statuses = reactive<Record<string, RelayRuntimeStatus | undefined>>({});
 const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0 });
 const loadingCache = ref(false);
 const clearingCache = ref(false);
+const pushBusy = ref(false);
+const retryingQueue = ref(false);
+const pushEnabled = ref(false);
+const pushSupported = supportsPushNotifications();
+const pushStatusText = computed(() => !pushSupported
+  ? "不支持"
+  : pushEnabled.value ? "已开启 · 通用隐私通知" : "未开启");
 let statusInterval: ReturnType<typeof setInterval> | null = null;
 let statusUnsubscribe: (() => void) | null = null;
 let cacheRequestId = 0;
@@ -427,14 +459,47 @@ function doLogout() {
   location.href = "/#/login";
 }
 
+async function togglePush() {
+  const account = keyStore.pkHex;
+  if (!account || pushBusy.value) return;
+  pushBusy.value = true;
+  try {
+    if (pushEnabled.value) await disablePushNotifications(account, event => keyStore.signEvent(event));
+    else await enablePushNotifications(account, event => keyStore.signEvent(event));
+    if (keyStore.pkHex !== account) return;
+    pushEnabled.value = pushEnabledForAccount(account);
+    ui.addToast(pushEnabled.value ? "后台推送已开启" : "后台推送已关闭", 2_000, "success");
+  } catch (error) {
+    if (keyStore.pkHex === account) ui.addToast(error instanceof Error ? error.message : "推送设置失败", 2_500, "error");
+  } finally {
+    pushBusy.value = false;
+  }
+}
+
+async function retryFailedQueue() {
+  const account = keyStore.pkHex;
+  if (!account || retryingQueue.value) return;
+  retryingQueue.value = true;
+  try {
+    registerOutgoingPushSigner(account, keyStore.signEvent.bind(keyStore));
+    const results = await retryFailedOutgoing(account);
+    const failures = results.filter(result => result.status === "rejected").length;
+    ui.addToast(failures ? `仍有 ${failures} 项发送失败` : "待发送内容已重试", 2_000, failures ? "error" : "success");
+  } finally {
+    retryingQueue.value = false;
+  }
+}
+
 watch(() => keyStore.pkHex, async pk => {
   cacheRequestId += 1;
   if (!pk) {
     settings.reset();
     Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
     for (const url of Object.keys(statuses)) delete statuses[url];
+    pushEnabled.value = false;
     return;
   }
+  pushEnabled.value = pushEnabledForAccount(pk);
   if (settings.loadedFor !== pk) await settings.load(pk);
   if (keyStore.pkHex !== pk || settings.loadedFor !== pk) return;
   await refreshCacheStats();

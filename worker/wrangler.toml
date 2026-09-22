@@ -1,6 +1,7 @@
 name = "hainei-media"
 main = "src/index.ts"
 compatibility_date = "2026-09-15"
+compatibility_flags = ["nodejs_compat"]
 
 [vars]
 AUTH_CHALLENGE_TTL_SECONDS = "300"
@@ -20,3 +21,5 @@ service = "blossom-imgbed"
 
 # Set server-side only with:
 # npx wrangler secret put BLOSSOM_SERVICE_TOKEN --config worker/wrangler.toml
+# npx wrangler secret put VAPID_PRIVATE_KEY --config worker/wrangler.toml
+# Configure VAPID_PUBLIC_KEY and VAPID_SUBJECT as non-secret Worker variables.

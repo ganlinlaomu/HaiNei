@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { finalizeEvent, getPublicKey, nip44, utils, type EventTemplate } from "nostr-tools";
 
@@ -5,6 +6,7 @@ const { publishMock } = vi.hoisted(() => ({ publishMock: vi.fn() }));
 vi.mock("@/nostr/relays", () => ({ publish: publishMock }));
 
 import { sendDirectMessage } from "@/nostr/messaging/service";
+import { db } from "@/db/dexie";
 
 const senderSecret = utils.hexToBytes("1".padStart(64, "0"));
 const recipientSecret = utils.hexToBytes("2".padStart(64, "0"));
@@ -21,7 +23,10 @@ const context = {
 };
 
 describe("NIP-17 message publication", () => {
-  beforeEach(() => publishMock.mockReset());
+  beforeEach(async () => {
+    publishMock.mockReset();
+    await db.outgoingQueue.clear();
+  });
 
   it("requires every encrypted copy to reach at least one relay", async () => {
     publishMock

@@ -1,5 +1,8 @@
 import { defineStore } from "pinia";
 import { useKeyStore } from "./keys";
+import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
+import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 
 export type InboxItem = {
   id: string;
@@ -37,8 +40,27 @@ function outboxKeyFor(pk: string | null | undefined) {
   return `nostr_outbox_${pk}`;
 }
 
-let inboxSaveTimer: ReturnType<typeof setTimeout> | null = null;
-let outboxSaveTimer: ReturnType<typeof setTimeout> | null = null;
+function isHomeControl(tags: string[][] | undefined) {
+  const values = new Set((tags || []).map(tag => `${tag[0]}:${tag[1]}`));
+  return values.has("l:hainei-friendship")
+    || values.has("l:hainei-interaction")
+    || values.has("t:hainei-profile")
+    || values.has("t:hainei-profile-request")
+    || values.has("t:hainei-tombstone");
+}
+
+function legacyTags(item: InboxItem) {
+  try {
+    const type = JSON.parse(item.content || "")?.type;
+    if (type === "hainei-profile" || type === "hainei-profile-request" || type === "hainei-tombstone") {
+      return [["t", type]];
+    }
+    if (typeof type === "string" && type.startsWith("friend_")) {
+      return [["l", "hainei-friendship"], ["t", type.slice(7)]];
+    }
+  } catch {}
+  return [];
+}
 
 export const useMessagesStore = defineStore("messages", {
   state: () => ({
@@ -60,7 +82,7 @@ export const useMessagesStore = defineStore("messages", {
       if (this.loadedFor === targetPk) return;
       this.loadedFor = targetPk;
 
-      // load inbox
+      // One-time, account-scoped import of the old localStorage mirror.
       try {
         const ik = inboxKeyFor(targetPk);
         if (ik) {
@@ -68,62 +90,66 @@ export const useMessagesStore = defineStore("messages", {
           const stored = rawI ? JSON.parse(rawI) : [];
           const compatible = Array.isArray(stored) ? stored
             .filter((item: InboxItem) => item.protocol === "nip17" && item.transportKind === 1059) : [];
-          this.inbox = compatible
-            .map((item: InboxItem) => ({
-              ...item,
-              transportEventId: item.transportEventId ?? item.id
-            }));
-          if (Array.isArray(stored) && compatible.length !== stored.length) this.saveInbox();
-        } else {
-          this.inbox = [];
+          for (const item of compatible) {
+            const message: CanonicalMessage = {
+              id: item.id,
+              senderPubkey: item.pubkey,
+              recipientPubkeys: item.recipientPubkeys || [targetPk],
+              conversationId: item.conversationId,
+              plaintext: item.content,
+              createdAt: item.created_at,
+              protocol: "nip17",
+              transportKind: 1059,
+              transportEventId: item.transportEventId || item.id,
+              rumorId: item.rumorId,
+              replyTo: item.replyTo,
+              rootId: item.rootId,
+              tags: legacyTags(item)
+            };
+            await syncedMessageRepository.insertMessageIfAbsent(targetPk, message);
+          }
+          if (rawI) localStorage.removeItem(ik);
         }
       } catch {
-        this.inbox = [];
+        // Leave the legacy key intact so a later load can retry safely.
       }
-
-      // load outbox
-      try {
-        const ok = outboxKeyFor(targetPk);
-        if (ok) {
-          const rawO = localStorage.getItem(ok);
-          this.outbox = rawO ? JSON.parse(rawO) : [];
-        } else {
-          this.outbox = [];
-        }
-      } catch {
-        this.outbox = [];
-      }
+      const records = await syncedMessageRepository.list(targetPk);
+      if (this.loadedFor !== targetPk) return;
+      this.inbox = records.filter(record => !isHomeControl(record.tags)).map(record => ({
+        id: record.id,
+        pubkey: record.senderPubkey,
+        created_at: record.createdAt,
+        content: record.plaintext || "",
+        protocol: "nip17" as const,
+        transportKind: record.transportKind,
+        transportEventId: record.transportEventIds[0],
+        rumorId: record.rumorId,
+        recipientPubkeys: record.recipientPubkeys,
+        conversationId: record.conversationId,
+        replyTo: record.replyTo,
+        rootId: record.rootId
+      })).sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
+      const outgoing = await outgoingQueueRepository.list(targetPk);
+      if (this.loadedFor !== targetPk) return;
+      this.outbox = outgoing.filter(item => item.state === "sent").map(item => {
+        const message = item.message as CanonicalMessage;
+        return {
+          id: item.outgoingId,
+          created_at: message.createdAt,
+          sent_at: item.updatedAt,
+          content: message.plaintext || "",
+          relayResults: (item.relayResults || []) as OutboxItem["relayResults"]
+        };
+      });
     },
 
-    saveInbox() {
-      if (inboxSaveTimer) {
-        clearTimeout(inboxSaveTimer);
-        inboxSaveTimer = null;
-      }
-      const key = inboxKeyFor(this.loadedFor || "");
-      if (!key) return;
-      try { localStorage.setItem(key, JSON.stringify(this.inbox)); } catch {}
-    },
+    saveInbox() {},
 
-    saveOutbox() {
-      if (outboxSaveTimer) {
-        clearTimeout(outboxSaveTimer);
-        outboxSaveTimer = null;
-      }
-      const key = outboxKeyFor(this.loadedFor || "");
-      if (!key) return;
-      try { localStorage.setItem(key, JSON.stringify(this.outbox)); } catch {}
-    },
+    saveOutbox() {},
 
-    scheduleInboxSave() {
-      if (inboxSaveTimer) return;
-      inboxSaveTimer = setTimeout(() => this.saveInbox(), 150);
-    },
+    scheduleInboxSave() {},
 
-    scheduleOutboxSave() {
-      if (outboxSaveTimer) return;
-      outboxSaveTimer = setTimeout(() => this.saveOutbox(), 150);
-    },
+    scheduleOutboxSave() {},
 
     addInbox(item: InboxItem) {
       if (!item || !item.id) return;
@@ -170,15 +196,6 @@ export const useMessagesStore = defineStore("messages", {
       const pk = this.loadedFor || "";
       const ik = inboxKeyFor(pk);
       const ok = outboxKeyFor(pk);
-      if (removeFromStorage) {
-        if (inboxSaveTimer) clearTimeout(inboxSaveTimer);
-        if (outboxSaveTimer) clearTimeout(outboxSaveTimer);
-        inboxSaveTimer = null;
-        outboxSaveTimer = null;
-      } else {
-        this.saveInbox();
-        this.saveOutbox();
-      }
       this.inbox = [];
       this.outbox = [];
       this.loadedFor = "";

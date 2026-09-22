@@ -2,8 +2,9 @@ import type { CanonicalMessage } from "./protocol";
 import type { MessageIngestionMetadata } from "./sync/types";
 import { debugLog } from "@/utils/debugLog";
 import { decodeFriendshipControl, isFriendshipControlMessage } from "@/nostr/messaging/friendshipControl";
-import { isHaiNeiProfileMessage } from "@/nostr/messaging/privateProfile";
+import { isHaiNeiProfileMessage, isHaiNeiProfileRequest } from "@/nostr/messaging/privateProfile";
 import type { NotificationItem } from "@/stores/notifications";
+import { isTombstoneMessage } from "@/nostr/messaging/feedControl";
 
 export function incomingFriendRequestNotification(message: CanonicalMessage, accountPubkey: string): NotificationItem | null {
   const control = decodeFriendshipControl(message);
@@ -25,6 +26,7 @@ export type HomeMessageDelivery = {
   processFriendshipMessage?: (message: CanonicalMessage) => boolean | Promise<boolean>;
   notifyFriendshipMessage?: (message: CanonicalMessage) => void;
   processProfileMessage?: (message: CanonicalMessage) => boolean | Promise<boolean>;
+  processFeedControlMessage?: (message: CanonicalMessage) => boolean | Promise<boolean>;
   isInteraction: (message: CanonicalMessage) => boolean;
   processInteraction: (message: CanonicalMessage) => void | Promise<void>;
   mirrorMessage: (message: CanonicalMessage) => void;
@@ -52,8 +54,15 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
       return false;
     }
     if (isHaiNeiProfileMessage(message)) {
-      await delivery.processProfileMessage?.(message);
+      if (!(metadata.source === "local-migration" && isHaiNeiProfileRequest(message))) {
+        await delivery.processProfileMessage?.(message);
+      }
       debugLog("ui", "ui_private_profile_routed", diagnostic, "info");
+      return false;
+    }
+    if (isTombstoneMessage(message)) {
+      await delivery.processFeedControlMessage?.(message);
+      debugLog("ui", "ui_feed_control_routed", diagnostic, "info");
       return false;
     }
     if (delivery.isAcceptedMessage && !delivery.isAcceptedMessage(message)) {

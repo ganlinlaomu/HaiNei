@@ -129,5 +129,5 @@ Since Pinia stores are reactive in Vue 3, these computed properties automaticall
 ## Related Code
 
 - `src/stores/friends.ts`: Friend store with `version` field and add/remove/update methods
-- `src/views/PostEditor.vue`: Uses reactive computed properties (already working)
+- `src/components/PostEditorModal.vue`: Uses reactive computed properties (already working)
 - `src/components/PostEditorModal.vue`: Uses reactive computed properties (already working)

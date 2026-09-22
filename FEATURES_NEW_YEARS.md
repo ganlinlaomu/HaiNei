@@ -141,7 +141,7 @@ This format:
 
 #### Components
 
-**PostEditor.vue**
+**PostEditorModal.vue**
 - Video URL input with validation
 - Video file upload handling
 - Provider detection logic

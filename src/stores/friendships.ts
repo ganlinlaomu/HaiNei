@@ -128,7 +128,8 @@ export const useFriendshipsStore = defineStore("friendships", {
       if (!friends.list.some(item => item.pubkey === peer)) {
         friends.add({ pubkey: peer, name: `${peer.slice(0, 8)}…` });
       }
-      void useProfilesStore().sendCurrentProfileTo(peer).catch(() => {});
+      const profiles = useProfilesStore();
+      void Promise.allSettled([profiles.sendCurrentProfileTo(peer), profiles.requestCurrentProfile(peer)]);
       return result;
     },
 
@@ -179,7 +180,10 @@ export const useFriendshipsStore = defineStore("friendships", {
         const wasAccepted = this.getState(peer) === "accepted";
         if (selfMessage || this.getState(peer) === "outgoing_pending") {
           await this.setRecord(peer, "accepted", { acceptedEventId: message.id, acceptedAt: control.timestamp });
-          if (!wasAccepted) void useProfilesStore().sendCurrentProfileTo(peer).catch(() => {});
+          if (!wasAccepted) {
+            const profiles = useProfilesStore();
+            void Promise.allSettled([profiles.sendCurrentProfileTo(peer), profiles.requestCurrentProfile(peer)]);
+          }
         }
       } else if (control.action === "cancel") {
         const cancellableState = selfMessage ? "outgoing_pending" : "incoming_pending";

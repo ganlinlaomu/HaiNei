@@ -24,14 +24,24 @@
       </div>
 
       <!-- Main image container -->
-      <div class="image-container" @click.stop>
+      <div
+        class="image-container"
+        @click.stop
+        @touchstart.stop="handleTouchStart"
+        @touchmove.stop.prevent="handleTouchMove"
+        @touchend.stop="handleTouchEnd"
+        @pointerdown="handlePointerDown"
+        @pointermove="handlePointerMove"
+        @pointerup="handlePointerUp"
+        @pointercancel="handlePointerUp"
+      >
         <img
           v-if="currentImage"
           :src="currentImage"
           :alt="`图片 ${currentIndex + 1}`"
           class="viewer-image"
           :style="imageStyle"
-          @click="toggleZoom"
+          @dblclick.stop="toggleZoom"
           @load="onImageLoad"
           @error="onImageError"
         />
@@ -80,7 +90,13 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
+import { defineComponent, ref, computed, watch, nextTick } from "vue";
+import {
+  clampViewerScale,
+  resetViewerTransform,
+  shouldCloseViewer,
+  swipeImageDirection
+} from "@/utils/imageViewerGestures";
 
 export default defineComponent({
   name: "ImageViewer",
@@ -101,7 +117,10 @@ export default defineComponent({
   emits: ["close"],
   setup(props, { emit }) {
     const currentIndex = ref(0);
-    const zoomed = ref(false);
+    const scale = ref(1);
+    const translateX = ref(0);
+    const translateY = ref(0);
+    const zoomed = computed(() => scale.value > 1);
     const loading = ref(true);
     const error = ref(false);
     const overlay = ref<HTMLElement | null>(null);
@@ -109,23 +128,22 @@ export default defineComponent({
     const currentImage = computed(() => props.images[currentIndex.value] || null);
 
     const imageStyle = computed(() => {
-      if (zoomed.value) {
-        return {
-          cursor: "zoom-out",
-          maxWidth: "none",
-          maxHeight: "none",
-          width: "auto",
-          height: "auto"
-        };
-      }
       return {
-        cursor: "zoom-in"
+        cursor: zoomed.value ? "grab" : "zoom-in",
+        transform: `translate3d(${translateX.value}px, ${translateY.value}px, 0) scale(${scale.value})`
       };
     });
 
+    function resetTransform() {
+      const reset = resetViewerTransform();
+      scale.value = reset.scale;
+      translateX.value = reset.x;
+      translateY.value = reset.y;
+    }
+
     function close() {
       emit("close");
-      zoomed.value = false;
+      resetTransform();
     }
 
     function onOverlayClick(e: MouseEvent) {
@@ -138,7 +156,7 @@ export default defineComponent({
     function previousImage() {
       if (currentIndex.value > 0) {
         currentIndex.value--;
-        zoomed.value = false;
+        resetTransform();
         loading.value = true;
         error.value = false;
       }
@@ -147,7 +165,7 @@ export default defineComponent({
     function nextImage() {
       if (currentIndex.value < props.images.length - 1) {
         currentIndex.value++;
-        zoomed.value = false;
+        resetTransform();
         loading.value = true;
         error.value = false;
       }
@@ -155,13 +173,14 @@ export default defineComponent({
 
     function goToImage(index: number) {
       currentIndex.value = index;
-      zoomed.value = false;
+      resetTransform();
       loading.value = true;
       error.value = false;
     }
 
     function toggleZoom() {
-      zoomed.value = !zoomed.value;
+      if (zoomed.value) resetTransform();
+      else scale.value = 2;
     }
 
     function onImageLoad() {
@@ -174,38 +193,86 @@ export default defineComponent({
       error.value = true;
     }
 
-    // Handle touch gestures for swipe
     let touchStartX = 0;
     let touchStartY = 0;
+    let startTranslateX = 0;
+    let startTranslateY = 0;
+    let pinchDistance = 0;
+    let pinchScale = 1;
+    let lastTapAt = 0;
+
+    function distance(touches: TouchList) {
+      return Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+    }
 
     function handleTouchStart(e: TouchEvent) {
+      if (e.touches.length === 2) {
+        pinchDistance = distance(e.touches);
+        pinchScale = scale.value;
+        return;
+      }
       touchStartX = e.touches[0].clientX;
       touchStartY = e.touches[0].clientY;
+      startTranslateX = translateX.value;
+      startTranslateY = translateY.value;
+    }
+
+    function handleTouchMove(e: TouchEvent) {
+      if (e.touches.length === 2 && pinchDistance) {
+        scale.value = clampViewerScale(pinchScale * distance(e.touches) / pinchDistance);
+        if (scale.value === 1) resetTransform();
+        return;
+      }
+      if (e.touches.length === 1 && zoomed.value) {
+        translateX.value = startTranslateX + e.touches[0].clientX - touchStartX;
+        translateY.value = startTranslateY + e.touches[0].clientY - touchStartY;
+      }
     }
 
     function handleTouchEnd(e: TouchEvent) {
+      if (e.touches.length > 0) return;
+      pinchDistance = 0;
       const touchEndX = e.changedTouches[0].clientX;
       const touchEndY = e.changedTouches[0].clientY;
       const deltaX = touchEndX - touchStartX;
       const deltaY = touchEndY - touchStartY;
-
-      // Only handle horizontal swipes (ignore if vertical swipe is larger)
-      if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
-        if (deltaX > 0) {
-          // Swipe right - previous image
-          previousImage();
-        } else {
-          // Swipe left - next image
-          nextImage();
-        }
+      const now = Date.now();
+      if (Math.abs(deltaX) < 12 && Math.abs(deltaY) < 12 && now - lastTapAt < 300) {
+        toggleZoom();
+        lastTapAt = 0;
+        return;
       }
+      if (Math.abs(deltaX) < 12 && Math.abs(deltaY) < 12) lastTapAt = now;
+      if (shouldCloseViewer(scale.value, deltaX, deltaY)) return close();
+      const direction = swipeImageDirection(scale.value, deltaX, deltaY);
+      if (direction < 0) previousImage();
+      if (direction > 0) nextImage();
+    }
+
+    let activePointer: number | null = null;
+    function handlePointerDown(e: PointerEvent) {
+      if (e.pointerType === "touch" || !zoomed.value) return;
+      activePointer = e.pointerId;
+      touchStartX = e.clientX;
+      touchStartY = e.clientY;
+      startTranslateX = translateX.value;
+      startTranslateY = translateY.value;
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    }
+    function handlePointerMove(e: PointerEvent) {
+      if (activePointer !== e.pointerId || !zoomed.value) return;
+      translateX.value = startTranslateX + e.clientX - touchStartX;
+      translateY.value = startTranslateY + e.clientY - touchStartY;
+    }
+    function handlePointerUp(e: PointerEvent) {
+      if (activePointer === e.pointerId) activePointer = null;
     }
 
     // Watch for visibility changes
     watch(() => props.visible, async (newVal) => {
       if (newVal) {
         currentIndex.value = props.initialIndex;
-        zoomed.value = false;
+        resetTransform();
         loading.value = true;
         error.value = false;
         
@@ -216,19 +283,7 @@ export default defineComponent({
           overlay.value.focus();
         }
 
-        // Add touch event listeners
-        document.addEventListener("touchstart", handleTouchStart, { passive: true });
-        document.addEventListener("touchend", handleTouchEnd, { passive: true });
-      } else {
-        // Remove touch event listeners
-        document.removeEventListener("touchstart", handleTouchStart);
-        document.removeEventListener("touchend", handleTouchEnd);
       }
-    });
-
-    onBeforeUnmount(() => {
-      document.removeEventListener("touchstart", handleTouchStart);
-      document.removeEventListener("touchend", handleTouchEnd);
     });
 
     return {
@@ -246,7 +301,13 @@ export default defineComponent({
       goToImage,
       toggleZoom,
       onImageLoad,
-      onImageError
+      onImageError,
+      handleTouchStart,
+      handleTouchMove,
+      handleTouchEnd,
+      handlePointerDown,
+      handlePointerMove,
+      handlePointerUp
     };
   }
 });
@@ -318,6 +379,9 @@ export default defineComponent({
   align-items: center;
   justify-content: center;
   position: relative;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
 }
 
 .viewer-image {
@@ -325,7 +389,8 @@ export default defineComponent({
   max-height: 90vh;
   object-fit: contain;
   display: block;
-  transition: all 0.3s ease;
+  transition: transform 0.18s ease;
+  transform-origin: center center;
   user-select: none;
   -webkit-user-select: none;
 }

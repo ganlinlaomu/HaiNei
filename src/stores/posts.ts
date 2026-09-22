@@ -48,11 +48,6 @@ export const usePostsStore = defineStore("posts", {
         if (key.pkHex === accountAtStart) await msgs.addOutbox(out);
       } catch (e) {
         logger.warn("[message-protocol] saving outbox failed", e);
-        try {
-          const fallbackKey = `nostr_outbox_${accountAtStart}`;
-          const existing = JSON.parse(localStorage.getItem(fallbackKey) || "[]");
-          localStorage.setItem(fallbackKey, JSON.stringify([out, ...(Array.isArray(existing) ? existing : [])].slice(0, 500)));
-        } catch {}
       }
 
       logger.debug("[message-protocol] published", {
