@@ -53,7 +53,10 @@
               :style="swipeStyle(n.id)"
               @click="go(n)"
             >
-              <NotificationTypeIcon :kind="notificationIconType(n)" />
+              <div class="notification-identity">
+                <ProfileAvatar :pubkey="n.from" :local-name="localName(n.from)" :size="36" />
+                <NotificationTypeIcon :kind="notificationIconType(n)" />
+              </div>
 
               <div class="content">
                 <div class="text">
@@ -100,7 +103,10 @@
               :style="swipeStyle(n.id)"
               @click="go(n)"
             >
-              <NotificationTypeIcon :kind="notificationIconType(n)" />
+              <div class="notification-identity">
+                <ProfileAvatar :pubkey="n.from" :local-name="localName(n.from)" :size="36" />
+                <NotificationTypeIcon :kind="notificationIconType(n)" />
+              </div>
 
               <div class="content">
                 <div class="text">
@@ -146,7 +152,10 @@
               :style="swipeStyle(n.id)"
               @click="go(n)"
             >
-              <NotificationTypeIcon :kind="notificationIconType(n)" />
+              <div class="notification-identity">
+                <ProfileAvatar :pubkey="n.from" :local-name="localName(n.from)" :size="36" />
+                <NotificationTypeIcon :kind="notificationIconType(n)" />
+              </div>
 
               <div class="content">
                 <div class="text">
@@ -180,12 +189,16 @@ import { useRouter } from "vue-router";
 import { useInteractionsStore } from "@/stores/interactions";
 import { useMessagesStore } from "@/stores/messages";
 import NotificationTypeIcon from "@/components/NotificationTypeIcon.vue";
+import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import { useKeyStore } from "@/stores/keys";
+import { localProfileName, profileDisplayName } from "@/services/profileCache";
 
 const notifications = useNotificationsStore();
 const friends = useFriendsStore();
 const interactions = useInteractionsStore();
 const messagesStore = useMessagesStore();
 const router = useRouter();
+const keys = useKeyStore();
 
 type NotificationTab = "all" | "comments" | "likes" | "friends";
 const activeTab = ref<NotificationTab>("all");
@@ -272,9 +285,9 @@ function dismiss(n: any) {
   swipe[n.id] = 0;
 }
 function displayName(pk: string) {
-  const f = friendsByPubkey.value.get(pk);
-  return f?.name || pk.slice(0, 8) + "...";
+  return profileDisplayName(keys.pkHex, pk, localName(pk));
 }
+function localName(pk: string) { return localProfileName(pk, friendsByPubkey.value.get(pk)?.name); }
 function notificationIconType(n: any): "like" | "comment" | "reply" | "friend" {
   if (n.type === "like") return "like";
   if (n.type === "friend_request") return "friend";
@@ -428,6 +441,24 @@ function summarizeNotificationText(text: string, maxLength = 40) {
 }
 .notification-item.unread {
   background: #f8fafc;
+}
+.notification-identity {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+}
+.notification-identity :deep(.notification-type-icon) {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #fff;
+}
+.notification-identity :deep(.notification-type-icon svg) {
+  width: 11px;
+  height: 11px;
 }
 .content {
   flex: 1;
