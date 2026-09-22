@@ -33,8 +33,9 @@
       <div v-if="acceptedFriends.length === 0" class="small">还没有已确认好友</div>
       <div class="list" v-else>
         <div v-for="f in acceptedFriends" :key="f.pubkey" class="friend-item">
+          <ProfileAvatar :pubkey="f.pubkey" :local-name="localContactName(f.pubkey)" :size="38" />
           <div class="friend-info">
-            <div><strong>{{ f.name }}</strong></div>
+            <div><strong>{{ contactName(f.pubkey) }}</strong></div>
             <div class="small">
               <span v-if="f.groups && f.groups.length > 0">
                 {{ f.groups[0] }}
@@ -59,6 +60,7 @@
       <div v-if="incomingRequests.length === 0" class="small">暂无收到的好友请求</div>
       <div v-else class="list">
         <div v-for="request in incomingRequests" :key="request.peerPubkey" class="friend-item">
+          <ProfileAvatar :pubkey="request.peerPubkey" :local-name="localContactName(request.peerPubkey)" :size="38" />
           <div class="friend-info">
             <strong>{{ contactName(request.peerPubkey) }}</strong>
             <div class="small">请求添加你为好友</div>
@@ -76,6 +78,7 @@
       <div v-if="outgoingRequests.length === 0" class="small">暂无等待确认的请求</div>
       <div v-else class="list">
         <div v-for="request in outgoingRequests" :key="request.peerPubkey" class="friend-item">
+          <ProfileAvatar :pubkey="request.peerPubkey" :local-name="localContactName(request.peerPubkey)" :size="38" />
           <div class="friend-info">
             <strong>{{ contactName(request.peerPubkey) }}</strong>
             <div class="small">等待对方接受<span v-if="request.requestedAt"> · {{ requestAge(request.requestedAt) }}</span></div>
@@ -171,6 +174,8 @@ import { keyToHex } from "@/utils/format";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useRoute } from "vue-router";
 import { formatRelativeTime } from "@/utils/format";
+import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import { localProfileName, profileDisplayName } from "@/services/profileCache";
 
 export default defineComponent({
   name: "Friends",
@@ -219,7 +224,8 @@ export default defineComponent({
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
     const incomingRequests = computed(() => friendships.getIncomingRequests());
     const outgoingRequests = computed(() => friendships.getOutgoingRequests());
-    const contactName = (pubkey: string) => friends.list.find(friend => friend.pubkey === pubkey)?.name || `${pubkey.slice(0, 8)}…`;
+    const localContactName = (pubkey: string) => localProfileName(pubkey, friends.list.find(friend => friend.pubkey === pubkey)?.name);
+    const contactName = (pubkey: string) => profileDisplayName(keys.pkHex, pubkey, localContactName(pubkey));
     const requestAge = (timestamp: number) => formatRelativeTime(timestamp);
 
     function toggleFriendMenu(pubkey: string) {
@@ -489,6 +495,7 @@ export default defineComponent({
       outgoingRequests,
       activeSection,
       contactName,
+      localContactName,
       requestAge,
       showModal,
       editMode,
@@ -596,10 +603,12 @@ export default defineComponent({
   padding: 9px 4px;
   background: #fff;
   border-bottom: 1px solid #eef2f6;
+  gap: 10px;
 }
 
 .friend-info {
   flex: 1;
+  min-width: 0;
 }
 
 .friend-actions {
