@@ -11,8 +11,14 @@
       <span class="sync-icon">✓</span> 已同步
     </div>
 
+    <nav class="friend-tabs" aria-label="好友分类">
+      <button type="button" :class="{ active: activeSection === 'accepted' }" @click="activeSection = 'accepted'">全部</button>
+      <button type="button" :class="{ active: activeSection === 'incoming' }" @click="activeSection = 'incoming'">收到请求 <span>{{ incomingRequests.length }}</span></button>
+      <button type="button" :class="{ active: activeSection === 'outgoing' }" @click="activeSection = 'outgoing'">已发送 <span>{{ outgoingRequests.length }}</span></button>
+    </nav>
+
     <!-- Friend List -->
-    <div class="card">
+    <div v-show="activeSection === 'accepted'" class="card">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
         <h3 style="margin: 0;">好友（{{ acceptedFriends.length }}）</h3>
         <button 
@@ -48,14 +54,14 @@
       </div>
     </div>
 
-    <div id="incoming-requests" class="card">
+    <div v-show="activeSection === 'incoming'" id="incoming-requests" class="card">
       <h3>收到的请求（{{ incomingRequests.length }}）</h3>
       <div v-if="incomingRequests.length === 0" class="small">暂无收到的好友请求</div>
       <div v-else class="list">
         <div v-for="request in incomingRequests" :key="request.peerPubkey" class="friend-item">
           <div class="friend-info">
             <strong>{{ contactName(request.peerPubkey) }}</strong>
-            <div class="small">{{ request.peerPubkey.slice(0, 16) }}…</div>
+            <div class="small">请求添加你为好友</div>
           </div>
           <div class="friend-actions">
             <button class="btn request-accept" @click="acceptRequest(request.peerPubkey)">接受</button>
@@ -65,14 +71,21 @@
       </div>
     </div>
 
-    <div class="card">
+    <div v-show="activeSection === 'outgoing'" class="card">
       <h3>已发送请求（{{ outgoingRequests.length }}）</h3>
       <div v-if="outgoingRequests.length === 0" class="small">暂无等待确认的请求</div>
       <div v-else class="list">
         <div v-for="request in outgoingRequests" :key="request.peerPubkey" class="friend-item">
           <div class="friend-info">
             <strong>{{ contactName(request.peerPubkey) }}</strong>
-            <div class="small">等待对方接受</div>
+            <div class="small">等待对方接受<span v-if="request.requestedAt"> · {{ requestAge(request.requestedAt) }}</span></div>
+          </div>
+          <div class="friend-actions">
+            <button class="more-button" type="button" :aria-expanded="openFriendMenu === request.peerPubkey" :aria-label="`${contactName(request.peerPubkey)} 的请求操作`" @click="toggleFriendMenu(request.peerPubkey)">更多</button>
+            <div v-if="openFriendMenu === request.peerPubkey" class="friend-menu">
+              <button type="button" @click="startPendingEdit(request.peerPubkey); openFriendMenu = ''">编辑备注</button>
+              <button type="button" class="danger" @click="withdrawRequest(request.peerPubkey); openFriendMenu = ''">撤回请求</button>
+            </div>
           </div>
         </div>
       </div>
@@ -81,10 +94,10 @@
     <!-- Modal for Add/Edit Friend -->
     <div v-if="showModal" class="modal-overlay" @click="closeModal">
       <div class="modal-content" @click.stop>
-        <h3>{{ editMode ? '编辑好友' : '添加好友' }}</h3>
+        <h3>{{ editMode ? (editingPending ? '编辑备注' : '编辑好友') : '添加好友' }}</h3>
         
         <form @submit.prevent="saveForm">
-          <div class="form-group">
+          <div v-if="!editingPending" class="form-group">
             <label>好友公钥 <span class="required">*</span></label>
             <input 
               v-model="formData.pubkey" 
@@ -157,6 +170,7 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { keyToHex } from "@/utils/format";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useRoute } from "vue-router";
+import { formatRelativeTime } from "@/utils/format";
 
 export default defineComponent({
   name: "Friends",
@@ -171,6 +185,8 @@ export default defineComponent({
     const showModal = ref(false);
     const editMode = ref(false);
     const saving = ref(false);
+    const editingPending = ref(false);
+    const activeSection = ref<"accepted" | "incoming" | "outgoing">("accepted");
     const openFriendMenu = ref("");
     const showSyncSuccess = ref(false);
     const isFadingOut = ref(false);
@@ -204,6 +220,7 @@ export default defineComponent({
     const incomingRequests = computed(() => friendships.getIncomingRequests());
     const outgoingRequests = computed(() => friendships.getOutgoingRequests());
     const contactName = (pubkey: string) => friends.list.find(friend => friend.pubkey === pubkey)?.name || `${pubkey.slice(0, 8)}…`;
+    const requestAge = (timestamp: number) => formatRelativeTime(timestamp);
 
     function toggleFriendMenu(pubkey: string) {
       openFriendMenu.value = openFriendMenu.value === pubkey ? "" : pubkey;
@@ -252,10 +269,11 @@ export default defineComponent({
     onMounted(async () => {
       await friends.load();
       await friendships.load();
-      if (route.query.section === "incoming") {
-        document.getElementById("incoming-requests")?.scrollIntoView({ block: "start" });
-      }
     });
+    watch(() => route.query.section, section => {
+      if (section === "incoming") activeSection.value = "incoming";
+      else if (section === "outgoing") activeSection.value = "outgoing";
+    }, { immediate: true });
 
     onBeforeUnmount(() => {
       // Clean up timeouts to prevent memory leaks
@@ -275,6 +293,7 @@ export default defineComponent({
         return;
       }
       editMode.value = false;
+      editingPending.value = false;
       formData.value = {
         pubkey: "",
         name: "",
@@ -284,8 +303,9 @@ export default defineComponent({
       showModal.value = true;
     };
 
-    const startEdit = (friend: Friend) => {
+    const startEdit = (friend: Friend, pending = false) => {
       editMode.value = true;
+      editingPending.value = pending;
       const groupStr = friend.groups && friend.groups.length > 0 
         ? friend.groups[0]
         : friend.group || "";
@@ -299,8 +319,17 @@ export default defineComponent({
       showModal.value = true;
     };
 
+    const startPendingEdit = (pubkey: string) => {
+      const friend = friends.list.find(item => item.pubkey === pubkey) || {
+        pubkey,
+        name: `${pubkey.slice(0, 8)}…`
+      };
+      startEdit(friend, true);
+    };
+
     const closeModal = () => {
       showModal.value = false;
+      editingPending.value = false;
       formData.value = {
         pubkey: "",
         name: "",
@@ -328,11 +357,13 @@ export default defineComponent({
           const groupInput = formData.value.groupsInput.trim();
           const group = groupInput.length > 0 ? groupInput : undefined;
           
-          const ok = friends.update(formData.value.originalPubkey, {
+          const patch = {
             name: nameVal,
             groups: group ? [group] : undefined,
             group: group
-          });
+          };
+          const ok = friends.update(formData.value.originalPubkey, patch)
+            || (editingPending.value && friends.add({ pubkey: formData.value.originalPubkey, ...patch }));
 
           if (ok) {
             ui.addToast("好友信息已更新", 2000, "success");
@@ -402,6 +433,16 @@ export default defineComponent({
       }
     };
 
+    const withdrawRequest = async (pubkey: string) => {
+      if (!confirm("确定撤回这条好友请求吗？")) return;
+      try {
+        await friendships.cancelRequest(pubkey);
+        ui.addToast("好友请求已撤回", 1500, "info");
+      } catch {
+        ui.addToast("撤回失败，请稍后重试", 2000, "error");
+      }
+    };
+
     // Group autocomplete handlers
     const onGroupInput = () => {
       showGroupSuggestions.value = true;
@@ -446,9 +487,12 @@ export default defineComponent({
       acceptedFriends,
       incomingRequests,
       outgoingRequests,
+      activeSection,
       contactName,
+      requestAge,
       showModal,
       editMode,
+      editingPending,
       formData,
       saving,
       openFriendMenu,
@@ -457,11 +501,13 @@ export default defineComponent({
       isFadingOut,
       startAdd,
       startEdit,
+      startPendingEdit,
       closeModal,
       saveForm,
       confirmDelete,
       acceptRequest,
       rejectRequest,
+      withdrawRequest,
       // Group autocomplete
       showGroupSuggestions,
       filteredGroups,
@@ -520,6 +566,27 @@ export default defineComponent({
   font-size: 16px;
   font-weight: bold;
 }
+.friend-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 10px 10px;
+  padding: 4px;
+  border-radius: 12px;
+  background: #eef2f6;
+}
+.friend-tabs button {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #64748b;
+  font-size: 13px;
+}
+.friend-tabs button.active { background:#fff;color:#1d4ed8;box-shadow:0 1px 4px rgba(15,23,42,.08); }
+.friend-tabs span { margin-left:3px;font-size:11px; }
 
 .friend-item {
   display: flex;
@@ -543,7 +610,7 @@ export default defineComponent({
 }
 .more-button {
   min-width: 44px;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 8px;
   border: 0;
   border-radius: 8px;
@@ -566,7 +633,7 @@ export default defineComponent({
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
 }
 .friend-menu button {
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 10px;
   border: 0;
   border-radius: 7px;

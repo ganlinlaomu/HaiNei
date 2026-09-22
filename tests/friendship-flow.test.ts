@@ -32,8 +32,9 @@ import { usePostsStore } from "@/stores/posts";
 import { useInteractionsStore } from "@/stores/interactions";
 import { useFriendsStore } from "@/stores/friends";
 import { friendshipTags } from "@/nostr/messaging/friendshipControl";
+import { useNotificationsStore } from "@/stores/notifications";
 
-function message(action: "request" | "accept" | "reject" | "remove", sender = PEER): CanonicalMessage {
+function message(action: "request" | "accept" | "reject" | "remove" | "cancel", sender = PEER): CanonicalMessage {
   return {
     id: `${action}-event`,
     senderPubkey: sender,
@@ -157,6 +158,59 @@ describe("friendship state and message authorization", () => {
     await friendships.processFriendshipMessage(message("reject"));
     expect(friendships.getState(PEER)).toBeUndefined();
     expect(mocks.delete).toHaveBeenCalledWith(ACCOUNT, PEER);
+  });
+
+  it("withdraws a local outgoing request with a distinct cancel control", async () => {
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "outgoing_pending", updatedAt: 1 }];
+    await friendships.cancelRequest(PEER);
+    expect(friendships.getState(PEER)).toBeUndefined();
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ tags: friendshipTags("cancel") }));
+  });
+
+  it("removes a remote incoming request on cancel and resolves its notification", async () => {
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "incoming_pending", updatedAt: 1 }];
+    const notifications = useNotificationsStore();
+    notifications.loadedFor = ACCOUNT;
+    notifications.list = [{
+      id: "friend-request:request-event", type: "friend_request", from: PEER,
+      messageId: "request-event", created_at: Math.floor(Date.now() / 1000), read: false
+    }];
+    await friendships.processFriendshipMessage(message("cancel"));
+    expect(friendships.getState(PEER)).toBeUndefined();
+    expect(notifications.unreadCount).toBe(0);
+    expect(notifications.list[0].read).toBe(true);
+  });
+
+  it("does not remove an accepted friendship when a stale cancel arrives", async () => {
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "accepted", updatedAt: 1 }];
+    await friendships.processFriendshipMessage(message("cancel"));
+    expect(friendships.getState(PEER)).toBe("accepted");
+    expect(mocks.delete).not.toHaveBeenCalled();
+  });
+
+  it("handles duplicate cancel events idempotently", async () => {
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "incoming_pending", updatedAt: 1 }];
+    await friendships.processFriendshipMessage(message("cancel"));
+    await friendships.processFriendshipMessage(message("cancel"));
+    expect(friendships.getState(PEER)).toBeUndefined();
+    expect(mocks.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("edits outgoing-request metadata without resending the request", () => {
+    const friends = useFriendsStore();
+    friends.loadedFor = ACCOUNT;
+    friends.list = [{ pubkey: PEER, name: "旧备注", groups: ["旧分组"] }];
+    expect(friends.update(PEER, { name: "新备注", groups: ["家人"], group: "家人" })).toBe(true);
+    expect(friends.list[0]).toMatchObject({ name: "新备注", groups: ["家人"], group: "家人" });
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it("does not leak relationship state across accounts", async () => {

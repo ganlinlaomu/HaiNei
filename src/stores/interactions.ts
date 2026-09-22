@@ -163,6 +163,7 @@ export const useInteractionsStore = defineStore("interactions", {
           from: interaction.author,
           messageId: interaction.messageId,
           commentId: interaction.type === "comment" ? interaction.id : undefined,
+          replyId: interaction.type === "comment" ? interaction.parentCommentId : undefined,
           created_at: interaction.timestamp,
           read: false
         });

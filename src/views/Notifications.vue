@@ -53,9 +53,7 @@
               :style="swipeStyle(n.id)"
               @click="go(n)"
             >
-              <div class="icon">
-                {{ notificationIcon(n) }}
-              </div>
+              <NotificationTypeIcon :kind="notificationIconType(n)" />
 
               <div class="content">
                 <div class="text">
@@ -102,9 +100,7 @@
               :style="swipeStyle(n.id)"
               @click="go(n)"
             >
-              <div class="icon">
-                {{ notificationIcon(n) }}
-              </div>
+              <NotificationTypeIcon :kind="notificationIconType(n)" />
 
               <div class="content">
                 <div class="text">
@@ -150,9 +146,7 @@
               :style="swipeStyle(n.id)"
               @click="go(n)"
             >
-              <div class="icon">
-                {{ notificationIcon(n) }}
-              </div>
+              <NotificationTypeIcon :kind="notificationIconType(n)" />
 
               <div class="content">
                 <div class="text">
@@ -185,6 +179,7 @@ import { useFriendsStore } from "@/stores/friends";
 import { useRouter } from "vue-router";
 import { useInteractionsStore } from "@/stores/interactions";
 import { useMessagesStore } from "@/stores/messages";
+import NotificationTypeIcon from "@/components/NotificationTypeIcon.vue";
 
 const notifications = useNotificationsStore();
 const friends = useFriendsStore();
@@ -280,10 +275,10 @@ function displayName(pk: string) {
   const f = friendsByPubkey.value.get(pk);
   return f?.name || pk.slice(0, 8) + "...";
 }
-function notificationIcon(n: any) {
-  if (n.type === "like") return "♥";
-  if (n.type === "friend_request") return "＋";
-  return "💬";
+function notificationIconType(n: any): "like" | "comment" | "reply" | "friend" {
+  if (n.type === "like") return "like";
+  if (n.type === "friend_request") return "friend";
+  return n.replyId ? "reply" : "comment";
 }
 function notificationAction(n: any) {
   if (n.type === "like") return "点赞了你";
@@ -433,9 +428,6 @@ function summarizeNotificationText(text: string, maxLength = 40) {
 }
 .notification-item.unread {
   background: #f8fafc;
-}
-.icon {
-  font-size: 18px;
 }
 .content {
   flex: 1;

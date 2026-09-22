@@ -11,6 +11,7 @@ import { friendshipRepository } from "@/repositories/friendshipRepository";
 import type { FriendshipRecord, FriendshipState } from "@/db/dexie";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendsStore } from "@/stores/friends";
+import { useNotificationsStore } from "@/stores/notifications";
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
 
@@ -136,6 +137,15 @@ export const useFriendshipsStore = defineStore("friendships", {
       await this.deleteRecord(peer);
     },
 
+    async cancelRequest(peerPubkey: string) {
+      const peer = normalized(peerPubkey);
+      if (this.getState(peer) !== "outgoing_pending") return;
+      await this.sendControl(peer, "cancel");
+      // An accept may win the race while the cancel is publishing. Never
+      // remove a relationship that has already reached accepted.
+      if (this.getState(peer) === "outgoing_pending") await this.deleteRecord(peer);
+    },
+
     async removeFriend(peerPubkey: string) {
       const peer = normalized(peerPubkey);
       if (this.getState(peer) !== "accepted") return;
@@ -166,6 +176,12 @@ export const useFriendshipsStore = defineStore("friendships", {
       } else if (control.action === "accept") {
         if (selfMessage || this.getState(peer) === "outgoing_pending") {
           await this.setRecord(peer, "accepted", { acceptedEventId: message.id, acceptedAt: control.timestamp });
+        }
+      } else if (control.action === "cancel") {
+        const cancellableState = selfMessage ? "outgoing_pending" : "incoming_pending";
+        if (this.getState(peer) === cancellableState) {
+          await this.deleteRecord(peer);
+          if (!selfMessage) useNotificationsStore().resolveFriendRequests(peer);
         }
       } else {
         await this.deleteRecord(peer);

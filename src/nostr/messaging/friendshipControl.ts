@@ -1,7 +1,7 @@
 import type { CanonicalMessage } from "./protocol";
 
 export const FRIENDSHIP_LABEL = "hainei-friendship";
-export type FriendshipAction = "request" | "accept" | "reject" | "remove";
+export type FriendshipAction = "request" | "accept" | "reject" | "remove" | "cancel";
 
 export function friendshipTags(action: FriendshipAction): string[][] {
   return [["l", FRIENDSHIP_LABEL], ["t", action]];
@@ -10,7 +10,7 @@ export function friendshipTags(action: FriendshipAction): string[][] {
 export function isFriendshipControlMessage(message: CanonicalMessage): boolean {
   return message.protocol === "nip17"
     && message.tags.some(tag => tag[0] === "l" && tag[1] === FRIENDSHIP_LABEL)
-    && message.tags.some(tag => tag[0] === "t" && ["request", "accept", "reject", "remove"].includes(tag[1]));
+    && message.tags.some(tag => tag[0] === "t" && ["request", "accept", "reject", "remove", "cancel"].includes(tag[1]));
 }
 
 export function decodeFriendshipControl(message: CanonicalMessage): { action: FriendshipAction; timestamp: number } | null {
