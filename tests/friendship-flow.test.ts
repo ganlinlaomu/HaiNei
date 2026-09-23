@@ -35,7 +35,7 @@ vi.mock("@/stores/profiles", () => ({
   })
 }));
 
-import { useFriendshipsStore } from "@/stores/friendships";
+import { reduceFriendshipControl, useFriendshipsStore, type FriendshipControlEvent } from "@/stores/friendships";
 import { usePostsStore } from "@/stores/posts";
 import { useInteractionsStore } from "@/stores/interactions";
 import { useFriendsStore } from "@/stores/friends";
@@ -168,7 +168,7 @@ describe("friendship state and message authorization", () => {
     await friendships.processFriendshipMessage(message("accept"));
     expect(friendships.getState(PEER)).toBe("accepted");
     await friendships.processFriendshipMessage(message("remove"));
-    expect(friendships.getState(PEER)).toBeUndefined();
+    expect(friendships.getState(PEER)).toBe("removed");
     await expect(usePostsStore().sendDirectMessage([PEER], "blocked again")).rejects.toThrow("已互相确认");
   });
 
@@ -187,6 +187,19 @@ describe("friendship state and message authorization", () => {
     expect(mocks.requestCurrentProfile).toHaveBeenCalledWith(PEER);
   });
 
+  it("binds new accept controls to the pending request id", async () => {
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{
+      accountPubkey: ACCOUNT, peerPubkey: PEER, state: "incoming_pending",
+      requestEventId: "bound-request", requestedAt: 90, updatedAt: 1,
+    }];
+    await friendships.acceptRequest(PEER);
+    expect(JSON.parse(mocks.send.mock.calls[0][0].content)).toMatchObject({
+      type: "friend_accept", requestId: "bound-request",
+    });
+  });
+
   it("sends the current profile when an outgoing request becomes accepted", async () => {
     const friendships = useFriendshipsStore();
     friendships.loadedFor = ACCOUNT;
@@ -202,8 +215,8 @@ describe("friendship state and message authorization", () => {
     friendships.loadedFor = ACCOUNT;
     friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "outgoing_pending", updatedAt: 1 }];
     await friendships.processFriendshipMessage(message("reject"));
-    expect(friendships.getState(PEER)).toBeUndefined();
-    expect(mocks.delete).toHaveBeenCalledWith(ACCOUNT, PEER);
+    expect(friendships.getState(PEER)).toBe("rejected");
+    expect(mocks.delete).not.toHaveBeenCalled();
   });
 
   it("withdraws a local outgoing request with a distinct cancel control", async () => {
@@ -211,7 +224,7 @@ describe("friendship state and message authorization", () => {
     friendships.loadedFor = ACCOUNT;
     friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "outgoing_pending", updatedAt: 1 }];
     await friendships.cancelRequest(PEER);
-    expect(friendships.getState(PEER)).toBeUndefined();
+    expect(friendships.getState(PEER)).toBe("cancelled");
     expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ tags: friendshipTags("cancel") }));
   });
 
@@ -226,7 +239,7 @@ describe("friendship state and message authorization", () => {
       messageId: "request-event", created_at: Math.floor(Date.now() / 1000), read: false
     }];
     await friendships.processFriendshipMessage(message("cancel"));
-    expect(friendships.getState(PEER)).toBeUndefined();
+    expect(friendships.getState(PEER)).toBe("cancelled");
     expect(notifications.unreadCount).toBe(0);
     expect(notifications.list[0].read).toBe(true);
   });
@@ -246,8 +259,9 @@ describe("friendship state and message authorization", () => {
     friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "incoming_pending", updatedAt: 1 }];
     await friendships.processFriendshipMessage(message("cancel"));
     await friendships.processFriendshipMessage(message("cancel"));
-    expect(friendships.getState(PEER)).toBeUndefined();
-    expect(mocks.delete).toHaveBeenCalledTimes(1);
+    expect(friendships.getState(PEER)).toBe("cancelled");
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+    expect(mocks.delete).not.toHaveBeenCalled();
   });
 
   it("edits outgoing-request metadata without resending the request", () => {
@@ -269,5 +283,45 @@ describe("friendship state and message authorization", () => {
     friendships.reset();
     await friendships.load(OTHER);
     expect(friendships.isAccepted(PEER)).toBe(false);
+  });
+});
+
+describe("monotonic friendship control reducer", () => {
+  const base = { accountPubkey: ACCOUNT, peerPubkey: PEER };
+  const event = (action: FriendshipControlEvent["action"], timestamp: number, eventId: string, selfMessage = false, requestId?: string): FriendshipControlEvent =>
+    ({ action, timestamp, eventId, selfMessage, requestId });
+
+  it("keeps removed after replaying an old request or accept", () => {
+    const requested = reduceFriendshipControl(undefined, base, event("request", 10, "request"))!;
+    const accepted = reduceFriendshipControl(requested, base, event("accept", 20, "accept", true, "request"))!;
+    const removed = reduceFriendshipControl(accepted, base, event("remove", 30, "remove"))!;
+    expect(reduceFriendshipControl(removed, base, event("request", 10, "request"))?.state).toBe("removed");
+    expect(reduceFriendshipControl(removed, base, event("accept", 20, "accept", true, "request"))?.state).toBe("removed");
+  });
+
+  it("does not let a stale cancel overwrite accepted state", () => {
+    const requested = reduceFriendshipControl(undefined, base, event("request", 10, "request"))!;
+    const accepted = reduceFriendshipControl(requested, base, event("accept", 20, "accept", true))!;
+    expect(reduceFriendshipControl(accepted, base, event("cancel", 15, "cancel"))).toBe(accepted);
+  });
+
+  it("is idempotent and uses event id as the same-timestamp tie-break", () => {
+    const first = reduceFriendshipControl(undefined, base, event("request", 10, "b"))!;
+    expect(reduceFriendshipControl(first, base, event("request", 10, "b"))).toBe(first);
+    expect(reduceFriendshipControl(first, base, event("request", 10, "a"))).toBe(first);
+    expect(reduceFriendshipControl(first, base, event("request", 10, "c"))?.lastControlEventId).toBe("c");
+  });
+
+  it("allows a genuinely newer request after a tombstone", () => {
+    const requested = reduceFriendshipControl(undefined, base, event("request", 10, "request"))!;
+    const accepted = reduceFriendshipControl(requested, base, event("accept", 20, "accept", true))!;
+    const removed = reduceFriendshipControl(accepted, base, event("remove", 30, "remove"))!;
+    expect(reduceFriendshipControl(removed, base, event("request", 40, "new-request"))?.state).toBe("incoming_pending");
+  });
+
+  it("ignores a mismatched requestId and accepts legacy controls without one", () => {
+    const requested = reduceFriendshipControl(undefined, base, event("request", 10, "request"))!;
+    expect(reduceFriendshipControl(requested, base, event("accept", 20, "bad-accept", true, "other"))).toBe(requested);
+    expect(reduceFriendshipControl(requested, base, event("accept", 20, "legacy-accept", true))?.state).toBe("accepted");
   });
 });

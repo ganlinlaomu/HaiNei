@@ -72,6 +72,7 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { useDirectMessagesStore } from "@/stores/directMessages";
 import { useMessagesStore } from "@/stores/messages";
+import { useFriendshipsStore } from "@/stores/friendships";
 
 
 export default defineComponent({
@@ -82,6 +83,7 @@ export default defineComponent({
     const notifications = useNotificationsStore();
     const directMessages = useDirectMessagesStore();
     const messages = useMessagesStore();
+    const friendships = useFriendshipsStore();
     const route = useRoute();
     const isLoggedIn = computed(() => !!keys.pkHex);
     const shortPk = computed(() => (keys.pkHex ? keys.pkHex.slice(0, 8) + "..." : ""));
@@ -102,7 +104,7 @@ export default defineComponent({
       { immediate: true }
     );
 
-    watch(() => `${keys.pkHex}:${messages.inbox.length}:${messages.inbox[0]?.id || ""}`, () => {
+    watch(() => `${keys.pkHex}:${messages.inbox.length}:${messages.inbox[0]?.id || ""}:${friendships.records.map(record => `${record.peerPubkey}:${record.state}:${record.lastControlEventId || ""}`).join(",")}`, () => {
       void directMessages.refresh(keys.pkHex);
     });
 

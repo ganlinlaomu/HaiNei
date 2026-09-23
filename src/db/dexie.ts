@@ -1,7 +1,7 @@
 import Dexie, { type Table, type Transaction } from "dexie";
 
 export const APP_VERSION = "0.1.5";
-export const DB_VERSION = 9;
+export const DB_VERSION = 10;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -102,7 +102,14 @@ export type DecryptedEventRecord = {
   decryptedAt: number;
 };
 
-export type FriendshipState = "outgoing_pending" | "incoming_pending" | "accepted" | "blocked";
+export type FriendshipState = "outgoing_pending" | "incoming_pending" | "accepted" | "removed" | "rejected" | "cancelled" | "blocked";
+
+export type FriendshipAcceptedWindow = {
+  acceptedAt: number;
+  acceptedEventId: string;
+  endedAt?: number;
+  endedEventId?: string;
+};
 
 export type FriendshipRecord = {
   accountPubkey: string;
@@ -112,6 +119,10 @@ export type FriendshipRecord = {
   acceptedEventId?: string;
   requestedAt?: number;
   acceptedAt?: number;
+  acceptedWindows?: FriendshipAcceptedWindow[];
+  lastAction?: "request" | "accept" | "reject" | "remove" | "cancel";
+  lastControlAt?: number;
+  lastControlEventId?: string;
   updatedAt: number;
 };
 
@@ -369,6 +380,40 @@ export class HaiNeiDatabase extends Dexie {
       accountProfiles: "[accountPubkey+ownerPubkey], accountPubkey, [accountPubkey+updatedAt]",
       outgoingQueue: "[accountPubkey+outgoingId], accountPubkey, [accountPubkey+state], [accountPubkey+nextAttemptAt]",
       accountBookmarks: "[accountPubkey+messageId], accountPubkey, [accountPubkey+createdAt]"
+    });
+
+    this.version(10).stores({
+      messages: "id, created_at, pubkey",
+      friends: "pubkey, name, group",
+      meta: "key",
+      imageCache: "url, timestamp",
+      accountMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+created_at], [accountPubkey+pubkey], [accountPubkey+pubkey+created_at]",
+      accountFriends: "[accountPubkey+pubkey], accountPubkey, [accountPubkey+name], [accountPubkey+group]",
+      accountMeta: "[accountPubkey+key], accountPubkey",
+      accountImageCache: "[accountPubkey+url], accountPubkey, [accountPubkey+timestamp]",
+      syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+createdAt], [accountPubkey+senderPubkey]",
+      conversationStates: "[accountPubkey+conversationId], accountPubkey, [accountPubkey+lastMessageAt]",
+      conversationReadStates: "[accountPubkey+conversationId], accountPubkey",
+      messageSyncStates: "accountPubkey",
+      decryptedEvents: "[accountPubkey+eventId], accountPubkey, [accountPubkey+decryptedAt]",
+      accountFriendships: "[accountPubkey+peerPubkey], accountPubkey, [accountPubkey+state], [accountPubkey+updatedAt]",
+      accountProfiles: "[accountPubkey+ownerPubkey], accountPubkey, [accountPubkey+updatedAt]",
+      outgoingQueue: "[accountPubkey+outgoingId], accountPubkey, [accountPubkey+state], [accountPubkey+nextAttemptAt]",
+      accountBookmarks: "[accountPubkey+messageId], accountPubkey, [accountPubkey+createdAt]"
+    }).upgrade(async transaction => {
+      await transaction.table<FriendshipRecord>("accountFriendships").toCollection().modify(record => {
+        const action = record.state === "accepted" ? "accept"
+          : record.state === "incoming_pending" || record.state === "outgoing_pending" ? "request"
+            : undefined;
+        const eventId = action === "accept" ? record.acceptedEventId : record.requestEventId;
+        const controlAt = action === "accept" ? record.acceptedAt : record.requestedAt;
+        if (action) record.lastAction = action;
+        if (eventId) record.lastControlEventId = eventId;
+        if (controlAt) record.lastControlAt = controlAt;
+        if (record.state === "accepted" && record.acceptedAt && record.acceptedEventId && !record.acceptedWindows?.length) {
+          record.acceptedWindows = [{ acceptedAt: record.acceptedAt, acceptedEventId: record.acceptedEventId }];
+        }
+      });
     });
   }
 }

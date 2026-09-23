@@ -1,14 +1,10 @@
 import { defineStore } from "pinia";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { sendDirectMessage } from "@/nostr/messaging/service";
-import {
-  decodeFriendshipControl,
-  friendshipTags,
-  type FriendshipAction
-} from "@/nostr/messaging/friendshipControl";
+import { decodeFriendshipControl, friendshipTags, type FriendshipAction, type FriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { getRelaysFromStorage } from "@/nostr/relays";
 import { friendshipRepository } from "@/repositories/friendshipRepository";
-import type { FriendshipRecord, FriendshipState } from "@/db/dexie";
+import type { FriendshipAcceptedWindow, FriendshipRecord, FriendshipState } from "@/db/dexie";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendsStore } from "@/stores/friends";
 import { useNotificationsStore } from "@/stores/notifications";
@@ -16,28 +12,95 @@ import { useProfilesStore } from "@/stores/profiles";
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
 
-export const useFriendshipsStore = defineStore("friendships", {
-  state: () => ({
-    records: [] as FriendshipRecord[],
-    loadedFor: "",
-    loading: false
-  }),
+export type FriendshipControlEvent = FriendshipControl & { eventId: string; selfMessage: boolean };
 
+function controlIsNewer(current: FriendshipRecord | undefined, event: FriendshipControlEvent) {
+  if (current?.lastControlAt === undefined) return true;
+  if (event.timestamp !== current.lastControlAt) return event.timestamp > current.lastControlAt;
+  return event.eventId.localeCompare(current.lastControlEventId || "") > 0;
+}
+
+function matchingRequest(current: FriendshipRecord | undefined, event: FriendshipControlEvent) {
+  return !event.requestId || (!!current?.requestEventId && event.requestId === current.requestEventId);
+}
+
+function closeOpenWindow(windows: FriendshipAcceptedWindow[], event: FriendshipControlEvent) {
+  return windows.map((window, index) => index === windows.length - 1 && window.endedAt === undefined
+    ? { ...window, endedAt: event.timestamp, endedEventId: event.eventId }
+    : window);
+}
+
+/** The only state transition for both locally sent and replayed friendship controls. */
+export function reduceFriendshipControl(
+  current: FriendshipRecord | undefined,
+  base: Pick<FriendshipRecord, "accountPubkey" | "peerPubkey">,
+  event: FriendshipControlEvent,
+): FriendshipRecord | undefined {
+  if (current?.state === "blocked" || !controlIsNewer(current, event)) return current;
+  let state: FriendshipState | undefined;
+
+  if (event.action === "request") {
+    if (current?.state === "accepted") return current;
+    state = event.selfMessage ? "outgoing_pending" : "incoming_pending";
+  } else if (event.action === "accept") {
+    const expected = event.selfMessage ? "incoming_pending" : "outgoing_pending";
+    if (current?.state !== expected || !matchingRequest(current, event)) return current;
+    state = "accepted";
+  } else if (event.action === "reject") {
+    const expected = event.selfMessage ? "incoming_pending" : "outgoing_pending";
+    if (current?.state !== expected || !matchingRequest(current, event)) return current;
+    state = "rejected";
+  } else if (event.action === "cancel") {
+    const expected = event.selfMessage ? "outgoing_pending" : "incoming_pending";
+    if (current?.state !== expected || !matchingRequest(current, event)) return current;
+    state = "cancelled";
+  } else if (event.action === "remove") {
+    if (current?.state !== "accepted") return current;
+    state = "removed";
+  }
+  if (!state) return current;
+
+  let acceptedWindows = [...(current?.acceptedWindows || [])];
+  if (!acceptedWindows.length && current?.state === "accepted" && current.acceptedAt && current.acceptedEventId) {
+    acceptedWindows = [{ acceptedAt: current.acceptedAt, acceptedEventId: current.acceptedEventId }];
+  }
+  if (event.action === "accept" && !acceptedWindows.some(window => window.endedAt === undefined)) {
+    acceptedWindows.push({ acceptedAt: event.timestamp, acceptedEventId: event.eventId });
+  } else if (event.action === "remove") {
+    acceptedWindows = closeOpenWindow(acceptedWindows, event);
+  }
+  return {
+    ...current,
+    ...base,
+    state,
+    ...(event.action === "request" ? { requestEventId: event.eventId, requestedAt: event.timestamp } : {}),
+    ...(event.action === "accept" ? { acceptedEventId: event.eventId, acceptedAt: event.timestamp } : {}),
+    acceptedWindows,
+    lastAction: event.action,
+    lastControlAt: event.timestamp,
+    lastControlEventId: event.eventId,
+    updatedAt: Date.now(),
+  };
+}
+
+export const useFriendshipsStore = defineStore("friendships", {
+  state: () => ({ records: [] as FriendshipRecord[], loadedFor: "", loading: false }),
   getters: {
-    getState: state => (peerPubkey: string): FriendshipState | undefined =>
-      state.records.find(item => item.peerPubkey === normalized(peerPubkey))?.state,
+    getRecord: state => (peerPubkey: string) => state.records.find(item => item.peerPubkey === normalized(peerPubkey)),
+    getState(): (peerPubkey: string) => FriendshipState | undefined {
+      return peerPubkey => this.getRecord(peerPubkey)?.state;
+    },
     isAccepted(): (peerPubkey: string) => boolean {
       return peerPubkey => this.getState(peerPubkey) === "accepted";
     },
     getIncomingRequests: state => () => state.records.filter(item => item.state === "incoming_pending"),
-    getOutgoingRequests: state => () => state.records.filter(item => item.state === "outgoing_pending")
+    getOutgoingRequests: state => () => state.records.filter(item => item.state === "outgoing_pending"),
   },
-
   actions: {
     async load(accountPubkey?: string) {
       const account = normalized(accountPubkey || useKeyStore().pkHex);
       if (!account) return this.reset();
-      if (this.loadedFor === account) return;
+      if (this.loadedFor === account && !this.loading) return;
       this.records = [];
       this.loadedFor = account;
       this.loading = true;
@@ -48,153 +111,89 @@ export const useFriendshipsStore = defineStore("friendships", {
         if (this.loadedFor === account) this.loading = false;
       }
     },
-
     reset() {
       this.records = [];
       this.loadedFor = "";
       this.loading = false;
     },
-
-    async setRecord(peerPubkey: string, state: FriendshipState, patch: Partial<FriendshipRecord> = {}) {
+    async applyControl(peerPubkey: string, event: FriendshipControlEvent) {
       const accountPubkey = this.loadedFor;
       const peer = normalized(peerPubkey);
-      if (!accountPubkey || !peer || peer === accountPubkey) return null;
-      const current = this.records.find(item => item.peerPubkey === peer);
-      const record: FriendshipRecord = {
-        ...current,
-        ...patch,
-        accountPubkey,
-        peerPubkey: peer,
-        state,
-        updatedAt: Date.now()
-      };
+      if (!accountPubkey || !peer || peer === accountPubkey) return { changed: false, record: undefined };
+      const current = this.getRecord(peer);
+      const record = reduceFriendshipControl(current, { accountPubkey, peerPubkey: peer }, event);
+      if (!record || record === current) return { changed: false, record: current };
       await friendshipRepository.put(record);
-      if (this.loadedFor !== accountPubkey) return null;
+      if (this.loadedFor !== accountPubkey) return { changed: false, record: undefined };
       const index = this.records.findIndex(item => item.peerPubkey === peer);
       if (index >= 0) this.records[index] = record;
       else this.records.push(record);
-      return record;
+      return { changed: true, record };
     },
-
-    async deleteRecord(peerPubkey: string) {
-      const account = this.loadedFor;
-      const peer = normalized(peerPubkey);
-      if (!account || !peer) return;
-      await friendshipRepository.delete(account, peer);
-      if (this.loadedFor === account) this.records = this.records.filter(item => item.peerPubkey !== peer);
-    },
-
-    async sendControl(peerPubkey: string, action: FriendshipAction) {
+    async sendControl(peerPubkey: string, action: FriendshipAction, requestId?: string) {
       const keys = useKeyStore();
       const account = keys.pkHex;
       const peer = normalized(peerPubkey);
-      if (!keys.isLoggedIn || !keys.supportsNip44 || !account || !peer || peer === account) {
-        throw new Error("无法发送好友关系消息");
-      }
+      if (!keys.isLoggedIn || !keys.supportsNip44 || !account || !peer || peer === account) throw new Error("无法发送好友关系消息");
       if (this.loadedFor !== account) await this.load(account);
-      const timestamp = Math.floor(Date.now() / 1000);
+      const previousControlAt = this.getRecord(peer)?.lastControlAt || 0;
+      const timestamp = Math.max(Math.floor(Date.now() / 1000), previousControlAt + 1);
       const result = await sendDirectMessage({
         recipientPubkeys: [peer],
-        content: JSON.stringify({ type: `friend_${action}`, from: account, timestamp }),
+        content: JSON.stringify({ type: `friend_${action}`, from: account, timestamp, ...(requestId ? { requestId } : {}) }),
         tags: friendshipTags(action),
         relays: getRelaysFromStorage("write"),
-        context: {
-          senderPubkey: account,
-          nip44Encrypt: keys.nip44Encrypt.bind(keys),
-          signEvent: keys.signEvent.bind(keys)
-        }
+        context: { senderPubkey: account, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
       });
       if (keys.pkHex !== account || this.loadedFor !== account) throw new Error("账号已切换");
-      return { result, timestamp };
+      const applied = await this.applyControl(peer, { action, timestamp, eventId: result.message.id, requestId, selfMessage: true });
+      return { result, applied };
     },
-
     async sendRequest(peerPubkey: string) {
-      const peer = normalized(peerPubkey);
-      const { result, timestamp } = await this.sendControl(peer, "request");
-      await this.setRecord(peer, "outgoing_pending", {
-        requestEventId: result.message.id,
-        requestedAt: timestamp
-      });
-      return result;
+      return (await this.sendControl(peerPubkey, "request")).result;
     },
-
     async acceptRequest(peerPubkey: string) {
       const peer = normalized(peerPubkey);
-      if (this.getState(peer) !== "incoming_pending") throw new Error("好友请求已失效");
-      const { result, timestamp } = await this.sendControl(peer, "accept");
-      await this.setRecord(peer, "accepted", { acceptedEventId: result.message.id, acceptedAt: timestamp });
+      const current = this.getRecord(peer);
+      if (current?.state !== "incoming_pending") throw new Error("好友请求已失效");
+      const { result, applied } = await this.sendControl(peer, "accept", current.requestEventId);
+      if (!applied.changed) throw new Error("好友请求已失效");
       const friends = useFriendsStore();
       if (friends.loadedFor !== this.loadedFor) await friends.load(this.loadedFor);
-      if (!friends.list.some(item => item.pubkey === peer)) {
-        friends.add({ pubkey: peer, name: `${peer.slice(0, 8)}…` });
-      }
+      if (!friends.list.some(item => item.pubkey === peer)) friends.add({ pubkey: peer, name: `${peer.slice(0, 8)}…` });
       const profiles = useProfilesStore();
       void Promise.allSettled([profiles.sendCurrentProfileTo(peer), profiles.requestCurrentProfile(peer)]);
       return result;
     },
-
     async rejectRequest(peerPubkey: string) {
-      const peer = normalized(peerPubkey);
-      if (this.getState(peer) !== "incoming_pending") return;
-      await this.sendControl(peer, "reject");
-      await this.deleteRecord(peer);
+      const current = this.getRecord(peerPubkey);
+      if (current?.state !== "incoming_pending") return;
+      await this.sendControl(peerPubkey, "reject", current.requestEventId);
     },
-
     async cancelRequest(peerPubkey: string) {
-      const peer = normalized(peerPubkey);
-      if (this.getState(peer) !== "outgoing_pending") return;
-      await this.sendControl(peer, "cancel");
-      // An accept may win the race while the cancel is publishing. Never
-      // remove a relationship that has already reached accepted.
-      if (this.getState(peer) === "outgoing_pending") await this.deleteRecord(peer);
+      const current = this.getRecord(peerPubkey);
+      if (current?.state !== "outgoing_pending") return;
+      await this.sendControl(peerPubkey, "cancel", current.requestEventId);
     },
-
     async removeFriend(peerPubkey: string) {
-      const peer = normalized(peerPubkey);
-      if (this.getState(peer) !== "accepted") return;
-      await this.sendControl(peer, "remove");
-      await this.deleteRecord(peer);
+      if (this.getState(peerPubkey) !== "accepted") return;
+      await this.sendControl(peerPubkey, "remove");
     },
-
     async processFriendshipMessage(message: CanonicalMessage) {
       const control = decodeFriendshipControl(message);
       const account = this.loadedFor;
       if (!control || !account) return false;
       const selfMessage = message.senderPubkey === account;
-      const peer = selfMessage
-        ? message.recipientPubkeys.find(pubkey => pubkey !== account)
-        : message.senderPubkey;
+      const peer = normalized(selfMessage ? message.recipientPubkeys.find(pubkey => pubkey !== account) || "" : message.senderPubkey);
       if (!peer || peer === account) return false;
-
-      if (control.action === "request") {
-        if (selfMessage) {
-          if (this.getState(peer) !== "accepted") await this.setRecord(peer, "outgoing_pending", {
-            requestEventId: message.id, requestedAt: control.timestamp
-          });
-        } else if (this.getState(peer) !== "accepted") {
-          await this.setRecord(peer, "incoming_pending", {
-            requestEventId: message.id, requestedAt: control.timestamp
-          });
-        }
-      } else if (control.action === "accept") {
-        const wasAccepted = this.getState(peer) === "accepted";
-        if (selfMessage || this.getState(peer) === "outgoing_pending") {
-          await this.setRecord(peer, "accepted", { acceptedEventId: message.id, acceptedAt: control.timestamp });
-          if (!wasAccepted) {
-            const profiles = useProfilesStore();
-            void Promise.allSettled([profiles.sendCurrentProfileTo(peer), profiles.requestCurrentProfile(peer)]);
-          }
-        }
-      } else if (control.action === "cancel") {
-        const cancellableState = selfMessage ? "outgoing_pending" : "incoming_pending";
-        if (this.getState(peer) === cancellableState) {
-          await this.deleteRecord(peer);
-          if (!selfMessage) useNotificationsStore().resolveFriendRequests(peer);
-        }
-      } else {
-        await this.deleteRecord(peer);
+      const wasAccepted = this.isAccepted(peer);
+      const applied = await this.applyControl(peer, { ...control, eventId: message.id, selfMessage });
+      if (applied.changed && control.action === "accept" && !wasAccepted) {
+        const profiles = useProfilesStore();
+        void Promise.allSettled([profiles.sendCurrentProfileTo(peer), profiles.requestCurrentProfile(peer)]);
       }
-      return true;
-    }
-  }
+      if (applied.changed && control.action === "cancel" && !selfMessage) useNotificationsStore().resolveFriendRequests(peer);
+      return applied.changed;
+    },
+  },
 });

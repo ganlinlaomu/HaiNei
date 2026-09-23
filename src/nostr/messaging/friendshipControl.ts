@@ -13,7 +13,9 @@ export function isFriendshipControlMessage(message: CanonicalMessage): boolean {
     && message.tags.some(tag => tag[0] === "t" && ["request", "accept", "reject", "remove", "cancel"].includes(tag[1]));
 }
 
-export function decodeFriendshipControl(message: CanonicalMessage): { action: FriendshipAction; timestamp: number } | null {
+export type FriendshipControl = { action: FriendshipAction; timestamp: number; requestId?: string };
+
+export function decodeFriendshipControl(message: CanonicalMessage): FriendshipControl | null {
   if (!isFriendshipControlMessage(message) || !message.plaintext) return null;
   try {
     const action = message.tags.find(tag => tag[0] === "t")?.[1] as FriendshipAction | undefined;
@@ -21,7 +23,10 @@ export function decodeFriendshipControl(message: CanonicalMessage): { action: Fr
     const expectedType = `friend_${action}`;
     if (!action || payload?.type !== expectedType || payload?.from?.toLowerCase() !== message.senderPubkey.toLowerCase()) return null;
     if (!Number.isFinite(payload.timestamp)) return null;
-    return { action, timestamp: Number(payload.timestamp) };
+    const requestId = typeof payload.requestId === "string" && payload.requestId.trim()
+      ? payload.requestId.trim()
+      : undefined;
+    return { action, timestamp: Number(payload.timestamp), requestId };
   } catch {
     return null;
   }
