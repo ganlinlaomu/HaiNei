@@ -28,6 +28,7 @@ export const useUIStore = defineStore("ui", () => {
   }
 
   const showPostEditor = ref(false);
+  const showNewConversation = ref(false);
   const blockingOverlays = ref(new Set<string>());
 
   function openPostEditor() {
@@ -36,6 +37,14 @@ export const useUIStore = defineStore("ui", () => {
 
   function closePostEditor() {
     showPostEditor.value = false;
+  }
+
+  function openNewConversation() {
+    showNewConversation.value = true;
+  }
+
+  function closeNewConversation() {
+    showNewConversation.value = false;
   }
 
   function setBlockingOverlay(name: string, visible: boolean) {
@@ -52,6 +61,9 @@ export const useUIStore = defineStore("ui", () => {
     showPostEditor,
     openPostEditor,
     closePostEditor,
+    showNewConversation,
+    openNewConversation,
+    closeNewConversation,
     blockingOverlays,
     setBlockingOverlay,
   };
