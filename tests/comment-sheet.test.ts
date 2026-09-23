@@ -76,6 +76,23 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain("260ms cubic-bezier(.22,1,.36,1)");
   });
 
+  it("drags the empty body but preserves native scrolling when comments exist", () => {
+    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    expect(sheet).toContain('@pointerdown="startEmptyDrag"');
+    expect(sheet).toContain("if (commentCount.value) return");
+    expect(sheet).toContain("touch-action:pan-y");
+    expect(sheet).toContain("-webkit-overflow-scrolling:touch");
+    expect(sheet).toContain(".comment-sheet-body.empty{touch-action:none");
+  });
+
+  it("shows one comment initially and expands the complete comment list", () => {
+    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    expect(sheet).toContain("const visibleThreads = computed");
+    expect(sheet).toContain("first ? [{ root: first.root, replies: [] }] : []");
+    expect(sheet).toContain("查看全部 {{ commentCount }} 条评论");
+    expect(sheet).toContain('@click="commentsExpanded = true"');
+  });
+
   it("routes replies to self back to the post author while retaining the reply id", () => {
     const self = ROOT.author;
     const friend = REPLY.author;
