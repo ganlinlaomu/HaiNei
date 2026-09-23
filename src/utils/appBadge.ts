@@ -8,6 +8,13 @@ export async function syncAppBadge(count: number, target: BadgeNavigator = navig
   else await target.clearAppBadge?.();
 }
 
-export function accountBadgeCount(accountPubkey: string, loadedFor: string, unreadCount: number) {
-  return accountPubkey !== "" && accountPubkey === loadedFor ? unreadCount : 0;
+export function accountBadgeCount(
+  accountPubkey: string,
+  loadedFor: string,
+  unreadCount: number,
+  directLoadedFor = accountPubkey,
+  directUnreadCount = 0,
+) {
+  if (!accountPubkey || accountPubkey !== loadedFor) return 0;
+  return unreadCount + (accountPubkey === directLoadedFor ? directUnreadCount : 0);
 }

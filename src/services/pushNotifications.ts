@@ -3,6 +3,7 @@ import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 const PUSH_ACTION = "hainei_push";
 
 type SignEvent = (event: EventTemplate) => Promise<VerifiedEvent>;
+export type PushCategory = "message" | "activity";
 
 function baseUrl() {
   return String(import.meta.env.VITE_HAINEI_WORKER_URL || window.location.origin).trim().replace(/\/+$/, "");
@@ -100,9 +101,10 @@ export async function triggerGenericPush(
   recipientPubkeys: string[],
   pubkey: string,
   signEvent: SignEvent,
+  type: PushCategory = "activity",
 ) {
   const recipients = [...new Set(recipientPubkeys.map(value => value.toLowerCase()))]
     .filter(value => value !== pubkey.toLowerCase());
   if (!recipients.length) return;
-  await authenticatedPost("/api/push/trigger", { recipientPubkeys: recipients }, pubkey, signEvent);
+  await authenticatedPost("/api/push/trigger", { recipientPubkeys: recipients, type }, pubkey, signEvent);
 }

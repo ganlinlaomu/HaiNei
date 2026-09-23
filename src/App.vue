@@ -1,12 +1,21 @@
 <template>
-  <div class="app-root" :class="{ 'login-route': hideAppChrome }">
+  <div class="app-root" :class="{ 'login-route': hideAppChrome, 'compose-fab-page': isPrimaryRoute }">
     <UpdateNotification />
     <HeaderBar v-if="!hideAppChrome" />
     <router-view v-slot="{ Component }">
-      <keep-alive :include="['Home', 'Friends', 'Notifications', 'Settings']">
+      <keep-alive :include="['Home', 'Friends', 'Conversations', 'Notifications', 'Settings']">
         <component :is="Component" />
       </keep-alive>
     </router-view>
+    <button
+      v-if="showComposeFab"
+      class="compose-fab"
+      type="button"
+      aria-label="发帖"
+      @pointerdown="preloadPostEditor"
+      @focus="preloadPostEditor"
+      @click="ui.openPostEditor()"
+    >+</button>
     <ToastContainer />
     <PostEditorModal v-if="!hideAppChrome && postEditorReady" />
     <div
@@ -37,7 +46,7 @@ import HeaderBar from "@/components/HeaderBar.vue";
 import ToastContainer from "@/components/ToastContainer.vue";
 import UpdateNotification from "@/components/UpdateNotification.vue";
 import { useUIStore } from "@/stores/ui";
-import { loadPostEditor } from "@/components/postEditorLoader";
+import { loadPostEditor, preloadPostEditor } from "@/components/postEditorLoader";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
 
@@ -49,6 +58,12 @@ export default defineComponent({
     const postEditorReady = ref(false);
     const postEditorLoadError = ref(false);
     const hideAppChrome = computed(() => route.meta.hideHeader === true);
+    const primaryRoutes = new Set(["Home", "Friends", "Conversations", "Notifications", "Settings", "MyProfile", "Saved", "Profile"]);
+    const isPrimaryRoute = computed(() => !hideAppChrome.value && primaryRoutes.has(String(route.name || "")));
+    const showComposeFab = computed(() => !hideAppChrome.value
+      && isPrimaryRoute.value
+      && !ui.showPostEditor
+      && ui.blockingOverlays.size === 0);
     let disposed = false;
     let idleHandle: number | null = null;
 
@@ -100,7 +115,7 @@ export default defineComponent({
       }
       document.body.classList.remove("login-page", "post-editor-open");
     });
-    return { ui, hideAppChrome, postEditorReady, postEditorLoadError, preparePostEditor };
+    return { ui, hideAppChrome, isPrimaryRoute, showComposeFab, postEditorReady, postEditorLoadError, preparePostEditor, preloadPostEditor };
   }
 });
 </script>
@@ -120,6 +135,10 @@ body.post-editor-open > #app {
   overflow: hidden;
 }
 
+.app-root.compose-fab-page {
+  padding-bottom: 72px;
+}
+
 .composer-loading-overlay {
   position: fixed;
   inset: 0 0 calc(80px + env(safe-area-inset-bottom)) 0;
@@ -130,6 +149,28 @@ body.post-editor-open > #app {
   padding: 16px;
   background: rgba(15, 23, 42, 0.38);
 }
+
+.compose-fab {
+  position: fixed;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 18px);
+  z-index: 10000;
+  width: 54px;
+  height: 54px;
+  padding: 0 0 4px;
+  border: 0;
+  border-radius: 50%;
+  background: #1687e8;
+  box-shadow: 0 7px 20px rgba(22, 135, 232, 0.32);
+  color: #fff;
+  font-size: 34px;
+  font-weight: 300;
+  line-height: 50px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.compose-fab:active { transform: scale(.96); }
 
 .composer-loading-card {
   width: min(100%, 720px);

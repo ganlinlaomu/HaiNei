@@ -5,6 +5,7 @@ import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./proto
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import type { OutgoingQueueRecord } from "@/db/dexie";
 import { triggerGenericPush } from "@/services/pushNotifications";
+import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/directMessages";
 
 export type MessageProtocolPolicy = "nip17";
 
@@ -102,6 +103,10 @@ export function shouldTriggerGenericPush(tags: string[][] | undefined) {
   return true;
 }
 
+export function pushCategoryForMessage(tags: string[][] | undefined): "message" | "activity" {
+  return tags?.some(tag => tag[0] === "t" && tag[1] === DIRECT_MESSAGE_TYPE) ? "message" : "activity";
+}
+
 const activePublishes = new Map<string, Promise<PublishedMessage>>();
 const accountGenerations = new Map<string, number>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -193,7 +198,7 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     const pushSigner = pushSigners.get(accountPubkey);
     if (pushSigner && shouldTriggerGenericPush(message.tags)) {
       const recipients = [...new Set(events.map(eventTarget).filter((value): value is string => !!value))];
-      void triggerGenericPush(recipients, accountPubkey, pushSigner).catch(() => undefined);
+      void triggerGenericPush(recipients, accountPubkey, pushSigner, pushCategoryForMessage(message.tags)).catch(() => undefined);
     }
     return queuedResult(sent!);
   })().finally(() => activePublishes.delete(key));

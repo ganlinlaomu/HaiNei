@@ -47,6 +47,9 @@
             </div>
           </div>
           <div class="friend-actions">
+            <button class="message-button" type="button" :aria-label="`给 ${contactName(f.pubkey)} 发私信`" @click="openMessage(f.pubkey)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>
+            </button>
             <button class="more-button" type="button" :aria-expanded="openFriendMenu === f.pubkey" :aria-label="`${f.name} 的更多操作`" @click="toggleFriendMenu(f.pubkey)">更多</button>
             <div v-if="openFriendMenu === f.pubkey" class="friend-menu">
               <button type="button" @click="startEdit(f); openFriendMenu = ''">编辑资料</button>
@@ -239,6 +242,9 @@ export default defineComponent({
     function openFriendProfile(pubkey: string, event?: Event) {
       return openProfile(router, keys.pkHex, pubkey, event);
     }
+    function openMessage(pubkey: string) {
+      if (friendships.isAccepted(pubkey) && pubkey !== keys.pkHex) void router.push(`/messages/${pubkey}`);
+    }
 
     // Filter groups based on current input
     const filteredGroups = computed(() => {
@@ -289,8 +295,10 @@ export default defineComponent({
       if (section === "incoming") activeSection.value = "incoming";
       else if (section === "outgoing") activeSection.value = "outgoing";
     }, { immediate: true });
+    watch(showModal, visible => ui.setBlockingOverlay("friends-editor", visible));
 
     onBeforeUnmount(() => {
+      ui.setBlockingOverlay("friends-editor", false);
       // Clean up timeouts to prevent memory leaks
       if (hideTimeout) {
         clearTimeout(hideTimeout);
@@ -514,6 +522,7 @@ export default defineComponent({
       openFriendMenu,
       toggleFriendMenu,
       openFriendProfile,
+      openMessage,
       showSyncSuccess,
       isFadingOut,
       startAdd,
@@ -638,6 +647,7 @@ export default defineComponent({
   color: #64748b;
   cursor: pointer;
 }
+.message-button{display:grid;place-items:center;width:44px;height:44px;padding:10px;border:0;border-radius:9px;background:transparent;color:#1687e8;cursor:pointer}.message-button svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.message-button:active{background:#eaf5ff}
 .friend-menu {
   position: absolute;
   z-index: 20;

@@ -104,7 +104,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, nextTick, onBeforeUnmount, ref, watch, type PropType } from "vue";
+import { computed, defineComponent, getCurrentInstance, h, nextTick, onBeforeUnmount, ref, watch, type PropType } from "vue";
 import type { InboxItem } from "@/stores/messages";
 import type { Comment, CommentMedia } from "@/stores/interactions";
 import { useInteractionsStore } from "@/stores/interactions";
@@ -118,6 +118,7 @@ import { uploadEncryptedCommentImage } from "@/utils/commentImage";
 import { useRouter } from "vue-router";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import PostImagePreview from "@/components/PostImagePreview.vue";
+import { useUIStore } from "@/stores/ui";
 
 const props = defineProps<{ visible: boolean; message: InboxItem; targetCommentId?: string }>();
 const emit = defineEmits<{ close: [] }>();
@@ -126,6 +127,8 @@ const friends = useFriendsStore();
 const keys = useKeyStore();
 const profiles = useProfilesStore();
 const router = useRouter();
+const ui = useUIStore();
+const overlayId = `comment-sheet-${getCurrentInstance()?.uid}`;
 const dialog = ref<HTMLElement | null>(null);
 const panel = ref<HTMLElement | null>(null);
 const commentBody = ref<HTMLElement | null>(null);
@@ -325,6 +328,7 @@ function focusTarget() {
   });
 }
 watch(() => props.visible, visible => {
+  ui.setBlockingOverlay(overlayId, visible);
   if (visible) {
     commentsExpanded.value = false;
     expandedReplyRoots.value = new Set();
@@ -336,12 +340,13 @@ watch(() => props.visible, visible => {
     sendError.value = "";
     dragY.value = 0;
   }
-});
+}, { immediate: true });
 watch([threads, () => props.targetCommentId], ([, targetCommentId]) => {
   revealTargetComment(targetCommentId);
   if (props.visible) focusTarget();
 });
 onBeforeUnmount(() => {
+  ui.setBlockingOverlay(overlayId, false);
   replyTarget.value = null;
   removeSelectedImage();
 });

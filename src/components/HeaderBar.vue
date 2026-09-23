@@ -9,22 +9,6 @@
       </svg>
       <span class="nav-label">首页</span>
     </router-link>
-    <button
-      class="nav-item nav-button"
-      :class="{ 'composer-active': ui.showPostEditor }"
-      type="button"
-      aria-label="发帖"
-      :aria-expanded="String(ui.showPostEditor)"
-      @pointerdown="preloadPostEditor"
-      @focus="preloadPostEditor"
-      @click="handlePostClick"
-    >
-      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-      </svg>
-      <span class="nav-label">发帖</span>
-    </button>
     <router-link class="nav-item" to="/friends" @click="handleNavigation">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
@@ -34,7 +18,15 @@
       </svg>
       <span class="nav-label">好友</span>
     </router-link>
-    <!-- ⭐⭐⭐ 新增：通知 -->
+    <router-link class="nav-item" to="/conversations" @click="handleNavigation">
+      <span class="icon-wrapper">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
+        </svg>
+        <span v-if="directMessages.unreadCount > 0" class="badge">{{ directMessages.unreadCount }}</span>
+      </span>
+      <span class="nav-label">私信</span>
+    </router-link>
     <router-link class="nav-item" to="/notifications" @click="handleNavigation">
       <span class="icon-wrapper">
         <svg
@@ -63,21 +55,23 @@
     </router-link>
     <router-link class="nav-item" to="/settings" @click="handleNavigation">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="3"></circle>
-        <path d="M12 1v6M12 17v6M4.22 4.22l4.24 4.25M15.54 15.54l4.24 4.25M1 12h6M17 12h6M4.22 19.78l4.24-4.25M15.54 8.46l4.24-4.25"></path>
+        <circle cx="12" cy="8" r="4"></circle>
+        <path d="M4 21a8 8 0 0 1 16 0"></path>
       </svg>
-      <span class="nav-label">设置</span>
+      <span class="nav-label">我的</span>
     </router-link>
   </nav>
 </template>
 
 <script lang="ts">
 import { defineComponent, computed, watch } from "vue";
+import { useRoute } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import { useNotificationsStore } from "@/stores/notifications";
-import { preloadPostEditor } from "@/components/postEditorLoader";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
+import { useDirectMessagesStore } from "@/stores/directMessages";
+import { useMessagesStore } from "@/stores/messages";
 
 
 export default defineComponent({
@@ -86,6 +80,9 @@ export default defineComponent({
     const keys = useKeyStore();
     const ui = useUIStore();
     const notifications = useNotificationsStore();
+    const directMessages = useDirectMessagesStore();
+    const messages = useMessagesStore();
+    const route = useRoute();
     const isLoggedIn = computed(() => !!keys.pkHex);
     const shortPk = computed(() => (keys.pkHex ? keys.pkHex.slice(0, 8) + "..." : ""));
     
@@ -93,26 +90,27 @@ export default defineComponent({
     const shouldShowBottomNav = computed(() => {
       if (!keys.pkHex) return false; // Not logged in at all
       if (keys.isEncrypted && !keys.isUnlocked) return false; // Needs to unlock
+      if (route.meta.hideBottomNav === true) return false;
       return true; // Logged in and unlocked (or not encrypted)
     });
 
     watch(
-      () => [keys.pkHex, notifications.loadedFor, notifications.unreadCount] as const,
-      ([account, loadedFor, unreadCount]) => {
-        void syncAppBadge(accountBadgeCount(account, loadedFor, unreadCount)).catch(() => undefined);
+      () => [keys.pkHex, notifications.loadedFor, notifications.unreadCount, directMessages.loadedFor, directMessages.unreadCount] as const,
+      ([account, loadedFor, unreadCount, directLoadedFor, directUnread]) => {
+        void syncAppBadge(accountBadgeCount(account, loadedFor, unreadCount, directLoadedFor, directUnread)).catch(() => undefined);
       },
       { immediate: true }
     );
-    
-    function handlePostClick() {
-      ui.openPostEditor();
-    }
+
+    watch(() => `${keys.pkHex}:${messages.inbox.length}:${messages.inbox[0]?.id || ""}`, () => {
+      void directMessages.refresh(keys.pkHex);
+    });
 
     function handleNavigation() {
       ui.closePostEditor();
     }
     
-    return { isLoggedIn, shortPk, handlePostClick, handleNavigation, notifications, shouldShowBottomNav, ui, preloadPostEditor };
+    return { isLoggedIn, shortPk, handleNavigation, notifications, directMessages, shouldShowBottomNav, ui };
   }
 });
 </script>
@@ -172,8 +170,9 @@ export default defineComponent({
    ========================= */
 
 .nav-item {
-  min-width: 64px;
-  padding: 8px 16px;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 4px;
 
   display: flex;
   flex-direction: column;
@@ -192,18 +191,6 @@ export default defineComponent({
     color 0.22s ease,
     background-color 0.22s ease,
     transform 0.22s ease;
-}
-
-.nav-button {
-  border: 0;
-  background: transparent;
-  font: inherit;
-}
-
-.nav-item.composer-active {
-  color: #1976d2;
-  background: rgba(59, 130, 246, 0.08);
-  transform: scale(0.97);
 }
 
 /* hover / active（桌面 & Android） */

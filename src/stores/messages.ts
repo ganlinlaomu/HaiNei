@@ -17,6 +17,7 @@ export type InboxItem = {
   conversationId?: string;
   replyTo?: string;
   rootId?: string;
+  tags?: string[][];
   _localMeta?: {
     groupCount: number;
     groups: Array<{ name: string; count: number }>;
@@ -127,7 +128,8 @@ export const useMessagesStore = defineStore("messages", {
         recipientPubkeys: record.recipientPubkeys,
         conversationId: record.conversationId,
         replyTo: record.replyTo,
-        rootId: record.rootId
+        rootId: record.rootId,
+        tags: record.tags || []
       })).sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
       const outgoing = await outgoingQueueRepository.list(targetPk);
       if (this.loadedFor !== targetPk) return;

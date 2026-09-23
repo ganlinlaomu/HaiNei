@@ -90,13 +90,14 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, ref, computed, watch, nextTick } from "vue";
+import { defineComponent, ref, computed, watch, nextTick, onBeforeUnmount, getCurrentInstance } from "vue";
 import {
   clampViewerScale,
   resetViewerTransform,
   shouldCloseViewer,
   swipeImageDirection
 } from "@/utils/imageViewerGestures";
+import { useUIStore } from "@/stores/ui";
 
 export default defineComponent({
   name: "ImageViewer",
@@ -116,6 +117,8 @@ export default defineComponent({
   },
   emits: ["close"],
   setup(props, { emit }) {
+    const ui = useUIStore();
+    const overlayId = `image-viewer-${getCurrentInstance()?.uid}`;
     const currentIndex = ref(0);
     const scale = ref(1);
     const translateX = ref(0);
@@ -270,6 +273,7 @@ export default defineComponent({
 
     // Watch for visibility changes
     watch(() => props.visible, async (newVal) => {
+      ui.setBlockingOverlay(overlayId, newVal);
       if (newVal) {
         currentIndex.value = props.initialIndex;
         resetTransform();
@@ -284,7 +288,9 @@ export default defineComponent({
         }
 
       }
-    });
+    }, { immediate: true });
+
+    onBeforeUnmount(() => ui.setBlockingOverlay(overlayId, false));
 
     return {
       currentIndex,

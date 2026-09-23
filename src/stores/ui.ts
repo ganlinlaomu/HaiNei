@@ -28,6 +28,7 @@ export const useUIStore = defineStore("ui", () => {
   }
 
   const showPostEditor = ref(false);
+  const blockingOverlays = ref(new Set<string>());
 
   function openPostEditor() {
     showPostEditor.value = true;
@@ -37,5 +38,21 @@ export const useUIStore = defineStore("ui", () => {
     showPostEditor.value = false;
   }
 
-  return { toasts, addToast, removeToast, showPostEditor, openPostEditor, closePostEditor };
+  function setBlockingOverlay(name: string, visible: boolean) {
+    const next = new Set(blockingOverlays.value);
+    if (visible) next.add(name);
+    else next.delete(name);
+    blockingOverlays.value = next;
+  }
+
+  return {
+    toasts,
+    addToast,
+    removeToast,
+    showPostEditor,
+    openPostEditor,
+    closePostEditor,
+    blockingOverlays,
+    setBlockingOverlay,
+  };
 });
