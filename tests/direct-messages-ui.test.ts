@@ -40,8 +40,13 @@ describe("direct-message navigation and UI contract", () => {
 
   it("uses the existing composer behind a route-aware floating button", () => {
     const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
-    expect(app).toContain('class="compose-fab"');
+    expect(app.match(/class="compose-fab"/g)).toHaveLength(1);
     expect(app).toContain("ui.openPostEditor()");
+    expect(app).toContain('route.name === "Conversations"');
+    expect(app).toContain("ui.openNewConversation()");
+    expect(app).toContain('key="message"');
+    expect(app).toContain('key="compose"');
+    expect(app).toContain("transition: opacity 140ms ease, transform 140ms ease");
     expect(app).toContain("PostEditorModal");
     expect(app).toContain("ui.blockingOverlays.size === 0");
     expect(app).not.toContain("new PostEditor");
@@ -51,6 +56,34 @@ describe("direct-message navigation and UI contract", () => {
     const navigation = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
     expect(navigation).toContain('<nav v-if="shouldShowBottomNav" class="bottom-nav">');
     expect(navigation).not.toContain('<nav v-show="shouldShowBottomNav"');
+  });
+
+  it("keeps mobile conversation and profile page roots full width", () => {
+    for (const file of ["Conversations.vue", "Messages.vue", "MyProfile.vue", "Profile.vue"]) {
+      const source = readFileSync(join(process.cwd(), `src/views/${file}`), "utf8");
+      expect(source, file).toContain("width:100%;max-width:none");
+      expect(source, file).toContain("margin:0");
+      expect(source, file).toContain("box-sizing:border-box");
+    }
+  });
+
+  it("provides X-style conversation search and the required empty state", () => {
+    const source = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    expect(source).toContain("私信</h1>");
+    expect(source).toContain("全部");
+    expect(source).toContain('type="search"');
+    expect(source).toContain("filteredConversations");
+    expect(source).toContain("暂无私信");
+    expect(source).toContain("开始一段新的私密对话。");
+  });
+
+  it("lists only accepted non-self friends in the new-conversation sheet", () => {
+    const source = readFileSync(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
+    expect(source).toContain('record.state === "accepted"');
+    expect(source).toContain("record.peerPubkey !== keys.pkHex");
+    expect(source).toContain("friend.note");
+    expect(source).toContain('emit("select", pubkey)');
+    expect(source).not.toContain("sendDirectMessage");
   });
 
   it("allows only accepted, non-self peers to start private messages", () => {
@@ -91,6 +124,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(service).toContain("outgoingQueueRepository.putIfAbsent");
     expect(chat).toContain('class="chat-composer"');
     expect(chat).toContain("'输入消息……'");
+    expect(chat).toContain('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>');
+    expect(chat).not.toContain('@click="router.back()">‹</button>');
     expect(chat).toContain("uploadEncryptedCommentImage");
     expect(chat).toContain("PostImagePreview");
     expect(conversations).toContain("`/messages/${pubkey}`");

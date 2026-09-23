@@ -11,11 +11,21 @@
       v-if="showComposeFab"
       class="compose-fab"
       type="button"
-      aria-label="发帖"
-      @pointerdown="preloadPostEditor"
-      @focus="preloadPostEditor"
-      @click="ui.openPostEditor()"
-    >+</button>
+      :aria-label="fabLabel"
+      @pointerdown="handleFabIntent"
+      @focus="handleFabIntent"
+      @click="handleFabClick"
+    >
+      <span class="fab-icon-stage" aria-hidden="true">
+        <Transition name="fab-icon" mode="out-in">
+          <svg v-if="isConversationsRoute" key="message" class="fab-message-icon" viewBox="0 0 24 24">
+            <path d="M20 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h9a4 4 0 0 1 4 4v3" />
+            <path d="M18 2v6M15 5h6" />
+          </svg>
+          <span v-else key="compose" class="fab-plus">+</span>
+        </Transition>
+      </span>
+    </button>
     <ToastContainer />
     <PostEditorModal v-if="!hideAppChrome && postEditorReady" />
     <div
@@ -60,9 +70,12 @@ export default defineComponent({
     const hideAppChrome = computed(() => route.meta.hideHeader === true);
     const primaryRoutes = new Set(["Home", "Friends", "Conversations", "Notifications", "Settings", "MyProfile", "Saved", "Profile"]);
     const isPrimaryRoute = computed(() => !hideAppChrome.value && primaryRoutes.has(String(route.name || "")));
+    const isConversationsRoute = computed(() => route.name === "Conversations");
+    const fabLabel = computed(() => isConversationsRoute.value ? "开始新私信" : "发帖");
     const showComposeFab = computed(() => !hideAppChrome.value
       && isPrimaryRoute.value
       && !ui.showPostEditor
+      && !ui.showNewConversation
       && ui.blockingOverlays.size === 0);
     let disposed = false;
     let idleHandle: number | null = null;
@@ -93,6 +106,15 @@ export default defineComponent({
       }
     }
 
+    function handleFabIntent() {
+      if (!isConversationsRoute.value) preloadPostEditor();
+    }
+
+    function handleFabClick() {
+      if (isConversationsRoute.value) ui.openNewConversation();
+      else ui.openPostEditor();
+    }
+
     watch(
       hideAppChrome,
       (hidden) => {
@@ -105,6 +127,9 @@ export default defineComponent({
       document.body.classList.toggle("post-editor-open", show);
       if (show && !postEditorReady.value) void preparePostEditor();
     });
+    watch(() => route.name, name => {
+      if (name !== "Conversations") ui.closeNewConversation();
+    });
     onMounted(schedulePostEditorWarmup);
     onBeforeUnmount(() => {
       disposed = true;
@@ -115,7 +140,19 @@ export default defineComponent({
       }
       document.body.classList.remove("login-page", "post-editor-open");
     });
-    return { ui, hideAppChrome, isPrimaryRoute, showComposeFab, postEditorReady, postEditorLoadError, preparePostEditor, preloadPostEditor };
+    return {
+      ui,
+      hideAppChrome,
+      isPrimaryRoute,
+      isConversationsRoute,
+      fabLabel,
+      showComposeFab,
+      postEditorReady,
+      postEditorLoadError,
+      preparePostEditor,
+      handleFabIntent,
+      handleFabClick,
+    };
   }
 });
 </script>
@@ -152,12 +189,14 @@ body.post-editor-open > #app {
 
 .compose-fab {
   position: fixed;
+  display: grid;
+  place-items: center;
   right: max(18px, env(safe-area-inset-right));
   bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 18px);
   z-index: 10000;
   width: 54px;
   height: 54px;
-  padding: 0 0 4px;
+  padding: 0;
   border: 0;
   border-radius: 50%;
   background: #1687e8;
@@ -165,12 +204,26 @@ body.post-editor-open > #app {
   color: #fff;
   font-size: 34px;
   font-weight: 300;
-  line-height: 50px;
+  line-height: 1;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 
 .compose-fab:active { transform: scale(.96); }
+
+.fab-icon-stage {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  margin: auto;
+  place-items: center;
+}
+
+.fab-icon-stage > * { grid-area: 1 / 1; }
+.fab-plus { display: block; font-size: 34px; font-weight: 300; line-height: 28px; }
+.fab-message-icon { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.fab-icon-enter-active,.fab-icon-leave-active { transition: opacity 140ms ease, transform 140ms ease; }
+.fab-icon-enter-from,.fab-icon-leave-to { opacity: 0; transform: scale(.82); }
 
 .composer-loading-card {
   width: min(100%, 720px);
