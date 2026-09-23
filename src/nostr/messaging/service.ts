@@ -5,6 +5,7 @@ import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./proto
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import type { OutgoingQueueRecord } from "@/db/dexie";
 import { triggerGenericPush } from "@/services/pushNotifications";
+import type { PushCategory } from "@/services/pushNotifications";
 import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/directMessages";
 
 export type MessageProtocolPolicy = "nip17";
@@ -18,6 +19,7 @@ export interface SendDirectMessageOptions {
   protocol?: MessageProtocolPolicy;
   relays: string[];
   context: EncodeContext;
+  pushCategory?: PushCategory;
 }
 
 export interface PublishedMessage {
@@ -90,7 +92,7 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
     updatedAt: now
   });
   if (queued.state === "sent") return queuedResult(queued);
-  const published = await publishQueuedOutgoing(accountPubkey, encoded.message.id);
+  const published = await publishQueuedOutgoing(accountPubkey, encoded.message.id, options.pushCategory);
   if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");
   return published;
 }
@@ -146,7 +148,7 @@ function queuedResult(record: OutgoingQueueRecord): PublishedMessage {
   };
 }
 
-export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: string): Promise<PublishedMessage> {
+export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: string, pushCategory?: PushCategory): Promise<PublishedMessage> {
   const key = `${accountPubkey}:${outgoingId}`;
   const existing = activePublishes.get(key);
   if (existing) return existing;
@@ -198,7 +200,7 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     const pushSigner = pushSigners.get(accountPubkey);
     if (pushSigner && shouldTriggerGenericPush(message.tags)) {
       const recipients = [...new Set(events.map(eventTarget).filter((value): value is string => !!value))];
-      void triggerGenericPush(recipients, accountPubkey, pushSigner, pushCategoryForMessage(message.tags)).catch(() => undefined);
+      void triggerGenericPush(recipients, accountPubkey, pushSigner, pushCategory || pushCategoryForMessage(message.tags)).catch(() => undefined);
     }
     return queuedResult(sent!);
   })().finally(() => activePublishes.delete(key));

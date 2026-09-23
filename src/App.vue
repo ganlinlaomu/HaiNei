@@ -57,6 +57,8 @@ import ToastContainer from "@/components/ToastContainer.vue";
 import UpdateNotification from "@/components/UpdateNotification.vue";
 import { useUIStore } from "@/stores/ui";
 import { loadPostEditor, preloadPostEditor } from "@/components/postEditorLoader";
+import { useKeyStore } from "@/stores/keys";
+import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
 
@@ -65,6 +67,7 @@ export default defineComponent({
   setup() {
     const route = useRoute();
     const ui = useUIStore();
+    const keys = useKeyStore();
     const postEditorReady = ref(false);
     const postEditorLoadError = ref(false);
     const hideAppChrome = computed(() => route.meta.hideHeader === true);
@@ -130,6 +133,11 @@ export default defineComponent({
     watch(() => route.name, name => {
       if (name !== "Conversations") ui.closeNewConversation();
     });
+    watch(
+      () => [keys.isLoggedIn, keys.isUnlocked] as const,
+      ([isLoggedIn, isUnlocked]) => { warmReadRelaysForSession({ isLoggedIn, isUnlocked }); },
+      { immediate: true }
+    );
     onMounted(schedulePostEditorWarmup);
     onBeforeUnmount(() => {
       disposed = true;

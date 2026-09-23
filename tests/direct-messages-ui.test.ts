@@ -120,6 +120,7 @@ describe("direct-message navigation and UI contract", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     expect(store).toContain("sendDirectMessage({");
+    expect(store).toContain('pushCategory: "message"');
     expect(store).not.toContain("nostrClient.publish");
     expect(service).toContain("outgoingQueueRepository.putIfAbsent");
     expect(chat).toContain('class="chat-composer"');
@@ -131,5 +132,11 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("uploadEncryptedCommentImage");
     expect(chat).toContain("PostImagePreview");
     expect(conversations).toContain("`/messages/${pubkey}`");
+  });
+
+  it("raises the DM composer above the safe-area bottom", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    expect(chat).toContain("calc(15px + env(safe-area-inset-bottom))");
+    expect(chat).toContain("height:43px");
   });
 });

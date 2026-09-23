@@ -407,6 +407,7 @@ describe("privacy-preserving push and badge", () => {
   it("keeps service-worker notification wording and click targets fixed by category", () => {
     const source = readFileSync(new URL("../public/service-worker.js", import.meta.url), "utf8");
     expect(source).toContain("body: isMessage ? '有新私信' : '有新通知'");
+    expect(source).toContain("JSON.parse(event.data?.text() || '{}')");
     expect(source).toContain("event.notification.data?.type === 'message' ? '/#/conversations' : '/#/notifications'");
     expect(source).not.toMatch(/sender|pubkey|private-message content|post content/);
   });

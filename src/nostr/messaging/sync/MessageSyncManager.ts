@@ -1,5 +1,5 @@
 import type { NostrEvent } from "nostr-tools";
-import { onRelayConnectionState, type RelayConnectionEvent } from "@/nostr/relays";
+import { getRelaysFromStorage, onRelayConnectionState, restoreRelayConnections, type RelayConnectionEvent } from "@/nostr/relays";
 import { nostrClient } from "@/services/nostrClient";
 import { buildMessageSubscriptions } from "@/nostr/messaging/subscriptions";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
@@ -25,6 +25,9 @@ type ManagerDependencies = {
   observeRelays?: (listener: (event: RelayConnectionEvent) => void) => () => void;
   decode?: DecodeMessage;
   now?: () => number;
+  resumeRelays?: (relays: string[]) => void;
+  activeReadRelays?: () => string[];
+  retryOutgoing?: (accountPubkey: string) => Promise<unknown> | void;
 };
 
 export class MessageSyncManager {
@@ -33,6 +36,9 @@ export class MessageSyncManager {
   private readonly observeRelays: (listener: (event: RelayConnectionEvent) => void) => () => void;
   private readonly decode?: DecodeMessage;
   private readonly now: () => number;
+  private readonly resumeRelays: (relays: string[]) => void;
+  private readonly activeReadRelays: () => string[];
+  private readonly retryOutgoing: (accountPubkey: string) => Promise<unknown> | void;
   private options: MessageSyncOptions | null = null;
   private realtimeSubscription: SubscriptionLike | null = null;
   private removeRelayObserver: (() => void) | null = null;
@@ -52,6 +58,9 @@ export class MessageSyncManager {
     this.observeRelays = dependencies.observeRelays || onRelayConnectionState;
     this.decode = dependencies.decode;
     this.now = dependencies.now || Date.now;
+    this.resumeRelays = dependencies.resumeRelays || restoreRelayConnections;
+    this.activeReadRelays = dependencies.activeReadRelays || (() => getRelaysFromStorage("read"));
+    this.retryOutgoing = dependencies.retryOutgoing || retryOutgoingQueue;
   }
 
   private isCurrent(sessionId: string, accountPubkey: string) {
@@ -270,7 +279,8 @@ export class MessageSyncManager {
     if (typeof window === "undefined" || typeof document === "undefined") return;
     this.foregroundHandler = () => {
       if (document.visibilityState === "hidden") return;
-      if (this.options) void retryOutgoingQueue(this.options.accountPubkey);
+      this.resumeRelays(this.activeReadRelays());
+      if (this.options) void this.retryOutgoing(this.options.accountPubkey);
       void this.resume("resume");
     };
     document.addEventListener("visibilitychange", this.foregroundHandler);

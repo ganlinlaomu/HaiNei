@@ -310,7 +310,7 @@ function relayStatusLabel(relay: RelayConfig) {
   if (!runtime) return "未连接";
   if (runtime.state === "connected") return "已连接";
   if (runtime.state === "connecting") return "连接中…";
-  if (runtime.state === "waiting-retry") return "等待重连";
+  if (runtime.state === "waiting-retry") return "重试中";
   return relay.lastFailureAt ? "连接失败" : "未连接";
 }
 

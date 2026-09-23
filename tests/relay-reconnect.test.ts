@@ -28,8 +28,64 @@ afterEach(() => {
   vi.useRealTimers();
   vi.resetModules();
   MockWebSocket.instances = [];
+  Reflect.deleteProperty(globalThis, "navigator");
+  Reflect.deleteProperty(globalThis, "window");
+  Reflect.deleteProperty(globalThis, "document");
+  Reflect.deleteProperty(globalThis, "WebSocket");
 });
 describe("relay reconnect", () => {
+  it("warms a relay connection without subscriptions or duplicate sockets", async () => {
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { inspectRelays, restoreRelayConnections, warmRelays } = await import("@/nostr/relays");
+    warmRelays(["wss://warm.test"]);
+    warmRelays(["wss://warm.test"]);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(inspectRelays()["wss://warm.test"].subs).toBe(0);
+    restoreRelayConnections(["wss://warm.test"]);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    MockWebSocket.instances[0].emit("open", {});
+    restoreRelayConnections(["wss://warm.test"]);
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it("foreground immediately resets exhausted retries and preserves one subscription", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { inspectRelays, restoreRelayConnections, subscribe } = await import("@/nostr/relays");
+    const subscription = subscribe(["wss://exhausted.test"], [{ kinds: [1059] }]);
+    MockWebSocket.instances[0].emit("close", {});
+    await vi.advanceTimersByTimeAsync(1_000);
+    MockWebSocket.instances[1].emit("close", {});
+    await vi.advanceTimersByTimeAsync(2_000);
+    MockWebSocket.instances[2].emit("close", {});
+    await vi.advanceTimersByTimeAsync(2_000);
+    MockWebSocket.instances[3].emit("close", {});
+    expect(inspectRelays()["wss://exhausted.test"]).toMatchObject({ state: "disconnected", reconnectAttempts: 3, subs: 1 });
+
+    restoreRelayConnections(["wss://exhausted.test"]);
+    expect(MockWebSocket.instances).toHaveLength(5);
+    expect(inspectRelays()["wss://exhausted.test"]).toMatchObject({ state: "connecting", reconnectAttempts: 0, subs: 1 });
+    subscription.unsub();
+  });
+
+  it("does not reconnect while navigator is offline", async () => {
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    const network = { onLine: true };
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: network });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { restoreRelayConnections, subscribe } = await import("@/nostr/relays");
+    const subscription = subscribe(["wss://offline-resume.test"], [{ kinds: [1059] }]);
+    network.onLine = false;
+    MockWebSocket.instances[0].emit("close", {});
+    restoreRelayConnections(["wss://offline-resume.test"]);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    subscription.unsub();
+  });
+
   it("reports connecting, connected, and retry-wait states separately", async () => {
     vi.useFakeTimers();
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });

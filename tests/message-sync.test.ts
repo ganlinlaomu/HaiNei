@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import Dexie from "dexie";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HaiNeiDatabase } from "@/db/dexie";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { MessageIngestionPipeline } from "@/nostr/messaging/sync/ingestion";
@@ -208,6 +208,70 @@ describe("relay catch-up", () => {
 });
 
 describe("message sync session", () => {
+  it("reconnects active read relays before foreground catch-up without duplicating realtime", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const subscriptions: Array<{ relays: string[]; filters: any[]; handlers: Record<string, Array<(...args: any[]) => void>> }> = [];
+    const subscribeFake = (relays: string[], filters: any[]) => {
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      const entry = { relays, filters, handlers };
+      subscriptions.push(entry);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name === "eose" && filters.some(filter => filter.until !== undefined)) {
+            queueMicrotask(() => callback(relays[0]));
+          }
+        },
+        unsub() {},
+      };
+    };
+    const documentHandlers = new Map<string, () => void>();
+    const windowHandlers = new Map<string, () => void>();
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: {
+        visibilityState: "visible",
+        addEventListener: (name: string, handler: () => void) => documentHandlers.set(name, handler),
+        removeEventListener: (name: string) => documentHandlers.delete(name),
+      },
+    });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        addEventListener: (name: string, handler: () => void) => windowHandlers.set(name, handler),
+        removeEventListener: (name: string) => windowHandlers.delete(name),
+      },
+    });
+    const resumeRelays = vi.fn();
+    const retryOutgoing = vi.fn();
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays,
+      activeReadRelays: () => ["wss://active-read.test"],
+      retryOutgoing,
+      now: () => 2_000_000,
+    });
+    await manager.start({
+      accountPubkey: ACCOUNT_A,
+      relays: ["wss://active-read.test"],
+      authors: [PEER, ACCOUNT_A],
+      decodeContext: { accountPubkey: ACCOUNT_A },
+    });
+    expect(subscriptions.filter(item => item.filters.every(filter => filter.until === undefined))).toHaveLength(1);
+
+    windowHandlers.get("focus")?.();
+    expect(resumeRelays).toHaveBeenCalledWith(["wss://active-read.test"]);
+    expect(retryOutgoing).toHaveBeenCalledWith(ACCOUNT_A);
+    for (let attempt = 0; attempt < 20 && subscriptions.length < 3; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(subscriptions).toHaveLength(3);
+    expect(subscriptions.filter(item => item.filters.every(filter => filter.until === undefined))).toHaveLength(1);
+    manager.stop();
+    Reflect.deleteProperty(globalThis, "document");
+    Reflect.deleteProperty(globalThis, "window");
+  });
+
   it("subscribes before history, merges the race, and catch-ups again after reconnect", async () => {
     const repo = new SyncedMessageRepository(database());
     const subscriptions: Array<Record<string, Array<(...args: any[]) => void>>> = [];
