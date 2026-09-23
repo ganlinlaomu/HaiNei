@@ -47,7 +47,7 @@ import { useRoute, useRouter } from "vue-router";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { directMessagePreview } from "@/nostr/messaging/directMessages";
-import { directMessagesForPeer, useDirectMessagesStore } from "@/stores/directMessages";
+import { useDirectMessagesStore } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
@@ -67,7 +67,7 @@ const peerPubkey = computed(() => String(route.params.pubkey || "").trim().toLow
 const accepted = computed(() => friendships.loadedFor === keys.pkHex && friendships.isAccepted(peerPubkey.value));
 const localName = computed(() => friends.list.find(friend => friend.pubkey === peerPubkey.value)?.name);
 const displayName = computed(() => privateProfileDisplayName(profiles.getProfile(peerPubkey.value)?.nickname, peerPubkey.value, localName.value));
-const messages = computed(() => directMessagesForPeer(messageStore.inbox, keys.pkHex, peerPubkey.value));
+const messages = computed(() => directMessages.peerMessages(peerPubkey.value));
 const draft = ref("");
 const sending = ref(false);
 const sendError = ref("");

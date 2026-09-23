@@ -123,6 +123,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(store).not.toContain("nostrClient.publish");
     expect(service).toContain("outgoingQueueRepository.putIfAbsent");
     expect(chat).toContain('class="chat-composer"');
+    expect(chat).toContain(':disabled="!accepted || sending"');
+    expect(chat).toContain('const messages = computed(() => directMessages.peerMessages(peerPubkey.value))');
     expect(chat).toContain("'输入消息……'");
     expect(chat).toContain('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>');
     expect(chat).not.toContain('@click="router.back()">‹</button>');

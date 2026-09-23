@@ -124,3 +124,26 @@ describe("v2 to v3 migration", () => {
     expect(await upgraded.messages.count()).toBe(1);
   });
 });
+
+describe("v9 to v10 friendship migration", () => {
+  it("preserves accepted data and adds monotonic control metadata", async () => {
+    const name = `hainei-friendship-migration-${sequence++}`;
+    const legacy = new Dexie(name);
+    legacy.version(9).stores({
+      accountFriendships: "[accountPubkey+peerPubkey], accountPubkey, [accountPubkey+state], [accountPubkey+updatedAt]",
+    });
+    await legacy.table("accountFriendships").put({
+      accountPubkey: ACCOUNT_A, peerPubkey: PEER_C, state: "accepted",
+      requestEventId: "request", acceptedEventId: "accept", requestedAt: 10, acceptedAt: 20, updatedAt: 30,
+    });
+    legacy.close();
+
+    const upgraded = new HaiNeiDatabase(name);
+    databases.push(upgraded);
+    await upgraded.open();
+    expect(await upgraded.accountFriendships.get([ACCOUNT_A, PEER_C])).toMatchObject({
+      state: "accepted", lastAction: "accept", lastControlAt: 20, lastControlEventId: "accept",
+      acceptedWindows: [{ acceptedAt: 20, acceptedEventId: "accept" }],
+    });
+  });
+});

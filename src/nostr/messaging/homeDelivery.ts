@@ -48,8 +48,8 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
       return false;
     }
     if (isFriendshipControlMessage(message)) {
-      await delivery.processFriendshipMessage?.(message);
-      delivery.notifyFriendshipMessage?.(message);
+      const changed = await delivery.processFriendshipMessage?.(message);
+      if (changed) delivery.notifyFriendshipMessage?.(message);
       debugLog("ui", "ui_friendship_control_routed", diagnostic, "info");
       return false;
     }
