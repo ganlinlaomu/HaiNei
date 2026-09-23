@@ -40,6 +40,17 @@ describe("feed media carousel and actions", () => {
     expect(source).not.toMatch(/aria-label=["'](?:分享|转发|repost|share)/i);
   });
 
+  it("uses a blue saved bookmark and the existing top toast feedback", () => {
+    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const toasts = readFileSync(join(process.cwd(), "src/components/ToastContainer.vue"), "utf8");
+    expect(card).toContain(".action.bookmark.saved{color:#60A5FA}");
+    expect(card).toContain('saved ? "已添加到收藏夹" : "已从收藏夹移除"');
+    expect(card).toContain('1700, "bookmark"');
+    expect(toasts).toContain("top: calc(env(safe-area-inset-top) + 12px)");
+    expect(toasts).toContain("background: rgba(255,255,255,.94)");
+    expect(toasts).toContain("color:#60A5FA");
+  });
+
   it("shows no counter or dots for a single image", () => {
     const source = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
     expect(source).toContain('v-if="images.length > 1" class="carousel-counter"');

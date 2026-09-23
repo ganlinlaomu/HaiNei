@@ -28,13 +28,23 @@ export const useBookmarksStore = defineStore("bookmarks", {
       const existing = this.records.find(item => item.messageId === messageId);
       if (existing) {
         this.records = this.records.filter(item => item.messageId !== messageId);
-        await bookmarkRepository.delete(account, messageId);
-        return false;
+        try {
+          await bookmarkRepository.delete(account, messageId);
+          return false;
+        } catch (error) {
+          this.records = [existing, ...this.records];
+          throw error;
+        }
       }
       const record = { accountPubkey: account, messageId, createdAt: Date.now() };
       this.records = [record, ...this.records];
-      await bookmarkRepository.put(record);
-      return true;
+      try {
+        await bookmarkRepository.put(record);
+        return true;
+      } catch (error) {
+        this.records = this.records.filter(item => item.messageId !== messageId);
+        throw error;
+      }
     }
   }
 });

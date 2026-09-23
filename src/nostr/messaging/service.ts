@@ -96,6 +96,7 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
 
 export function shouldTriggerGenericPush(tags: string[][] | undefined) {
   const type = tags?.find(tag => tag[0] === "t")?.[1];
+  if (type === "like" && tags?.some(tag => tag[0] === "liked" && tag[1] === "false")) return false;
   if (["hainei-profile", "hainei-profile-request", "hainei-tombstone"].includes(type || "")) return false;
   if (tags?.some(tag => tag[0] === "l" && tag[1] === "hainei-friendship")) return type === "request";
   return true;

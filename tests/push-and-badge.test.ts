@@ -40,6 +40,7 @@ describe("privacy-preserving push and badge", () => {
     expect(sanitizePushRecipients([OTHER, "private post text", ACCOUNT], ACCOUNT)).toEqual([OTHER]);
     expect(shouldTriggerGenericPush([["t", "hainei-profile-request"]])).toBe(false);
     expect(shouldTriggerGenericPush([["t", "hainei-tombstone"]])).toBe(false);
+    expect(shouldTriggerGenericPush([["t", "like"], ["liked", "false"]])).toBe(false);
   });
 
   it("sets and clears the app badge from unread count", async () => {

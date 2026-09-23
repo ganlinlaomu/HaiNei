@@ -24,7 +24,7 @@ export default defineComponent({
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  top: 16px;
+  top: calc(env(safe-area-inset-top) + 12px);
   z-index: 9999;
   display: flex;
   flex-direction: column;
@@ -40,6 +40,7 @@ export default defineComponent({
   display: flex;
   align-items: center;
   justify-content: space-between;
+  animation: toast-enter 180ms ease-out both;
 }
 .toast.success {
   background: #16a34a;
@@ -47,6 +48,15 @@ export default defineComponent({
 .toast.error {
   background: #dc2626;
 }
+.toast.bookmark {
+  border: 1px solid rgba(96,165,250,.28);
+  background: rgba(255,255,255,.94);
+  color: #1f2937;
+  box-shadow: 0 8px 24px rgba(15,23,42,.14);
+  backdrop-filter: blur(12px);
+}
+.toast.bookmark::before { content:"✓";margin-right:8px;color:#60A5FA;font-weight:800 }
+.toast.bookmark .close { color:#64748b }
 .toast .close {
   background: transparent;
   color: rgba(255,255,255,0.9);
@@ -54,4 +64,6 @@ export default defineComponent({
   margin-left: 12px;
   cursor: pointer;
 }
+@keyframes toast-enter { from { opacity:0;transform:translateY(-6px) } to { opacity:1;transform:translateY(0) } }
+@media(prefers-reduced-motion:reduce){.toast{animation:none}}
 </style>
