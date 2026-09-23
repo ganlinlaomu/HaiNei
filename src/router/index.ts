@@ -8,6 +8,8 @@ const Settings = () => import("@/views/Settings.vue");
 const MyProfile = () => import("@/views/MyProfile.vue");
 const Profile = () => import("@/views/Profile.vue");
 const Notifications = () => import("@/views/Notifications.vue");
+const Conversations = () => import("@/views/Conversations.vue");
+const Messages = () => import("@/views/Messages.vue");
 const Debug = () => import("@/views/Debug.vue");
 const Saved = () => import("@/views/Saved.vue");
 import { useKeyStore } from "@/stores/keys";
@@ -50,6 +52,18 @@ const routes: Array<RouteRecordRaw> = [
     name: "Friends",
     component: Friends,
     meta: { requiresAuth: true }
+  },
+  {
+    path: "/conversations",
+    name: "Conversations",
+    component: Conversations,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/messages/:pubkey",
+    name: "Messages",
+    component: Messages,
+    meta: { requiresAuth: true, hideBottomNav: true }
   },
   {
     path: "/settings",

@@ -174,7 +174,7 @@
         <summary class="section-heading">
           <div><h3>后台推送</h3><p>{{ pushStatusText }}</p></div>
         </summary>
-        <p class="section-detail">推送只包含“有新的活动”，不会包含好友、帖子或资料内容。</p>
+        <p class="section-detail">推送只显示“有新私信”或“有新通知”，不会包含好友、消息、帖子或资料内容。</p>
         <div class="account-row">
           <span class="small">{{ pushSupported ? "需要你主动授权浏览器通知权限" : "当前浏览器不支持 Web Push" }}</span>
           <button class="btn btn-secondary" type="button" :disabled="pushBusy || !pushSupported" @click="togglePush">

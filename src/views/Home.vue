@@ -78,6 +78,7 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
+import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 
 
 // reuse the regex logic from extractImageUrls to strip out image markdown and plain image URLs
@@ -127,7 +128,7 @@ export default defineComponent({
     const feedPreferenceSnapshot = computed(() =>
       `${[...feedPreferences.hiddenMessageIds].sort().join(",")}|${[...feedPreferences.mutedPubkeys].sort().join(",")}`
     );
-    const visibleInbox = () => msgs.inbox.filter(message => feedPreferences.isVisible(message));
+    const visibleInbox = () => msgs.inbox.filter(message => !isDirectMessageTags(message.tags) && feedPreferences.isVisible(message));
 
     const status = ref("未连接");
     let homeAccountPk = "";
@@ -561,7 +562,8 @@ async function safeUpdateLocalRefs() {
     recipientPubkeys: message.recipientPubkeys,
     conversationId: message.conversationId,
     replyTo: message.replyTo,
-    rootId: message.rootId
+    rootId: message.rootId,
+    tags: message.tags
   });
 }
 

@@ -10,6 +10,7 @@ import { useNotificationsStore } from "./notifications";
 import { useProfilesStore } from "./profiles";
 import { useFeedPreferencesStore } from "./feedPreferences";
 import { useBookmarksStore } from "./bookmarks";
+import { useDirectMessagesStore } from "./directMessages";
 import type { WindowNostr } from "nostr-tools/nip07";
 import { BunkerSigner, type BunkerPointer, parseBunkerInput } from "nostr-tools/nip46";
 import { finalizeEvent } from "nostr-tools";
@@ -157,6 +158,11 @@ export const useKeyStore = defineStore("keys", {
         console.error(`[account] messages load failed account=${account}`, e);
       }
       try {
+        await useDirectMessagesStore().refresh(pk);
+      } catch (e) {
+        console.error(`[account] direct messages load failed account=${account}`, e);
+      }
+      try {
         await useInteractionsStore().load(pk);
       } catch (e) {
         console.error(`[account] interactions load failed account=${account}`, e);
@@ -201,6 +207,11 @@ export const useKeyStore = defineStore("keys", {
         useMessagesStore().reset(false);
       } catch (e) {
         console.error(`[account] messages reset failed account=${account}`, e);
+      }
+      try {
+        useDirectMessagesStore().reset();
+      } catch (e) {
+        console.error(`[account] direct messages reset failed account=${account}`, e);
       }
       try {
         useSettingsStore().reset();

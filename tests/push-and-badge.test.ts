@@ -1,17 +1,60 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
 import { handleRequest } from "../worker/src/index";
-import { GENERIC_PUSH_PAYLOAD, sanitizePushRecipients } from "../worker/src/push";
+import {
+  ACTIVITY_PUSH_PAYLOAD,
+  createVapidHeaders,
+  encryptPushPayload,
+  GENERIC_PUSH_PAYLOAD,
+  MESSAGE_PUSH_PAYLOAD,
+  pushPayloadForType,
+  sanitizePushRecipients,
+  triggerGenericPush,
+} from "../worker/src/push";
 import {
   enablePushNotifications,
   pushEnabledForAccount,
   pushServiceErrorMessage,
 } from "@/services/pushNotifications";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
-import { shouldTriggerGenericPush } from "@/nostr/messaging/service";
+import { pushCategoryForMessage, shouldTriggerGenericPush } from "@/nostr/messaging/service";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+let vapidPublicKey = "";
+let vapidPrivateKey = "";
+let subscriptionPublicKey = "";
+let subscriptionPrivateKey: CryptoKey;
+let subscriptionAuth = "";
+
+function toArrayBuffer(value: Uint8Array) {
+  return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
+}
+
+function base64UrlEncode(value: Uint8Array) {
+  let binary = "";
+  for (const byte of value) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlDecode(value: string) {
+  const decoded = atob(value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "="));
+  return Uint8Array.from(decoded, character => character.charCodeAt(0));
+}
+
+async function testHkdf(ikm: Uint8Array, salt: Uint8Array, info: Uint8Array, length: number) {
+  const key = await crypto.subtle.importKey("raw", toArrayBuffer(ikm), "HKDF", false, ["deriveBits"]);
+  return new Uint8Array(await crypto.subtle.deriveBits({
+    name: "HKDF",
+    hash: "SHA-256",
+    salt: toArrayBuffer(salt),
+    info: toArrayBuffer(info),
+  }, key, length * 8));
+}
 
 class MemoryStorage implements Storage {
   data = new Map<string, string>();
@@ -39,7 +82,11 @@ class PushD1 {
         if (sql.includes("FROM hainei_auth_challenges")) return this.challenges.get(String(values[0])) || null;
         return null;
       },
-      all: async () => ({ results: [] }),
+      all: async () => ({
+        results: sql.includes("FROM hainei_push_subscriptions")
+          ? [...this.subscriptions.values()].filter(row => values.includes(row.account_pubkey))
+          : [],
+      }),
       run: async () => {
         if (sql.startsWith("INSERT INTO hainei_auth_challenges")) {
           this.challenges.set(String(values[0]), { expires_at: Number(values[2]), used_at: null, pubkey: null });
@@ -78,7 +125,11 @@ function pushEnv(db = new PushD1(), configured = true) {
     DB: db,
     BLOSSOM: { fetch: vi.fn() },
     BLOSSOM_SERVICE_TOKEN: "secret",
-    ...(configured ? { VAPID_PUBLIC_KEY: "public", VAPID_PRIVATE_KEY: "private" } : {}),
+    ...(configured ? {
+      VAPID_PUBLIC_KEY: vapidPublicKey,
+      VAPID_PRIVATE_KEY: vapidPrivateKey,
+      VAPID_SUBJECT: "mailto:admin@hainei.app",
+    } : {}),
   } as any;
 }
 
@@ -98,6 +149,27 @@ async function authenticatedBody(env: any, secret: Uint8Array, extra: Record<str
   };
 }
 
+beforeAll(async () => {
+  const vapidKeys = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const vapidPublic = new Uint8Array(await crypto.subtle.exportKey("raw", vapidKeys.publicKey));
+  const vapidPrivate = await crypto.subtle.exportKey("jwk", vapidKeys.privateKey);
+  vapidPublicKey = base64UrlEncode(vapidPublic);
+  vapidPrivateKey = vapidPrivate.d!;
+
+  const subscriptionKeys = await crypto.subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" },
+    true,
+    ["deriveBits"],
+  );
+  subscriptionPrivateKey = subscriptionKeys.privateKey;
+  subscriptionPublicKey = base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", subscriptionKeys.publicKey)));
+  subscriptionAuth = base64UrlEncode(crypto.getRandomValues(new Uint8Array(16)));
+});
+
 beforeEach(() => vi.stubGlobal("localStorage", new MemoryStorage()));
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -105,10 +177,16 @@ afterEach(() => {
 });
 
 describe("privacy-preserving push and badge", () => {
+  function addSubscription(db: PushD1, endpoint = "https://web.push.apple.com/QWxhZGRpbjpvcGVuIHNlc2FtZQ") {
+    const row = { account_pubkey: OTHER, endpoint, p256dh: subscriptionPublicKey, auth: subscriptionAuth };
+    db.subscriptions.set(`${OTHER}|${endpoint}`, row);
+    return row;
+  }
+
   it("serves the POST public-key route and reports missing VAPID config explicitly", async () => {
     const configured = await handleRequest(new Request("https://worker.test/api/push/public-key", { method: "POST" }), pushEnv());
     expect(configured.status).toBe(200);
-    expect(await configured.json()).toEqual({ publicKey: "public" });
+    expect(await configured.json()).toEqual({ publicKey: vapidPublicKey });
 
     const missing = await handleRequest(new Request("https://worker.test/api/push/public-key", { method: "POST" }), pushEnv(new PushD1(), false));
     expect(missing.status).toBe(503);
@@ -145,13 +223,192 @@ describe("privacy-preserving push and badge", () => {
     expect(db.subscriptions.size).toBe(0);
   });
 
-  it("uses a fixed generic payload that cannot contain caller private content", () => {
-    expect(GENERIC_PUSH_PAYLOAD).toEqual({ title: "HaiNei", body: "有新的活动", url: "/#/notifications" });
-    expect(JSON.stringify(GENERIC_PUSH_PAYLOAD)).not.toContain("private post text");
+  it("uses only fixed privacy-safe message and activity payloads", () => {
+    expect(MESSAGE_PUSH_PAYLOAD).toEqual({ type: "message", title: "HaiNei", body: "有新私信", url: "/#/conversations" });
+    expect(ACTIVITY_PUSH_PAYLOAD).toEqual({ type: "activity", title: "HaiNei", body: "有新通知", url: "/#/notifications" });
+    expect(GENERIC_PUSH_PAYLOAD).toBe(ACTIVITY_PUSH_PAYLOAD);
+    expect(pushPayloadForType("unknown")).toBe(ACTIVITY_PUSH_PAYLOAD);
+    expect(pushPayloadForType(undefined)).toBe(ACTIVITY_PUSH_PAYLOAD);
+    expect(JSON.stringify([MESSAGE_PUSH_PAYLOAD, ACTIVITY_PUSH_PAYLOAD])).not.toContain("private post text");
     expect(sanitizePushRecipients([OTHER, "private post text", ACCOUNT], ACCOUNT)).toEqual([OTHER]);
+    expect(pushCategoryForMessage([["t", "hainei-dm"]])).toBe("message");
+    expect(pushCategoryForMessage([["l", "hainei-interaction"], ["t", "like"]])).toBe("activity");
+    expect(pushCategoryForMessage([["l", "hainei-interaction"], ["t", "comment"]])).toBe("activity");
+    expect(pushCategoryForMessage([["l", "hainei-friendship"], ["t", "request"]])).toBe("activity");
     expect(shouldTriggerGenericPush([["t", "hainei-profile-request"]])).toBe(false);
     expect(shouldTriggerGenericPush([["t", "hainei-tombstone"]])).toBe(false);
     expect(shouldTriggerGenericPush([["t", "like"], ["liked", "false"]])).toBe(false);
+  });
+
+  it("encrypts a valid non-empty RFC 8291 aes128gcm payload", async () => {
+    const payload = JSON.stringify(GENERIC_PUSH_PAYLOAD);
+    const body = await encryptPushPayload(payload, subscriptionPublicKey, subscriptionAuth);
+    expect(body.byteLength).toBeGreaterThan(86 + 16);
+    expect(new DataView(body.buffer, body.byteOffset, body.byteLength).getUint32(16, false)).toBe(4096);
+    expect(body[20]).toBe(65);
+
+    const salt = body.slice(0, 16);
+    const applicationPublicKeyBytes = body.slice(21, 86);
+    const applicationPublicKey = await crypto.subtle.importKey(
+      "raw",
+      toArrayBuffer(applicationPublicKeyBytes),
+      { name: "ECDH", namedCurve: "P-256" },
+      false,
+      [],
+    );
+    const sharedSecret = new Uint8Array(await crypto.subtle.deriveBits(
+      { name: "ECDH", public: applicationPublicKey },
+      subscriptionPrivateKey,
+      256,
+    ));
+    const keyInfo = new Uint8Array([
+      ...encoder.encode("WebPush: info\0"),
+      ...base64UrlDecode(subscriptionPublicKey),
+      ...applicationPublicKeyBytes,
+    ]);
+    const inputKeyMaterial = await testHkdf(sharedSecret, base64UrlDecode(subscriptionAuth), keyInfo, 32);
+    const contentEncryptionKey = await testHkdf(
+      inputKeyMaterial,
+      salt,
+      encoder.encode("Content-Encoding: aes128gcm\0"),
+      16,
+    );
+    const nonce = await testHkdf(inputKeyMaterial, salt, encoder.encode("Content-Encoding: nonce\0"), 12);
+    const aesKey = await crypto.subtle.importKey("raw", toArrayBuffer(contentEncryptionKey), "AES-GCM", false, ["decrypt"]);
+    const record = new Uint8Array(await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: toArrayBuffer(nonce) },
+      aesKey,
+      toArrayBuffer(body.slice(86)),
+    ));
+    expect(record.at(-1)).toBe(2);
+    expect(decoder.decode(record.slice(0, -1))).toBe(payload);
+  });
+
+  it("creates a verifiable VAPID JWT and headers for the endpoint origin", async () => {
+    const now = 1_800_000_000;
+    const headers = await createVapidHeaders({
+      publicKey: vapidPublicKey,
+      privateKey: vapidPrivateKey,
+      subject: "mailto:admin@hainei.app",
+    }, "https://web.push.apple.com/path/token", now);
+    const token = headers.Authorization.match(/^vapid t=([^,]+), k=/)?.[1];
+    expect(token).toBeTruthy();
+    expect(headers["Crypto-Key"]).toBe(`p256ecdsa=${vapidPublicKey}`);
+
+    const [encodedHeader, encodedPayload, encodedSignature] = token!.split(".");
+    expect(JSON.parse(decoder.decode(base64UrlDecode(encodedHeader)))).toEqual({ typ: "JWT", alg: "ES256" });
+    expect(JSON.parse(decoder.decode(base64UrlDecode(encodedPayload)))).toEqual({
+      aud: "https://web.push.apple.com",
+      exp: now + 12 * 60 * 60,
+      sub: "mailto:admin@hainei.app",
+    });
+    const verificationKey = await crypto.subtle.importKey(
+      "raw",
+      toArrayBuffer(base64UrlDecode(vapidPublicKey)),
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
+    );
+    await expect(crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      verificationKey,
+      toArrayBuffer(base64UrlDecode(encodedSignature)),
+      toArrayBuffer(encoder.encode(`${encodedHeader}.${encodedPayload}`)),
+    )).resolves.toBe(true);
+  });
+
+  it("reports a successful push as sent", async () => {
+    const db = new PushD1();
+    addSubscription(db);
+    const send = vi.fn().mockResolvedValue(new Response(null, { status: 201 }));
+    vi.stubGlobal("fetch", send);
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER])).resolves.toEqual({
+      requested: 1, subscriptionsFound: 1, sent: 1, failed: 0, expired: 0,
+    });
+    expect(log).toHaveBeenCalledWith({
+      recipientPubkey: OTHER,
+      endpointHost: "web.push.apple.com",
+      status: 201,
+      message: "push sent",
+    });
+    const [, request] = send.mock.calls[0] as [string, RequestInit];
+    expect(request.method).toBe("POST");
+    expect(request.headers).toMatchObject({
+      "Content-Encoding": "aes128gcm",
+      "Content-Type": "application/octet-stream",
+      TTL: "60",
+    });
+    expect((request.headers as Record<string, string>).Authorization).toMatch(/^vapid t=.+, k=/);
+    expect((request.body as ArrayBuffer).byteLength).toBeGreaterThan(0);
+  });
+
+  it.each([404, 410])("removes and reports an expired subscription for status %i", async statusCode => {
+    const db = new PushD1();
+    const row = addSubscription(db);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: statusCode })));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER])).resolves.toEqual({
+      requested: 1, subscriptionsFound: 1, sent: 0, failed: 0, expired: 1,
+    });
+    expect(db.subscriptions.has(`${OTHER}|${row.endpoint}`)).toBe(false);
+  });
+
+  it("reports other delivery failures and retains the subscription", async () => {
+    const db = new PushD1();
+    const row = addSubscription(db);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER])).resolves.toEqual({
+      requested: 1, subscriptionsFound: 1, sent: 0, failed: 1, expired: 0,
+    });
+    expect(db.subscriptions.has(`${OTHER}|${row.endpoint}`)).toBe(true);
+  });
+
+  it("reports no subscription without attempting delivery", async () => {
+    const send = vi.fn();
+    vi.stubGlobal("fetch", send);
+
+    await expect(triggerGenericPush(pushEnv(), ACCOUNT, [OTHER])).resolves.toEqual({
+      requested: 1, subscriptionsFound: 0, sent: 0, failed: 0, expired: 0,
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not expose push secrets or full endpoint URLs in diagnostics", async () => {
+    const db = new PushD1();
+    const row = addSubscription(db);
+    const privateKey = vapidPrivateKey;
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(
+      new Error(`failed ${row.endpoint} ${row.p256dh} ${row.auth} ${privateKey}`),
+    ));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER]);
+
+    const diagnostics = JSON.stringify(log.mock.calls);
+    expect(diagnostics).toContain(OTHER);
+    expect(diagnostics).toContain("web.push.apple.com");
+    expect(diagnostics).not.toContain(row.endpoint);
+    expect(diagnostics).not.toContain(row.p256dh);
+    expect(diagnostics).not.toContain(row.auth);
+    expect(diagnostics).not.toContain(privateKey);
+  });
+
+  it("keeps Node createECDH and web-push out of the Worker push path", () => {
+    const source = readFileSync(new URL("../worker/src/push.ts", import.meta.url), "utf8");
+    expect(source).not.toMatch(/createECDH/);
+    expect(source).not.toMatch(/(?:from|require\s*\()\s*["'](?:node:)?web-push["']/);
+  });
+
+  it("keeps service-worker notification wording and click targets fixed by category", () => {
+    const source = readFileSync(new URL("../public/service-worker.js", import.meta.url), "utf8");
+    expect(source).toContain("body: isMessage ? '有新私信' : '有新通知'");
+    expect(source).toContain("event.notification.data?.type === 'message' ? '/#/conversations' : '/#/notifications'");
+    expect(source).not.toMatch(/sender|pubkey|private-message content|post content/);
   });
 
   it("sets and clears the app badge from unread count", async () => {
@@ -162,6 +419,7 @@ describe("privacy-preserving push and badge", () => {
     expect(target.clearAppBadge).toHaveBeenCalledOnce();
     expect(accountBadgeCount(OTHER, ACCOUNT, 3)).toBe(0);
     expect(accountBadgeCount(ACCOUNT, ACCOUNT, 3)).toBe(3);
+    expect(accountBadgeCount(ACCOUNT, ACCOUNT, 3, ACCOUNT, 2)).toBe(5);
   });
 
   it("keeps push opt-in state isolated across account switches", () => {

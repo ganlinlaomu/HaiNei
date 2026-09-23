@@ -2,17 +2,9 @@
 
 后台推送复用现有 `hainei-media` Worker 和 `blossom-imgbed-db` D1。不要创建第二个 Worker 或数据库。
 
-## 1. 生成并配置 VAPID
+## 1. 配置现有 VAPID 密钥
 
-仓库已依赖 `web-push`，无需安装新包：
-
-```bash
-npm exec web-push -- generate-vapid-keys --json
-```
-
-将输出的 `publicKey` 填入 `worker/wrangler.toml` 的 `VAPID_PUBLIC_KEY`。`VAPID_SUBJECT` 可保留为 `mailto:admin@hainei.app`，或改为实际运维邮箱。公钥可以提交；不要提交、打印或记录私钥。
-
-用交互式命令录入输出的 `privateKey`：
+保持现有 `VAPID_PUBLIC_KEY`、`VAPID_PRIVATE_KEY` 和 `VAPID_SUBJECT` 不变。公钥可以提交；不要提交、打印或记录私钥。如需重新录入现有私钥，使用交互式命令：
 
 ```bash
 npm exec wrangler -- secret put VAPID_PRIVATE_KEY --config worker/wrangler.toml
@@ -63,7 +55,7 @@ npm exec wrangler -- d1 execute DB --remote --config worker/wrangler.toml \
 
 ```text
 HaiNei
-有新的活动
+有新通知
 ```
 
 推送载荷不得包含发送者、pubkey、动态、评论、资料或任何解密内容。最后关闭推送，再次查询计数，确认对应订阅已删除。

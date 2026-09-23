@@ -52,7 +52,7 @@ export async function handleRequest(request: Request, env: Env) {
     if (path === "/api/push/trigger") {
       const payload = await body(request);
       const pubkey = await verifyAndConsumeChallenge(env, payload.challenge, payload.event, undefined, "hainei_push");
-      return json(await triggerGenericPush(env, pubkey, payload.recipientPubkeys));
+      return json(await triggerGenericPush(env, pubkey, payload.recipientPubkeys, payload.type));
     }
     return json({ error: "not_found" }, 404);
   } catch (error) {

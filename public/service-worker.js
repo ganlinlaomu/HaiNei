@@ -89,17 +89,23 @@ self.addEventListener('fetch', (event) => {
 });
 
 self.addEventListener('push', (event) => {
+  let type = 'activity';
+  try {
+    if (event.data?.json()?.type === 'message') type = 'message';
+  } catch {}
+  const isMessage = type === 'message';
   event.waitUntil(self.registration.showNotification('HaiNei', {
-    body: '有新的活动',
+    body: isMessage ? '有新私信' : '有新通知',
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    data: { url: '/#/notifications' }
+    data: { type }
   }));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const target = new URL('/#/notifications', self.location.origin).href;
+  const path = event.notification.data?.type === 'message' ? '/#/conversations' : '/#/notifications';
+  const target = new URL(path, self.location.origin).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     if (windows[0]) {
