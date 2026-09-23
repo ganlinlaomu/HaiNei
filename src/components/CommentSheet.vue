@@ -35,20 +35,34 @@
             @pointerup="endEmptyDrag"
             @pointercancel="endEmptyDrag"
           >
-            <div v-if="!threads.length" class="empty-comments">暂无评论</div>
-            <article v-for="thread in visibleThreads" :key="thread.root.id" class="comment-thread">
-              <CommentRow :comment="thread.root" @reply="startReply" />
-              <div v-for="reply in thread.replies" :key="reply.id" class="comment-reply">
-                <CommentRow :comment="reply" @reply="startReply" />
-              </div>
-            </article>
-            <button
-              v-if="commentCount > 1"
-              class="expand-comments"
-              type="button"
-              :aria-expanded="commentsExpanded"
-              @click="toggleCommentExpansion"
-            >{{ commentsExpanded ? "隐藏评论" : `查看全部 ${commentCount} 条评论` }}</button>
+            <div v-if="!threads.length" class="empty-comments">
+              <strong>还没有评论</strong>
+              <span>开始对话。</span>
+            </div>
+            <template v-for="(thread, index) in threads" :key="thread.root.id">
+              <button
+                v-if="index === INITIAL_ROOT_COUNT && remainingRootCount"
+                class="thread-toggle root-toggle"
+                type="button"
+                :aria-expanded="commentsExpanded"
+                @click="toggleCommentExpansion"
+              ><span aria-hidden="true"></span>{{ commentsExpanded ? "隐藏评论" : `查看 ${remainingRootCount} 条评论` }}</button>
+              <article v-if="index < INITIAL_ROOT_COUNT || commentsExpanded" class="comment-thread">
+                <CommentRow :comment="thread.root" @reply="startReply" />
+                <button
+                  v-if="thread.replies.length"
+                  class="thread-toggle reply-toggle"
+                  type="button"
+                  :aria-expanded="isReplyThreadExpanded(thread.root.id)"
+                  @click="toggleReplyThread(thread.root.id)"
+                ><span aria-hidden="true"></span>{{ isReplyThreadExpanded(thread.root.id) ? "隐藏回复" : `查看 ${thread.replies.length} 条回复` }}</button>
+                <div v-if="isReplyThreadExpanded(thread.root.id)" class="comment-replies">
+                  <div v-for="reply in thread.replies" :key="reply.id" class="comment-reply">
+                    <CommentRow :comment="reply" is-reply @reply="startReply" />
+                  </div>
+                </div>
+              </article>
+            </template>
           </div>
 
           <div v-if="replyTarget" class="reply-target">
@@ -119,12 +133,10 @@ const dragY = ref(0);
 const dragging = ref(false);
 const threads = computed(() => buildCommentThreads(interactions.getComments(props.message.id)));
 const commentCount = computed(() => interactions.getComments(props.message.id).length);
+const INITIAL_ROOT_COUNT = 1;
 const commentsExpanded = ref(false);
-const visibleThreads = computed(() => {
-  if (commentsExpanded.value) return threads.value;
-  const first = threads.value[0];
-  return first ? [{ root: first.root, replies: [] }] : [];
-});
+const expandedReplyRoots = ref(new Set<string>());
+const remainingRootCount = computed(() => Math.max(0, threads.value.length - INITIAL_ROOT_COUNT));
 const panelStyle = computed(() => dragY.value > 0 ? ({ transform: `translateY(${dragY.value}px)` }) : undefined);
 const canSend = computed(() => canSubmitComment(draft.value, !!selectedImage.value));
 
@@ -141,16 +153,22 @@ function navigateProfile(pubkey: string, event?: Event) {
 }
 
 const CommentRow = defineComponent({
-  props: { comment: { type: Object as PropType<Comment>, required: true } },
+  props: {
+    comment: { type: Object as PropType<Comment>, required: true },
+    isReply: { type: Boolean, default: false }
+  },
   emits: ["reply"],
   setup(rowProps, { emit: rowEmit }) {
-    return () => h("div", { id: `comment-${rowProps.comment.id}`, class: ["comment-row", { highlight: props.targetCommentId === rowProps.comment.id }] }, [
+    return () => h("div", { id: `comment-${rowProps.comment.id}`, class: ["comment-row", { "reply-row": rowProps.isReply, highlight: props.targetCommentId === rowProps.comment.id }] }, [
       h("button", { class: "comment-avatar", type: "button", "aria-label": `查看 ${displayName(rowProps.comment.author)} 的资料`, onClick: (event: Event) => navigateProfile(rowProps.comment.author, event) }, [
-        h(ProfileAvatar, { pubkey: rowProps.comment.author, localName: localName(rowProps.comment.author), size: 36 })
+        h(ProfileAvatar, { pubkey: rowProps.comment.author, localName: localName(rowProps.comment.author), size: rowProps.isReply ? 32 : 36 })
       ]),
       h("div", { class: "comment-copy" }, [
-        h("button", { class: "comment-name", type: "button", onClick: (event: Event) => navigateProfile(rowProps.comment.author, event) }, displayName(rowProps.comment.author)),
-        rowProps.comment.text ? h("div", { class: "comment-text" }, rowProps.comment.text) : null,
+        h("div", { class: "comment-author-line" }, [
+          h("button", { class: "comment-name", type: "button", onClick: (event: Event) => navigateProfile(rowProps.comment.author, event) }, displayName(rowProps.comment.author)),
+          h("time", formatRelativeTime(rowProps.comment.timestamp))
+        ]),
+        rowProps.comment.text ? h("div", { class: "comment-text" }, renderCommentText(rowProps.comment.text)) : null,
         rowProps.comment.media?.[0] ? h("div", { class: "comment-image" }, [
           h(PostImagePreview, {
             content: `![](${rowProps.comment.media[0].ref})`,
@@ -159,9 +177,7 @@ const CommentRow = defineComponent({
             altText: "评论图片"
           })
         ]) : null,
-        h("div", { class: "comment-meta" }, [
-          h("span", formatRelativeTime(rowProps.comment.timestamp)),
-          h("span", " · "),
+        h("div", { class: "comment-actions" }, [
           h("button", { type: "button", onClick: () => rowEmit("reply", rowProps.comment) }, "回复"),
           rowProps.comment.pending ? h("span", { class: "pending" }, "发送中…") : null,
           rowProps.comment.failed ? h("span", { class: "failed" }, "发送失败") : null
@@ -180,7 +196,32 @@ function startReply(comment: Comment) {
 function cancelReply() { replyTarget.value = null; }
 function toggleCommentExpansion() {
   commentsExpanded.value = !commentsExpanded.value;
-  if (!commentsExpanded.value) void nextTick(() => { if (commentBody.value) commentBody.value.scrollTop = 0; });
+}
+function isReplyThreadExpanded(rootId: string) { return expandedReplyRoots.value.has(rootId); }
+function toggleReplyThread(rootId: string) {
+  const next = new Set(expandedReplyRoots.value);
+  next.has(rootId) ? next.delete(rootId) : next.add(rootId);
+  expandedReplyRoots.value = next;
+}
+function renderCommentText(text: string) {
+  const match = /@[\p{L}\p{N}_.-]+/u.exec(text);
+  if (!match || match.index === undefined) return text;
+  return [
+    text.slice(0, match.index),
+    h("span", { class: "comment-mention" }, match[0]),
+    text.slice(match.index + match[0].length)
+  ];
+}
+function revealTargetComment(targetCommentId?: string) {
+  if (!targetCommentId) return;
+  const rootIndex = threads.value.findIndex(thread =>
+    thread.root.id === targetCommentId || thread.replies.some(reply => reply.id === targetCommentId)
+  );
+  if (rootIndex >= INITIAL_ROOT_COUNT) commentsExpanded.value = true;
+  const thread = threads.value[rootIndex];
+  if (thread?.replies.some(reply => reply.id === targetCommentId)) {
+    expandedReplyRoots.value = new Set([...expandedReplyRoots.value, thread.root.id]);
+  }
 }
 function removeSelectedImage() {
   if (selectedImage.value) URL.revokeObjectURL(selectedImage.value.preview);
@@ -278,7 +319,9 @@ function focusTarget() {
 }
 watch(() => props.visible, visible => {
   if (visible) {
-    commentsExpanded.value = !!props.targetCommentId;
+    commentsExpanded.value = false;
+    expandedReplyRoots.value = new Set();
+    revealTargetComment(props.targetCommentId);
     focusTarget();
   }
   else {
@@ -288,7 +331,7 @@ watch(() => props.visible, visible => {
   }
 });
 watch([threads, () => props.targetCommentId], ([, targetCommentId]) => {
-  if (targetCommentId) commentsExpanded.value = true;
+  revealTargetComment(targetCommentId);
   if (props.visible) focusTarget();
 });
 onBeforeUnmount(() => {
@@ -302,8 +345,8 @@ onBeforeUnmount(() => {
 .comment-sheet-panel{width:min(100%,720px);height:calc(100dvh - 72px);display:flex;flex-direction:column;border-radius:18px 18px 0 0;background:#fff;box-shadow:0 -12px 38px rgba(15,23,42,.2);transition:transform 260ms cubic-bezier(.22,1,.36,1);overflow:hidden;touch-action:pan-y}.comment-sheet-panel.dragging{transition:none}
 .drag-handle-area{display:grid;place-items:center;height:24px;flex:0 0 24px;touch-action:none}.drag-handle-area span{width:38px;height:4px;border-radius:999px;background:#cbd5e1}
 .comment-sheet-header{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:44px;padding-left:44px;border-bottom:1px solid #e2e8f0}.comment-sheet-header h2{margin:0;text-align:center;font-size:16px}.comment-sheet-header button{width:44px;height:44px;border:0;background:transparent;color:#64748b;font-size:24px}
-.comment-sheet-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scroll-padding-bottom:24px;padding:8px 14px 24px}.comment-sheet-body.empty{touch-action:none;cursor:grab}.comment-sheet-body.empty:active{cursor:grabbing}.empty-comments{padding:48px 0;text-align:center;color:#94a3b8}.expand-comments{min-height:38px;margin:2px 0 4px 46px;padding:4px 0;border:0;background:transparent;color:#64748b;font-size:12px;font-weight:600;text-align:left}
-.comment-thread{padding:5px 0}.comment-reply{margin-left:40px}.comment-row{display:flex;align-items:flex-start;gap:10px;padding:5px 2px;border-radius:10px}.comment-row.highlight{animation:comment-highlight 1.6s ease}.comment-avatar,.comment-name{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.comment-avatar{display:flex;align-items:flex-start;justify-content:center;width:36px;height:36px;flex:0 0 36px;align-self:flex-start;border-radius:50%;overflow:hidden}.comment-name{display:block;font-weight:700;line-height:1.3;text-align:left}.comment-copy{flex:1;min-width:0;font-size:13px}.comment-text{margin-top:2px;line-height:1.4;overflow-wrap:anywhere}.comment-meta{display:flex;align-items:center;gap:2px;margin-top:3px;color:#94a3b8;font-size:11px;line-height:1.3}.comment-meta button{padding:2px 3px;border:0;background:transparent;color:#64748b;font-weight:600}.pending{margin-left:6px}.failed{margin-left:6px;color:#dc2626}.comment-image{width:min(260px,100%);max-height:320px;margin-top:6px;overflow:hidden;border-radius:10px}.comment-image :deep(.post-image-preview),.comment-image :deep(.carousel-shell){width:100%;max-width:260px}.comment-image :deep(.carousel-shell){max-height:320px;margin:0;border-radius:10px}.comment-image :deep(.carousel-image){display:block;width:auto;height:auto;max-width:100%;max-height:320px;margin:auto;object-fit:cover;border-radius:10px}.comment-image :deep(.carousel-dots),.comment-image :deep(.carousel-counter),.comment-image :deep(.carousel-nav){display:none}
+.comment-sheet-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scroll-padding-bottom:24px;padding:8px 14px 24px}.comment-sheet-body.empty{touch-action:none;cursor:grab}.comment-sheet-body.empty:active{cursor:grabbing}.empty-comments{display:flex;flex-direction:column;align-items:center;gap:4px;padding:54px 0;color:#94a3b8;text-align:center}.empty-comments strong{color:#334155;font-size:14px;font-weight:600}.empty-comments span{font-size:12px}
+.comment-thread{padding:5px 0}.comment-replies{margin-top:1px}.comment-reply{margin-left:42px;padding-top:4px}.comment-row{display:flex;align-items:flex-start;gap:10px;padding:4px 2px;border-radius:10px}.comment-row.highlight{animation:comment-highlight 1.6s ease}.comment-avatar,.comment-name,.comment-actions button{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.comment-avatar{display:flex;align-items:flex-start;justify-content:center;width:36px;height:36px;flex:0 0 36px;align-self:flex-start;border-radius:50%;overflow:hidden}.reply-row .comment-avatar{width:32px;height:32px;flex-basis:32px}.comment-copy{flex:1;min-width:0;font-size:13px}.comment-author-line{display:flex;align-items:baseline;gap:7px;min-width:0;line-height:1.3}.comment-name{min-width:0;color:#1f2937;font-size:13px;font-weight:600;text-align:left}.comment-author-line time{flex-shrink:0;color:#94a3b8;font-size:10.5px;font-weight:400}.comment-text{margin-top:2px;color:#1f2937;line-height:1.4;overflow-wrap:anywhere}.comment-mention{color:#2563eb}.comment-actions{display:flex;align-items:center;gap:6px;min-height:18px;margin-top:3px;color:#94a3b8;font-size:11px;line-height:1.3}.comment-actions button{color:#64748b;font-size:11px;font-weight:500}.pending{margin-left:2px}.failed{margin-left:2px;color:#dc2626}.thread-toggle{display:flex;align-items:center;gap:8px;min-height:30px;padding:2px 0;border:0;background:transparent;color:#64748b;font-size:11px;font-weight:500;text-align:left}.thread-toggle>span{display:block;width:24px;height:1px;background:#cbd5e1}.root-toggle{margin:2px 0 2px 48px}.reply-toggle{margin:1px 0 0 48px}.comment-image{width:min(260px,100%);max-height:320px;margin-top:6px;overflow:hidden;border-radius:10px}.comment-image :deep(.post-image-preview),.comment-image :deep(.carousel-shell){width:100%;max-width:260px}.comment-image :deep(.carousel-shell){max-height:320px;margin:0;border-radius:10px}.comment-image :deep(.carousel-image){display:block;width:auto;height:auto;max-width:100%;max-height:320px;margin:auto;object-fit:cover;border-radius:10px}.comment-image :deep(.carousel-dots),.comment-image :deep(.carousel-counter),.comment-image :deep(.carousel-nav){display:none}
 .reply-target{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;padding:2px 12px;border-top:1px solid #eef2f6;color:#64748b;font-size:11px}.reply-target button{width:28px;height:28px;border:0;background:transparent;color:inherit}
 .selected-image{position:relative;width:72px;height:72px;margin:7px 12px 0}.selected-image img{display:block;width:100%;height:100%;object-fit:cover;border-radius:9px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:rgba(15,23,42,.82);color:#fff;font-size:16px;line-height:22px}.comment-composer{position:sticky;bottom:0;z-index:2;display:grid;grid-template-columns:36px minmax(0,1fr) 40px auto;align-items:center;gap:6px;flex-shrink:0;padding:8px 10px calc(env(safe-area-inset-bottom) + 10px);border-top:1px solid #e2e8f0;background:#fff}.comment-composer input[type=text]{min-width:0;height:40px;padding:0 12px;border:1px solid #dbe3ec;border-radius:999px;font-size:16px}.image-input{display:none}.comment-composer button{height:40px;border:0;background:transparent;color:#2563eb;font-weight:700}.comment-composer button:disabled{opacity:.45}.image-button{width:40px;padding:8px}.image-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.send-button{min-width:44px;padding:0 4px}.send-error{flex-shrink:0;padding:3px 14px;color:#dc2626;font-size:11px;text-align:center}
 .comment-sheet-enter-active{transition:opacity 320ms cubic-bezier(.22,1,.36,1)}.comment-sheet-leave-active{transition:opacity 260ms cubic-bezier(.22,1,.36,1)}.comment-sheet-enter-active .comment-sheet-panel{transition:transform 320ms cubic-bezier(.22,1,.36,1)}.comment-sheet-leave-active .comment-sheet-panel{transition:transform 260ms cubic-bezier(.22,1,.36,1)}.comment-sheet-enter-from,.comment-sheet-leave-to{opacity:0}.comment-sheet-enter-from .comment-sheet-panel,.comment-sheet-leave-to .comment-sheet-panel{transform:translateY(100%)}

@@ -85,15 +85,47 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain(".comment-sheet-body.empty{touch-action:none");
   });
 
-  it("shows one comment initially and expands the complete comment list", () => {
+  it("keeps the root toggle before expanded roots and collapses back in place", () => {
     const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
-    expect(sheet).toContain("const visibleThreads = computed");
-    expect(sheet).toContain("first ? [{ root: first.root, replies: [] }] : []");
+    expect(sheet).toContain("const INITIAL_ROOT_COUNT = 1");
+    expect(sheet).toContain("index < INITIAL_ROOT_COUNT || commentsExpanded");
+    expect(sheet).toContain("`查看 ${remainingRootCount} 条评论`");
     expect(sheet).toContain('commentsExpanded ? "隐藏评论"');
-    expect(sheet).toContain("`查看全部 ${commentCount} 条评论`");
     expect(sheet).toContain('@click="toggleCommentExpansion"');
+    expect(sheet.indexOf('class="thread-toggle root-toggle"')).toBeLessThan(sheet.indexOf('class="comment-thread"'));
     expect(card).not.toContain('class="view-comments"');
+  });
+
+  it("keeps reply expansion independent per root and the control before replies", () => {
+    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    expect(sheet).toContain("const expandedReplyRoots = ref(new Set<string>())");
+    expect(sheet).toContain("toggleReplyThread(thread.root.id)");
+    expect(sheet).toContain("isReplyThreadExpanded(thread.root.id)");
+    expect(sheet).toContain("`查看 ${thread.replies.length} 条回复`");
+    expect(sheet).toContain('isReplyThreadExpanded(thread.root.id) ? "隐藏回复"');
+    expect(sheet.indexOf('class="thread-toggle reply-toggle"')).toBeLessThan(sheet.indexOf('class="comment-replies"'));
+  });
+
+  it("uses a plain Instagram-style author row and clean empty state", () => {
+    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    expect(sheet).toContain('class: "comment-author-line"');
+    expect(sheet).toContain('h("time", formatRelativeTime');
+    expect(sheet).toContain(".comment-name{min-width:0;color:#1f2937");
+    expect(sheet).toContain(".comment-actions button{color:#64748b");
+    expect(sheet).not.toMatch(/\.comment-name\{[^}]*border-radius/);
+    expect(sheet).not.toMatch(/\.comment-actions button\{[^}]*border-radius/);
+    expect(sheet).toContain("还没有评论");
+    expect(sheet).toContain("开始对话。");
+    expect(sheet).toContain('class: "comment-mention"');
+  });
+
+  it("derives all root and reply counts only from locally available interactions", () => {
+    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    expect(sheet).toContain("buildCommentThreads(interactions.getComments(props.message.id))");
+    expect(sheet).toContain("threads.value.length - INITIAL_ROOT_COUNT");
+    expect(sheet).toContain("thread.replies.length");
+    expect(sheet).not.toContain("fetchProfile");
   });
 
   it("routes replies to self back to the post author while retaining the reply id", () => {

@@ -38,6 +38,10 @@ describe("feed media carousel and actions", () => {
     expect(source).toContain("@click=\"toggleComments\"");
     expect(source).toContain("@click=\"toggleBookmark\"");
     expect(source).not.toMatch(/aria-label=["'](?:分享|转发|repost|share)/i);
+    expect(source).toContain("min-width:36px;min-height:36px;padding:5px 6px");
+    expect(source).toContain("width:21px;height:21px");
+    expect(source).toContain("gap:3px");
+    expect(source).toContain("font-size:11px");
   });
 
   it("uses a blue saved bookmark and the existing top toast feedback", () => {
