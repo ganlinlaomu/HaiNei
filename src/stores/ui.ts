@@ -5,7 +5,7 @@ type Toast = {
   id: number;
   message: string;
   timeout?: number;
-  type?: "info" | "success" | "error";
+  type?: "info" | "success" | "error" | "bookmark";
 };
 
 export const useUIStore = defineStore("ui", () => {

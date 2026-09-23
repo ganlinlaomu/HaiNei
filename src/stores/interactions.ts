@@ -16,6 +16,7 @@ export interface Like {
   author: string;
   timestamp: number;
   type: "like";
+  liked?: boolean;
   pending?: boolean;
   failed?: boolean;
 }
@@ -42,6 +43,26 @@ export interface CommentMedia {
 
 export type Interaction = Like | Comment;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+const pendingLikeTransitions = new Set<string>();
+
+export function likeNotificationId(messageId: string, authorPubkey: string) {
+  return `like:${messageId}:${authorPubkey.toLowerCase()}`;
+}
+
+export function isActiveLike(like: Like) {
+  return like.liked !== false;
+}
+
+function latestLikeStates(items: Interaction[]) {
+  const latest = new Map<string, Like>();
+  items.forEach(item => {
+    if (item.type !== "like") return;
+    const author = item.author.toLowerCase();
+    const existing = latest.get(author);
+    if (!existing || item.timestamp >= existing.timestamp) latest.set(author, item);
+  });
+  return [...latest.values()];
+}
 
 function newInteractionId() {
   return typeof crypto !== "undefined" && crypto.randomUUID
@@ -86,7 +107,7 @@ export const useInteractionsStore = defineStore("interactions", {
 
   getters: {
     getLikes: state => (messageId: string) =>
-      (state.interactions.get(messageId) || []).filter(item => item.type === "like") as Like[],
+      latestLikeStates(state.interactions.get(messageId) || []).filter(isActiveLike),
     getComments: state => (messageId: string) =>
       (state.interactions.get(messageId) || []).filter(item => item.type === "comment") as Comment[],
     getReplies: state => (messageId: string, parentCommentId: string) =>
@@ -94,29 +115,18 @@ export const useInteractionsStore = defineStore("interactions", {
         item.type === "comment" && item.parentCommentId === parentCommentId
       ) as Comment[],
     getLikeCount: state => (messageId: string) =>
-      (state.interactions.get(messageId) || []).reduce((count, item) => count + Number(item.type === "like"), 0),
+      latestLikeStates(state.interactions.get(messageId) || []).filter(isActiveLike).length,
     getCommentCount: state => (messageId: string) =>
       (state.interactions.get(messageId) || []).reduce((count, item) => count + Number(item.type === "comment"), 0),
     isLikedByUser: state => (messageId: string, userPubkey: string) =>
-      (state.interactions.get(messageId) || []).some(item => item.type === "like" && item.author === userPubkey)
+      latestLikeStates(state.interactions.get(messageId) || [])
+        .some(item => item.author.toLowerCase() === userPubkey.toLowerCase() && isActiveLike(item))
   },
 
   actions: {
     async sendLike(messageId: string, messageAuthor: string) {
-      const key = useKeyStore();
-      if (!key.isLoggedIn) throw new Error("未登录");
-      const interaction: Like = {
-        id: newInteractionId(), messageId, author: key.pkHex,
-        timestamp: Math.floor(Date.now() / 1000), type: "like"
-      };
-      this._addInteraction({ ...interaction, pending: true });
-      try {
-        await this._sendInteraction(interaction, messageAuthor);
-        this._replaceInteraction(interaction);
-      } catch (error) {
-        this._removeInteraction(interaction.messageId, interaction.id);
-        throw error;
-      }
+      if (this.isLikedByUser(messageId, useKeyStore().pkHex)) return;
+      await this._sendLikeState(messageId, messageAuthor, true);
     },
 
     async sendComment(
@@ -145,14 +155,39 @@ export const useInteractionsStore = defineStore("interactions", {
       }
     },
 
-    async removeLike(messageId: string, _messageAuthor: string) {
+    async removeLike(messageId: string, messageAuthor: string) {
       const key = useKeyStore();
       if (!key.isLoggedIn) return;
-      const items = this.interactions.get(messageId) || [];
-      const next = items.filter(item => !(item.type === "like" && item.author === key.pkHex));
-      if (next.length === items.length) return;
-      this.interactions.set(messageId, next);
-      this._scheduleSave();
+      if (!this.isLikedByUser(messageId, key.pkHex)) return;
+      await this._sendLikeState(messageId, messageAuthor, false);
+    },
+
+    async _sendLikeState(messageId: string, messageAuthor: string, liked: boolean) {
+      const key = useKeyStore();
+      if (!key.isLoggedIn) throw new Error("未登录");
+      const transitionKey = `${key.pkHex.toLowerCase()}:${messageId}`;
+      if (pendingLikeTransitions.has(transitionKey)) return;
+      pendingLikeTransitions.add(transitionKey);
+      const previous = latestLikeStates(this.interactions.get(messageId) || [])
+        .find(item => item.author.toLowerCase() === key.pkHex.toLowerCase());
+      const interaction: Like = {
+        id: likeNotificationId(messageId, key.pkHex),
+        messageId,
+        author: key.pkHex,
+        liked,
+        timestamp: Math.max(Math.floor(Date.now() / 1000), (previous?.timestamp || 0) + 1),
+        type: "like"
+      };
+      this._addInteraction({ ...interaction, pending: true });
+      try {
+        await this._sendInteraction(interaction, messageAuthor);
+        this._addInteraction(interaction);
+      } catch (error) {
+        this._addInteraction({ ...interaction, pending: false, failed: true });
+        throw error;
+      } finally {
+        pendingLikeTransitions.delete(transitionKey);
+      }
     },
 
     async _sendInteraction(interaction: Interaction, recipientPubkey: string) {
@@ -167,7 +202,11 @@ export const useInteractionsStore = defineStore("interactions", {
         recipientPubkeys: [recipientPubkey],
         content: JSON.stringify(interaction),
         replyTo: interaction.messageId,
-        tags: [["l", INTERACTION_LABEL], ["t", interaction.type]],
+        tags: [
+          ["l", INTERACTION_LABEL],
+          ["t", interaction.type],
+          ...(interaction.type === "like" ? [["liked", String(isActiveLike(interaction))]] : [])
+        ],
         relays: getRelaysFromStorage(),
         context: {
           senderPubkey: key.pkHex,
@@ -184,9 +223,16 @@ export const useInteractionsStore = defineStore("interactions", {
       const interaction = decodeInteractionMessage(message);
       if (!interaction) return false;
       this.processedEvents.add(message.id);
-      if (interaction.author !== myPubkey) {
+      const currentLike = interaction.type === "like"
+        ? latestLikeStates(this.interactions.get(interaction.messageId) || [])
+          .find(item => item.author.toLowerCase() === interaction.author.toLowerCase())
+        : undefined;
+      const staleLike = !!currentLike && interaction.type === "like" && interaction.timestamp < currentLike.timestamp;
+      if (!staleLike && interaction.author !== myPubkey && (interaction.type !== "like" || isActiveLike(interaction))) {
         useNotificationsStore().addNotification({
-          id: `interaction:${message.id}`,
+          id: interaction.type === "like"
+            ? likeNotificationId(interaction.messageId, interaction.author)
+            : `interaction:${message.id}`,
           type: interaction.type,
           from: interaction.author,
           messageId: interaction.messageId,
@@ -203,11 +249,21 @@ export const useInteractionsStore = defineStore("interactions", {
 
     _addInteraction(interaction: Interaction) {
       const items = this.interactions.get(interaction.messageId) || [];
+      if (interaction.type === "like") {
+        const author = interaction.author.toLowerCase();
+        const existing = latestLikeStates(items).find(item => item.author.toLowerCase() === author);
+        if (existing) {
+          if (interaction.timestamp < existing.timestamp) return;
+          const next = items.filter(item => item.type !== "like" || item.author.toLowerCase() !== author);
+          this.interactions.set(interaction.messageId, [...next, interaction]);
+          this._scheduleSave();
+          return;
+        }
+      }
       if (items.some(item => item.id === interaction.id)) {
         this._replaceInteraction(interaction);
         return;
       }
-      if (interaction.type === "like" && items.some(item => item.type === "like" && item.author === interaction.author)) return;
       this.interactions.set(interaction.messageId, [...items, interaction]);
       this._scheduleSave();
     },

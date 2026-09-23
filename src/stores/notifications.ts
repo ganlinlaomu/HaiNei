@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { useKeyStore } from "./keys";
-import { useInteractionsStore, type Comment } from "./interactions";
+import { likeNotificationId, useInteractionsStore, type Comment } from "./interactions";
 
 export interface NotificationItem {
   id: string;
@@ -73,11 +73,20 @@ export const useNotificationsStore = defineStore("notifications", {
         const stored = raw ? JSON.parse(raw) : [];
         // Normal posts belong in Home, not Notifications. Remove legacy
         // message notifications account-by-account as they are loaded.
+        const seen = new Set<string>();
         this.list = Array.isArray(stored)
           ? stored.filter((item: NotificationItem & { type?: string }) =>
               item?.type === "like" || item?.type === "comment" || item?.type === "friend_request")
+            .map((item: NotificationItem) => item.type === "like" && item.messageId
+              ? { ...item, id: likeNotificationId(item.messageId, item.from) }
+              : item)
+            .filter((item: NotificationItem) => {
+              if (seen.has(item.id)) return false;
+              seen.add(item.id);
+              return true;
+            })
           : [];
-        if (Array.isArray(stored) && this.list.length !== stored.length) {
+        if (Array.isArray(stored) && JSON.stringify(this.list) !== JSON.stringify(stored)) {
           localStorage.setItem(notificationsKeyFor(targetPk)!, JSON.stringify(this.list));
         }
       } catch { this.list = []; }
@@ -127,6 +136,7 @@ export const useNotificationsStore = defineStore("notifications", {
 
     addNotification(n: NotificationItem) {
       if (n.type !== "like" && n.type !== "comment" && n.type !== "friend_request") return;
+      if (n.type === "like" && n.messageId) n.id = likeNotificationId(n.messageId, n.from);
       // 这里的逻辑修复最重要：
       // 1. 检查是否重复
       if (this.list.some(x => x.id === n.id)) return;

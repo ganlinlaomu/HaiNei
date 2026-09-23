@@ -31,10 +31,10 @@ describe("notifications store", () => {
     const notifications = useNotificationsStore();
     await notifications.load(account);
 
-    expect(notifications.list.map(item => item.id)).toEqual(["like", "reply"]);
+    expect(notifications.list.map(item => item.id)).toEqual(["like:p1:b", "reply"]);
     expect(notifications.unreadCount).toBe(2);
     expect(JSON.parse(localStorage.getItem(`nostr_notifications_${account}`) || "[]").map((item: { id: string }) => item.id))
-      .toEqual(["like", "reply"]);
+      .toEqual(["like:p1:b", "reply"]);
   });
 
   it("rejects message notifications defensively", async () => {
