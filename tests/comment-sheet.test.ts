@@ -112,12 +112,27 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain('class: "comment-author-line"');
     expect(sheet).toContain('h("time", formatRelativeTime');
     expect(sheet).toContain(".comment-name{min-width:0;color:#1f2937");
+    expect(sheet).toContain(".comment-author-line time{flex-shrink:0;color:#94a3b8;font-size:11px");
+    expect(sheet).toContain(".comment-actions{display:flex;align-items:center;gap:6px;min-height:18px;margin-top:3px;color:#94a3b8;font-size:11px");
     expect(sheet).toContain(".comment-actions button{color:#64748b");
     expect(sheet).not.toMatch(/\.comment-name\{[^}]*border-radius/);
     expect(sheet).not.toMatch(/\.comment-actions button\{[^}]*border-radius/);
+    expect(sheet).not.toMatch(/\.comment-author-line time\{[^}]*background/);
+    expect(sheet).not.toMatch(/\.comment-avatar\{[^}]*background/);
     expect(sheet).toContain("还没有评论");
     expect(sheet).toContain("开始对话。");
     expect(sheet).toContain('class: "comment-mention"');
+  });
+
+  it("uses a wide two-sided root separator and a shorter reply separator", () => {
+    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    expect(sheet).toContain("grid-template-columns:minmax(48px,1fr) auto minmax(48px,1fr)");
+    expect(sheet).toContain(".root-toggle .toggle-line{width:100%");
+    expect(sheet).toContain(".reply-toggle .toggle-line{width:24px");
+    const rootToggle = sheet.slice(sheet.indexOf('class="thread-toggle root-toggle"'), sheet.indexOf('<article v-if='));
+    expect(rootToggle.match(/class="toggle-line"/g)).toHaveLength(2);
+    const replyToggle = sheet.slice(sheet.indexOf('class="thread-toggle reply-toggle"'), sheet.indexOf('<div v-if="isReplyThreadExpanded'));
+    expect(replyToggle.match(/class="toggle-line"/g)).toHaveLength(1);
   });
 
   it("derives all root and reply counts only from locally available interactions", () => {
