@@ -48,6 +48,9 @@ describe("direct-message navigation and UI contract", () => {
     const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
     expect(router).toContain('path: "/messages/:pubkey"');
     expect(router).toContain("hideBottomNav: true");
+    const navigation = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
+    expect(navigation).toContain('<nav v-if="shouldShowBottomNav" class="bottom-nav">');
+    expect(navigation).not.toContain('<nav v-show="shouldShowBottomNav"');
   });
 
   it("allows only accepted, non-self peers to start private messages", () => {
@@ -86,6 +89,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(store).toContain("sendDirectMessage({");
     expect(store).not.toContain("nostrClient.publish");
     expect(service).toContain("outgoingQueueRepository.putIfAbsent");
+    expect(chat).toContain('class="chat-composer"');
+    expect(chat).toContain("'输入消息……'");
     expect(chat).toContain("uploadEncryptedCommentImage");
     expect(chat).toContain("PostImagePreview");
     expect(conversations).toContain("`/messages/${pubkey}`");
