@@ -35,6 +35,7 @@ type RelayConn = {
   hasConnected: boolean;
   shouldReconnect: boolean;
   connectStartedAt: number;
+  connect: () => void;
 };
 
 const CONNECT_TIMEOUT = 4000;
@@ -197,7 +198,8 @@ function ensureRelayConn(url: string): RelayConn {
     reconnectAttempts: 0,
     hasConnected: false,
     shouldReconnect: true,
-    connectStartedAt: Date.now()
+    connectStartedAt: Date.now(),
+    connect: () => undefined
   };
   relaysMap[url] = conn;
 
@@ -356,6 +358,7 @@ function ensureRelayConn(url: string): RelayConn {
       };
 
       const onClose = () => {
+        if (conn.ws !== ws) return;
         if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
         conn.connectTimer = null;
         conn.ready = false;
@@ -404,8 +407,24 @@ function ensureRelayConn(url: string): RelayConn {
     }
   };
 
+  conn.connect = create;
   create();
   return conn;
+}
+
+/** Start active relay connections without creating subscriptions or traffic. */
+export function warmRelays(relays: string[]) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  for (const url of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
+    const existing = relaysMap[url];
+    const conn = existing || ensureRelayConn(url);
+    if (!existing || conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
+    if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+    conn.reconnectTimer = null;
+    conn.reconnectAttempts = 0;
+    conn.shouldReconnect = true;
+    conn.connect();
+  }
 }
 
 function sendRaw(conn: RelayConn, payload: any): "sent" | "queued" {
@@ -716,19 +735,32 @@ export const pool = {
   }
 };
 
-/** Resume only relays that still own logical subscriptions. */
-export function restoreRelayConnections() {
-  for (const [url, conn] of Object.entries(relaysMap)) {
-    if (conn.subs.size > 0 && !conn.ready && conn.ws?.readyState !== 0) reconnectRelay(url);
+/** Reset foreground retry exhaustion and immediately reconnect active read relays. */
+export function restoreRelayConnections(relays = getRelaysFromStorage("read")) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  for (const url of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
+    const conn = relaysMap[url] || ensureRelayConn(url);
+    if (conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
+    if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+    conn.reconnectTimer = null;
+    conn.reconnectAttempts = 0;
+    conn.shouldReconnect = true;
+    conn.connect();
   }
 }
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-  window.addEventListener("online", restoreRelayConnections);
-  window.addEventListener("pageshow", restoreRelayConnections);
+  const restoreActiveRelayConnections = () => restoreRelayConnections(
+    Object.entries(relaysMap)
+      .filter(([, conn]) => conn.subs.size > 0 || conn.okHandlers.size > 0 || conn.queue.length > 0)
+      .map(([url]) => url)
+  );
+  window.addEventListener("online", restoreActiveRelayConnections);
+  window.addEventListener("pageshow", restoreActiveRelayConnections);
+  window.addEventListener("focus", restoreActiveRelayConnections);
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") restoreRelayConnections();
+      if (document.visibilityState === "visible") restoreActiveRelayConnections();
     });
   }
 }

@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db, type OutgoingQueueRecord } from "@/db/dexie";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 
-const publish = vi.hoisted(() => vi.fn());
+const { publish, triggerPush } = vi.hoisted(() => ({ publish: vi.fn(), triggerPush: vi.fn() }));
 vi.mock("@/services/nostrClient", () => ({ nostrClient: { publish } }));
+vi.mock("@/services/pushNotifications", () => ({ triggerGenericPush: triggerPush }));
 
 import {
   publishQueuedOutgoing,
+  registerOutgoingPushSigner,
   retryFailedOutgoing,
   retryOutgoingQueue
 } from "@/nostr/messaging/service";
@@ -26,11 +28,20 @@ function queued(accountPubkey = ACCOUNT, outgoingId = "logical-1", state: Outgoi
 
 beforeEach(async () => {
   publish.mockReset().mockResolvedValue([{ relay: "wss://relay.test", ok: true, ts: 1 }]);
+  triggerPush.mockReset().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { onLine: true });
   await db.outgoingQueue.clear();
 });
 
 describe("durable outgoing queue", () => {
+  it("uses an explicit private-message push category at publish time", async () => {
+    await outgoingQueueRepository.putIfAbsent(queued());
+    const signer = vi.fn();
+    registerOutgoingPushSigner(ACCOUNT, signer);
+    await publishQueuedOutgoing(ACCOUNT, "logical-1", "message");
+    expect(triggerPush).toHaveBeenCalledWith([OTHER], ACCOUNT, signer, "message");
+  });
+
   it("is durable before publish and does not duplicate a concurrent logical retry", async () => {
     await outgoingQueueRepository.putIfAbsent(queued());
     publish.mockImplementationOnce(async () => {

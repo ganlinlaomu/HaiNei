@@ -216,6 +216,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!content.trim()) throw new Error("消息不能为空");
       const result = await sendDirectMessage({
         recipientPubkeys: [peer], content: content.trim(), tags: [["t", DIRECT_MESSAGE_TYPE]], relays: getRelaysFromStorage("write"),
+        pushCategory: "message",
         context: { senderPubkey: account, nip44Encrypt: keys.supportsNip44 ? keys.nip44Encrypt.bind(keys) : undefined, signEvent: keys.signEvent.bind(keys) },
       });
       if (keys.pkHex !== account || !friendships.isAccepted(peer)) throw new Error("好友关系已变更");

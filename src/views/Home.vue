@@ -931,9 +931,10 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
               reconcileStartupSnapshot(true);
               startupSyncing.value = false;
             }
-            status.value = syncStatus === "live" ? "同步完成" :
-              syncStatus === "catching-up" ? "获取历史消息中..." :
-              syncStatus === "error" ? "同步失败" : "连接中";
+            status.value = syncStatus === "live" ? "已连接" :
+              syncStatus === "catching-up" ? "正在同步" :
+              syncStatus === "offline" ? "离线" :
+              syncStatus === "error" ? "重试中" : "连接中";
           }
         });
         

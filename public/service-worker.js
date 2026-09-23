@@ -91,7 +91,8 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('push', (event) => {
   let type = 'activity';
   try {
-    if (event.data?.json()?.type === 'message') type = 'message';
+    const payload = JSON.parse(event.data?.text() || '{}');
+    if (payload?.type === 'message') type = 'message';
   } catch {}
   const isMessage = type === 'message';
   event.waitUntil(self.registration.showNotification('HaiNei', {
