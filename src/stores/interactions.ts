@@ -6,6 +6,7 @@ import { useKeyStore } from "@/stores/keys";
 import { useNotificationsStore } from "@/stores/notifications";
 import { logger } from "@/utils/logger";
 import { useFriendshipsStore } from "@/stores/friendships";
+import { isEncryptedImageRef } from "@/utils/encryptedImageRef";
 
 export const INTERACTION_LABEL = "hainei-interaction";
 
@@ -27,8 +28,16 @@ export interface Comment {
   timestamp: number;
   type: "comment";
   parentCommentId?: string;
+  media?: CommentMedia[];
   pending?: boolean;
   failed?: boolean;
+}
+
+export interface CommentMedia {
+  type: "image";
+  ref: string;
+  width?: number;
+  height?: number;
 }
 
 export type Interaction = Like | Comment;
@@ -52,7 +61,15 @@ function decodeInteractionMessage(message: CanonicalMessage): Interaction | null
     if (!interaction?.id || !interaction.messageId || !["like", "comment"].includes(interaction.type)) return null;
     if (interaction.author?.toLowerCase() !== message.senderPubkey.toLowerCase()) return null;
     if (typeof interaction.timestamp !== "number") return null;
-    if (interaction.type === "comment" && typeof interaction.text !== "string") return null;
+    if (interaction.type === "comment") {
+      if (typeof interaction.text !== "string") return null;
+      if (interaction.media !== undefined) {
+        if (!Array.isArray(interaction.media) || interaction.media.length > 1) return null;
+        const media = interaction.media[0];
+        if (media && (media.type !== "image" || !isEncryptedImageRef(media.ref))) return null;
+      }
+      if (!interaction.text.trim() && !interaction.media?.length) return null;
+    }
     return interaction;
   } catch {
     return null;
@@ -102,12 +119,21 @@ export const useInteractionsStore = defineStore("interactions", {
       }
     },
 
-    async sendComment(messageId: string, messageAuthor: string, text: string, parentCommentId?: string) {
+    async sendComment(
+      messageId: string,
+      messageAuthor: string,
+      text: string,
+      parentCommentId?: string,
+      media?: CommentMedia[]
+    ) {
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
+      const normalizedMedia = media?.slice(0, 1).filter(item => item.type === "image" && isEncryptedImageRef(item.ref));
+      if (!text.trim() && !normalizedMedia?.length) throw new Error("评论不能为空");
       const interaction: Comment = {
         id: newInteractionId(), messageId, author: key.pkHex, text: text.trim(),
-        timestamp: Math.floor(Date.now() / 1000), type: "comment", parentCommentId
+        timestamp: Math.floor(Date.now() / 1000), type: "comment", parentCommentId,
+        ...(normalizedMedia?.length ? { media: normalizedMedia } : {})
       };
       this._addInteraction({ ...interaction, pending: true });
       try {
@@ -134,7 +160,9 @@ export const useInteractionsStore = defineStore("interactions", {
       if (!key.isLoggedIn) throw new Error("未登录");
       const friendships = useFriendshipsStore();
       if (friendships.loadedFor !== key.pkHex) await friendships.load(key.pkHex);
-      if (!friendships.isAccepted(recipientPubkey)) throw new Error("只能与已互相确认的好友互动");
+      if (recipientPubkey.toLowerCase() !== key.pkHex.toLowerCase() && !friendships.isAccepted(recipientPubkey)) {
+        throw new Error("只能与已互相确认的好友互动");
+      }
       await sendDirectMessage({
         recipientPubkeys: [recipientPubkey],
         content: JSON.stringify(interaction),

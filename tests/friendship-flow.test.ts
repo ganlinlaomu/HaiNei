@@ -41,6 +41,7 @@ import { useInteractionsStore } from "@/stores/interactions";
 import { useFriendsStore } from "@/stores/friends";
 import { friendshipTags } from "@/nostr/messaging/friendshipControl";
 import { useNotificationsStore } from "@/stores/notifications";
+import { encodeEncryptedImageRef } from "@/utils/encryptedImageRef";
 
 function message(action: "request" | "accept" | "reject" | "remove" | "cancel", sender = PEER): CanonicalMessage {
   return {
@@ -118,6 +119,29 @@ describe("friendship state and message authorization", () => {
     await usePostsStore().sendDirectMessage([PEER], "allowed");
     await useInteractionsStore().sendLike("message-id", PEER);
     expect(mocks.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows a self-recipient comment without friendship and sends only an encrypted image ref", async () => {
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [];
+    const ref = encodeEncryptedImageRef({
+      v: 1,
+      url: "https://media.example/encrypted",
+      mime: "image/jpeg",
+      alg: "AES-GCM",
+      iv: "aXY=",
+      key: "a2V5"
+    });
+    await useInteractionsStore().sendComment("message-id", ACCOUNT, "", undefined, [
+      { type: "image", ref, width: 320, height: 240 },
+      { type: "image", ref, width: 640, height: 480 }
+    ]);
+    const payload = JSON.parse(mocks.send.mock.calls[0][0].content);
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ recipientPubkeys: [ACCOUNT] }));
+    expect(payload.text).toBe("");
+    expect(payload.media).toEqual([{ type: "image", ref, width: 320, height: 240 }]);
+    expect(mocks.send.mock.calls[0][0].content).not.toContain("data:image");
   });
 
   it("shows an optimistic like immediately and does not duplicate it after publish", async () => {

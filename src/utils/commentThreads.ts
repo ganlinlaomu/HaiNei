@@ -31,14 +31,27 @@ export function buildCommentSubmission(
   messageId: string,
   postAuthor: string,
   text: string,
-  replyTarget?: Pick<Comment, "id" | "author"> | null
+  replyTarget?: Pick<Comment, "id" | "author"> | null,
+  currentPubkey?: string
 ) {
+  const recipientPubkey = replyTarget
+    ? (currentPubkey && replyTarget.author === currentPubkey ? postAuthor : replyTarget.author)
+    : postAuthor;
   return {
     messageId,
-    recipientPubkey: replyTarget?.author || postAuthor,
+    recipientPubkey,
     text: text.trim(),
     parentCommentId: replyTarget?.id
   };
+}
+
+export function shouldCloseCommentSheetDrag(distance: number, panelHeight: number, durationMs: number) {
+  const velocity = durationMs > 0 ? distance / durationMs : 0;
+  return distance > panelHeight * 0.25 || velocity >= 0.7;
+}
+
+export function canSubmitComment(text: string, hasImage: boolean) {
+  return text.trim().length > 0 || hasImage;
 }
 
 export function commentDraftAfterSend(draft: string, succeeded: boolean) {
