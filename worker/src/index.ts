@@ -58,7 +58,10 @@ export async function handleRequest(request: Request, env: Env) {
   } catch (error) {
     if (!(error instanceof HttpError)) console.error("HaiNei Worker request failed", error);
     const status = error instanceof HttpError ? error.status : 500;
-    return json({ error: error instanceof Error ? error.message : "internal_error" }, status);
+    const message = error instanceof HttpError
+      ? error.message
+      : path.startsWith("/api/push/") ? "push_storage_unavailable" : "internal_error";
+    return json({ error: message }, status);
   }
 }
 

@@ -50,6 +50,8 @@ Blossom 端对应变量为 `HAINEI_MAX_FILE_SIZE_BYTES`、`HAINEI_DAILY_UPLOAD_C
 
 Pages 构建可设置 `VITE_HAINEI_WORKER_URL` 指向已部署 Worker；它只是公开 API 地址，不是凭据。
 
+后台推送的生产迁移、VAPID 配置、Worker/Pages 部署与冒烟检查见 [`worker/PUSH_DEPLOYMENT.md`](worker/PUSH_DEPLOYMENT.md)。
+
 ## 环境要求
 - Node.js 20–22
 - npm 或 yarn
