@@ -87,10 +87,13 @@ describe("comment bottom sheet", () => {
 
   it("shows one comment initially and expands the complete comment list", () => {
     const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     expect(sheet).toContain("const visibleThreads = computed");
     expect(sheet).toContain("first ? [{ root: first.root, replies: [] }] : []");
-    expect(sheet).toContain("查看全部 {{ commentCount }} 条评论");
-    expect(sheet).toContain('@click="commentsExpanded = true"');
+    expect(sheet).toContain('commentsExpanded ? "隐藏评论"');
+    expect(sheet).toContain("`查看全部 ${commentCount} 条评论`");
+    expect(sheet).toContain('@click="toggleCommentExpansion"');
+    expect(card).not.toContain('class="view-comments"');
   });
 
   it("routes replies to self back to the post author while retaining the reply id", () => {

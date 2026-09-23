@@ -43,11 +43,12 @@
               </div>
             </article>
             <button
-              v-if="commentCount > 1 && !commentsExpanded"
+              v-if="commentCount > 1"
               class="expand-comments"
               type="button"
-              @click="commentsExpanded = true"
-            >查看全部 {{ commentCount }} 条评论</button>
+              :aria-expanded="commentsExpanded"
+              @click="toggleCommentExpansion"
+            >{{ commentsExpanded ? "隐藏评论" : `查看全部 ${commentCount} 条评论` }}</button>
           </div>
 
           <div v-if="replyTarget" class="reply-target">
@@ -120,7 +121,7 @@ const threads = computed(() => buildCommentThreads(interactions.getComments(prop
 const commentCount = computed(() => interactions.getComments(props.message.id).length);
 const commentsExpanded = ref(false);
 const visibleThreads = computed(() => {
-  if (commentsExpanded.value || props.targetCommentId) return threads.value;
+  if (commentsExpanded.value) return threads.value;
   const first = threads.value[0];
   return first ? [{ root: first.root, replies: [] }] : [];
 });
@@ -177,6 +178,10 @@ function startReply(comment: Comment) {
   void nextTick(() => composer.value?.focus());
 }
 function cancelReply() { replyTarget.value = null; }
+function toggleCommentExpansion() {
+  commentsExpanded.value = !commentsExpanded.value;
+  if (!commentsExpanded.value) void nextTick(() => { if (commentBody.value) commentBody.value.scrollTop = 0; });
+}
 function removeSelectedImage() {
   if (selectedImage.value) URL.revokeObjectURL(selectedImage.value.preview);
   selectedImage.value = null;
