@@ -10,8 +10,18 @@ function baseUrl() {
 
 async function responseJson(response: Response, fallback: string) {
   const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error || fallback);
+  if (!response.ok) throw new Error(pushServiceErrorMessage(response.status, body?.error, fallback));
   return body;
+}
+
+export function pushServiceErrorMessage(status: number, code: unknown, fallback: string) {
+  const error = typeof code === "string" ? code : "";
+  if (status === 404 || error === "not_found") return "推送服务尚未部署，请更新 HaiNei Worker";
+  if (error === "push_not_configured") return "推送服务尚未配置 VAPID";
+  if (error === "push_storage_unavailable" || error === "internal_error") {
+    return "推送服务数据库尚未准备好，请检查 Worker 部署和 D1 迁移";
+  }
+  return error || fallback;
 }
 
 async function authenticatedPost(path: string, payload: Record<string, unknown>, pubkey: string, signEvent: SignEvent) {
@@ -57,19 +67,23 @@ export function pushEnabledForAccount(pubkey: string) {
 }
 
 export async function enablePushNotifications(pubkey: string, signEvent: SignEvent) {
+  const enabledKey = `hainei_push_enabled_${pubkey.toLowerCase()}`;
+  localStorage.removeItem(enabledKey);
   if (!supportsPushNotifications()) throw new Error("当前浏览器不支持推送通知");
   if (Notification.permission === "denied") throw new Error("推送权限已被浏览器拒绝，请在系统设置中恢复");
   const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
   if (permission !== "granted") throw new Error("未授予推送权限");
   const publicKeyResponse = await fetch(`${baseUrl()}/api/push/public-key`, { method: "POST" });
   const publicKeyBody = await responseJson(publicKeyResponse, "获取推送公钥失败");
+  const publicKey = String(publicKeyBody?.publicKey || "").trim();
+  if (!publicKey) throw new Error("推送服务尚未配置 VAPID");
   const registration = await navigator.serviceWorker.ready;
   const subscription = await registration.pushManager.subscribe({
     userVisibleOnly: true,
-    applicationServerKey: applicationServerKey(String(publicKeyBody?.publicKey || "")),
+    applicationServerKey: applicationServerKey(publicKey),
   });
   await authenticatedPost("/api/push/subscribe", { subscription: subscription.toJSON() }, pubkey, signEvent);
-  localStorage.setItem(`hainei_push_enabled_${pubkey.toLowerCase()}`, "1");
+  localStorage.setItem(enabledKey, "1");
 }
 
 export async function disablePushNotifications(pubkey: string, signEvent: SignEvent) {

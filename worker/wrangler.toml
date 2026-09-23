@@ -9,11 +9,14 @@ UPLOAD_TOKEN_TTL_SECONDS = "3600"
 MAX_FILE_SIZE_BYTES = "26214400"
 DAILY_UPLOAD_COUNT = "100"
 DAILY_UPLOAD_BYTES = "1073741824"
+VAPID_PUBLIC_KEY = "BKizbdewmQM2sZZPg8KwdokwXozVxOQIRYwPGJR12p_qbKaGuQBJBBZ1D3XykY_UrZJbWJarPnDh2ds5zSfeits" # Replace with the generated public key before production deploy.
+VAPID_SUBJECT = "mailto:admin@hainei.app"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "blossom-imgbed-db"
 database_id = "28adbba4-77ec-418e-af4b-6a1e91cbe927"
+migrations_dir = "migrations"
 
 [[services]]
 binding = "BLOSSOM"
@@ -22,4 +25,4 @@ service = "blossom-imgbed"
 # Set server-side only with:
 # npx wrangler secret put BLOSSOM_SERVICE_TOKEN --config worker/wrangler.toml
 # npx wrangler secret put VAPID_PRIVATE_KEY --config worker/wrangler.toml
-# Configure VAPID_PUBLIC_KEY and VAPID_SUBJECT as non-secret Worker variables.
+# VAPID_PRIVATE_KEY must never be added to this file.
