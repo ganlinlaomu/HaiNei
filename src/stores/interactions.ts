@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import { deviceStorage } from "@/services/deviceStorage";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { sendDirectMessage } from "@/nostr/messaging/service";
 import { getRelaysFromStorage } from "@/nostr/relays";
@@ -296,11 +297,11 @@ export const useInteractionsStore = defineStore("interactions", {
       this.lastSyncedAt = 0;
       this.loadedFor = targetPk;
       try {
-        const raw = localStorage.getItem(`interactions_${targetPk}`);
+        const raw = deviceStorage.getItem(`interactions_${targetPk}`);
         if (!raw) return;
         const data = JSON.parse(raw);
         if (data?.protocol !== "nip17") {
-          localStorage.removeItem(`interactions_${targetPk}`);
+          deviceStorage.removeItem(`interactions_${targetPk}`);
           return;
         }
         const stored = data?.interactions && typeof data.interactions === "object" ? data.interactions : {};
@@ -328,7 +329,7 @@ export const useInteractionsStore = defineStore("interactions", {
         saveTimer = null;
       }
       try {
-        localStorage.setItem(`interactions_${this.loadedFor}`, JSON.stringify({
+        deviceStorage.setItem(`interactions_${this.loadedFor}`, JSON.stringify({
           protocol: "nip17",
           interactions: Object.fromEntries(this.interactions),
           lastSyncedAt: this.lastSyncedAt
@@ -345,7 +346,7 @@ export const useInteractionsStore = defineStore("interactions", {
       this.processedEvents.clear();
       this.lastSyncedAt = 0;
       this.loadedFor = "";
-      if (removeFromStorage && pk) localStorage.removeItem(`interactions_${pk}`);
+      if (removeFromStorage && pk) deviceStorage.removeItem(`interactions_${pk}`);
     }
   }
 });

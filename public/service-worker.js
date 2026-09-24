@@ -3,7 +3,7 @@
  * ====================================================== */
 
 const VERSION = "0.1.5"; // ⚠️ 更新代码时同步修改此版本号
-const BUILD_ID = "2026-09-22T00:02:58.804Z"; // Replaced by scripts/update-sw-version.js on every production build
+const BUILD_ID = "2026-09-24T04:28:09.082Z"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
 const HTML_CACHE = `${CACHE_PREFIX}-html-${VERSION}-${BUILD_ID}`;

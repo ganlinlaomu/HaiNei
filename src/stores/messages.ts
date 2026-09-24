@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import { deviceStorage } from "@/services/deviceStorage";
 import { useKeyStore } from "./keys";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
@@ -90,11 +91,11 @@ export const useMessagesStore = defineStore("messages", {
       if (this.loadedFor === targetPk) return;
       this.loadedFor = targetPk;
 
-      // One-time, account-scoped import of the old localStorage mirror.
+      // One-time, account-scoped import of the migrated legacy mirror.
       try {
         const ik = inboxKeyFor(targetPk);
         if (ik) {
-          const rawI = localStorage.getItem(ik);
+          const rawI = deviceStorage.getItem(ik);
           const stored = rawI ? JSON.parse(rawI) : [];
           const compatible = Array.isArray(stored) ? stored
             .filter((item: InboxItem) => item.protocol === "nip17" && item.transportKind === 1059) : [];
@@ -116,7 +117,7 @@ export const useMessagesStore = defineStore("messages", {
             };
             await syncedMessageRepository.insertMessageIfAbsent(targetPk, message);
           }
-          if (rawI) localStorage.removeItem(ik);
+          if (rawI) deviceStorage.removeItem(ik);
         }
       } catch {
         // Leave the legacy key intact so a later load can retry safely.
@@ -209,8 +210,8 @@ export const useMessagesStore = defineStore("messages", {
       this.outbox = [];
       this.loadedFor = "";
       if (removeFromStorage) {
-        try { if (ik) localStorage.removeItem(ik); } catch {}
-        try { if (ok) localStorage.removeItem(ok); } catch {}
+        try { if (ik) deviceStorage.removeItem(ik); } catch {}
+        try { if (ok) deviceStorage.removeItem(ok); } catch {}
       }
     },
 
@@ -218,8 +219,8 @@ export const useMessagesStore = defineStore("messages", {
     storedPks(): string[] {
       try {
         const out: string[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
+        for (let i = 0; i < deviceStorage.length; i++) {
+          const k = deviceStorage.key(i);
           if (!k) continue;
           if (k.startsWith("nostr_inbox_") || k.startsWith("nostr_outbox_")) {
             const pk = k.split("_").slice(2).join("_");

@@ -29,6 +29,11 @@ import {
 import { debugLog } from "@/utils/debugLog";
 import { clearAccountScopedCaches } from "@/services/nostrCache";
 import { cancelOutgoingWorkForAccount } from "@/nostr/messaging/service";
+import { ACCOUNT_STATE_NAMESPACES, fetchAndMaterializeAccountState, syncAccountStateNamespace } from "@/services/accountStateSync";
+import { deviceStorage } from "@/services/deviceStorage";
+import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
+import { startAccountMessageSync, stopAccountMessageSync } from "@/services/accountMessageSync";
+import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 
 /**
  * keys store with robust nostr-tools feature detection.
@@ -120,6 +125,17 @@ export const useKeyStore = defineStore("keys", {
     async loadAccountStores(pk: string) {
       if (this.pkHex && this.pkHex !== pk) clearAccountScopedCaches(this.pkHex);
       const account = pk.slice(0, 8);
+      // Start bootstrap Relay handshakes while the encrypted Worker snapshot is
+      // being authenticated and fetched. This opens sockets only; subscriptions
+      // remain owned by their existing sync managers.
+      warmReadRelaysForSession(this);
+      if (this.supportsNip44) {
+        try {
+          await fetchAndMaterializeAccountState(this);
+        } catch (e) {
+          console.warn(`[account] encrypted snapshot restore unavailable account=${account}`, e);
+        }
+      }
       // Settings must load first so no later store can use the previous account's
       // relay or Blossom mirrors during an account switch.
       try {
@@ -172,9 +188,22 @@ export const useKeyStore = defineStore("keys", {
       } catch (e) {
         console.error(`[account] notifications load failed account=${account}`, e);
       }
+      // Account-level UI is ready from IndexedDB/D1 now. Relay history repair
+      // continues in the session service and checkpoints only after reconciliation.
+      void startAccountMessageSync(this)
+        .then(async () => {
+          if (!this.supportsNip44 || this.pkHex !== pk) return;
+          const syncState = await syncedMessageRepository.getSyncState(pk);
+          const namespaces = syncState.historyBackfillCompletedAt
+            ? ACCOUNT_STATE_NAMESPACES
+            : ACCOUNT_STATE_NAMESPACES.filter(namespace => namespace !== "friendships");
+          await Promise.allSettled(namespaces.map(namespace => syncAccountStateNamespace(this, namespace)));
+        })
+        .catch(e => console.warn(`[account] Relay history bootstrap unavailable account=${account}`, e));
     },
 
     resetAccountStores(currentPk: string) {
+      stopAccountMessageSync();
       clearAccountScopedCaches(currentPk);
       cancelOutgoingWorkForAccount(currentPk);
       const account = currentPk.slice(0, 8) || "none";
@@ -384,18 +413,20 @@ export const useKeyStore = defineStore("keys", {
       try {
         const pk = await safeGetPublicKey(sk);
         this.pkHex = pk;
+        this.isUnlocked = true;
       } catch (e) {
         this.skHex = "";
         this.pkHex = "";
         this.loginMethod = "";
         this.loginTimestamp = 0;
+        this.isUnlocked = false;
         throw e;
       }
       try {
-        localStorage.setItem("skHex", this.skHex);
-        localStorage.setItem("pkHex", this.pkHex);
-        localStorage.setItem("loginMethod", this.loginMethod);
-        localStorage.setItem("loginTimestamp", String(this.loginTimestamp));
+        deviceStorage.setItem("skHex", this.skHex);
+        deviceStorage.setItem("pkHex", this.pkHex);
+        deviceStorage.setItem("loginMethod", this.loginMethod);
+        deviceStorage.setItem("loginTimestamp", String(this.loginTimestamp));
       } catch {}
       await this.loadAccountStores(this.pkHex);
       logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
@@ -415,13 +446,14 @@ export const useKeyStore = defineStore("keys", {
         this.pkHex = pk;
         this.skHex = ""; // No private key with extension
         this.loginMethod = "nip07";
+        this.isUnlocked = true;
         this.loginTimestamp = Math.floor(Date.now() / 1000);
 
         try {
-          localStorage.setItem("pkHex", this.pkHex);
-          localStorage.setItem("loginMethod", this.loginMethod);
-          localStorage.setItem("loginTimestamp", String(this.loginTimestamp));
-          localStorage.removeItem("skHex"); // Ensure no private key is stored
+          deviceStorage.setItem("pkHex", this.pkHex);
+          deviceStorage.setItem("loginMethod", this.loginMethod);
+          deviceStorage.setItem("loginTimestamp", String(this.loginTimestamp));
+          deviceStorage.removeItem("skHex"); // Ensure no private key is stored
         } catch {}
 
         await this.loadAccountStores(this.pkHex);
@@ -430,6 +462,7 @@ export const useKeyStore = defineStore("keys", {
         this.pkHex = "";
         this.loginMethod = "";
         this.loginTimestamp = 0;
+        this.isUnlocked = false;
         throw new Error(`浏览器插件登录失败: ${e.message || e}`);
       }
     },
@@ -450,7 +483,7 @@ export const useKeyStore = defineStore("keys", {
 
         // Try to restore existing client secret key, or generate a new one
         let clientSecretKey: Uint8Array;
-        const storedKey = localStorage.getItem("bunkerClientSecretKey");
+        const storedKey = deviceStorage.getItem("bunkerClientSecretKey");
         if (storedKey) {
           try {
             // Restore from base64
@@ -483,19 +516,20 @@ export const useKeyStore = defineStore("keys", {
         this.pkHex = pk;
         this.skHex = ""; // No private key with bunker
         this.loginMethod = "nip46";
+        this.isUnlocked = true;
         this.loginTimestamp = Math.floor(Date.now() / 1000);
         this.bunkerSigner = signer;
         this.bunkerClientSecretKey = clientSecretKey;
 
         try {
-          localStorage.setItem("pkHex", this.pkHex);
-          localStorage.setItem("loginMethod", this.loginMethod);
-          localStorage.setItem("loginTimestamp", String(this.loginTimestamp));
-          localStorage.setItem("bunkerInput", bunkerInput);
+          deviceStorage.setItem("pkHex", this.pkHex);
+          deviceStorage.setItem("loginMethod", this.loginMethod);
+          deviceStorage.setItem("loginTimestamp", String(this.loginTimestamp));
+          deviceStorage.setItem("bunkerInput", bunkerInput);
           // Store client secret key for reconnection (base64 encoded)
           const keyBase64 = uint8ArrayToBase64(clientSecretKey);
-          localStorage.setItem("bunkerClientSecretKey", keyBase64);
-          localStorage.removeItem("skHex"); // Ensure no private key is stored
+          deviceStorage.setItem("bunkerClientSecretKey", keyBase64);
+          deviceStorage.removeItem("skHex"); // Ensure no private key is stored
         } catch {}
 
         await this.loadAccountStores(this.pkHex);
@@ -504,6 +538,7 @@ export const useKeyStore = defineStore("keys", {
         this.pkHex = "";
         this.loginMethod = "";
         this.loginTimestamp = 0;
+        this.isUnlocked = false;
         this.bunkerSigner = null;
         
         // Re-throw with a user-friendly message if not already handled
@@ -562,12 +597,12 @@ export const useKeyStore = defineStore("keys", {
 
           // Store metadata
           try {
-            localStorage.setItem("pkHex", this.pkHex);
-            localStorage.setItem("loginMethod", this.loginMethod);
-            localStorage.setItem("loginTimestamp", String(this.loginTimestamp));
-            localStorage.setItem("isEncrypted", "true");
+            deviceStorage.setItem("pkHex", this.pkHex);
+            deviceStorage.setItem("loginMethod", this.loginMethod);
+            deviceStorage.setItem("loginTimestamp", String(this.loginTimestamp));
+            deviceStorage.setItem("isEncrypted", "true");
             // Don't store skHex in plain text
-            localStorage.removeItem("skHex");
+            deviceStorage.removeItem("skHex");
           } catch {}
         } else {
           // No password, use regular login
@@ -636,14 +671,14 @@ export const useKeyStore = defineStore("keys", {
       this.isRestoring = true;
       debugLog("account", "session_restore_start", {}, "info");
       try {
-        const method = localStorage.getItem("loginMethod") as
+        const method = deviceStorage.getItem("loginMethod") as
           | "sk"
           | "nip07"
           | "nip46"
           | null;
 
-        const pk = localStorage.getItem("pkHex");
-        const isEncrypted = localStorage.getItem("isEncrypted") === "true";
+        const pk = deviceStorage.getItem("pkHex");
+        const isEncrypted = deviceStorage.getItem("isEncrypted") === "true";
 
         if (!method || !pk) {
           this.isRestored = true;
@@ -653,11 +688,11 @@ export const useKeyStore = defineStore("keys", {
 
       this.loginMethod = method;
       this.pkHex = pk;
-      const loginTimestamp = localStorage.getItem("loginTimestamp") || "0";
+      const loginTimestamp = deviceStorage.getItem("loginTimestamp") || "0";
       this.loginTimestamp = parseInt(loginTimestamp, 10) || 0;
 
       if (method === "nip46") {
-        const bunkerInput = localStorage.getItem("bunkerInput");
+        const bunkerInput = deviceStorage.getItem("bunkerInput");
         if (bunkerInput) {
           try {
             const bunkerPointer = await parseBunkerInput(bunkerInput);
@@ -665,7 +700,7 @@ export const useKeyStore = defineStore("keys", {
             
             // Try to restore the client secret key
             let clientSecretKey: Uint8Array;
-            const storedKey = localStorage.getItem("bunkerClientSecretKey");
+            const storedKey = deviceStorage.getItem("bunkerClientSecretKey");
             if (storedKey) {
               try {
                 clientSecretKey = base64ToUint8Array(storedKey);
@@ -735,7 +770,7 @@ export const useKeyStore = defineStore("keys", {
           return;
         } else {
           // Plain text private key
-          const sk = localStorage.getItem("skHex");
+          const sk = deviceStorage.getItem("skHex");
           if (sk) {
             this.skHex = sk;
             this.isEncrypted = false;
@@ -775,12 +810,12 @@ export const useKeyStore = defineStore("keys", {
       await this.loginWithSk(sk);
       // Mark as registered locally (useful if UI expects a flag)
       try {
-        const regsRaw = localStorage.getItem("nostr_registered_accounts") || "[]";
+        const regsRaw = deviceStorage.getItem("nostr_registered_accounts") || "[]";
         const regs = JSON.parse(regsRaw);
         if (!Array.isArray(regs)) regs.length = 0;
         if (!regs.includes(this.pkHex)) {
           regs.push(this.pkHex);
-          localStorage.setItem("nostr_registered_accounts", JSON.stringify(regs));
+          deviceStorage.setItem("nostr_registered_accounts", JSON.stringify(regs));
         }
       } catch {
         // ignore storage errors
@@ -819,13 +854,13 @@ export const useKeyStore = defineStore("keys", {
       this.bunkerClientSecretKey = null;
       
       try {
-        localStorage.removeItem("skHex");
-        localStorage.removeItem("pkHex");
-        localStorage.removeItem("loginMethod");
-        localStorage.removeItem("loginTimestamp");
-        localStorage.removeItem("bunkerInput");
-        localStorage.removeItem("bunkerClientSecretKey");
-        localStorage.removeItem("isEncrypted");
+        deviceStorage.removeItem("skHex");
+        deviceStorage.removeItem("pkHex");
+        deviceStorage.removeItem("loginMethod");
+        deviceStorage.removeItem("loginTimestamp");
+        deviceStorage.removeItem("bunkerInput");
+        deviceStorage.removeItem("bunkerClientSecretKey");
+        deviceStorage.removeItem("isEncrypted");
         // Note: We don't remove the encrypted key itself, user can unlock again
       } catch (e) {
         console.error(`[account] login metadata cleanup failed account=${currentPk.slice(0, 8) || "none"}`, e);

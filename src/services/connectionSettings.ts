@@ -1,3 +1,5 @@
+import { deviceStorage } from "@/services/deviceStorage";
+
 export type RelaySource = "user" | "nip65" | "default";
 export type MediaServerType = "blossom" | "imgbed" | "custom";
 export type MediaServerSource = "user" | "default";
@@ -94,7 +96,7 @@ function isLoopbackHostname(hostname: string): boolean {
     || hostname === "[::1]";
 }
 
-export function getOrCreateDeviceId(storage: Storage = localStorage): string {
+export function getOrCreateDeviceId(storage: Pick<Storage, "getItem" | "setItem"> = deviceStorage): string {
   const existing = storage.getItem(DEVICE_ID_STORAGE_KEY)?.trim();
   if (existing) return existing;
   const id = typeof crypto.randomUUID === "function"

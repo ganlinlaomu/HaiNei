@@ -7,11 +7,12 @@ import router from "./router";
 import { useKeyStore } from "@/stores/keys";
 import { clearExpiredCache } from "@/utils/imageCache";
 import { initVersionTracking, handleVersionUpdate } from "@/utils/versionManager";
+import { migrateLegacyLocalStorage } from "@/services/legacyLocalStorageMigration";
 
-// 🔍 Check for version changes BEFORE mounting the app
-const versionChanged = initVersionTracking();
-
-if (versionChanged) {
+async function bootstrap() {
+  await migrateLegacyLocalStorage();
+  const versionChanged = initVersionTracking();
+  if (versionChanged) {
   // Version changed - handle update and reload
   console.log("[main] Version changed detected, handling update...");
   
@@ -27,7 +28,8 @@ if (versionChanged) {
   
   // Don't continue with app initialization
   // The page will reload after cleanup
-} else {
+    return;
+  }
   // Normal app initialization
   const app = createApp(App);
   const pinia = createPinia();
@@ -69,3 +71,12 @@ if (versionChanged) {
     });
   }
 }
+
+void bootstrap().catch(error => {
+  console.error("[main] bootstrap failed", error);
+  const app = createApp(App);
+  const pinia = createPinia();
+  app.use(pinia);
+  app.use(router);
+  app.mount("#app");
+});

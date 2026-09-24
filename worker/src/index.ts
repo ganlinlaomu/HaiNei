@@ -7,6 +7,7 @@ import {
   triggerGenericPush,
 } from "./push";
 import { HttpError, type Env } from "./types";
+import { AccountStateConflict, getAccountState, putAccountState } from "./accountState";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -38,6 +39,16 @@ export async function handleRequest(request: Request, env: Env) {
       const pubkey = await verifyAndConsumeChallenge(env, payload.challenge, payload.event);
       return json(await createMediaSession(env, pubkey, payload.fileSize), 201);
     }
+    if (path === "/api/account-state/get") {
+      const payload = await body(request);
+      const pubkey = await verifyAndConsumeChallenge(env, payload.challenge, payload.event, undefined, "hainei_account_state");
+      return json(await getAccountState(env, pubkey, payload.namespaces));
+    }
+    if (path === "/api/account-state/put") {
+      const payload = await body(request);
+      const pubkey = await verifyAndConsumeChallenge(env, payload.challenge, payload.event, undefined, "hainei_account_state");
+      return json(await putAccountState(env, pubkey, payload));
+    }
     if (path === "/api/push/public-key") return json(getPushPublicKey(env));
     if (path === "/api/push/subscribe") {
       const payload = await body(request);
@@ -56,6 +67,9 @@ export async function handleRequest(request: Request, env: Env) {
     }
     return json({ error: "not_found" }, 404);
   } catch (error) {
+    if (error instanceof AccountStateConflict) {
+      return json({ error: error.message, currentVersion: error.currentVersion }, 409);
+    }
     if (!(error instanceof HttpError)) console.error("HaiNei Worker request failed", error);
     const status = error instanceof HttpError ? error.status : 500;
     const message = error instanceof HttpError

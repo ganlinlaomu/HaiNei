@@ -1,3 +1,5 @@
+import { deviceStorage } from "@/services/deviceStorage";
+
 export interface PostDraft {
   content: string;
   allFriends: boolean;
@@ -14,7 +16,7 @@ export function loadPostDraft(account?: string | null): PostDraft | null {
   const key = postDraftKey(account);
   if (!key) return null;
   try {
-    const value = JSON.parse(localStorage.getItem(key) || "null") as Partial<PostDraft> | null;
+    const value = JSON.parse(deviceStorage.getItem(key) || "null") as Partial<PostDraft> | null;
     if (!value || typeof value.content !== "string") return null;
     return {
       content: value.content,
@@ -32,11 +34,11 @@ export function loadPostDraft(account?: string | null): PostDraft | null {
 export function savePostDraft(account: string | null | undefined, draft: Omit<PostDraft, "updatedAt">) {
   const key = postDraftKey(account);
   if (!key) return;
-  try { localStorage.setItem(key, JSON.stringify({ ...draft, updatedAt: Date.now() })); } catch {}
+  try { deviceStorage.setItem(key, JSON.stringify({ ...draft, updatedAt: Date.now() })); } catch {}
 }
 
 export function clearPostDraft(account?: string | null) {
   const key = postDraftKey(account);
   if (!key) return;
-  try { localStorage.removeItem(key); } catch {}
+  try { deviceStorage.removeItem(key); } catch {}
 }

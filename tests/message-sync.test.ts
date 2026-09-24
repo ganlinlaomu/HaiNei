@@ -208,6 +208,52 @@ describe("relay catch-up", () => {
 });
 
 describe("message sync session", () => {
+  it("does not complete fresh history after partial Relay EOSE and resumes repair later", async () => {
+    const repo = new SyncedMessageRepository(database());
+    let subscriptionIndex = 0;
+    const subscribeFake = (relays: string[], filters: any[]) => {
+      const index = subscriptionIndex++;
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name !== "eose" || filters.every(filter => filter.until === undefined)) return;
+          queueMicrotask(() => {
+            if (index === 1) {
+              handlers.event?.forEach(handler => handler({ canonical: message("old-from-a", 1), id: "wrap-old", created_at: 1 }, "wss://a"));
+              callback("wss://a");
+            } else {
+              callback("wss://a");
+              callback("wss://b");
+            }
+          });
+        },
+        unsub() {},
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      decode: async (event: any) => event.canonical,
+      catchupTimeoutMs: 5,
+      now: () => 2_000_000,
+    });
+    await manager.start({
+      accountPubkey: ACCOUNT_A,
+      relays: ["wss://a", "wss://b"],
+      authors: [PEER, ACCOUNT_A],
+      decodeContext: { accountPubkey: ACCOUNT_A },
+    });
+    expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillCompletedAt).toBeUndefined();
+    expect((await repo.list(ACCOUNT_A)).map(item => item.id)).toEqual(["old-from-a"]);
+
+    await manager.resume("manual");
+    expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillCompletedAt).toBe(2_000_000);
+    expect(subscriptionIndex).toBeGreaterThanOrEqual(3);
+    manager.stop();
+  });
+
   it("reconnects active read relays before foreground catch-up without duplicating realtime", async () => {
     const repo = new SyncedMessageRepository(database());
     const subscriptions: Array<{ relays: string[]; filters: any[]; handlers: Record<string, Array<(...args: any[]) => void>> }> = [];

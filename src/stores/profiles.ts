@@ -14,6 +14,7 @@ import { getRelaysFromStorage } from "@/nostr/relays";
 import { profileRepository } from "@/repositories/profileRepository";
 import { useKeyStore } from "@/stores/keys";
 import type { FriendshipRecord } from "@/db/dexie";
+import { scheduleAccountStateSync } from "@/services/accountStateSync";
 
 function normalized(value: string) { return value.trim().toLowerCase(); }
 
@@ -70,6 +71,7 @@ export const useProfilesStore = defineStore("profiles", {
         updatedAt
       };
       await this.putLatest(profile);
+      scheduleAccountStateSync(keys, "own_profile");
       return profile;
     },
 

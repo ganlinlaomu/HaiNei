@@ -4,6 +4,7 @@
  */
 
 import { APP_VERSION } from "@/db/dexie";
+import { deviceStorage } from "@/services/deviceStorage";
 
 const VERSION_KEY = "app_version";
 const LAST_UPDATE_CHECK_KEY = "last_update_check";
@@ -13,7 +14,7 @@ const LAST_UPDATE_CHECK_KEY = "last_update_check";
  */
 export function getStoredVersion(): string | null {
   try {
-    return localStorage.getItem(VERSION_KEY);
+    return deviceStorage.getItem(VERSION_KEY);
   } catch (e) {
     console.error("[VersionManager] Failed to get stored version", e);
     return null;
@@ -25,8 +26,8 @@ export function getStoredVersion(): string | null {
  */
 export function storeCurrentVersion(): void {
   try {
-    localStorage.setItem(VERSION_KEY, APP_VERSION);
-    localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
+    deviceStorage.setItem(VERSION_KEY, APP_VERSION);
+    deviceStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
   } catch (e) {
     console.error("[VersionManager] Failed to store version", e);
   }
@@ -91,8 +92,8 @@ export async function clearAllAppData(): Promise<void> {
   
   try {
     const keysToKeep = [VERSION_KEY, LAST_UPDATE_CHECK_KEY];
-    Object.keys(localStorage).forEach(key => {
-      if (!keysToKeep.includes(key)) localStorage.removeItem(key);
+    Array.from({ length: deviceStorage.length }, (_, index) => deviceStorage.key(index)).filter((key): key is string => !!key).forEach(key => {
+      if (!keysToKeep.includes(key)) deviceStorage.removeItem(key);
     });
     sessionStorage.clear();
     

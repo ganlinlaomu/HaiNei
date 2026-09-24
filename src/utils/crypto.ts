@@ -2,6 +2,7 @@
  * WebCrypto utilities for secure private key encryption
  * Uses AES-GCM with PBKDF2 for password-based encryption
  */
+import { deviceStorage } from "@/services/deviceStorage";
 
 const PBKDF2_ITERATIONS = 100000;
 const SALT_LENGTH = 16;
@@ -157,7 +158,7 @@ export async function decryptPrivateKey(
 export function hasEncryptedKey(pkHex: string): boolean {
   try {
     const key = `encrypted_sk_${pkHex}`;
-    const raw = localStorage.getItem(key);
+    const raw = deviceStorage.getItem(key);
     return !!raw;
   } catch {
     return false;
@@ -165,20 +166,20 @@ export function hasEncryptedKey(pkHex: string): boolean {
 }
 
 /**
- * Store encrypted private key in localStorage
+ * Store encrypted private key in device IndexedDB.
  */
 export function storeEncryptedKey(pkHex: string, encrypted: EncryptedData): void {
   const key = `encrypted_sk_${pkHex}`;
-  localStorage.setItem(key, JSON.stringify(encrypted));
+  deviceStorage.setItem(key, JSON.stringify(encrypted));
 }
 
 /**
- * Retrieve encrypted private key from localStorage
+ * Retrieve encrypted private key from device IndexedDB.
  */
 export function retrieveEncryptedKey(pkHex: string): EncryptedData | null {
   try {
     const key = `encrypted_sk_${pkHex}`;
-    const raw = localStorage.getItem(key);
+    const raw = deviceStorage.getItem(key);
     if (!raw) return null;
     return JSON.parse(raw) as EncryptedData;
   } catch {
@@ -187,12 +188,12 @@ export function retrieveEncryptedKey(pkHex: string): EncryptedData | null {
 }
 
 /**
- * Remove encrypted private key from localStorage
+ * Remove encrypted private key from device IndexedDB.
  */
 export function removeEncryptedKey(pkHex: string): void {
   try {
     const key = `encrypted_sk_${pkHex}`;
-    localStorage.removeItem(key);
+    deviceStorage.removeItem(key);
   } catch {
     // ignore
   }

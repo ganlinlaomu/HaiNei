@@ -1,4 +1,5 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
+import { deviceStorage } from "@/services/deviceStorage";
 
 const PUSH_ACTION = "hainei_push";
 
@@ -64,12 +65,12 @@ export function supportsPushNotifications() {
 }
 
 export function pushEnabledForAccount(pubkey: string) {
-  return !!pubkey && localStorage.getItem(`hainei_push_enabled_${pubkey.toLowerCase()}`) === "1";
+  return !!pubkey && deviceStorage.getItem(`hainei_push_enabled_${pubkey.toLowerCase()}`) === "1";
 }
 
 export async function enablePushNotifications(pubkey: string, signEvent: SignEvent) {
   const enabledKey = `hainei_push_enabled_${pubkey.toLowerCase()}`;
-  localStorage.removeItem(enabledKey);
+  deviceStorage.removeItem(enabledKey);
   if (!supportsPushNotifications()) throw new Error("当前浏览器不支持推送通知");
   if (Notification.permission === "denied") throw new Error("推送权限已被浏览器拒绝，请在系统设置中恢复");
   const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
@@ -84,7 +85,7 @@ export async function enablePushNotifications(pubkey: string, signEvent: SignEve
     applicationServerKey: applicationServerKey(publicKey),
   });
   await authenticatedPost("/api/push/subscribe", { subscription: subscription.toJSON() }, pubkey, signEvent);
-  localStorage.setItem(enabledKey, "1");
+  deviceStorage.setItem(enabledKey, "1");
 }
 
 export async function disablePushNotifications(pubkey: string, signEvent: SignEvent) {
@@ -94,7 +95,7 @@ export async function disablePushNotifications(pubkey: string, signEvent: SignEv
   if (subscription) {
     await authenticatedPost("/api/push/unsubscribe", { endpoint: subscription.endpoint }, pubkey, signEvent);
   }
-  localStorage.removeItem(`hainei_push_enabled_${pubkey.toLowerCase()}`);
+  deviceStorage.removeItem(`hainei_push_enabled_${pubkey.toLowerCase()}`);
 }
 
 export async function triggerGenericPush(

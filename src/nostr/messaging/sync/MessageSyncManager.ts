@@ -28,6 +28,7 @@ type ManagerDependencies = {
   resumeRelays?: (relays: string[]) => void;
   activeReadRelays?: () => string[];
   retryOutgoing?: (accountPubkey: string) => Promise<unknown> | void;
+  catchupTimeoutMs?: number;
 };
 
 export class MessageSyncManager {
@@ -39,6 +40,7 @@ export class MessageSyncManager {
   private readonly resumeRelays: (relays: string[]) => void;
   private readonly activeReadRelays: () => string[];
   private readonly retryOutgoing: (accountPubkey: string) => Promise<unknown> | void;
+  private readonly catchupTimeoutMs?: number;
   private options: MessageSyncOptions | null = null;
   private realtimeSubscription: SubscriptionLike | null = null;
   private removeRelayObserver: (() => void) | null = null;
@@ -61,6 +63,7 @@ export class MessageSyncManager {
     this.resumeRelays = dependencies.resumeRelays || restoreRelayConnections;
     this.activeReadRelays = dependencies.activeReadRelays || (() => getRelaysFromStorage("read"));
     this.retryOutgoing = dependencies.retryOutgoing || retryOutgoingQueue;
+    this.catchupTimeoutMs = dependencies.catchupTimeoutMs;
   }
 
   private isCurrent(sessionId: string, accountPubkey: string) {
@@ -221,6 +224,7 @@ export class MessageSyncManager {
             return () => this.activeCatchupSubscriptions.delete(subscription);
           },
           signal: this.abortController?.signal,
+          timeoutMs: this.catchupTimeoutMs,
           maxBatches: repairingHistory ? INITIAL_HISTORY_MAX_BATCHES : undefined,
           isCurrent: () => this.isCurrent(sessionId, options.accountPubkey),
           onEvent: async (event, eventRelay) => {
@@ -232,7 +236,7 @@ export class MessageSyncManager {
         await this.repository.updateSyncState(options.accountPubkey, {
           lastSuccessfulSyncAt: completedAt,
           lastCatchupCompletedAt: completedAt,
-          ...(repairingHistory && result.completedRelays.size > 0
+          ...(repairingHistory && result.allRelaysCompleted && result.exhaustedHistory && !result.hitMaxBatches && !result.incomplete
             ? {
                 historyBackfillCompletedAt: completedAt,
                 historyBackfillRelaySignature: relaySignature
