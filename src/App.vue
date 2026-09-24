@@ -17,7 +17,7 @@
       @click="handleFabClick"
     >
       <span class="fab-icon-stage" aria-hidden="true">
-        <Transition name="fab-icon" mode="out-in">
+        <Transition :name="isConversationsRoute ? 'fab-to-message' : 'fab-to-compose'">
           <svg v-if="isConversationsRoute" key="message" class="fab-message-icon" viewBox="0 0 24 24">
             <path d="M20 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h9a4 4 0 0 1 4 4v3" />
             <path d="M18 2v6M15 5h6" />
@@ -230,8 +230,17 @@ body.post-editor-open > #app {
 .fab-icon-stage > * { grid-area: 1 / 1; }
 .fab-plus { display: block; font-size: 34px; font-weight: 300; line-height: 28px; }
 .fab-message-icon { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-.fab-icon-enter-active,.fab-icon-leave-active { transition: opacity 140ms ease, transform 140ms ease; }
-.fab-icon-enter-from,.fab-icon-leave-to { opacity: 0; transform: scale(.82); }
+.fab-to-message-enter-active,
+.fab-to-message-leave-active,
+.fab-to-compose-enter-active,
+.fab-to-compose-leave-active {
+  transform-origin: center;
+  transition: opacity 240ms cubic-bezier(.2,.75,.25,1), transform 240ms cubic-bezier(.2,.75,.25,1);
+}
+.fab-to-message-enter-from { opacity: 0; transform: scale(.72) rotate(90deg); }
+.fab-to-message-leave-to { opacity: 0; transform: scale(.72) rotate(-90deg); }
+.fab-to-compose-enter-from { opacity: 0; transform: scale(.72) rotate(-90deg); }
+.fab-to-compose-leave-to { opacity: 0; transform: scale(.72) rotate(90deg); }
 
 .composer-loading-card {
   width: min(100%, 720px);
@@ -272,5 +281,16 @@ body.post-editor-open > #app {
 
 @media (min-width: 720px) {
   .composer-loading-overlay { align-items: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fab-to-message-enter-active,
+  .fab-to-message-leave-active,
+  .fab-to-compose-enter-active,
+  .fab-to-compose-leave-active { transition: none; }
+  .fab-to-message-enter-from,
+  .fab-to-message-leave-to,
+  .fab-to-compose-enter-from,
+  .fab-to-compose-leave-to { opacity: 1; transform: none; }
 }
 </style>
