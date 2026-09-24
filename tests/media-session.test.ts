@@ -3,8 +3,10 @@ import { getMediaSession, resetMediaSessionCacheForTests } from "@/services/medi
 import { uploadImageToBlossom, uploadImageToBlossomWithFallback } from "@/utils/blossom";
 
 class MockXMLHttpRequest {
-  static responses: Array<{ status: number; body?: string }> = [];
+  static responses: Array<{ status?: number; body?: string; pending?: boolean }> = [];
   static headers: Array<Record<string, string>> = [];
+  static instances: MockXMLHttpRequest[] = [];
+  static aborts = 0;
   readyState = 0;
   status = 0;
   responseText = "";
@@ -13,15 +15,20 @@ class MockXMLHttpRequest {
   onerror: (() => void) | null = null;
   onabort: (() => void) | null = null;
   private requestHeaders: Record<string, string> = {};
+  constructor() { MockXMLHttpRequest.instances.push(this); }
   open() {}
-  abort() {}
+  abort() {
+    MockXMLHttpRequest.aborts += 1;
+    this.onabort?.();
+  }
   getAllResponseHeaders() { return ""; }
   setRequestHeader(name: string, value: string) { this.requestHeaders[name] = value; }
   send() {
     MockXMLHttpRequest.headers.push({ ...this.requestHeaders });
     const response = MockXMLHttpRequest.responses.shift();
     if (!response) throw new Error("missing XHR response");
-    this.status = response.status;
+    if (response.pending) return;
+    this.status = response.status || 0;
     this.responseText = response.body || "";
     this.readyState = 4;
     this.onreadystatechange?.();
@@ -41,6 +48,8 @@ describe("HaiNei Worker media sessions", () => {
     fetchMock.mockReset();
     MockXMLHttpRequest.responses = [];
     MockXMLHttpRequest.headers = [];
+    MockXMLHttpRequest.instances = [];
+    MockXMLHttpRequest.aborts = 0;
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("window", { location: { origin: "https://app.example" } });
     vi.stubGlobal("XMLHttpRequest", MockXMLHttpRequest);
@@ -132,5 +141,37 @@ describe("HaiNei Worker media sessions", () => {
       }],
     });
     expect(MockXMLHttpRequest.headers[0].Authorization).toBe("Bearer imgbed_upload_default");
+  });
+
+  it("settles a valid HTTP 2xx descriptor once without aborting", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
+    MockXMLHttpRequest.responses.push({ status: 200, body: JSON.stringify({ url: "https://media.example/file" }) });
+
+    const result = await uploadImageToBlossom(new File(["data"], "file.txt", { type: "text/plain" }), {
+      uploadUrl: "https://media.example/upload",
+      uploadToken: "test-token",
+    });
+
+    expect(result.url).toBe("https://media.example/file");
+    expect(MockXMLHttpRequest.aborts).toBe(0);
+    MockXMLHttpRequest.instances[0].onabort?.();
+    expect(MockXMLHttpRequest.aborts).toBe(0);
+  });
+
+  it("aborts only on timeout and reports the timeout phase once", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
+    MockXMLHttpRequest.responses.push({ pending: true });
+    const upload = uploadImageToBlossom(new File(["data"], "file.txt", { type: "text/plain" }), {
+      uploadUrl: "https://media.example/upload",
+      uploadToken: "test-token",
+      timeoutMs: 1000,
+    });
+    const rejected = expect(upload).rejects.toMatchObject({ phase: "put_timeout" });
+
+    await vi.waitFor(() => expect(MockXMLHttpRequest.instances).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await rejected;
+    expect(MockXMLHttpRequest.aborts).toBe(1);
   });
 });

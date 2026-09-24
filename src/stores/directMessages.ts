@@ -378,9 +378,13 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     async failTask(localId: string, state: "upload_failed" | "send_failed", error: unknown) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
       const task = this.outgoingTasks.find(item => item.accountPubkey === account && item.localId === localId);
+      const finalState = state === "upload_failed" && task?.uploadedRef ? "send_failed" : state;
+      const phase = typeof error === "object" && error && "phase" in error && typeof error.phase === "string"
+        ? error.phase
+        : finalState === "send_failed" ? "relay_failed" : "prepare_failed";
       await this.patchTask(localId, {
-        state: state === "upload_failed" && task?.uploadedRef ? "send_failed" : state,
-        lastError: error instanceof Error ? error.message : state,
+        state: finalState,
+        lastError: `${phase}: ${error instanceof Error ? error.message : finalState}`,
       });
     },
     async finishTask(task: OutgoingDmTaskRecord, result: PublishedMessage) {
