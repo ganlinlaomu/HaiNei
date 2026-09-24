@@ -11,8 +11,6 @@ import { useProfilesStore } from "./profiles";
 import { useFeedPreferencesStore } from "./feedPreferences";
 import { useBookmarksStore } from "./bookmarks";
 import { useDirectMessagesStore } from "./directMessages";
-import type { WindowNostr } from "nostr-tools/nip07";
-import { BunkerSigner, type BunkerPointer, parseBunkerInput } from "nostr-tools/nip46";
 import { finalizeEvent } from "nostr-tools";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import {
@@ -21,10 +19,7 @@ import {
   storeEncryptedKey,
   retrieveEncryptedKey,
   removeEncryptedKey,
-  hasEncryptedKey,
-  uint8ArrayToBase64,
-  base64ToUint8Array,
-  type EncryptedData
+  hasEncryptedKey
 } from "@/utils/crypto";
 import { debugLog } from "@/utils/debugLog";
 import { clearAccountScopedCaches } from "@/services/nostrCache";
@@ -34,21 +29,19 @@ import { deviceStorage } from "@/services/deviceStorage";
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { startAccountMessageSync, stopAccountMessageSync } from "@/services/accountMessageSync";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import {
+  forgetDeviceAccount,
+  listDeviceAccounts,
+  rememberDeviceAccount,
+  type DeviceAccount
+} from "@/services/accountRegistry";
+import {
+  connectWithPomegranate,
+  validatePomegranateSigner,
+  type HaiNeiRemoteSigner
+} from "@/services/pomegranateAuth";
 
-/**
- * keys store with robust nostr-tools feature detection.
- * - Supports NIP-07 (browser extension) login
- * - Supports NIP-46 (bunker/remote signer) login
- * - Adds `register()` to create/register an account (wrapper around generateTemp/loginWithSk).
- * - Keeps generate/login/logout functionality resilient to different nostr-tools builds.
- */
-
-// Extend window with nostr property
-declare global {
-  interface Window {
-    nostr?: WindowNostr;
-  }
-}
+let restoreSessionFlight: Promise<void> | null = null;
 
 function toHex(u8: Uint8Array) {
   return Array.from(u8).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -80,12 +73,12 @@ export const useKeyStore = defineStore("keys", {
   state: () => ({
     skHex: "" as string,
     pkHex: "" as string,
-    loginMethod: "" as "sk" | "nip07" | "nip46" | "",
-    bunkerSigner: null as BunkerSigner | null,
+    loginMethod: "" as "google" | "private-key" | "",
+    googleSigner: null as HaiNeiRemoteSigner | null,
+    accounts: listDeviceAccounts() as DeviceAccount[],
     loginTimestamp: 0 as number, // Unix timestamp when user logged in
     isEncrypted: false as boolean, // Whether the current login uses encrypted storage
     isUnlocked: false as boolean, // Whether the encrypted key has been unlocked
-    bunkerClientSecretKey: null as Uint8Array | null, // Persisted bunker client secret for reconnection
     isRestoring: false as boolean, // Whether session restoration is in progress
     isRestored: false as boolean // Whether session restoration has completed
   }),
@@ -102,22 +95,14 @@ export const useKeyStore = defineStore("keys", {
     supportsNip04(): boolean {
       if (!this.isLoggedIn) return false;
       
-      switch (this.loginMethod) {
-        case "sk":
-          return !!this.skHex;
-        case "nip07":
-          return !!(window.nostr?.nip04?.encrypt && window.nostr?.nip04?.decrypt);
-        case "nip46":
-          return !!this.bunkerSigner;
-        default:
-          return false;
-      }
+      if (this.loginMethod === "private-key") return !!this.skHex;
+      if (this.loginMethod === "google") return !!this.googleSigner?.nip04;
+      return false;
     },
     supportsNip44(): boolean {
       if (!this.isLoggedIn) return false;
-      if (this.loginMethod === "sk") return !!this.skHex;
-      if (this.loginMethod === "nip07") return !!window.nostr?.nip44?.encrypt && !!window.nostr?.nip44?.decrypt;
-      if (this.loginMethod === "nip46") return !!this.bunkerSigner;
+      if (this.loginMethod === "private-key") return !!this.skHex;
+      if (this.loginMethod === "google") return !!this.googleSigner?.nip44;
       return false;
     }
   },
@@ -259,6 +244,100 @@ export const useKeyStore = defineStore("keys", {
       }
     },
 
+    refreshAccounts() {
+      this.accounts = listDeviceAccounts();
+    },
+
+    persistActiveSession() {
+      if (!this.pkHex || !this.loginMethod) return;
+      deviceStorage.setItem("pkHex", this.pkHex);
+      deviceStorage.setItem("loginMethod", this.loginMethod);
+      deviceStorage.setItem("loginTimestamp", String(this.loginTimestamp));
+      deviceStorage.setItem("isEncrypted", this.isEncrypted ? "true" : "false");
+    },
+
+    rememberCurrentAccount() {
+      if (!this.pkHex || !this.loginMethod) return;
+      this.accounts = rememberDeviceAccount({
+        pubkey: this.pkHex,
+        authType: this.loginMethod,
+        hasEncryptedKey: this.loginMethod === "private-key" && hasEncryptedKey(this.pkHex),
+        lastUsedAt: Date.now(),
+      });
+    },
+
+    clearActiveSession() {
+      const currentPk = this.pkHex;
+      if (currentPk) this.resetAccountStores(currentPk);
+      try { this.googleSigner?.disconnect?.(); } catch {}
+      this.skHex = "";
+      this.pkHex = "";
+      this.loginMethod = "";
+      this.googleSigner = null;
+      this.loginTimestamp = 0;
+      this.isEncrypted = false;
+      this.isUnlocked = false;
+      for (const key of ["skHex", "pkHex", "loginMethod", "loginTimestamp", "isEncrypted", "bunkerInput", "bunkerClientSecretKey"]) {
+        deviceStorage.removeItem(key);
+      }
+    },
+
+    async loginWithGoogle(expectedPubkey?: string) {
+      const connection = await connectWithPomegranate(expectedPubkey);
+      await this.loginWithGoogleSigner(connection.pubkey, connection.signer, expectedPubkey);
+    },
+
+    async loginWithGoogleSigner(pubkey: string, signer: unknown, expectedPubkey?: string) {
+      const previousPubkey = this.pkHex;
+      const connection = await validatePomegranateSigner(pubkey, signer, expectedPubkey);
+      if (previousPubkey && previousPubkey !== connection.pubkey) this.resetAccountStores(previousPubkey);
+      if (this.googleSigner && this.googleSigner !== connection.signer) {
+        try { this.googleSigner.disconnect?.(); } catch {}
+      }
+      this.skHex = "";
+      this.pkHex = connection.pubkey;
+      this.loginMethod = "google";
+      this.googleSigner = connection.signer;
+      this.loginTimestamp = Math.floor(Date.now() / 1000);
+      this.isEncrypted = false;
+      this.isUnlocked = true;
+      deviceStorage.removeItem("skHex");
+      this.persistActiveSession();
+      this.rememberCurrentAccount();
+      await this.loadAccountStores(this.pkHex);
+      logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
+    },
+
+    async selectRememberedAccount(pubkey: string) {
+      const account = listDeviceAccounts().find(item => item.pubkey === pubkey.toLowerCase());
+      if (!account) throw new Error("未找到已记住的账号");
+      if (account.authType === "google") {
+        await this.loginWithGoogle(account.pubkey);
+        return "connected" as const;
+      }
+      if (!account.hasEncryptedKey || !hasEncryptedKey(account.pubkey)) {
+        throw new Error("该私钥账号未在本机加密保存，请重新输入私钥");
+      }
+      if (this.pkHex && this.pkHex !== account.pubkey) this.resetAccountStores(this.pkHex);
+      try { this.googleSigner?.disconnect?.(); } catch {}
+      this.skHex = "";
+      this.pkHex = account.pubkey;
+      this.loginMethod = "private-key";
+      this.googleSigner = null;
+      this.loginTimestamp = Math.floor(Date.now() / 1000);
+      this.isEncrypted = true;
+      this.isUnlocked = false;
+      this.persistActiveSession();
+      return "unlock" as const;
+    },
+
+    removeAccountFromDevice(pubkey: string) {
+      const normalized = pubkey.toLowerCase();
+      removeEncryptedKey(normalized);
+      this.accounts = forgetDeviceAccount(normalized);
+      if (this.pkHex === normalized) this.clearActiveSession();
+    },
+
     /**
      * Unified NIP-04 decryption that works with all login methods
      * @param senderPubHex - The public key of the sender
@@ -270,31 +349,14 @@ export const useKeyStore = defineStore("keys", {
         throw new Error("未登录，无法解密消息");
       }
 
-      switch (this.loginMethod) {
-        case "sk":
-          // Direct decryption with private key
-          if (!this.skHex) {
-            throw new Error("私钥登录但未找到私钥");
-          }
-          return await nostr.nip04.decrypt(this.skHex, senderPubHex, ciphertext);
-
-        case "nip07":
-          // Use browser extension
-          if (!window.nostr?.nip04?.decrypt) {
-            throw new Error("浏览器插件不支持 NIP-04 解密");
-          }
-          return await window.nostr.nip04.decrypt(senderPubHex, ciphertext);
-
-        case "nip46":
-          // Use bunker signer
-          if (!this.bunkerSigner) {
-            throw new Error("Bunker 签名器未初始化");
-          }
-          return await this.bunkerSigner.nip04Decrypt(senderPubHex, ciphertext);
-
-        default:
-          throw new Error(`未知的登录方式: ${this.loginMethod}`);
+      if (this.loginMethod === "private-key") {
+        if (!this.skHex) throw new Error("私钥登录但未找到私钥");
+        return nostr.nip04.decrypt(this.skHex, senderPubHex, ciphertext);
       }
+      if (this.loginMethod === "google" && this.googleSigner?.nip04) {
+        return this.googleSigner.nip04.decrypt(senderPubHex, ciphertext);
+      }
+      throw new Error("当前登录方式不支持 NIP-04");
     },
 
     /**
@@ -308,63 +370,38 @@ export const useKeyStore = defineStore("keys", {
         throw new Error("未登录，无法加密消息");
       }
 
-      switch (this.loginMethod) {
-        case "sk":
-          // Direct encryption with private key
-          if (!this.skHex) {
-            throw new Error("私钥登录但未找到私钥");
-          }
-          return await nostr.nip04.encrypt(this.skHex, recipientPubHex, plaintext);
-
-        case "nip07":
-          // Use browser extension
-          if (!window.nostr?.nip04?.encrypt) {
-            throw new Error("浏览器插件不支持 NIP-04 加密");
-          }
-          return await window.nostr.nip04.encrypt(recipientPubHex, plaintext);
-
-        case "nip46":
-          // Use bunker signer
-          if (!this.bunkerSigner) {
-            throw new Error("Bunker 签名器未初始化");
-          }
-          return await this.bunkerSigner.nip04Encrypt(recipientPubHex, plaintext);
-
-        default:
-          throw new Error(`未知的登录方式: ${this.loginMethod}`);
+      if (this.loginMethod === "private-key") {
+        if (!this.skHex) throw new Error("私钥登录但未找到私钥");
+        return nostr.nip04.encrypt(this.skHex, recipientPubHex, plaintext);
       }
+      if (this.loginMethod === "google" && this.googleSigner?.nip04) {
+        return this.googleSigner.nip04.encrypt(recipientPubHex, plaintext);
+      }
+      throw new Error("当前登录方式不支持 NIP-04");
     },
 
     async nip44Decrypt(senderPubHex: string, ciphertext: string): Promise<string> {
       if (!this.pkHex || !this.loginMethod) throw new Error("未登录，无法解密消息");
-      if (this.loginMethod === "sk") {
+      if (this.loginMethod === "private-key") {
         if (!this.skHex) throw new Error("私钥登录但未找到私钥");
         const conversationKey = nostr.nip44.v2.utils.getConversationKey(nostr.utils.hexToBytes(this.skHex), senderPubHex);
         return nostr.nip44.v2.decrypt(ciphertext, conversationKey);
       }
-      if (this.loginMethod === "nip07") {
-        if (!window.nostr?.nip44?.decrypt) throw new Error("浏览器插件不支持 NIP-44 解密");
-        return window.nostr.nip44.decrypt(senderPubHex, ciphertext);
-      }
-      if (this.loginMethod === "nip46" && this.bunkerSigner) {
-        return this.bunkerSigner.nip44Decrypt(senderPubHex, ciphertext);
+      if (this.loginMethod === "google" && this.googleSigner) {
+        return this.googleSigner.nip44.decrypt(senderPubHex, ciphertext);
       }
       throw new Error("当前登录方式不支持 NIP-44");
     },
 
     async nip44Encrypt(recipientPubHex: string, plaintext: string): Promise<string> {
       if (!this.pkHex || !this.loginMethod) throw new Error("未登录，无法加密消息");
-      if (this.loginMethod === "sk") {
+      if (this.loginMethod === "private-key") {
         if (!this.skHex) throw new Error("私钥登录但未找到私钥");
         const conversationKey = nostr.nip44.v2.utils.getConversationKey(nostr.utils.hexToBytes(this.skHex), recipientPubHex);
         return nostr.nip44.v2.encrypt(plaintext, conversationKey);
       }
-      if (this.loginMethod === "nip07") {
-        if (!window.nostr?.nip44?.encrypt) throw new Error("浏览器插件不支持 NIP-44 加密");
-        return window.nostr.nip44.encrypt(recipientPubHex, plaintext);
-      }
-      if (this.loginMethod === "nip46" && this.bunkerSigner) {
-        return this.bunkerSigner.nip44Encrypt(recipientPubHex, plaintext);
+      if (this.loginMethod === "google" && this.googleSigner) {
+        return this.googleSigner.nip44.encrypt(recipientPubHex, plaintext);
       }
       throw new Error("当前登录方式不支持 NIP-44");
     },
@@ -379,37 +416,24 @@ export const useKeyStore = defineStore("keys", {
         throw new Error("未登录，无法签名事件");
       }
 
-      switch (this.loginMethod) {
-        case "sk":
-          // Direct signing with private key
-          if (!this.skHex) {
-            throw new Error("私钥登录但未找到私钥");
-          }
-          return finalizeEvent(event, nostr.utils.hexToBytes(this.skHex));
-
-        case "nip07":
-          // Use browser extension
-          if (!window.nostr?.signEvent) {
-            throw new Error("浏览器插件不支持事件签名");
-          }
-          return await window.nostr.signEvent(event);
-
-        case "nip46":
-          // Use bunker signer
-          if (!this.bunkerSigner) {
-            throw new Error("Bunker 签名器未初始化");
-          }
-          return await this.bunkerSigner.signEvent(event);
-
-        default:
-          throw new Error(`未知的登录方式: ${this.loginMethod}`);
+      if (this.loginMethod === "private-key") {
+        if (!this.skHex) throw new Error("私钥登录但未找到私钥");
+        return finalizeEvent(event, nostr.utils.hexToBytes(this.skHex));
       }
+      if (this.loginMethod === "google" && this.googleSigner) {
+        return this.googleSigner.signEvent(event);
+      }
+      throw new Error(`未知的登录方式: ${this.loginMethod}`);
     },
     async loginWithSk(sk: string) {
       const previousPubkey = this.pkHex;
+      if (previousPubkey) this.resetAccountStores(previousPubkey);
+      try { this.googleSigner?.disconnect?.(); } catch {}
       this.skHex = sk;
-      this.loginMethod = "sk";
+      this.loginMethod = "private-key";
+      this.googleSigner = null;
       this.loginTimestamp = Math.floor(Date.now() / 1000);
+      this.isEncrypted = false;
       try {
         const pk = await safeGetPublicKey(sk);
         this.pkHex = pk;
@@ -422,131 +446,11 @@ export const useKeyStore = defineStore("keys", {
         this.isUnlocked = false;
         throw e;
       }
-      try {
-        deviceStorage.setItem("skHex", this.skHex);
-        deviceStorage.setItem("pkHex", this.pkHex);
-        deviceStorage.setItem("loginMethod", this.loginMethod);
-        deviceStorage.setItem("loginTimestamp", String(this.loginTimestamp));
-      } catch {}
+      deviceStorage.setItem("skHex", this.skHex);
+      this.persistActiveSession();
+      this.rememberCurrentAccount();
       await this.loadAccountStores(this.pkHex);
       logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
-    },
-
-    /**
-     * Login with NIP-07 browser extension
-     */
-    async loginWithExtension() {
-      const previousPubkey = this.pkHex;
-      if (!window.nostr) {
-        throw new Error("未检测到 Nostr 浏览器插件。请安装如 Alby, nos2x 等插件。");
-      }
-
-      try {
-        const pk = await window.nostr.getPublicKey();
-        this.pkHex = pk;
-        this.skHex = ""; // No private key with extension
-        this.loginMethod = "nip07";
-        this.isUnlocked = true;
-        this.loginTimestamp = Math.floor(Date.now() / 1000);
-
-        try {
-          deviceStorage.setItem("pkHex", this.pkHex);
-          deviceStorage.setItem("loginMethod", this.loginMethod);
-          deviceStorage.setItem("loginTimestamp", String(this.loginTimestamp));
-          deviceStorage.removeItem("skHex"); // Ensure no private key is stored
-        } catch {}
-
-        await this.loadAccountStores(this.pkHex);
-        logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
-      } catch (e: any) {
-        this.pkHex = "";
-        this.loginMethod = "";
-        this.loginTimestamp = 0;
-        this.isUnlocked = false;
-        throw new Error(`浏览器插件登录失败: ${e.message || e}`);
-      }
-    },
-
-    /**
-     * Login with NIP-46 bunker/remote signer
-     * @param bunkerInput - bunker:// URL or name@domain NIP-05
-     */
-    async loginWithBunker(bunkerInput: string) {
-      const previousPubkey = this.pkHex;
-      try {
-        // Parse bunker input (bunker:// URL or NIP-05)
-        const bunkerPointer = await parseBunkerInput(bunkerInput.trim());
-        
-        if (!bunkerPointer) {
-          throw new Error("无效的 bunker URL 或 NIP-05 地址。请检查输入格式。");
-        }
-
-        // Try to restore existing client secret key, or generate a new one
-        let clientSecretKey: Uint8Array;
-        const storedKey = deviceStorage.getItem("bunkerClientSecretKey");
-        if (storedKey) {
-          try {
-            // Restore from base64
-            clientSecretKey = base64ToUint8Array(storedKey);
-          } catch {
-            // If restore fails, generate new
-            clientSecretKey = crypto.getRandomValues(new Uint8Array(32));
-          }
-        } else {
-          clientSecretKey = crypto.getRandomValues(new Uint8Array(32));
-        }
-        
-        // Create bunker signer with timeout handling
-        const signer = BunkerSigner.fromBunker(clientSecretKey, bunkerPointer, {
-          onauth: (url: string) => {
-            console.log("Bunker authentication required:", url);
-          }
-        });
-        
-        // Connect to the bunker with timeout
-        try {
-          await signer.sendRequest("connect", []);
-        } catch (connectError: any) {
-          throw new Error(`无法连接到远程签名器。请确保 bunker 服务可用并且您已授权连接。详情: ${connectError.message || connectError}`);
-        }
-        
-        // Get public key from bunker
-        const pk = await signer.getPublicKey();
-        
-        this.pkHex = pk;
-        this.skHex = ""; // No private key with bunker
-        this.loginMethod = "nip46";
-        this.isUnlocked = true;
-        this.loginTimestamp = Math.floor(Date.now() / 1000);
-        this.bunkerSigner = signer;
-        this.bunkerClientSecretKey = clientSecretKey;
-
-        try {
-          deviceStorage.setItem("pkHex", this.pkHex);
-          deviceStorage.setItem("loginMethod", this.loginMethod);
-          deviceStorage.setItem("loginTimestamp", String(this.loginTimestamp));
-          deviceStorage.setItem("bunkerInput", bunkerInput);
-          // Store client secret key for reconnection (base64 encoded)
-          const keyBase64 = uint8ArrayToBase64(clientSecretKey);
-          deviceStorage.setItem("bunkerClientSecretKey", keyBase64);
-          deviceStorage.removeItem("skHex"); // Ensure no private key is stored
-        } catch {}
-
-        await this.loadAccountStores(this.pkHex);
-        logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
-      } catch (e: any) {
-        this.pkHex = "";
-        this.loginMethod = "";
-        this.loginTimestamp = 0;
-        this.isUnlocked = false;
-        this.bunkerSigner = null;
-        
-        // Re-throw with a user-friendly message if not already handled
-        if (e.message && e.message.includes("无法连接")) {
-          throw e;
-        }
-        throw new Error(`Bunker 登录失败: ${e.message || e}`);
-      }
     },
 
     /**
@@ -587,23 +491,20 @@ export const useKeyStore = defineStore("keys", {
         if (password && password.trim()) {
           const encrypted = await encryptPrivateKey(skHex, password);
           storeEncryptedKey(pk, encrypted);
+          if (previousPubkey) this.resetAccountStores(previousPubkey);
+          try { this.googleSigner?.disconnect?.(); } catch {}
           
           this.skHex = skHex;
           this.pkHex = pk;
-          this.loginMethod = "sk";
+          this.loginMethod = "private-key";
+          this.googleSigner = null;
           this.isEncrypted = true;
           this.isUnlocked = true;
           this.loginTimestamp = Math.floor(Date.now() / 1000);
 
-          // Store metadata
-          try {
-            deviceStorage.setItem("pkHex", this.pkHex);
-            deviceStorage.setItem("loginMethod", this.loginMethod);
-            deviceStorage.setItem("loginTimestamp", String(this.loginTimestamp));
-            deviceStorage.setItem("isEncrypted", "true");
-            // Don't store skHex in plain text
-            deviceStorage.removeItem("skHex");
-          } catch {}
+          deviceStorage.removeItem("skHex");
+          this.persistActiveSession();
+          this.rememberCurrentAccount();
         } else {
           // No password, use regular login
           await this.loginWithSk(skHex);
@@ -618,6 +519,7 @@ export const useKeyStore = defineStore("keys", {
         this.skHex = "";
         this.pkHex = "";
         this.loginMethod = "";
+        this.googleSigner = null;
         this.loginTimestamp = 0;
         this.isEncrypted = false;
         this.isUnlocked = false;
@@ -654,6 +556,9 @@ export const useKeyStore = defineStore("keys", {
 
         this.skHex = skHex;
         this.isUnlocked = true;
+        this.loginTimestamp = Math.floor(Date.now() / 1000);
+        this.persistActiveSession();
+        this.rememberCurrentAccount();
 
         await this.loadAccountStores(this.pkHex);
       } catch (e: any) {
@@ -667,137 +572,92 @@ export const useKeyStore = defineStore("keys", {
       await this.loginWithSk(sk);
     },
     
-    async restoreSession() {
+    restoreSession() {
+      if (this.isRestored) return Promise.resolve();
+      if (restoreSessionFlight) return restoreSessionFlight;
+      restoreSessionFlight = this.restoreSessionOnce().finally(() => {
+        restoreSessionFlight = null;
+      });
+      return restoreSessionFlight;
+    },
+
+    async restoreSessionOnce() {
       this.isRestoring = true;
       debugLog("account", "session_restore_start", {}, "info");
       try {
-        const method = deviceStorage.getItem("loginMethod") as
-          | "sk"
-          | "nip07"
-          | "nip46"
-          | null;
-
+        this.refreshAccounts();
+        const storedMethod = deviceStorage.getItem("loginMethod");
         const pk = deviceStorage.getItem("pkHex");
         const isEncrypted = deviceStorage.getItem("isEncrypted") === "true";
 
-        if (!method || !pk) {
+        if (!storedMethod || !pk) {
           this.isRestored = true;
           debugLog("account", "session_restore_success", { pubkeyPrefix: "", loginMethod: "" }, "info");
           return;
         }
 
-      this.loginMethod = method;
-      this.pkHex = pk;
-      const loginTimestamp = deviceStorage.getItem("loginTimestamp") || "0";
-      this.loginTimestamp = parseInt(loginTimestamp, 10) || 0;
-
-      if (method === "nip46") {
-        const bunkerInput = deviceStorage.getItem("bunkerInput");
-        if (bunkerInput) {
-          try {
-            const bunkerPointer = await parseBunkerInput(bunkerInput);
-            if (!bunkerPointer) throw new Error("无效的 Bunker 连接信息");
-            
-            // Try to restore the client secret key
-            let clientSecretKey: Uint8Array;
-            const storedKey = deviceStorage.getItem("bunkerClientSecretKey");
-            if (storedKey) {
-              try {
-                clientSecretKey = base64ToUint8Array(storedKey);
-              } catch {
-                console.warn("[keys] Failed to restore bunker client secret, generating new");
-                clientSecretKey = crypto.getRandomValues(new Uint8Array(32));
-              }
-            } else {
-              clientSecretKey = crypto.getRandomValues(new Uint8Array(32));
-            }
-
-            const signer = BunkerSigner.fromBunker(
-              clientSecretKey,
-              bunkerPointer
-            );
-
-            // Connect with timeout (properly cleanup timeout on success)
-            let timeoutId: ReturnType<typeof setTimeout> | null = null;
-            const connectPromise = signer.sendRequest("connect", []);
-            const timeoutPromise = new Promise((_, reject) => {
-              timeoutId = setTimeout(() => reject(new Error("Bunker connection timeout")), 10000);
-            });
-            
-            try {
-              await Promise.race([connectPromise, timeoutPromise]);
-              // Clear timeout if connect succeeds
-              if (timeoutId !== null) clearTimeout(timeoutId);
-            } catch (e) {
-              // Clear timeout if connect fails
-              if (timeoutId !== null) clearTimeout(timeoutId);
-              throw e;
-            }
-
-            this.bunkerSigner = signer;
-            this.bunkerClientSecretKey = clientSecretKey;
-          } catch (e) {
-            console.error("[keys] bunker restore failed", e);
-            debugLog("account", "session_restore_failed", {
-              pubkeyPrefix: pk,
-              loginMethod: method,
-              reason: e instanceof Error ? e.name : "bunker_restore_failed"
-            }, "warn");
-            this.logout();
-            this.isRestored = true;
-            return;
-          }
-        } else {
+        if (storedMethod === "nip07" || storedMethod === "nip46") {
           debugLog("account", "session_restore_failed", {
             pubkeyPrefix: pk,
-            loginMethod: method,
-            reason: "missing_bunker_input"
+            loginMethod: storedMethod,
+            reason: "stale_auth_type"
           }, "warn");
-          this.logout();
+          this.clearActiveSession();
           this.isRestored = true;
-          debugLog("account", "session_restore_success", { pubkeyPrefix: this.pkHex, loginMethod: method }, "info");
           return;
         }
-      }
 
-      if (method === "sk") {
+        const method = storedMethod === "sk" ? "private-key" : storedMethod;
+        if (method !== "private-key" && method !== "google") {
+          this.clearActiveSession();
+          this.isRestored = true;
+          return;
+        }
+
+        this.loginMethod = method;
+        this.pkHex = pk.toLowerCase();
+        this.loginTimestamp = parseInt(deviceStorage.getItem("loginTimestamp") || "0", 10) || 0;
+
+        if (method === "google") {
+          const connection = await connectWithPomegranate(this.pkHex);
+          await this.loginWithGoogleSigner(connection.pubkey, connection.signer, this.pkHex);
+          this.isRestored = true;
+          return;
+        }
+
         if (isEncrypted) {
-          // Encrypted private key - need to unlock
+          if (!hasEncryptedKey(this.pkHex)) throw new Error("未找到加密的私钥");
           this.isEncrypted = true;
           this.isUnlocked = false;
-          // Don't load stores yet, wait for unlock
+          this.persistActiveSession();
+          this.rememberCurrentAccount();
           this.isRestored = true;
           return;
-        } else {
-          // Plain text private key
-          const sk = deviceStorage.getItem("skHex");
-          if (sk) {
-            this.skHex = sk;
-            this.isEncrypted = false;
-            this.isUnlocked = true;
-          }
         }
-      }
 
-      // Load account-scoped stores for non-encrypted or successfully restored sessions
-      if (method === "nip07" || method === "nip46" || (method === "sk" && !isEncrypted)) {
+        const sk = deviceStorage.getItem("skHex");
+        if (!sk || await safeGetPublicKey(sk) !== this.pkHex) throw new Error("本地私钥与公钥不匹配");
+        this.skHex = sk;
+        this.isEncrypted = false;
+        this.isUnlocked = true;
+        this.persistActiveSession();
+        this.rememberCurrentAccount();
         await this.loadAccountStores(this.pkHex);
+        this.isRestored = true;
+        debugLog("account", "session_restore_success", { pubkeyPrefix: this.pkHex, loginMethod: method }, "info");
+      } catch (error) {
+        console.error("[keys] restoreSession error", error);
+        debugLog("account", "session_restore_failed", {
+          pubkeyPrefix: this.pkHex,
+          loginMethod: this.loginMethod,
+          reason: error instanceof Error ? error.name : "restore_failed"
+        }, "error");
+        this.clearActiveSession();
+        this.isRestored = true;
+      } finally {
+        this.isRestoring = false;
       }
-      
-      this.isRestored = true;
-      debugLog("account", "session_restore_success", { pubkeyPrefix: this.pkHex, loginMethod: method }, "info");
-    } catch (error) {
-      console.error("[keys] restoreSession error", error);
-      debugLog("account", "session_restore_failed", {
-        pubkeyPrefix: this.pkHex,
-        loginMethod: this.loginMethod,
-        reason: error instanceof Error ? error.name : "restore_failed"
-      }, "error");
-      this.isRestored = true;
-    } finally {
-      this.isRestoring = false;
-    }
-  },
+    },
     /**
      * register(options?)
      * - Creates a new keypair (or uses provided skHex) and logs in the user.
@@ -831,40 +691,8 @@ export const useKeyStore = defineStore("keys", {
         loginMethod: currentMethod
       }, "info");
 
-      // Stop and clear account-scoped runtime state while the account context exists.
-      this.resetAccountStores(currentPk);
-
-      // Close bunker signer before clearing the key/login state.
-      if (this.bunkerSigner) {
-        try {
-          this.bunkerSigner.close();
-        } catch (e) {
-          console.error(`[account] bunker close failed account=${currentPk.slice(0, 8) || "none"}`, e);
-        }
-        this.bunkerSigner = null;
-      }
-
-      this.skHex = "";
-      this.pkHex = "";
-      this.loginMethod = "";
-      this.loginTimestamp = 0;
-      this.isEncrypted = false;
-      this.isUnlocked = false;
-      
-      this.bunkerClientSecretKey = null;
-      
-      try {
-        deviceStorage.removeItem("skHex");
-        deviceStorage.removeItem("pkHex");
-        deviceStorage.removeItem("loginMethod");
-        deviceStorage.removeItem("loginTimestamp");
-        deviceStorage.removeItem("bunkerInput");
-        deviceStorage.removeItem("bunkerClientSecretKey");
-        deviceStorage.removeItem("isEncrypted");
-        // Note: We don't remove the encrypted key itself, user can unlock again
-      } catch (e) {
-        console.error(`[account] login metadata cleanup failed account=${currentPk.slice(0, 8) || "none"}`, e);
-      }
+      this.clearActiveSession();
+      this.refreshAccounts();
       // navigate to login
       try {
         const router = useRouter();
