@@ -10,6 +10,7 @@
 
 import { subscribe } from "@/nostr/relays";
 import { logger } from "@/utils/logger";
+import { deviceStorage } from "@/services/deviceStorage";
 import { closeSubscription } from "@/utils/closeSubscription";
 
 export const SYNC_OVERLAP_SECONDS = 300;
@@ -382,7 +383,7 @@ export async function backfillFriendLists(options: {
  */
 export function saveBackfillBreakpoint(key: string, timestamp: number) {
   try {
-    localStorage.setItem(`backfill_breakpoint_${key}`, String(timestamp));
+    deviceStorage.setItem(`backfill_breakpoint_${key}`, String(timestamp));
   } catch (e) {
     logger.warn("保存回填断点失败", e);
   }
@@ -393,7 +394,7 @@ export function saveBackfillBreakpoint(key: string, timestamp: number) {
  */
 export function loadBackfillBreakpoint(key: string): number | null {
   try {
-    const raw = localStorage.getItem(`backfill_breakpoint_${key}`);
+    const raw = deviceStorage.getItem(`backfill_breakpoint_${key}`);
     if (raw) {
       const ts = parseInt(raw, 10);
       return isNaN(ts) ? null : ts;

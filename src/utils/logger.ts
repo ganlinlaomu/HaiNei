@@ -1,6 +1,8 @@
+import { deviceStorage } from "@/services/deviceStorage";
+
 export function isDebugEnabled(): boolean {
   try {
-    return localStorage.getItem("nostr_debug") === "1";
+    return deviceStorage.getItem("nostr_debug") === "1";
   } catch {
     return false;
   }

@@ -7,6 +7,9 @@ import type { SubscriptionLike } from "./types";
 export type CatchupPageResult = {
   events: Array<{ event: NostrEvent; relayUrl?: string }>;
   completedRelays: Set<string>;
+  allRelaysCompleted: boolean;
+  timedOut: boolean;
+  aborted: boolean;
 };
 
 export type SubscribeForCatchup = (relays: string[], filters: any[]) => SubscriptionLike;
@@ -27,25 +30,32 @@ export async function fetchCatchupPage(
   return new Promise(resolve => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = () => {
+    const finish = (reason: "eose" | "timeout" | "abort" | "empty") => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       closeSubscription(subscription);
       untrack?.();
-      signal?.removeEventListener("abort", finish);
-      resolve({ events, completedRelays });
+      signal?.removeEventListener("abort", abort);
+      resolve({
+        events,
+        completedRelays,
+        allRelaysCompleted: completedRelays.size >= expectedRelays.size,
+        timedOut: reason === "timeout",
+        aborted: reason === "abort",
+      });
     };
+    const abort = () => finish("abort");
     subscription.on("event", (event: NostrEvent, relayUrl?: string) => events.push({ event, relayUrl }));
     subscription.on("eose", (relayUrl: string) => {
       completedRelays.add(relayUrl);
       logger.debug(`[message-sync] EOSE relay=${relayUrl} count=${completedRelays.size}/${expectedRelays.size}`);
-      if (completedRelays.size >= expectedRelays.size) finish();
+      if (completedRelays.size >= expectedRelays.size) finish("eose");
     });
-    timer = setTimeout(finish, timeoutMs);
-    signal?.addEventListener("abort", finish, { once: true });
-    if (signal?.aborted) finish();
-    if (expectedRelays.size === 0) finish();
+    timer = setTimeout(() => finish("timeout"), timeoutMs);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) finish("abort");
+    if (expectedRelays.size === 0) finish("empty");
   });
 }
 
@@ -68,9 +78,15 @@ export async function runPagedCatchup(options: {
   let received = 0;
   let insertedCandidates = 0;
   let completedRelays = new Set<string>();
+  let allRelaysCompleted = true;
+  let timedOut = false;
+  let aborted = false;
+  let naturalEnd = false;
+  let batches = 0;
   const maxBatches = options.maxBatches ?? 100;
 
   for (let batch = 0; batch < maxBatches && options.isCurrent(); batch++) {
+    batches++;
     const pageFilters = options.filters.map(filter => ({ ...filter, ...(currentUntil === undefined ? {} : { until: currentUntil }) }));
     const page = await fetchCatchupPage(
       options.relays,
@@ -80,7 +96,10 @@ export async function runPagedCatchup(options: {
       options.trackSubscription,
       options.signal
     );
-    completedRelays = page.completedRelays;
+    for (const relay of page.completedRelays) completedRelays.add(relay);
+    allRelaysCompleted = allRelaysCompleted && page.allRelaysCompleted;
+    timedOut = timedOut || page.timedOut;
+    aborted = aborted || page.aborted;
     received += page.events.length;
     let newUnique = 0;
     let oldest: number | undefined;
@@ -93,13 +112,26 @@ export async function runPagedCatchup(options: {
       insertedCandidates++;
       await options.onEvent(event, relayUrl);
     }
-    if (oldest === undefined) break;
+    if (oldest === undefined) { naturalEnd = true; break; }
     const didNotAdvance = currentUntil !== undefined && oldest === currentUntil;
-    if (didNotAdvance && newUnique === 0) break;
+    if (didNotAdvance && newUnique === 0) { naturalEnd = true; break; }
     currentUntil = oldest;
     // Without a full page there cannot be another timestamp boundary hidden by limit.
     const pageLimit = Math.max(...pageFilters.map(filter => Number(filter.limit || 0)));
-    if (!pageLimit || page.events.length < pageLimit) break;
+    if (!pageLimit || page.events.length < pageLimit) { naturalEnd = true; break; }
   }
-  return { received, unique: insertedCandidates, completedRelays };
+  const hitMaxBatches = !naturalEnd && batches >= maxBatches;
+  const incomplete = aborted || timedOut || !allRelaysCompleted || !options.isCurrent();
+  return {
+    received,
+    unique: insertedCandidates,
+    completedRelays,
+    allRelaysCompleted,
+    exhaustedHistory: naturalEnd && !incomplete,
+    naturalEnd,
+    hitMaxBatches,
+    timedOut,
+    aborted,
+    incomplete,
+  };
 }

@@ -1,6 +1,9 @@
 import { defineStore } from "pinia";
 import { useKeyStore } from "./keys";
 import { likeNotificationId, useInteractionsStore, type Comment } from "./interactions";
+import { deviceStorage } from "@/services/deviceStorage";
+import { metaRepository } from "@/repositories/metaRepository";
+import { scheduleAccountStateSync } from "@/services/accountStateSync";
 
 export interface NotificationItem {
   id: string;
@@ -28,10 +31,10 @@ interface NotificationMeta {
 }
 
 function loadMeta(pk: string): NotificationMeta | null {
-  try { const raw = localStorage.getItem(metaKeyFor(pk)!); return raw ? JSON.parse(raw) : null; } catch { return null; }
+  try { const raw = deviceStorage.getItem(metaKeyFor(pk)!); return raw ? JSON.parse(raw) : null; } catch { return null; }
 }
 function saveMeta(pk: string, meta: NotificationMeta) {
-  try { localStorage.setItem(metaKeyFor(pk)!, JSON.stringify(meta)); } catch {}
+  try { deviceStorage.setItem(metaKeyFor(pk)!, JSON.stringify(meta)); } catch {}
 }
 
 export const useNotificationsStore = defineStore("notifications", {
@@ -69,7 +72,7 @@ export const useNotificationsStore = defineStore("notifications", {
 
       // 1. 加载基本列表
       try {
-        const raw = localStorage.getItem(notificationsKeyFor(targetPk)!);
+        const raw = deviceStorage.getItem(notificationsKeyFor(targetPk)!);
         const stored = raw ? JSON.parse(raw) : [];
         // Normal posts belong in Home, not Notifications. Remove legacy
         // message notifications account-by-account as they are loaded.
@@ -87,13 +90,13 @@ export const useNotificationsStore = defineStore("notifications", {
             })
           : [];
         if (Array.isArray(stored) && JSON.stringify(this.list) !== JSON.stringify(stored)) {
-          localStorage.setItem(notificationsKeyFor(targetPk)!, JSON.stringify(this.list));
+          deviceStorage.setItem(notificationsKeyFor(targetPk)!, JSON.stringify(this.list));
         }
       } catch { this.list = []; }
 
       // 2. 加载屏蔽列表
       try {
-        const raw = localStorage.getItem(dismissedKeyFor(targetPk)!);
+        const raw = deviceStorage.getItem(dismissedKeyFor(targetPk)!);
         this.dismissed = raw ? new Set(JSON.parse(raw)) : new Set();
       } catch { this.dismissed = new Set(); }
 
@@ -105,6 +108,17 @@ export const useNotificationsStore = defineStore("notifications", {
         saveMeta(targetPk, meta);
       }
       this.meta = meta;
+
+      const syncedState = (typeof indexedDB === "undefined" ? undefined : (await metaRepository.get(targetPk, "notification_state"))?.value) as {
+        dismissedIds?: string[];
+        readCursor?: { lastReadCreatedAt?: number; lastReadMessageId?: string };
+      } | undefined;
+      if (syncedState) {
+        this.dismissed = new Set([...this.dismissed, ...(syncedState.dismissedIds || [])]);
+        if (this.meta && Number(syncedState.readCursor?.lastReadCreatedAt || 0) > this.meta.lastSeenAt) {
+          this.meta.lastSeenAt = Number(syncedState.readCursor?.lastReadCreatedAt || 0);
+        }
+      }
 
       // 4. 填充缺失内容
       this.refreshContent();
@@ -128,9 +142,14 @@ export const useNotificationsStore = defineStore("notifications", {
       const pk = this.loadedFor || "";
       if (!pk) return;
       try {
-        localStorage.setItem(notificationsKeyFor(pk)!, JSON.stringify(this.list));
-        localStorage.setItem(dismissedKeyFor(pk)!, JSON.stringify([...this.dismissed]));
+        deviceStorage.setItem(notificationsKeyFor(pk)!, JSON.stringify(this.list));
+        deviceStorage.setItem(dismissedKeyFor(pk)!, JSON.stringify([...this.dismissed]));
         if (this.meta) saveMeta(pk, this.meta);
+        if (typeof indexedDB !== "undefined") void metaRepository.put(pk, "notification_state", {
+          dismissedIds: [...this.dismissed],
+          readCursor: this.meta ? { lastReadCreatedAt: this.meta.lastSeenAt, lastReadMessageId: this.meta.seenEventIds.at(-1) || "" } : undefined,
+        });
+        scheduleAccountStateSync(useKeyStore(), "notification_state");
       } catch {}
     },
 
@@ -210,9 +229,9 @@ export const useNotificationsStore = defineStore("notifications", {
       this.loadedFor = "";
       if (removeFromStorage && pk) {
         try {
-          localStorage.removeItem(notificationsKeyFor(pk)!);
-          localStorage.removeItem(dismissedKeyFor(pk)!);
-          localStorage.removeItem(metaKeyFor(pk)!);
+          deviceStorage.removeItem(notificationsKeyFor(pk)!);
+          deviceStorage.removeItem(dismissedKeyFor(pk)!);
+          deviceStorage.removeItem(metaKeyFor(pk)!);
         } catch {}
       }
     },

@@ -15,6 +15,7 @@ import {
   type RelayConfig
 } from "@/services/connectionSettings";
 import { performanceCounters } from "@/services/nostrCache";
+import { deviceStorage } from "@/services/deviceStorage";
 
 type RelayConn = {
   url: string;
@@ -162,7 +163,7 @@ export const DEFAULT_RELAYS = [
 
 export function getRelaysFromStorage(mode: "read" | "write" | "both" = "both") {
   try {
-    const structuredRaw = localStorage.getItem(ACTIVE_RELAY_CONFIGS_KEY);
+    const structuredRaw = deviceStorage.getItem(ACTIVE_RELAY_CONFIGS_KEY);
     if (structuredRaw !== null) {
       const structured = JSON.parse(structuredRaw) as RelayConfig[];
       if (!Array.isArray(structured)) throw new Error("invalid relay configuration mirror");
@@ -173,7 +174,7 @@ export function getRelaysFromStorage(mode: "read" | "write" | "both" = "both") {
       );
       return [...new Set(matching.map(relay => normalizeRelayUrl(relay.url)).filter(Boolean))];
     }
-    const raw = localStorage.getItem("custom-relays");
+    const raw = deviceStorage.getItem("custom-relays");
     if (raw) return [...new Set(raw.split(/\r?\n/).map(normalizeRelayUrl).filter(Boolean))];
   } catch {
     // Defaults keep startup and offline restore usable when a mirror is corrupt.

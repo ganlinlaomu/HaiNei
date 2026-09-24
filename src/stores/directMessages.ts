@@ -12,6 +12,7 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { uploadEncryptedCommentImage } from "@/utils/commentImage";
+import { scheduleAccountStateSync } from "@/services/accountStateSync";
 
 type MessageCursor = { lastReadCreatedAt: number; lastReadMessageId: string };
 export type ConversationPreference = {
@@ -304,8 +305,18 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       });
       const conversationIds = [...new Set(visible.map(item => item.conversationId).filter((value): value is string => !!value))];
       const cursors = await Promise.all(conversationIds.map(async conversationId => {
-        const record = await metaRepository.get(account, readKey(conversationId));
-        return [conversationId, record?.value as MessageCursor | undefined] as const;
+        const [record, synced] = await Promise.all([
+          metaRepository.get(account, readKey(conversationId)),
+          typeof syncedMessageRepository.getReadState === "function" && typeof indexedDB !== "undefined"
+            ? syncedMessageRepository.getReadState(account, conversationId)
+            : Promise.resolve(undefined),
+        ]);
+        const local = record?.value as MessageCursor | undefined;
+        const remote = synced?.lastReadCreatedAt === undefined ? undefined : {
+          lastReadCreatedAt: synced.lastReadCreatedAt,
+          lastReadMessageId: synced.lastReadMessageId || "",
+        };
+        return [conversationId, !local || (remote && isMessageAfter({ id: remote.lastReadMessageId, createdAt: remote.lastReadCreatedAt }, local)) ? remote : local] as const;
       }));
       if (useKeyStore().pkHex !== account) return;
       this.loadedFor = account;
@@ -334,6 +345,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!latestIncoming?.conversationId) return;
       const read = { lastReadCreatedAt: latestIncoming.created_at, lastReadMessageId: latestIncoming.id };
       await metaRepository.put(account, readKey(latestIncoming.conversationId), read);
+      if (typeof syncedMessageRepository.markRead === "function" && typeof indexedDB !== "undefined") {
+        await syncedMessageRepository.markRead(account, latestIncoming.conversationId);
+      }
+      scheduleAccountStateSync(useKeyStore(), "read_state");
       if (useKeyStore().pkHex !== account) return;
       this.readCursors = { ...this.readCursors, [latestIncoming.conversationId]: read };
       this.unreadByConversation = { ...this.unreadByConversation, [latestIncoming.conversationId]: 0 };

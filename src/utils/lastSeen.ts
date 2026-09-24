@@ -2,6 +2,7 @@
  * Utility functions for managing the lastSeenCreatedAt watermark
  * This helps prevent showing the same "new messages" repeatedly on PWA cold starts
  */
+import { deviceStorage } from "@/services/deviceStorage";
 
 const LAST_SEEN_PREFIX = 'home_lastSeenCreatedAt_';
 
@@ -15,7 +16,7 @@ export function getLastSeenCreatedAt(userPkHex: string): number {
   
   try {
     const key = `${LAST_SEEN_PREFIX}${userPkHex}`;
-    const value = localStorage.getItem(key);
+    const value = deviceStorage.getItem(key);
     if (!value) return 0;
     
     const timestamp = parseInt(value, 10);
@@ -36,7 +37,7 @@ export function setLastSeenCreatedAt(userPkHex: string, timestamp: number): void
   
   try {
     const key = `${LAST_SEEN_PREFIX}${userPkHex}`;
-    localStorage.setItem(key, timestamp.toString());
+    deviceStorage.setItem(key, timestamp.toString());
   } catch (e) {
     console.error('Failed to set lastSeenCreatedAt', e);
   }

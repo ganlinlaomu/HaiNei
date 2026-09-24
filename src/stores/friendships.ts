@@ -6,9 +6,9 @@ import { getRelaysFromStorage } from "@/nostr/relays";
 import { friendshipRepository } from "@/repositories/friendshipRepository";
 import type { FriendshipAcceptedWindow, FriendshipRecord, FriendshipState } from "@/db/dexie";
 import { useKeyStore } from "@/stores/keys";
-import { useFriendsStore } from "@/stores/friends";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
+import { scheduleAccountStateSync } from "@/services/accountStateSync";
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
 
@@ -128,6 +128,7 @@ export const useFriendshipsStore = defineStore("friendships", {
       const index = this.records.findIndex(item => item.peerPubkey === peer);
       if (index >= 0) this.records[index] = record;
       else this.records.push(record);
+      scheduleAccountStateSync(useKeyStore(), "friendships");
       return { changed: true, record };
     },
     async sendControl(peerPubkey: string, action: FriendshipAction, requestId?: string) {
@@ -158,9 +159,14 @@ export const useFriendshipsStore = defineStore("friendships", {
       if (current?.state !== "incoming_pending") throw new Error("好友请求已失效");
       const { result, applied } = await this.sendControl(peer, "accept", current.requestEventId);
       if (!applied.changed) throw new Error("好友请求已失效");
-      const friends = useFriendsStore();
-      if (friends.loadedFor !== this.loadedFor) await friends.load(this.loadedFor);
-      if (!friends.list.some(item => item.pubkey === peer)) friends.add({ pubkey: peer, name: `${peer.slice(0, 8)}…` });
+      const friends = (await import("@/stores/friends")).useFriendsStore();
+      if (friends.loadedFor !== this.loadedFor) {
+        if (typeof indexedDB !== "undefined") await friends.load(this.loadedFor);
+        else friends.loadedFor = this.loadedFor;
+      }
+      if (!friends.list.some(item => item.pubkey === peer)) {
+        friends.list.push({ pubkey: peer, name: `${peer.slice(0, 8)}…` });
+      }
       const profiles = useProfilesStore();
       void Promise.allSettled([profiles.sendCurrentProfileTo(peer), profiles.requestCurrentProfile(peer)]);
       return result;

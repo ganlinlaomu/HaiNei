@@ -133,7 +133,7 @@ router.beforeEach(async (to, from, next) => {
       if (appContainer) saveHomeScroll(keyStore.pkHex, appContainer.scrollTop);
     }
     
-    // If store hasn't loaded keys from localStorage yet, try to restore session
+    // If the store has not loaded its IndexedDB session yet, restore it now.
     if (!keyStore.pkHex && !keyStore.loginMethod) {
       try {
         await keyStore.restoreSession();

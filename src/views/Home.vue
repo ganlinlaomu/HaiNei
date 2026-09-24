@@ -71,7 +71,7 @@ import { getLastSeenCreatedAt, setLastSeenCreatedAt, updateLastSeenToNewest } fr
 import { extractVideoData as extractVideoDataUtil, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
 import { useRealtimeInboxReconcile } from "@/components/useRealtimeInboxReconcile";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
-import { MessageSyncManager } from "@/nostr/messaging/sync";
+import { accountMessageSyncManager } from "@/services/accountMessageSync";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { useNotificationsStore } from "@/stores/notifications";
@@ -133,7 +133,7 @@ export default defineComponent({
     const status = ref("未连接");
     let homeAccountPk = "";
     let homeSyncGeneration = 0;
-    const messageSync = new MessageSyncManager();
+    const messageSync = accountMessageSyncManager;
 
     const messagesRef = ref([] as any[]);
     const displayedMessages = ref([] as any[]);
@@ -210,9 +210,9 @@ export default defineComponent({
       .sort()
       .join("|"));
 
-    function closeHomeSubscriptions() {
+    function closeHomeSubscriptions(stopSession = true) {
       homeSyncGeneration++;
-      messageSync.stop();
+      if (stopSession) messageSync.stop();
     }
 
     function clearHomeRuntimeState() {
@@ -960,7 +960,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
 
    onBeforeUnmount(() => {
      detachVirtualScroll();
-     closeHomeSubscriptions();
+     closeHomeSubscriptions(false);
      clearHomeRuntimeState();
    });
    onActivated(attachVirtualScroll);

@@ -23,6 +23,7 @@ import {
   type MediaServerType
 } from "@/services/connectionSettings";
 import { clearMediaSession, getMediaSession } from "@/services/mediaSession";
+import { deviceStorage } from "@/services/deviceStorage";
 
 export const DEFAULT_BLOSSOM_SERVERS = [
   { url: DEFAULT_MEDIA_SERVERS[0].url, token: "" }
@@ -62,7 +63,7 @@ export async function getBlossomConfig(): Promise<{
 }> {
   try {
     // Try to get servers list first (new format)
-    const serversJson = localStorage.getItem("blossom_servers");
+    const serversJson = deviceStorage.getItem("blossom_servers");
     const hasExplicitServerList = serversJson !== null;
     let servers: MediaServer[] = [];
     
@@ -91,8 +92,8 @@ export async function getBlossomConfig(): Promise<{
     
     // Fallback to single server config (old format)
     if (servers.length === 0 && !hasExplicitServerList) {
-      const rawUrl = (localStorage.getItem("blossom_upload_url") || "").trim();
-      const token = (localStorage.getItem("blossom_token") || "").trim();
+      const rawUrl = (deviceStorage.getItem("blossom_upload_url") || "").trim();
+      const token = (deviceStorage.getItem("blossom_token") || "").trim();
       if (rawUrl) {
         servers.push({
           id: `legacy-media-${rawUrl}`,
@@ -125,8 +126,8 @@ export async function getBlossomConfig(): Promise<{
 
     servers = rankMediaServers(servers);
     
-    const timeoutMs = parseInt(localStorage.getItem("blossom_timeout_ms") || "") || 60000;
-    const authHeaderName = (localStorage.getItem("blossom_auth_header") || "Authorization").trim() || "Authorization";
+    const timeoutMs = parseInt(deviceStorage.getItem("blossom_timeout_ms") || "") || 60000;
+    const authHeaderName = (deviceStorage.getItem("blossom_auth_header") || "Authorization").trim() || "Authorization";
     
     // Return first server as default for backward compatibility
     const url = servers.length > 0 ? normalizeBlossomUploadUrl(servers[0].url) : null;

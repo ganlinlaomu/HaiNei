@@ -3,18 +3,15 @@ import { useKeyStore } from "./keys";
 import {
   disconnectRelay,
   getRelaysFromStorage,
-  onRelayConnectionState,
-  publish,
-  subscribe
+  onRelayConnectionState
 } from "@/nostr/relays";
 import { setMediaHealthReporter } from "@/utils/blossom";
 import { logger } from "@/utils/logger";
-import { closeSubscription } from "@/utils/closeSubscription";
+import { deviceStorage } from "@/services/deviceStorage";
+import { scheduleAccountStateSync, syncAccountStateNamespace } from "@/services/accountStateSync";
 import {
   ACTIVE_RELAY_CONFIGS_KEY,
   DEFAULT_RELAY_URLS,
-  MEDIA_SYNC_IDENTIFIER,
-  RELAY_SYNC_IDENTIFIER,
   SETTINGS_VERSION,
   createDefaultConnectionSettings,
   dedupeMedia,
@@ -29,7 +26,6 @@ import {
   normalizeMediaUrl,
   normalizeRelayUrl,
   rankMediaServers,
-  relayConfigsFromNip65,
   selectRelayConfigs,
   type ConnectionSettings,
   type MediaServer,
@@ -50,14 +46,7 @@ type StoredSettingsData = {
   bootstrapSyncVersion?: number;
 };
 
-type SettingsSyncPayload<T> = {
-  version: number;
-  type: string;
-  items: T[];
-};
-
 let relayHealthUnsubscribe: (() => void) | null = null;
-let cancelSettingsFetch: (() => void) | null = null;
 
 export function storageKeyFor(pkHex?: string | null) {
   const normalized = typeof pkHex === "string" ? pkHex.trim().toLowerCase() : "";
@@ -78,7 +67,7 @@ export function settingsSyncRelays(mode: "read" | "write") {
 
 function readJsonArray(key: string): unknown[] {
   try {
-    const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+    const parsed = JSON.parse(deviceStorage.getItem(key) || "[]");
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -86,7 +75,7 @@ function readJsonArray(key: string): unknown[] {
 }
 
 function readLegacyRelays(): unknown[] {
-  const raw = localStorage.getItem("custom-relays");
+  const raw = deviceStorage.getItem("custom-relays");
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -95,10 +84,6 @@ function readLegacyRelays(): unknown[] {
     // The historic format was newline-delimited.
   }
   return raw.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
-}
-
-function syncStampItem<T extends RelayConfig | MediaServer>(item: T, createdAt: number, eventId: string): T {
-  return { ...item, syncCreatedAt: createdAt, syncEventId: eventId };
 }
 
 export const useSettingsStore = defineStore("settings", {
@@ -144,7 +129,7 @@ export const useSettingsStore = defineStore("settings", {
       this.dataSaver = enabled;
       const key = dataSaverKeyFor(this.loadedFor);
       if (!key) return;
-      try { localStorage.setItem(key, enabled ? "1" : "0"); } catch {}
+      try { deviceStorage.setItem(key, enabled ? "1" : "0"); } catch {}
     },
 
     _clearValidationError() {
@@ -169,10 +154,8 @@ export const useSettingsStore = defineStore("settings", {
 
     reset() {
     this._sessionGeneration++;
-    cancelSettingsFetch?.();
-    cancelSettingsFetch = null;
     const activeRuntimeRelays = getRelaysFromStorage();
-      if (this._publishTimer !== null) window.clearTimeout(this._publishTimer);
+      if (this._publishTimer !== null) window.clearTimeout(this._publishTimer!);
       this._publishTimer = null;
       this._pendingDomains = [];
       relayHealthUnsubscribe?.();
@@ -194,11 +177,11 @@ export const useSettingsStore = defineStore("settings", {
       this._syncJobs = 0;
       try {
         for (const url of activeRuntimeRelays) disconnectRelay(url);
-        localStorage.removeItem(ACTIVE_RELAY_CONFIGS_KEY);
-        localStorage.removeItem("custom-relays");
-        localStorage.removeItem("blossom_servers");
-        localStorage.removeItem("blossom_upload_url");
-        localStorage.removeItem("blossom_token");
+        deviceStorage.removeItem(ACTIVE_RELAY_CONFIGS_KEY);
+        deviceStorage.removeItem("custom-relays");
+        deviceStorage.removeItem("blossom_servers");
+        deviceStorage.removeItem("blossom_upload_url");
+        deviceStorage.removeItem("blossom_token");
         window.dispatchEvent(new CustomEvent("blossom-config-updated", { detail: { servers: [] } }));
       } catch (error) {
         logger.warn("[settings] clear runtime mirrors failed", error);
@@ -217,20 +200,20 @@ export const useSettingsStore = defineStore("settings", {
       if (this.loadedFor === targetPk) return;
 
       const canUseGlobalLegacy = !this.loadedFor
-        && (localStorage.getItem("pkHex") || "").trim().toLowerCase() === targetPk;
+        && (deviceStorage.getItem("pkHex") || "").trim().toLowerCase() === targetPk;
       const legacyRelays = canUseGlobalLegacy ? readLegacyRelays() : [];
       const legacyMedia = canUseGlobalLegacy ? readJsonArray("blossom_servers") : [];
       const legacySingleMedia = canUseGlobalLegacy && !legacyMedia.length
         ? [{
-            url: localStorage.getItem("blossom_upload_url") || "",
-            token: localStorage.getItem("blossom_token") || ""
+            url: deviceStorage.getItem("blossom_upload_url") || "",
+            token: deviceStorage.getItem("blossom_token") || ""
           }]
         : [];
 
       if (this.loadedFor !== targetPk) this.reset();
       this.loadedFor = targetPk;
       try {
-        this.dataSaver = localStorage.getItem(dataSaverKeyFor(targetPk)!) === "1";
+        this.dataSaver = deviceStorage.getItem(dataSaverKeyFor(targetPk)!) === "1";
       } catch { this.dataSaver = false; }
       const generation = this._sessionGeneration;
       this.deviceId = getOrCreateDeviceId();
@@ -238,7 +221,7 @@ export const useSettingsStore = defineStore("settings", {
       const key = storageKeyFor(targetPk);
       let storedValue: unknown;
       try {
-        const raw = key ? localStorage.getItem(key) : null;
+        const raw = key ? deviceStorage.getItem(key) : null;
         if (raw) {
           const parsed = JSON.parse(raw) as Partial<StoredSettingsData>;
           storedValue = parsed.settings;
@@ -250,7 +233,7 @@ export const useSettingsStore = defineStore("settings", {
       } catch (error) {
         logger.warn("[settings] local settings were invalid; defaults restored", {
           account: targetPk.slice(0, 8),
-          errorType: error instanceof Error ? error.name : typeof error
+          errorType: error instanceof Error ? (error as Error).name : typeof error
         });
       }
 
@@ -264,26 +247,8 @@ export const useSettingsStore = defineStore("settings", {
       this.applySettings();
       this.bindHealthTracking();
 
-      // Remote sync is deliberately non-blocking: local/default settings are ready now.
-      const fetchPromise = this.fetchFromRelays();
-
-      // Republish migrated identities through bootstrap Relays as well.
-      // After first merging anything already remote, republish only domains that
-      // contain an actual legacy user change (not untouched built-in defaults).
-      if ((storedValue || legacyMedia.length || legacySingleMedia.length) && this.bootstrapSyncVersion < SETTINGS_VERSION) {
-        const migrationDomains: SettingsDomain[] = [];
-        if (this.settings.relays.some(item => item.updatedAt > 0 && item.updatedBy !== "builtin")) {
-          migrationDomains.push("relays");
-        }
-        if (this.settings.mediaServers.some(item => item.source === "user" || (item.updatedAt > 0 && item.updatedBy !== "builtin"))) {
-          migrationDomains.push("media");
-        }
-        if (migrationDomains.length) {
-          void fetchPromise.finally(() => {
-            if (this.loadedFor === targetPk && this._sessionGeneration === generation) this.schedulePublish(migrationDomains);
-          });
-        }
-      }
+      // Account settings are restored and synchronized through the encrypted
+      // account-state namespace. Relay settings events are legacy import only.
     },
 
     bindHealthTracking() {
@@ -331,8 +296,8 @@ export const useSettingsStore = defineStore("settings", {
       const activeSet = new Set(activeUrls);
 
       try {
-        localStorage.setItem(ACTIVE_RELAY_CONFIGS_KEY, JSON.stringify(activeRelays));
-        localStorage.setItem("custom-relays", activeUrls.join("\n"));
+        deviceStorage.setItem(ACTIVE_RELAY_CONFIGS_KEY, JSON.stringify(activeRelays));
+        deviceStorage.setItem("custom-relays", activeUrls.join("\n"));
         for (const url of previousRelays) {
           if (!activeSet.has(url)) disconnectRelay(url);
         }
@@ -341,20 +306,20 @@ export const useSettingsStore = defineStore("settings", {
       } catch (error) {
         logger.warn("[settings] apply relay configuration failed", {
           account: this.loadedFor.slice(0, 8),
-          errorType: error instanceof Error ? error.name : typeof error
+          errorType: error instanceof Error ? (error as Error).name : typeof error
         });
       }
 
       try {
         const activeMedia = effectiveMediaServers(this.settings.mediaServers);
-        localStorage.setItem("blossom_servers", JSON.stringify(activeMedia));
+        deviceStorage.setItem("blossom_servers", JSON.stringify(activeMedia));
         const first = activeMedia[0];
         if (first) {
-          localStorage.setItem("blossom_upload_url", first.url);
-          localStorage.setItem("blossom_token", first.token || "");
+          deviceStorage.setItem("blossom_upload_url", first.url);
+          deviceStorage.setItem("blossom_token", first.token || "");
         } else {
-          localStorage.removeItem("blossom_upload_url");
-          localStorage.removeItem("blossom_token");
+          deviceStorage.removeItem("blossom_upload_url");
+          deviceStorage.removeItem("blossom_token");
         }
         window.dispatchEvent(new CustomEvent("blossom-config-updated", { detail: { servers: activeMedia } }));
       } catch (error) {
@@ -378,7 +343,8 @@ export const useSettingsStore = defineStore("settings", {
         bootstrapSyncVersion: this.bootstrapSyncVersion
       };
       try {
-        localStorage.setItem(key, JSON.stringify(data));
+        deviceStorage.setItem(key, JSON.stringify(data));
+        scheduleAccountStateSync(useKeyStore(), "settings", this.deviceId);
       } catch (error) {
         logger.warn("[settings] local save failed", {
           account: this.loadedFor.slice(0, 8),
@@ -390,6 +356,9 @@ export const useSettingsStore = defineStore("settings", {
     changed(domains: SettingsDomain[]) {
       this.save();
       this.applySettings();
+      if (domains.includes("relays")) {
+        void import("@/services/accountMessageSync").then(({ restartAccountMessageSync }) => restartAccountMessageSync());
+      }
       this.schedulePublish(domains);
     },
 
@@ -582,231 +551,21 @@ export const useSettingsStore = defineStore("settings", {
     schedulePublish(domains: SettingsDomain[]) {
       const keyStore = useKeyStore();
       if (!keyStore.supportsNip44 || keyStore.pkHex !== this.loadedFor) return;
-      this._pendingDomains = [...new Set([...this._pendingDomains, ...domains])];
-      if (this._publishTimer !== null) window.clearTimeout(this._publishTimer);
-      this._publishTimer = window.setTimeout(() => {
-        const pending = [...this._pendingDomains];
-        this._pendingDomains = [];
-        this._publishTimer = null;
-        void this.publishToRelays(pending);
-      }, 1_500);
+      void domains;
+      scheduleAccountStateSync(keyStore, "settings", this.deviceId);
     },
 
     async publishToRelays(domains: SettingsDomain[] = ["relays", "media"]): Promise<boolean> {
       const keyStore = useKeyStore();
       if (!keyStore.isLoggedIn || !keyStore.supportsNip44 || keyStore.pkHex !== this.loadedFor) return false;
-      const account = keyStore.pkHex;
-      const generation = this._sessionGeneration;
-      const isCurrent = () => this._sessionGeneration === generation && this.loadedFor === account && keyStore.pkHex === account;
-      const snapshot: ConnectionSettings = JSON.parse(JSON.stringify(this.settings));
-      const relays = settingsSyncRelays("write");
-      this._beginSync("正在同步加密设置…");
-      this.syncError = "";
-      let allSucceeded = true;
-
-      try {
-        for (const domain of [...new Set(domains)]) {
-          if (!isCurrent()) return false;
-          const items = domain === "relays" ? snapshot.relays : snapshot.mediaServers;
-          const identifier = domain === "relays" ? RELAY_SYNC_IDENTIFIER : MEDIA_SYNC_IDENTIFIER;
-          const payload: SettingsSyncPayload<RelayConfig | MediaServer> = {
-            version: SETTINGS_VERSION,
-            type: identifier,
-            items
-          };
-          const encrypted = await keyStore.nip44Encrypt(account, JSON.stringify(payload));
-          if (!isCurrent()) return false;
-          const event = await keyStore.signEvent({
-            kind: 30078,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [["d", identifier], ["client", "HaiNei"]],
-            content: encrypted
-          });
-          if (!isCurrent() || event.pubkey !== account) return false;
-          const results = await publish(relays, event);
-          if (!isCurrent()) return false;
-          const anySuccess = results.some(result => result.ok);
-          const bootstrapSuccess = results.some(result =>
-            result.ok && (DEFAULT_RELAY_URLS as readonly string[]).includes(result.relay)
-          );
-          if (!anySuccess) {
-            allSucceeded = false;
-            continue;
-          }
-          if (domain === "relays") {
-            this.settings.relays = this.settings.relays.map(item =>
-              snapshot.relays.some(sent => sent.url === item.url && JSON.stringify(sent) === JSON.stringify(item))
-                ? syncStampItem(item, event.created_at, event.id) : item);
-          } else {
-            this.settings.mediaServers = this.settings.mediaServers.map(item =>
-              snapshot.mediaServers.some(sent => sent.id === item.id && JSON.stringify(sent) === JSON.stringify(item))
-                ? syncStampItem(item, event.created_at, event.id) : item);
-          }
-          this.lastSyncTimestamp = Math.max(this.lastSyncTimestamp, event.created_at);
-          if (bootstrapSuccess && domain === "relays") {
-            this.lastRelaySyncTimestamp = Math.max(this.lastRelaySyncTimestamp, event.created_at);
-          } else if (bootstrapSuccess) {
-            this.lastMediaSyncTimestamp = Math.max(this.lastMediaSyncTimestamp, event.created_at);
-          } else {
-            allSucceeded = false;
-          }
-          this.save();
-        }
-        if (allSucceeded) {
-          this.bootstrapSyncVersion = SETTINGS_VERSION;
-          this.save();
-        } else {
-          this.syncError = "部分设置同步失败，本地配置已生效";
-        }
-        return allSucceeded;
-      } catch (error) {
-        if (!isCurrent()) return false;
-        this.syncError = "设置同步失败，本地配置已生效";
-        logger.warn("[settings] encrypted publish failed", {
-          account: account.slice(0, 8),
-          errorType: error instanceof Error ? error.name : typeof error
-        });
-        return false;
-      } finally {
-        if (isCurrent()) this._endSync();
-      }
+      void domains;
+      return syncAccountStateNamespace(keyStore, "settings", this.deviceId);
     },
 
     async fetchFromRelays(): Promise<boolean> {
-      const keyStore = useKeyStore();
-      if (!keyStore.isLoggedIn || keyStore.pkHex !== this.loadedFor || this._isFetching) return false;
-      const account = keyStore.pkHex;
-      const generation = this._sessionGeneration;
-      const isCurrent = () => this._sessionGeneration === generation && this.loadedFor === account && keyStore.pkHex === account;
-      const relays = settingsSyncRelays("read");
-      if (!relays.length) return false;
-
-      this._isFetching = true;
-      this._beginSync("正在从 Relay 拉取设置…");
-      this.syncError = "";
-      try {
-        const sub = subscribe(relays, [
-          { kinds: [30078], authors: [account], "#d": [RELAY_SYNC_IDENTIFIER, MEDIA_SYNC_IDENTIFIER], limit: 20 },
-          { kinds: [10002], authors: [account], limit: 5 }
-        ]);
-
-        return await new Promise(resolve => {
-          const expectedRelays = new Set(relays);
-          const completedRelays = new Set<string>();
-          const candidates = new Map<string, any>();
-          let finished = false;
-          let timer: ReturnType<typeof setTimeout>;
-          const cancel = () => {
-            finished = true;
-            clearTimeout(timer);
-            closeSubscription(sub);
-            resolve(false);
-          };
-          cancelSettingsFetch = cancel;
-
-          const finish = async () => {
-            if (finished) return;
-            finished = true;
-            clearTimeout(timer);
-            closeSubscription(sub);
-            if (!isCurrent()) {
-              resolve(false);
-              return;
-            }
-
-            const ordered = [...candidates.values()].sort((a, b) =>
-              (Number(a.created_at) - Number(b.created_at)) || String(a.id).localeCompare(String(b.id))
-            );
-            let changed = false;
-            let newestNip65: any = null;
-            for (const event of ordered) {
-              if (!isCurrent()) { resolve(false); return; }
-              if (event.kind === 10002) {
-                newestNip65 = event;
-                continue;
-              }
-              if (event.kind !== 30078 || !keyStore.supportsNip44) continue;
-              const identifier = event.tags?.find((tag: unknown) =>
-                Array.isArray(tag) && tag[0] === "d"
-              )?.[1];
-              if (identifier !== RELAY_SYNC_IDENTIFIER && identifier !== MEDIA_SYNC_IDENTIFIER) continue;
-              try {
-                const decrypted = await keyStore.nip44Decrypt(account, event.content);
-                if (!isCurrent()) { resolve(false); return; }
-                const payload = JSON.parse(decrypted) as SettingsSyncPayload<unknown>;
-                if (!payload || !Array.isArray(payload.items) || payload.type !== identifier) continue;
-                const migrated = migrateConnectionSettings(
-                  identifier === RELAY_SYNC_IDENTIFIER
-                    ? { relays: payload.items }
-                    : { mediaServers: payload.items },
-                  { deviceId: this.deviceId }
-                );
-                const metadata = { createdAt: Number(event.created_at) || 0, eventId: String(event.id || "") };
-                if (identifier === RELAY_SYNC_IDENTIFIER) {
-                  this.settings.relays = mergeRelayConfigs(this.settings.relays, migrated.relays, metadata);
-                  this.lastRelaySyncTimestamp = Math.max(this.lastRelaySyncTimestamp, metadata.createdAt);
-                } else {
-                  this.settings.mediaServers = mergeMediaServers(this.settings.mediaServers, migrated.mediaServers, metadata);
-                  this.lastMediaSyncTimestamp = Math.max(this.lastMediaSyncTimestamp, metadata.createdAt);
-                }
-                this.lastSyncTimestamp = Math.max(this.lastSyncTimestamp, metadata.createdAt);
-                changed = true;
-              } catch (error) {
-                if (!isCurrent()) { resolve(false); return; }
-                logger.warn("[settings] ignored invalid encrypted settings event", {
-                  event: String(event.id || "").slice(0, 8),
-                  errorType: error instanceof Error ? error.name : typeof error
-                });
-              }
-            }
-
-            if (!isCurrent()) { resolve(false); return; }
-            if (newestNip65) {
-              this.settings.relays = relayConfigsFromNip65(
-                newestNip65.tags,
-                {
-                  createdAt: Number(newestNip65.created_at) || 0,
-                  eventId: String(newestNip65.id || "")
-                },
-                account,
-                this.settings.relays
-              );
-              this.lastRelaySyncTimestamp = Math.max(
-                this.lastRelaySyncTimestamp,
-                Number(newestNip65.created_at) || 0
-              );
-              changed = true;
-            }
-
-            if (changed) {
-              this.save();
-              this.applySettings();
-            }
-            resolve(changed);
-          };
-
-          timer = setTimeout(() => void finish(), 5_000);
-          sub.on("event", event => {
-            if (!finished && isCurrent() && event?.id) candidates.set(event.id, event);
-          });
-          sub.on("eose", (relayUrl: string) => {
-            completedRelays.add(relayUrl);
-            if (completedRelays.size >= expectedRelays.size) void finish();
-          });
-        });
-      } catch (error) {
-        logger.warn("[settings] remote sync failed; local settings remain active", {
-          account: account.slice(0, 8),
-          errorType: error instanceof Error ? error.name : typeof error
-        });
-        return false;
-      } finally {
-        if (isCurrent()) {
-          cancelSettingsFetch = null;
-          this._endSync();
-          this._isFetching = false;
-        }
-      }
+      // Settings snapshots moved to the authenticated encrypted account-state
+      // endpoint. Keep this no-op only for callers from older UI code.
+      return false;
     }
   }
 });

@@ -1,7 +1,8 @@
 import Dexie, { type Table, type Transaction } from "dexie";
+import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 
 export const APP_VERSION = "0.1.5";
-export const DB_VERSION = 11;
+export const DB_VERSION = 12;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -15,6 +16,10 @@ export type DBFriend = {
   pubkey: string;
   name?: string;
   group?: string;
+  groups?: string[];
+  note?: string;
+  updatedAt?: number;
+  deleted?: boolean;
 };
 
 export type DBMeta = {
@@ -185,6 +190,20 @@ export type BookmarkRecord = {
   accountPubkey: string;
   messageId: string;
   createdAt: number;
+  updatedAt?: number;
+  deleted?: boolean;
+};
+
+export type DeviceKeyValueRecord = { key: string; value: string; updatedAt: number };
+export type AccountStateNamespace =
+  | "friendships" | "friend_metadata" | "own_profile" | "settings"
+  | "bookmarks" | "feed_preferences" | "read_state" | "notification_state";
+export type AccountStateMirrorRecord = {
+  accountPubkey: string;
+  namespace: AccountStateNamespace;
+  version: number;
+  data: unknown;
+  updatedAt: number;
 };
 
 const ACCOUNT_SCOPED_KEY_PATTERNS = [
@@ -196,7 +215,7 @@ const ACCOUNT_SCOPED_KEY_PATTERNS = [
 ];
 
 /** Resolve ownership only when browser storage proves there is one account. */
-export function resolveUnambiguousLegacyAccount(storage: Storage | undefined = globalThis.localStorage): string | null {
+export function resolveUnambiguousLegacyAccount(storage: Storage | undefined = legacyBrowserStorageForMigration()): string | null {
   if (!storage) return null;
   const accounts = new Set<string>();
   const add = (value: unknown) => {
@@ -276,6 +295,8 @@ export class HaiNeiDatabase extends Dexie {
   outgoingQueue!: Table<OutgoingQueueRecord, [string, string]>;
   outgoingDmTasks!: Table<OutgoingDmTaskRecord, [string, string]>;
   accountBookmarks!: Table<BookmarkRecord, [string, string]>;
+  deviceKeyValues!: Table<DeviceKeyValueRecord, string>;
+  accountStateMirrors!: Table<AccountStateMirrorRecord, [string, AccountStateNamespace]>;
 
   constructor(name = DATABASE_NAME) {
     super(name);
@@ -465,6 +486,29 @@ export class HaiNeiDatabase extends Dexie {
       outgoingQueue: "[accountPubkey+outgoingId], accountPubkey, [accountPubkey+state], [accountPubkey+nextAttemptAt]",
       outgoingDmTasks: "[accountPubkey+localId], accountPubkey, [accountPubkey+peerPubkey], [accountPubkey+state], [accountPubkey+updatedAt]",
       accountBookmarks: "[accountPubkey+messageId], accountPubkey, [accountPubkey+createdAt]"
+    });
+
+    this.version(12).stores({
+      messages: "id, created_at, pubkey",
+      friends: "pubkey, name, group",
+      meta: "key",
+      imageCache: "url, timestamp",
+      accountMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+created_at], [accountPubkey+pubkey], [accountPubkey+pubkey+created_at]",
+      accountFriends: "[accountPubkey+pubkey], accountPubkey, [accountPubkey+name], [accountPubkey+group]",
+      accountMeta: "[accountPubkey+key], accountPubkey",
+      accountImageCache: "[accountPubkey+url], accountPubkey, [accountPubkey+timestamp]",
+      syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+createdAt], [accountPubkey+senderPubkey]",
+      conversationStates: "[accountPubkey+conversationId], accountPubkey, [accountPubkey+lastMessageAt]",
+      conversationReadStates: "[accountPubkey+conversationId], accountPubkey",
+      messageSyncStates: "accountPubkey",
+      decryptedEvents: "[accountPubkey+eventId], accountPubkey, [accountPubkey+decryptedAt]",
+      accountFriendships: "[accountPubkey+peerPubkey], accountPubkey, [accountPubkey+state], [accountPubkey+updatedAt]",
+      accountProfiles: "[accountPubkey+ownerPubkey], accountPubkey, [accountPubkey+updatedAt]",
+      outgoingQueue: "[accountPubkey+outgoingId], accountPubkey, [accountPubkey+state], [accountPubkey+nextAttemptAt]",
+      outgoingDmTasks: "[accountPubkey+localId], accountPubkey, [accountPubkey+peerPubkey], [accountPubkey+state], [accountPubkey+updatedAt]",
+      accountBookmarks: "[accountPubkey+messageId], accountPubkey, [accountPubkey+createdAt]",
+      deviceKeyValues: "key, updatedAt",
+      accountStateMirrors: "[accountPubkey+namespace], accountPubkey, [accountPubkey+updatedAt]"
     });
   }
 }

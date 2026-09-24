@@ -194,69 +194,11 @@ describe("settings session isolation", () => {
     expect(store.loadedFor).toBe("");
   });
 
-  it.each([B, A])("discards a suspended decrypt after switching to a new %s session", async target => {
-    const handlers = new Map<string, (...args: any[]) => void>();
-    const close = vi.fn();
-    mocks.subscribe.mockReturnValue({ on: (name: string, fn: (...args: any[]) => void) => handlers.set(name, fn), unsub: close });
-    const decoding = deferred<string>();
-    mocks.key.nip44Decrypt.mockReturnValueOnce(decoding.promise);
+  it("retires Relay-based settings snapshots", async () => {
     const store = activate(A);
-    const fetching = store.fetchFromRelays();
-    handlers.get("event")!({ id: "remote", kind: 30078, created_at: 10,
-      tags: [["d", MEDIA_SYNC_IDENTIFIER]], content: "ciphertext" });
-    for (const relay of DEFAULT_RELAY_URLS) handlers.get("eose")!(relay);
-    expect(mocks.key.nip44Decrypt).toHaveBeenCalledOnce();
-    activate(B);
-    if (target === A) activate(A);
-    store.syncing = true;
-    store._isFetching = true;
-    const baseline = JSON.stringify(store.$state);
-    decoding.resolve(JSON.stringify({ type: MEDIA_SYNC_IDENTIFIER, items: [media("old-a", 20)] }));
-    expect(await fetching).toBe(false);
-    await Promise.resolve();
-    expect(JSON.stringify(store.$state)).toBe(baseline);
-    expect(close).toHaveBeenCalled();
-    expect(localStorage.getItem(storageKeyFor(target)!)).toBeNull();
-  });
-
-  it.each(["encrypt", "sign", "publish"] as const)("cannot mutate B or continue the next domain after a suspended %s", async stage => {
-    const pending = deferred<any>();
-    if (stage === "encrypt") mocks.key.nip44Encrypt.mockReturnValueOnce(pending.promise);
-    if (stage === "sign") mocks.key.signEvent.mockReturnValueOnce(pending.promise);
-    if (stage === "publish") mocks.publish.mockReturnValueOnce(pending.promise);
-    const store = activate(A);
-    const sending = store.publishToRelays();
-    await vi.waitFor(() => {
-      if (stage === "sign") expect(mocks.key.signEvent).toHaveBeenCalledOnce();
-      if (stage === "publish") expect(mocks.publish).toHaveBeenCalledOnce();
-    });
-    activate(B);
-    store.syncing = true;
-    store.syncError = "B-owned-state";
-    const baseline = JSON.stringify(store.$state);
-    pending.resolve(stage === "encrypt" ? "ciphertext" : stage === "sign"
-      ? { id: "old-signature", pubkey: A } : [{ relay: DEFAULT_RELAY_URLS[0], ok: true }]);
-    expect(await sending).toBe(false);
-    expect(JSON.stringify(store.$state)).toBe(baseline);
-    expect(mocks.key.nip44Encrypt).toHaveBeenCalledTimes(1);
-    if (stage === "encrypt") expect(mocks.key.signEvent).not.toHaveBeenCalled();
-    if (stage === "sign") expect(mocks.publish).not.toHaveBeenCalled();
-  });
-
-  it("publishes a stable snapshot and does not stamp edits made during the await", async () => {
-    const pending = deferred<any>();
-    mocks.publish.mockReturnValueOnce(pending.promise);
-    const store = activate(A);
-    store.settings.mediaServers = [media(mediaServerId("blossom", URL), 10, { token: "old" })];
-    const sending = store.publishToRelays(["media"]);
-    await vi.waitFor(() => expect(mocks.publish).toHaveBeenCalledOnce());
-    store.updateMediaServer(mediaServerId("blossom", URL), { token: "new" });
-    pending.resolve([{ relay: DEFAULT_RELAY_URLS[0], ok: true }]);
-    expect(await sending).toBe(true);
-    const payload = JSON.parse(mocks.key.nip44Encrypt.mock.calls[0][1]);
-    expect(payload.items[0].token).toBe("old");
-    expect(store.settings.mediaServers[0].token).toBe("new");
-    expect(store.settings.mediaServers[0].syncEventId).toBeUndefined();
+    await expect(store.fetchFromRelays()).resolves.toBe(false);
+    expect(mocks.subscribe).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
   });
 
   it("ignores an old account's delayed upload health result", () => {
@@ -268,26 +210,6 @@ describe("settings session isolation", () => {
     store.bindHealthTracking();
     oldReporter(mediaServerId("blossom", URL), false, Date.now());
     expect(store.settings.mediaServers[0].failureCount).toBeUndefined();
-  });
-
-  it("keeps syncing true until overlapping fetch and publish operations both finish", async () => {
-    const handlers = new Map<string, (...args: any[]) => void>();
-    const close = vi.fn();
-    const publishPending = deferred<any>();
-    mocks.subscribe.mockReturnValue({ on: (name: string, fn: (...args: any[]) => void) => handlers.set(name, fn), unsub: close });
-    mocks.publish.mockReturnValueOnce(publishPending.promise);
-    const store = activate(A);
-    const fetching = store.fetchFromRelays();
-    const sending = store.publishToRelays(["media"]);
-    await vi.waitFor(() => expect(mocks.publish).toHaveBeenCalledOnce());
-    expect(store.syncing).toBe(true);
-    for (const relay of DEFAULT_RELAY_URLS) handlers.get("eose")!(relay);
-    await fetching;
-    expect(store.syncing).toBe(true);
-    publishPending.resolve([{ relay: DEFAULT_RELAY_URLS[0], ok: true }]);
-    await sending;
-    expect(store.syncing).toBe(false);
-    expect(close).toHaveBeenCalled();
   });
 
   it("prevents disabling the last readable or writable relay", () => {
