@@ -9,6 +9,48 @@ import { clearExpiredCache } from "@/utils/imageCache";
 import { initVersionTracking, handleVersionUpdate } from "@/utils/versionManager";
 import { migrateLegacyLocalStorage } from "@/services/legacyLocalStorageMigration";
 
+let serviceWorkerRegistration: Promise<ServiceWorkerRegistration> | null = null;
+let serviceWorkerLoadListenerAttached = false;
+
+function registerServiceWorkerNow() {
+  if (serviceWorkerRegistration) return serviceWorkerRegistration;
+
+  console.log("[main] sw_register_start");
+  serviceWorkerRegistration = navigator.serviceWorker
+    .register("/service-worker.js", { updateViaCache: "none" })
+    .then(registration => {
+      console.log("[main] sw_register_ok", {
+        active: registration.active?.state ?? null,
+        waiting: registration.waiting?.state ?? null,
+        installing: registration.installing?.state ?? null,
+      });
+      return registration;
+    })
+    .catch(error => {
+      serviceWorkerRegistration = null;
+      console.warn("[main] sw_register_failed", error);
+      throw error;
+    });
+
+  return serviceWorkerRegistration;
+}
+
+export function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+
+  if (document.readyState === "complete") {
+    void registerServiceWorkerNow().catch(() => {});
+    return;
+  }
+
+  if (serviceWorkerLoadListenerAttached) return;
+  serviceWorkerLoadListenerAttached = true;
+  window.addEventListener("load", () => {
+    serviceWorkerLoadListenerAttached = false;
+    void registerServiceWorkerNow().catch(() => {});
+  }, { once: true });
+}
+
 async function bootstrap() {
   await migrateLegacyLocalStorage();
   const versionChanged = initVersionTracking();
@@ -56,21 +98,9 @@ async function bootstrap() {
       console.warn("[main] clearExpiredCache failed", e);
     }
   })();
-
-  // register service worker for production
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker
-        .register("/service-worker.js", { updateViaCache: "none" })
-        .then(() => {
-          console.log("[main] Service Worker registered successfully");
-        })
-        .catch((err) => {
-          console.warn("Service Worker 注册失败", err);
-        });
-    });
-  }
 }
+
+registerServiceWorker();
 
 void bootstrap().catch(error => {
   console.error("[main] bootstrap failed", error);
