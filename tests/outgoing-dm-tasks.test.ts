@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   publish: vi.fn(),
   upload: vi.fn(),
   queueGet: vi.fn(),
+  taskList: vi.fn(),
   insert: vi.fn(),
 }));
 
@@ -26,7 +27,7 @@ vi.mock("@/utils/commentImage", () => ({ uploadEncryptedCommentImage: mocks.uplo
 vi.mock("@/repositories/outgoingDmTaskRepository", () => ({
   outgoingDmTaskRepository: {
     get: vi.fn(async (account: string, localId: string) => mocks.tasks.get(`${account}:${localId}`)),
-    list: vi.fn(async (account: string) => [...mocks.tasks.values()].filter(task => task.accountPubkey === account)),
+    list: mocks.taskList,
     put: vi.fn(async (task: any) => { mocks.tasks.set(`${task.accountPubkey}:${task.localId}`, task); return task; }),
     update: vi.fn(async (account: string, localId: string, patch: any) => {
       const key = `${account}:${localId}`;
@@ -89,6 +90,7 @@ beforeEach(() => {
   mocks.publish.mockReset();
   mocks.upload.mockReset();
   mocks.queueGet.mockReset().mockResolvedValue(undefined);
+  mocks.taskList.mockReset().mockImplementation(async (account: string) => [...mocks.tasks.values()].filter(task => task.accountPubkey === account));
   mocks.insert.mockReset().mockResolvedValue({ inserted: true });
   vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:preview"), revokeObjectURL: vi.fn() });
   vi.stubGlobal("File", class File extends Blob {
@@ -221,12 +223,77 @@ describe("optimistic outgoing DM tasks", () => {
     const { direct } = seed();
     const localId = direct.send(PEER, "", new File(["image"], "photo.jpg", { type: "image/jpeg" }));
     await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("send_failed"));
+    expect(direct.peerMessages(PEER)[0].outgoing?.state).not.toBe("upload_failed");
     expect(direct.outgoingTasks[0].uploadedRef).toBe("blossom+aesgcm:once");
 
     await Promise.all([direct.retry(localId), direct.retry(localId)]);
     expect(mocks.upload).toHaveBeenCalledOnce();
     expect(mocks.publish).toHaveBeenCalledOnce();
     expect(direct.peerMessages(PEER)).toHaveLength(1);
+  });
+
+  it("keeps sent terminal when local synced-message persistence fails after Relay success", async () => {
+    mocks.upload.mockResolvedValue({ ref: "blossom+aesgcm:accepted" });
+    mocks.send.mockImplementation(async (options: any) => {
+      await options.onQueued("canonical-accepted");
+      return canonical("canonical-accepted", options.content);
+    });
+    mocks.insert.mockRejectedValueOnce(new Error("indexeddb failed"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { direct } = seed();
+
+    direct.send(PEER, "", new File(["image"], "photo.jpg", { type: "image/jpeg" }));
+
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
+    expect(direct.outgoingTasks[0]).toMatchObject({
+      state: "sent",
+      outgoingId: "canonical-accepted",
+      lastError: undefined,
+    });
+    warn.mockRestore();
+  });
+
+  it("reconciles a failed task to sent from the durable outgoing queue during refresh", async () => {
+    const queued = canonical("canonical-queued", "![](blossom+aesgcm:queued)");
+    const persisted = {
+      accountPubkey: ACCOUNT, localId: "queue-sent", peerPubkey: PEER, text: "",
+      imageBlob: new Blob(["image"], { type: "image/jpeg" }),
+      uploadedRef: "blossom+aesgcm:queued", outgoingId: "canonical-queued",
+      state: "upload_failed", lastError: "stale", createdAt: 20, updatedAt: 20,
+    } as const;
+    mocks.tasks.set(`${ACCOUNT}:queue-sent`, persisted);
+    mocks.queueGet.mockResolvedValue({
+      accountPubkey: ACCOUNT, outgoingId: "canonical-queued", state: "sent",
+      message: queued.message, events: queued.events, relayResults: queued.relayResults,
+    });
+    const { direct } = seed();
+
+    await direct.refresh(ACCOUNT);
+
+    expect(direct.peerMessages(PEER)[0].outgoing).toMatchObject({ state: "sent", lastError: undefined });
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it("does not let an old refresh snapshot overwrite a newer in-memory sent task", async () => {
+    let releaseList!: (tasks: any[]) => void;
+    mocks.taskList.mockImplementationOnce(() => new Promise(resolve => { releaseList = resolve; }));
+    const { direct } = seed();
+    const refreshing = direct.refresh(ACCOUNT);
+    await vi.waitFor(() => expect(mocks.taskList).toHaveBeenCalledOnce());
+    direct.outgoingTasks = [{
+      accountPubkey: ACCOUNT, localId: "racing", peerPubkey: PEER, text: "完成",
+      state: "sent", outgoingId: "canonical-racing", canonicalMessageId: "canonical-racing",
+      createdAt: 30, updatedAt: 300,
+    }];
+
+    releaseList([{
+      accountPubkey: ACCOUNT, localId: "racing", peerPubkey: PEER, text: "完成",
+      state: "send_failed", lastError: "old", createdAt: 30, updatedAt: 100,
+    }]);
+    await refreshing;
+
+    expect(direct.outgoingTasks[0]).toMatchObject({ state: "sent", updatedAt: 300 });
   });
 
   it("never regresses an uploaded image task to upload_failed", async () => {
