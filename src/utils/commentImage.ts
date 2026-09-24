@@ -8,6 +8,12 @@ import { resizeImageFile } from "@/utils/imageResize";
 import { compressImageToTargetSize } from "@/utils/imageCompression";
 import type { PreparedEncryptedImage } from "@/db/dexie";
 
+function ownedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 export async function prepareEncryptedCommentImage(file: File): Promise<PreparedEncryptedImage> {
   const resized = await resizeImageFile(file, { maxSize: 1280, quality: 0.78, outputType: "image/jpeg" });
   const compressed = await compressImageToTargetSize(resized, {
@@ -24,9 +30,9 @@ export async function prepareEncryptedCommentImage(file: File): Promise<Prepared
   const encrypted = await encryptImageBytes(key, new Uint8Array(await compressed.file.arrayBuffer()));
   const rawKey = new Uint8Array(await crypto.subtle.exportKey("raw", key));
   return {
-    encryptedBlob: new Blob([base64ToBytes(encrypted.ct)], { type: "application/octet-stream" }),
+    encryptedBytes: ownedArrayBuffer(base64ToBytes(encrypted.ct)),
     encryptedName: `${compressed.file.name}.encrypted`,
-    previewBlob: compressed.file,
+    previewBytes: await compressed.file.arrayBuffer(),
     mime: compressed.file.type || "image/jpeg",
     iv: encrypted.iv,
     key: bytesToBase64(rawKey),
@@ -39,7 +45,7 @@ export async function uploadPreparedEncryptedCommentImage(
   prepared: PreparedEncryptedImage,
   options: { accountPubkey: string; signEvent: (event: EventTemplate) => Promise<VerifiedEvent> }
 ) {
-  const encryptedFile = new File([prepared.encryptedBlob], prepared.encryptedName, { type: "application/octet-stream" });
+  const encryptedFile = new File([prepared.encryptedBytes], prepared.encryptedName, { type: "application/octet-stream" });
   const descriptor = await uploadImageToBlossomWithFallback(encryptedFile, {
     accountPubkey: options.accountPubkey,
     signEvent: options.signEvent
@@ -56,7 +62,8 @@ export async function uploadPreparedEncryptedCommentImage(
   });
   // The encrypted upload is already complete here. A local preview-cache failure
   // must not turn a successful Blossom upload into an upload failure.
-  await storeImageInCache(options.accountPubkey, ref, prepared.previewBlob, prepared.mime).catch(() => undefined);
+  const previewBlob = new Blob([prepared.previewBytes], { type: prepared.mime });
+  await storeImageInCache(options.accountPubkey, ref, previewBlob, prepared.mime).catch(() => undefined);
   return { type: "image" as const, ref, width: prepared.width, height: prepared.height };
 }
 
