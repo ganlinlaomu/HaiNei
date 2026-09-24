@@ -30,6 +30,22 @@ const taskPreviewUrls = new Map<string, string>();
 let resumeListenersInstalled = false;
 
 function taskKey(accountPubkey: string, localId: string) { return `${accountPubkey}:${localId}`; }
+function mergeTaskVersions(left: OutgoingDmTaskRecord, right: OutgoingDmTaskRecord) {
+  if (left.state === "sent" && right.state !== "sent") return left;
+  if (right.state === "sent" && left.state !== "sent") return right;
+  return right.updatedAt > left.updatedAt ? right : left;
+}
+function normalizeTaskForQueue(task: OutgoingDmTaskRecord, queueState?: "pending" | "sending" | "waiting_network" | "failed" | "sent") {
+  if (task.state === "sent" || queueState === "sent") return { ...task, state: "sent" as const, lastError: undefined };
+  if (queueState === "failed") return { ...task, state: "send_failed" as const };
+  if (queueState === "pending" || queueState === "sending" || queueState === "waiting_network") {
+    return { ...task, state: "sending" as const, lastError: undefined };
+  }
+  if ((task.uploadedRef || task.outgoingId) && task.state === "upload_failed") {
+    return { ...task, state: "send_failed" as const };
+  }
+  return task;
+}
 function createLocalId() {
   const random = typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -217,7 +233,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         friendships.loadedFor === account && !friendships.loading ? Promise.resolve() : friendships.load(account),
       ]);
       if (useKeyStore().pkHex !== account) return;
-      const outgoingTasks = await outgoingDmTaskRepository.list(account);
+      let outgoingTasks = await outgoingDmTaskRepository.list(account);
       if (useKeyStore().pkHex !== account) return;
       const outgoingMatches = matchOutgoingTasksToCanonical(messages.inbox, outgoingTasks, account);
       for (const [messageId, task] of outgoingMatches.taskByMessageId) {
@@ -230,7 +246,27 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           updatedAt: Date.now(),
         });
       }
+      outgoingTasks = await Promise.all(outgoingTasks.map(async task => {
+        const queued = task.outgoingId ? await outgoingQueueRepository.get(account, task.outgoingId) : undefined;
+        const normalized = normalizeTaskForQueue(task, queued?.state);
+        if (normalized.state !== task.state || normalized.lastError !== task.lastError) {
+          const updatedAt = Date.now();
+          await outgoingDmTaskRepository.update(account, task.localId, {
+            state: normalized.state,
+            lastError: normalized.lastError,
+            updatedAt,
+          });
+          return { ...normalized, updatedAt };
+        }
+        return normalized;
+      }));
       if (useKeyStore().pkHex !== account) return;
+      const mergedById = new Map(outgoingTasks.map(task => [task.localId, task]));
+      for (const current of this.outgoingTasks.filter(task => task.accountPubkey === account)) {
+        const loaded = mergedById.get(current.localId);
+        mergedById.set(current.localId, loaded ? mergeTaskVersions(loaded, current) : current);
+      }
+      outgoingTasks = [...mergedById.values()];
       this.outgoingTasks = outgoingTasks.sort((a, b) => a.createdAt - b.createdAt || a.localId.localeCompare(b.localId));
       for (const task of outgoingTasks) {
         const key = taskKey(account, task.localId);
@@ -361,18 +397,28 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         taskPreviewUrls.set(taskKey(account, task.localId), URL.createObjectURL(image));
       }
       this.outgoingTasks = [...this.outgoingTasks, task];
-      void outgoingDmTaskRepository.put(task)
-        .then(() => this.runTask(task.localId))
-        .catch(error => this.failTask(task.localId, image ? "upload_failed" : "send_failed", error));
+      void outgoingDmTaskRepository.put(task).then(
+        () => { void this.runTask(task.localId); },
+        error => { void this.failTask(task.localId, image ? "upload_failed" : "send_failed", error); },
+      );
       return task.localId;
     },
     async patchTask(localId: string, patch: Partial<OutgoingDmTaskRecord>) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
       const index = this.outgoingTasks.findIndex(task => task.accountPubkey === account && task.localId === localId);
       if (index < 0) return;
-      const updated = { ...this.outgoingTasks[index], ...patch, updatedAt: Date.now() };
+      const current = this.outgoingTasks[index];
+      const combined = { ...current, ...patch };
+      const protectedPatch = { ...patch };
+      if (current.state === "sent") {
+        protectedPatch.state = "sent";
+        protectedPatch.lastError = undefined;
+      } else if (protectedPatch.state === "upload_failed" && (combined.uploadedRef || combined.outgoingId)) {
+        protectedPatch.state = "send_failed";
+      }
+      const updated = { ...current, ...protectedPatch, updatedAt: Date.now() };
       this.outgoingTasks.splice(index, 1, updated);
-      await outgoingDmTaskRepository.update(account, localId, { ...patch, updatedAt: updated.updatedAt });
+      await outgoingDmTaskRepository.update(account, localId, { ...protectedPatch, updatedAt: updated.updatedAt });
       return updated;
     },
     async failTask(localId: string, state: "upload_failed" | "send_failed", error: unknown) {
@@ -388,22 +434,36 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       });
     },
     async finishTask(task: OutgoingDmTaskRecord, result: PublishedMessage) {
-      await syncedMessageRepository.insertMessageIfAbsent(task.accountPubkey, result.message);
-      if (useKeyStore().pkHex === task.accountPubkey) useMessagesStore().addInbox(canonicalInboxItem(result));
+      try {
+        await this.patchTask(task.localId, {
+          state: "sent",
+          outgoingId: result.message.id,
+          canonicalMessageId: result.message.id,
+          imageBlob: undefined,
+          imageName: undefined,
+          imageType: undefined,
+          preparedImage: undefined,
+          lastError: undefined,
+        });
+      } catch (error) {
+        console.warn("[dm] local sent-state persistence failed", error instanceof Error ? error.message : "unknown error");
+      }
+      try {
+        await syncedMessageRepository.insertMessageIfAbsent(task.accountPubkey, result.message);
+      } catch (error) {
+        console.warn("[dm] local synced-message persistence failed", error instanceof Error ? error.message : "unknown error");
+      }
+      if (useKeyStore().pkHex === task.accountPubkey) {
+        try {
+          useMessagesStore().addInbox(canonicalInboxItem(result));
+        } catch (error) {
+          console.warn("[dm] local inbox update failed", error instanceof Error ? error.message : "unknown error");
+        }
+      }
       const previewKey = taskKey(task.accountPubkey, task.localId);
       const previewUrl = taskPreviewUrls.get(previewKey);
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       taskPreviewUrls.delete(previewKey);
-      await this.patchTask(task.localId, {
-        state: "sent",
-        outgoingId: result.message.id,
-        canonicalMessageId: result.message.id,
-        imageBlob: undefined,
-        imageName: undefined,
-        imageType: undefined,
-        preparedImage: undefined,
-        lastError: undefined,
-      });
     },
     async runTask(localId: string) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
@@ -476,6 +536,12 @@ export const useDirectMessagesStore = defineStore("directMessages", {
               relayResults: (queued.relayResults || []) as PublishedMessage["relayResults"],
             });
             continue;
+          }
+          const normalized = normalizeTaskForQueue(task, queued?.state);
+          if (normalized.state !== task.state || normalized.lastError !== task.lastError) {
+            await this.patchTask(task.localId, { state: normalized.state, lastError: normalized.lastError });
+            task.state = normalized.state;
+            task.lastError = normalized.lastError;
           }
         }
         const resumableFailure = task.state === "send_failed"
