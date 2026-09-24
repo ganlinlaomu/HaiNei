@@ -3,7 +3,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
 import { handleRequest } from "../worker/src/index";
 import {
-  ACTIVITY_PUSH_PAYLOAD,
   createVapidHeaders,
   encryptPushPayload,
   GENERIC_PUSH_PAYLOAD,
@@ -16,6 +15,7 @@ import {
   enablePushNotifications,
   pushEnabledForAccount,
   pushServiceErrorMessage,
+  triggerGenericPush as triggerFrontendPush,
 } from "@/services/pushNotifications";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { pushCategoryForMessage, shouldTriggerGenericPush } from "@/nostr/messaging/service";
@@ -223,18 +223,20 @@ describe("privacy-preserving push and badge", () => {
     expect(db.subscriptions.size).toBe(0);
   });
 
-  it("uses only fixed privacy-safe message and activity payloads", () => {
-    expect(MESSAGE_PUSH_PAYLOAD).toEqual({ type: "message", title: "HaiNei", body: "有新私信", url: "/#/conversations" });
-    expect(ACTIVITY_PUSH_PAYLOAD).toEqual({ type: "activity", title: "HaiNei", body: "有新通知", url: "/#/notifications" });
-    expect(GENERIC_PUSH_PAYLOAD).toBe(ACTIVITY_PUSH_PAYLOAD);
-    expect(pushPayloadForType("unknown")).toBe(ACTIVITY_PUSH_PAYLOAD);
-    expect(pushPayloadForType(undefined)).toBe(ACTIVITY_PUSH_PAYLOAD);
-    expect(JSON.stringify([MESSAGE_PUSH_PAYLOAD, ACTIVITY_PUSH_PAYLOAD])).not.toContain("private post text");
+  it("uses only the fixed privacy-safe private-message payload", () => {
+    expect(MESSAGE_PUSH_PAYLOAD).toEqual({ type: "message", title: "HaiNei", body: "你有新的私信消息", url: "/#/conversations" });
+    expect(GENERIC_PUSH_PAYLOAD).toBe(MESSAGE_PUSH_PAYLOAD);
+    expect(pushPayloadForType("unknown")).toBeNull();
+    expect(pushPayloadForType(undefined)).toBeNull();
+    expect(JSON.stringify(MESSAGE_PUSH_PAYLOAD)).not.toContain("private post text");
     expect(sanitizePushRecipients([OTHER, "private post text", ACCOUNT], ACCOUNT)).toEqual([OTHER]);
     expect(pushCategoryForMessage([["t", "hainei-dm"]])).toBe("message");
-    expect(pushCategoryForMessage([["l", "hainei-interaction"], ["t", "like"]])).toBe("activity");
-    expect(pushCategoryForMessage([["l", "hainei-interaction"], ["t", "comment"]])).toBe("activity");
-    expect(pushCategoryForMessage([["l", "hainei-friendship"], ["t", "request"]])).toBe("activity");
+    expect(pushCategoryForMessage([["l", "hainei-interaction"], ["t", "like"]])).toBeNull();
+    expect(pushCategoryForMessage([["l", "hainei-interaction"], ["t", "comment"]])).toBeNull();
+    expect(pushCategoryForMessage([["l", "hainei-friendship"], ["t", "request"]])).toBeNull();
+    expect(shouldTriggerGenericPush([["l", "hainei-interaction"], ["t", "like"]])).toBe(false);
+    expect(shouldTriggerGenericPush([["l", "hainei-interaction"], ["t", "comment"]])).toBe(false);
+    expect(shouldTriggerGenericPush([["l", "hainei-friendship"], ["t", "request"]])).toBe(false);
     expect(shouldTriggerGenericPush([["t", "hainei-profile-request"]])).toBe(false);
     expect(shouldTriggerGenericPush([["t", "hainei-tombstone"]])).toBe(false);
     expect(shouldTriggerGenericPush([["t", "like"], ["liked", "false"]])).toBe(false);
@@ -324,7 +326,7 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("fetch", send);
     const log = vi.spyOn(console, "info").mockImplementation(() => {});
 
-    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER])).resolves.toEqual({
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message")).resolves.toEqual({
       requested: 1, subscriptionsFound: 1, sent: 1, failed: 0, expired: 0,
     });
     expect(log).toHaveBeenCalledWith({
@@ -344,13 +346,38 @@ describe("privacy-preserving push and badge", () => {
     expect((request.body as ArrayBuffer).byteLength).toBeGreaterThan(0);
   });
 
+  it("does not deliver activity or unknown push categories", async () => {
+    const db = new PushD1();
+    addSubscription(db);
+    const send = vi.fn();
+    vi.stubGlobal("fetch", send);
+
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "activity")).resolves.toEqual({
+      requested: 1, subscriptionsFound: 0, sent: 0, failed: 0, expired: 0,
+    });
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "unknown")).resolves.toEqual({
+      requested: 1, subscriptionsFound: 0, sent: 0, failed: 0, expired: 0,
+    });
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER])).resolves.toEqual({
+      requested: 1, subscriptionsFound: 0, sent: 0, failed: 0, expired: 0,
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not call the Worker trigger route for frontend activity pushes", async () => {
+    const send = vi.fn();
+    vi.stubGlobal("fetch", send);
+    await triggerFrontendPush([OTHER], ACCOUNT, vi.fn(), "activity");
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it.each([404, 410])("removes and reports an expired subscription for status %i", async statusCode => {
     const db = new PushD1();
     const row = addSubscription(db);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: statusCode })));
     vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER])).resolves.toEqual({
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message")).resolves.toEqual({
       requested: 1, subscriptionsFound: 1, sent: 0, failed: 0, expired: 1,
     });
     expect(db.subscriptions.has(`${OTHER}|${row.endpoint}`)).toBe(false);
@@ -362,7 +389,7 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
     vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER])).resolves.toEqual({
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message")).resolves.toEqual({
       requested: 1, subscriptionsFound: 1, sent: 0, failed: 1, expired: 0,
     });
     expect(db.subscriptions.has(`${OTHER}|${row.endpoint}`)).toBe(true);
@@ -372,7 +399,7 @@ describe("privacy-preserving push and badge", () => {
     const send = vi.fn();
     vi.stubGlobal("fetch", send);
 
-    await expect(triggerGenericPush(pushEnv(), ACCOUNT, [OTHER])).resolves.toEqual({
+    await expect(triggerGenericPush(pushEnv(), ACCOUNT, [OTHER], "message")).resolves.toEqual({
       requested: 1, subscriptionsFound: 0, sent: 0, failed: 0, expired: 0,
     });
     expect(send).not.toHaveBeenCalled();
@@ -387,7 +414,7 @@ describe("privacy-preserving push and badge", () => {
     ));
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER]);
+    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message");
 
     const diagnostics = JSON.stringify(log.mock.calls);
     expect(diagnostics).toContain(OTHER);
@@ -404,11 +431,11 @@ describe("privacy-preserving push and badge", () => {
     expect(source).not.toMatch(/(?:from|require\s*\()\s*["'](?:node:)?web-push["']/);
   });
 
-  it("keeps service-worker notification wording and click targets fixed by category", () => {
+  it("keeps service-worker notification wording and click target private-message only", () => {
     const source = readFileSync(new URL("../public/service-worker.js", import.meta.url), "utf8");
-    expect(source).toContain("body: isMessage ? '有新私信' : '有新通知'");
+    expect(source).toContain("body: '你有新的私信消息'");
     expect(source).toContain("JSON.parse(event.data?.text() || '{}')");
-    expect(source).toContain("event.notification.data?.type === 'message' ? '/#/conversations' : '/#/notifications'");
+    expect(source).toContain("const path = '/#/conversations'");
     expect(source).not.toMatch(/sender|pubkey|private-message content|post content/);
   });
 

@@ -102,15 +102,11 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
 }
 
 export function shouldTriggerGenericPush(tags: string[][] | undefined) {
-  const type = tags?.find(tag => tag[0] === "t")?.[1];
-  if (type === "like" && tags?.some(tag => tag[0] === "liked" && tag[1] === "false")) return false;
-  if (["hainei-profile", "hainei-profile-request", "hainei-tombstone"].includes(type || "")) return false;
-  if (tags?.some(tag => tag[0] === "l" && tag[1] === "hainei-friendship")) return type === "request";
-  return true;
+  return tags?.some(tag => tag[0] === "t" && tag[1] === DIRECT_MESSAGE_TYPE) === true;
 }
 
-export function pushCategoryForMessage(tags: string[][] | undefined): "message" | "activity" {
-  return tags?.some(tag => tag[0] === "t" && tag[1] === DIRECT_MESSAGE_TYPE) ? "message" : "activity";
+export function pushCategoryForMessage(tags: string[][] | undefined): "message" | null {
+  return shouldTriggerGenericPush(tags) ? "message" : null;
 }
 
 const activePublishes = new Map<string, Promise<PublishedMessage>>();
@@ -183,19 +179,21 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
       if (state === "waiting_network") scheduleRetry(accountPubkey, delay);
       throw error;
     }
-    const failedEvents = events.filter(event => !relayResults.some(result => result.eventId === event.id && result.ok));
-    if (failedEvents.length) {
+    const recipientEvents = events.filter(event => eventTarget(event) !== accountPubkey);
+    const requiredEvents = recipientEvents.length ? recipientEvents : events;
+    const failedRequiredEvents = requiredEvents.filter(event => !relayResults.some(result => result.eventId === event.id && result.ok));
+    if (failedRequiredEvents.length) {
       const state = attempts >= 3 ? "failed" : "waiting_network";
       const delay = Math.min(60_000, 2 ** attempts * 1_000);
       await outgoingQueueRepository.update(accountPubkey, outgoingId, {
         state,
         relayResults,
         nextAttemptAt: Date.now() + delay,
-        lastError: `${failedEvents.length}/${events.length} copies failed`,
+        lastError: `${failedRequiredEvents.length}/${requiredEvents.length} recipient copies failed`,
         updatedAt: Date.now()
       });
       if (state === "waiting_network") scheduleRetry(accountPubkey, delay);
-      throw new Error(`消息发布失败：${failedEvents.length}/${events.length} 个加密副本未被任何 relay 接收`);
+      throw new Error(`消息发布失败：${failedRequiredEvents.length}/${requiredEvents.length} 个收件人副本未被任何 relay 接收`);
     }
     const sent = await outgoingQueueRepository.update(accountPubkey, outgoingId, {
       state: "sent", relayResults, nextAttemptAt: undefined, lastError: undefined, updatedAt: Date.now()
@@ -204,7 +202,7 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     const pushSigner = pushSigners.get(accountPubkey);
     if (pushSigner && shouldTriggerGenericPush(message.tags)) {
       const recipients = [...new Set(events.map(eventTarget).filter((value): value is string => !!value))];
-      void triggerGenericPush(recipients, accountPubkey, pushSigner, pushCategory || pushCategoryForMessage(message.tags)).catch(() => undefined);
+      void triggerGenericPush(recipients, accountPubkey, pushSigner, pushCategory === "message" ? pushCategory : "message").catch(() => undefined);
     }
     return queuedResult(sent!);
   })().finally(() => activePublishes.delete(key));

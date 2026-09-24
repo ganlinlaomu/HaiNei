@@ -165,7 +165,20 @@ describe("optimistic outgoing DM tasks", () => {
   });
 
   it("distinguishes upload failure and retries the same local image task", async () => {
-    mocks.upload.mockRejectedValueOnce(new Error("upload failed")).mockResolvedValueOnce({ ref: "blossom+aesgcm:retry" });
+    const prepared = {
+      encryptedBlob: new Blob(["encrypted"]), encryptedName: "photo.encrypted",
+      previewBlob: new Blob(["preview"], { type: "image/jpeg" }), mime: "image/jpeg",
+      iv: "iv", key: "key", width: 10, height: 10,
+    };
+    mocks.upload
+      .mockImplementationOnce(async (_file: File, options: any) => {
+        await options.onPrepared(prepared);
+        throw new Error("upload failed");
+      })
+      .mockImplementationOnce(async (_file: File, options: any) => {
+        expect(options.prepared).toMatchObject({ encryptedName: "photo.encrypted", key: "key" });
+        return { ref: "blossom+aesgcm:retry" };
+      });
     mocks.send.mockImplementation(async (options: any) => {
       await options.onQueued("canonical-image");
       return canonical("canonical-image", options.content);
@@ -195,6 +208,45 @@ describe("optimistic outgoing DM tasks", () => {
     expect(mocks.upload).toHaveBeenCalledOnce();
     expect(mocks.publish).toHaveBeenCalledOnce();
     expect(direct.peerMessages(PEER)).toHaveLength(1);
+  });
+
+  it("merges and durably relinks a failed optimistic image when the task id link is missing", async () => {
+    const { direct, messages } = seed();
+    const failedTask = {
+      accountPubkey: ACCOUNT,
+      localId: "lost-link",
+      peerPubkey: PEER,
+      text: "这张如何",
+      imageBlob: new Blob(["image"], { type: "image/jpeg" }),
+      uploadedRef: "blossom+aesgcm:encrypted",
+      state: "send_failed",
+      createdAt: 100,
+      updatedAt: 101,
+    } as const;
+    direct.outgoingTasks = [failedTask];
+    mocks.tasks.set(`${ACCOUNT}:lost-link`, failedTask);
+    messages.inbox = [{
+      id: "relay-self-copy",
+      pubkey: ACCOUNT,
+      recipientPubkeys: [PEER],
+      created_at: 100,
+      content: "这张如何\n![](blossom+aesgcm:encrypted)",
+      conversationId: "conversation-1",
+      protocol: "nip17",
+      transportKind: 1059,
+      tags: [["t", "hainei-dm"]],
+    }];
+
+    expect(direct.peerMessages(PEER)).toHaveLength(1);
+    expect(direct.peerMessages(PEER)[0]).toMatchObject({
+      id: "relay-self-copy",
+      outgoing: { localId: "lost-link", state: "send_failed" },
+    });
+    await direct.refresh(ACCOUNT);
+    expect(mocks.tasks.get(`${ACCOUNT}:lost-link`)).toMatchObject({
+      outgoingId: "relay-self-copy",
+      canonicalMessageId: "relay-self-copy",
+    });
   });
 
   it("reloads and resumes account-scoped pending work while self-copy stays deduplicated", async () => {
@@ -228,5 +280,18 @@ describe("optimistic outgoing DM tasks", () => {
 
     await direct.resumePending(true);
     await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
+  });
+
+  it("does not automatically re-upload a definitively failed image", async () => {
+    const { direct } = seed();
+    direct.outgoingTasks = [{
+      accountPubkey: ACCOUNT, localId: "upload-failed", peerPubkey: PEER, text: "",
+      imageBlob: new Blob(["image"], { type: "image/jpeg" }), state: "upload_failed",
+      createdAt: 12, updatedAt: 12,
+    }];
+
+    await direct.resumePending(true);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(direct.outgoingTasks[0].state).toBe("upload_failed");
   });
 });

@@ -8,22 +8,16 @@ const RECORD_SIZE = 4096;
 const MAX_PAYLOAD_SIZE = 3993;
 
 const PUBKEY = /^[0-9a-f]{64}$/;
-export const ACTIVITY_PUSH_PAYLOAD = Object.freeze({
-  type: "activity" as const,
-  title: "HaiNei",
-  body: "有新通知",
-  url: "/#/notifications",
-});
 export const MESSAGE_PUSH_PAYLOAD = Object.freeze({
   type: "message" as const,
   title: "HaiNei",
-  body: "有新私信",
+  body: "你有新的私信消息",
   url: "/#/conversations",
 });
-export const GENERIC_PUSH_PAYLOAD = ACTIVITY_PUSH_PAYLOAD;
+export const GENERIC_PUSH_PAYLOAD = MESSAGE_PUSH_PAYLOAD;
 
 export function pushPayloadForType(value: unknown) {
-  return value === "message" ? MESSAGE_PUSH_PAYLOAD : ACTIVITY_PUSH_PAYLOAD;
+  return value === "message" ? MESSAGE_PUSH_PAYLOAD : null;
 }
 
 type PushSubscriptionRow = {
@@ -248,6 +242,8 @@ export async function triggerGenericPush(env: Env, senderPubkey: string, recipie
     failed: 0,
     expired: 0,
   };
+  const pushPayload = pushPayloadForType(typeValue);
+  if (!pushPayload) return diagnostics;
   if (!recipients.length) return diagnostics;
   const placeholders = recipients.map(() => "?").join(",");
   const rows = await env.DB.prepare(`
@@ -258,7 +254,7 @@ export async function triggerGenericPush(env: Env, senderPubkey: string, recipie
   if (!rows.results.length) return diagnostics;
 
   const config = pushConfig(env);
-  const payload = JSON.stringify(pushPayloadForType(typeValue));
+  const payload = JSON.stringify(pushPayload);
   await Promise.all(rows.results.map(async row => {
     const host = endpointHost(row.endpoint);
     try {

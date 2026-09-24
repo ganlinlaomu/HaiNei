@@ -21,7 +21,7 @@ function queued(accountPubkey = ACCOUNT, outgoingId = "logical-1", state: Outgoi
   const event = { id: `wrap-${outgoingId}`, kind: 1059, pubkey: accountPubkey, created_at: 1, content: "cipher", sig: "", tags: [["p", OTHER]] };
   return {
     accountPubkey, outgoingId, state,
-    message: { id: outgoingId, senderPubkey: accountPubkey, recipientPubkeys: [OTHER], plaintext: "private", createdAt: 1, protocol: "nip17", transportKind: 1059, tags: [] },
+    message: { id: outgoingId, senderPubkey: accountPubkey, recipientPubkeys: [OTHER], plaintext: "private", createdAt: 1, protocol: "nip17", transportKind: 1059, tags: [["t", "hainei-dm"]] },
     events: [event], relays: ["wss://relay.test"], attempts: 0, createdAt: 1, updatedAt: 1
   } satisfies OutgoingQueueRecord;
 }
