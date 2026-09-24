@@ -25,6 +25,9 @@ vi.mock("@/repositories/metaRepository", () => ({
 }));
 vi.mock("@/nostr/relays", () => ({ getRelaysFromStorage: () => [] }));
 vi.mock("@/nostr/messaging/service", () => ({ sendDirectMessage: vi.fn() }));
+vi.mock("@/repositories/outgoingDmTaskRepository", () => ({
+  outgoingDmTaskRepository: { list: vi.fn(async () => []), get: vi.fn(), put: vi.fn(), update: vi.fn() },
+}));
 
 import { buildDirectConversationSummaries, useDirectMessagesStore } from "@/stores/directMessages";
 import { useFriendshipsStore } from "@/stores/friendships";

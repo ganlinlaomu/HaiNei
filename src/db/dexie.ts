@@ -1,7 +1,7 @@
 import Dexie, { type Table, type Transaction } from "dexie";
 
 export const APP_VERSION = "0.1.5";
-export const DB_VERSION = 10;
+export const DB_VERSION = 11;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -152,6 +152,24 @@ export type OutgoingQueueRecord = {
   updatedAt: number;
 };
 
+export type OutgoingDmTaskState = "uploading" | "sending" | "sent" | "upload_failed" | "send_failed";
+export type OutgoingDmTaskRecord = {
+  accountPubkey: string;
+  localId: string;
+  peerPubkey: string;
+  text: string;
+  imageBlob?: Blob;
+  imageName?: string;
+  imageType?: string;
+  state: OutgoingDmTaskState;
+  uploadedRef?: string;
+  outgoingId?: string;
+  canonicalMessageId?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastError?: string;
+};
+
 export type BookmarkRecord = {
   accountPubkey: string;
   messageId: string;
@@ -245,6 +263,7 @@ export class HaiNeiDatabase extends Dexie {
   accountFriendships!: Table<FriendshipRecord, [string, string]>;
   accountProfiles!: Table<AccountProfileRecord, [string, string]>;
   outgoingQueue!: Table<OutgoingQueueRecord, [string, string]>;
+  outgoingDmTasks!: Table<OutgoingDmTaskRecord, [string, string]>;
   accountBookmarks!: Table<BookmarkRecord, [string, string]>;
 
   constructor(name = DATABASE_NAME) {
@@ -414,6 +433,27 @@ export class HaiNeiDatabase extends Dexie {
           record.acceptedWindows = [{ acceptedAt: record.acceptedAt, acceptedEventId: record.acceptedEventId }];
         }
       });
+    });
+
+    this.version(11).stores({
+      messages: "id, created_at, pubkey",
+      friends: "pubkey, name, group",
+      meta: "key",
+      imageCache: "url, timestamp",
+      accountMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+created_at], [accountPubkey+pubkey], [accountPubkey+pubkey+created_at]",
+      accountFriends: "[accountPubkey+pubkey], accountPubkey, [accountPubkey+name], [accountPubkey+group]",
+      accountMeta: "[accountPubkey+key], accountPubkey",
+      accountImageCache: "[accountPubkey+url], accountPubkey, [accountPubkey+timestamp]",
+      syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+createdAt], [accountPubkey+senderPubkey]",
+      conversationStates: "[accountPubkey+conversationId], accountPubkey, [accountPubkey+lastMessageAt]",
+      conversationReadStates: "[accountPubkey+conversationId], accountPubkey",
+      messageSyncStates: "accountPubkey",
+      decryptedEvents: "[accountPubkey+eventId], accountPubkey, [accountPubkey+decryptedAt]",
+      accountFriendships: "[accountPubkey+peerPubkey], accountPubkey, [accountPubkey+state], [accountPubkey+updatedAt]",
+      accountProfiles: "[accountPubkey+ownerPubkey], accountPubkey, [accountPubkey+updatedAt]",
+      outgoingQueue: "[accountPubkey+outgoingId], accountPubkey, [accountPubkey+state], [accountPubkey+nextAttemptAt]",
+      outgoingDmTasks: "[accountPubkey+localId], accountPubkey, [accountPubkey+peerPubkey], [accountPubkey+state], [accountPubkey+updatedAt]",
+      accountBookmarks: "[accountPubkey+messageId], accountPubkey, [accountPubkey+createdAt]"
     });
   }
 }

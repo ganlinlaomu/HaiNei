@@ -25,7 +25,7 @@
           <ProfileAvatar :pubkey="conversation.peerPubkey" :local-name="localName(conversation.peerPubkey)" :size="48" />
           <span class="conversation-copy">
             <strong>{{ displayName(conversation.peerPubkey) }}</strong>
-            <span class="preview">{{ preview(conversation.latest.content) }}</span>
+            <span class="preview">{{ preview(conversation.latest) }}</span>
           </span>
           <span class="conversation-meta">
             <time>{{ formatRelativeTime(conversation.latest.created_at) }}</time>
@@ -57,7 +57,7 @@ import { buildDirectConversationSummaries, useDirectMessagesStore } from "@/stor
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
-import { useMessagesStore } from "@/stores/messages";
+import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { formatRelativeTime } from "@/utils/format";
@@ -73,14 +73,19 @@ const ui = useUIStore();
 const searchQuery = ref("");
 const openMenuPeer = ref("");
 const conversations = computed(() => buildDirectConversationSummaries(
-  messages.inbox,
+  directMessages.conversationItems(),
   keys.pkHex,
   directMessages.unreadByConversation,
   { friendshipRecords: friendships.records, preferencesByPeer: directMessages.preferencesByPeer },
 ));
 const localName = (pubkey: string) => friends.list.find(friend => friend.pubkey === pubkey)?.name;
 const displayName = (pubkey: string) => privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey));
-const preview = (content: string) => directMessagePreview(content) || "新消息";
+const preview = (message: InboxItem) => {
+  if (message.outgoing?.state === "uploading") return "[图片] · 上传中…";
+  if (message.outgoing?.state === "sending") return message.outgoing.hasImage ? "[图片] · 发送中…" : "消息发送中…";
+  if (message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed") return "发送失败";
+  return directMessagePreview(message.content) || "新消息";
+};
 const filteredConversations = computed(() => {
   const needle = searchQuery.value.trim().toLocaleLowerCase();
   if (!needle) return conversations.value;

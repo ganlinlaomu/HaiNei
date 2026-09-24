@@ -20,6 +20,8 @@ export interface SendDirectMessageOptions {
   relays: string[];
   context: EncodeContext;
   pushCategory?: PushCategory;
+  createdAt?: number;
+  onQueued?: (outgoingId: string) => void | Promise<void>;
 }
 
 export interface PublishedMessage {
@@ -45,7 +47,8 @@ export async function buildMessageEvents(options: Omit<SendDirectMessageOptions,
     plaintext: options.content,
     replyTo: options.replyTo,
     rootId: options.rootId,
-    tags: options.tags
+    tags: options.tags,
+    createdAt: options.createdAt
   };
   if (!options.context.nip44Encrypt) throw new Error("当前登录方式不支持 NIP-44，无法发送 NIP-17 消息");
   return nip17Adapter.encode!(outgoing, options.context);
@@ -91,6 +94,7 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
     createdAt: now,
     updatedAt: now
   });
+  await options.onQueued?.(encoded.message.id);
   if (queued.state === "sent") return queuedResult(queued);
   const published = await publishQueuedOutgoing(accountPubkey, encoded.message.id, options.pushCategory);
   if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");

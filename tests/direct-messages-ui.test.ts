@@ -124,12 +124,14 @@ describe("direct-message navigation and UI contract", () => {
     expect(store).not.toContain("nostrClient.publish");
     expect(service).toContain("outgoingQueueRepository.putIfAbsent");
     expect(chat).toContain('class="chat-composer"');
-    expect(chat).toContain(':disabled="!accepted || sending"');
+    expect(chat).not.toContain("sending = ref(");
+    expect(chat).not.toContain(':disabled="!accepted || sending"');
+    expect(chat).toContain(':disabled="!accepted || !keys.pkHex"');
     expect(chat).toContain('const messages = computed(() => directMessages.peerMessages(peerPubkey.value))');
     expect(chat).toContain("'输入消息……'");
     expect(chat).toContain('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>');
     expect(chat).not.toContain('@click="router.back()">‹</button>');
-    expect(chat).toContain("uploadEncryptedCommentImage");
+    expect(store).toContain("uploadEncryptedCommentImage");
     expect(chat).toContain("PostImagePreview");
     expect(conversations).toContain("`/messages/${pubkey}`");
   });
@@ -142,5 +144,22 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("border-radius:50%");
     expect(chat).toContain("box-shadow:0 2px 12px");
     expect(chat).toContain("border-top:0");
+  });
+
+  it("uses per-message optimistic status without blocking the composer", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    expect(chat).toContain("上传中…");
+    expect(chat).toContain("发送中…");
+    expect(chat).toContain("✔️ 已发送");
+    expect(chat).toContain("上传失败 ·");
+    expect(chat).toContain("发送失败 ·");
+    expect(chat).toContain("directMessages.retry(message.outgoing.localId)");
+    expect(chat).toContain('draft.value = ""');
+    expect(chat).not.toContain("sendError");
+    expect(chat).not.toContain("sending.value");
+    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    expect(store).toContain('window.addEventListener("online", resume)');
+    expect(store).toContain('window.addEventListener("pageshow", resume)');
+    expect(store).toContain("resumePending(true)");
   });
 });

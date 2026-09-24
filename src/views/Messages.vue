@@ -17,9 +17,16 @@
           <span v-if="!isOwn(message)" class="avatar-slot">
             <ProfileAvatar v-if="showAvatar(index)" :pubkey="peerPubkey" :local-name="localName" :size="28" />
           </span>
-          <div class="message-bubble">
-            <span v-if="messageText(message.content)" class="bubble-text">{{ messageText(message.content) }}</span>
-            <PostImagePreview v-if="hasImage(message.content)" :content="message.content" :show-all="true" alt-text="私信图片" />
+          <div class="message-stack">
+            <div class="message-bubble">
+              <span v-if="messageText(message.content)" class="bubble-text">{{ messageText(message.content) }}</span>
+              <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
+              <PostImagePreview v-else-if="hasImage(message.content)" :content="message.content" :show-all="true" alt-text="私信图片" />
+            </div>
+            <span v-if="isOwn(message) && message.outgoing" class="message-status" :class="{ failed: isFailed(message) }">
+              {{ statusLabel(message) }}
+              <button v-if="isFailed(message)" type="button" @click="directMessages.retry(message.outgoing.localId)">重试</button>
+            </span>
           </div>
         </div>
       </template>
@@ -29,14 +36,13 @@
       <img :src="selectedImage.preview" alt="待发送图片" />
       <button type="button" aria-label="移除图片" @click="removeSelectedImage">×</button>
     </div>
-    <div v-if="sendError" class="send-error" role="alert">{{ sendError }}</div>
     <form class="chat-composer" @submit.prevent="submitMessage">
       <input ref="imageInput" class="image-input" type="file" accept="image/*" @change="selectImage" />
-      <button class="image-button" type="button" aria-label="添加图片" :disabled="!accepted || sending" @click="imageInput?.click()">
+      <button class="image-button" type="button" aria-label="添加图片" :disabled="!accepted || !keys.pkHex" @click="imageInput?.click()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 5-5 4 4 2-2 5 5"/></svg>
       </button>
-      <input v-model="draft" type="text" autocomplete="off" :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'" :disabled="!accepted || sending" />
-      <button class="send-button" type="submit" :disabled="!canSend">{{ sending ? '发送中' : '发送' }}</button>
+      <input v-model="draft" type="text" autocomplete="off" :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'" :disabled="!accepted || !keys.pkHex" />
+      <button class="send-button" type="submit" :disabled="!canSend">发送</button>
     </form>
   </main>
 </template>
@@ -53,7 +59,6 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
-import { uploadEncryptedCommentImage } from "@/utils/commentImage";
 
 const route = useRoute();
 const router = useRouter();
@@ -69,16 +74,25 @@ const localName = computed(() => friends.list.find(friend => friend.pubkey === p
 const displayName = computed(() => privateProfileDisplayName(profiles.getProfile(peerPubkey.value)?.nickname, peerPubkey.value, localName.value));
 const messages = computed(() => directMessages.peerMessages(peerPubkey.value));
 const draft = ref("");
-const sending = ref(false);
-const sendError = ref("");
 const selectedImage = ref<{ file: File; preview: string } | null>(null);
 const imageInput = ref<HTMLInputElement | null>(null);
 const messageList = ref<HTMLElement | null>(null);
-const canSend = computed(() => accepted.value && !sending.value && (!!draft.value.trim() || !!selectedImage.value));
+const canSend = computed(() => !!keys.pkHex && accepted.value && (!!draft.value.trim() || !!selectedImage.value));
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
 const messageText = (content: string) => directMessagePreview(content) === "[图片]" ? "" : directMessagePreview(content);
 const isOwn = (message: InboxItem) => message.pubkey === keys.pkHex;
+const isFailed = (message: InboxItem) => message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed";
+function statusLabel(message: InboxItem) {
+  switch (message.outgoing?.state) {
+    case "uploading": return "上传中…";
+    case "sending": return "发送中…";
+    case "sent": return "✔️ 已发送";
+    case "upload_failed": return "上传失败 ·";
+    case "send_failed": return "发送失败 ·";
+    default: return "";
+  }
+}
 function showAvatar(index: number) {
   if (isOwn(messages.value[index])) return false;
   const previous = messages.value[index - 1];
@@ -112,28 +126,16 @@ function selectImage(event: Event) {
   removeSelectedImage();
   selectedImage.value = { file, preview: URL.createObjectURL(file) };
 }
-async function submitMessage() {
+function submitMessage() {
   if (!canSend.value) return;
-  sending.value = true;
-  sendError.value = "";
+  const text = draft.value;
+  const image = selectedImage.value?.file;
   try {
-    let content = draft.value.trim();
-    if (selectedImage.value) {
-      const media = await uploadEncryptedCommentImage(selectedImage.value.file, {
-        accountPubkey: keys.pkHex,
-        signEvent: keys.signEvent.bind(keys),
-      });
-      content = `${content}${content ? "\n" : ""}![](${media.ref})`;
-    }
-    await directMessages.send(peerPubkey.value, content);
+    directMessages.send(peerPubkey.value, text, image);
     draft.value = "";
     removeSelectedImage();
     scrollToBottom();
-  } catch (error) {
-    sendError.value = error instanceof Error ? error.message : "发送失败，请重试";
-  } finally {
-    sending.value = false;
-  }
+  } catch {}
 }
 
 onMounted(load);
@@ -149,7 +151,7 @@ onBeforeUnmount(removeSelectedImage);
 <style scoped>
 .chat-page{position:fixed;inset:0;z-index:1000;display:grid;width:100%;max-width:none;margin:0;box-sizing:border-box;grid-template-rows:auto minmax(0,1fr) auto auto;background:#fff;color:#0f1419}
 .chat-header{display:grid;grid-template-columns:38px 34px minmax(0,1fr);align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}.chat-header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}
-.message-list{min-height:0;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.message-bubble{max-width:min(76%,430px);padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}
-.selected-image{position:relative;width:70px;height:70px;margin:6px 14px}.selected-image img{width:100%;height:100%;object-fit:cover;border-radius:10px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}.send-error{padding:4px 14px;color:#dc2626;font-size:11px;text-align:center}
+.message-list{min-height:0;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:10px;line-height:1.3}.message-status.failed{color:#dc2626}.message-status button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}
+.selected-image{position:relative;width:70px;height:70px;margin:6px 14px}.selected-image img{width:100%;height:100%;object-fit:cover;border-radius:10px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}
 .chat-composer{display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 12px calc(12px + env(safe-area-inset-bottom));border-top:0;background:transparent}.chat-composer input[type=text]{min-width:0;height:44px;padding:0 16px;border:1px solid #cfd5db;border-radius:999px;outline:0;background:#fff;box-shadow:0 2px 12px rgba(15,23,42,.08);font-size:16px}.chat-composer input[type=text]:focus{border-color:#1d9bf0;box-shadow:0 2px 12px rgba(29,155,240,.13)}.image-input{display:none}.image-button,.send-button{height:44px;color:#1d9bf0;font-weight:700}.image-button{display:grid;width:44px;padding:10px;place-items:center;border:1px solid #cfd5db;border-radius:50%;background:#fff;box-shadow:0 2px 12px rgba(15,23,42,.08)}.image-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.send-button{padding:0 8px;border:0;background:transparent}.chat-composer button:disabled{opacity:.38}
 </style>
