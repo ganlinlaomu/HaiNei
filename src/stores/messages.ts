@@ -18,6 +18,13 @@ export type InboxItem = {
   replyTo?: string;
   rootId?: string;
   tags?: string[][];
+  outgoing?: {
+    localId: string;
+    state: "uploading" | "sending" | "sent" | "upload_failed" | "send_failed";
+    imagePreviewUrl?: string;
+    hasImage: boolean;
+    lastError?: string;
+  };
   _localMeta?: {
     groupCount: number;
     groups: Array<{ name: string; count: number }>;

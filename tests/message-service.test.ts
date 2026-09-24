@@ -5,7 +5,7 @@ import { finalizeEvent, getPublicKey, nip44, utils, type EventTemplate } from "n
 const { publishMock } = vi.hoisted(() => ({ publishMock: vi.fn() }));
 vi.mock("@/nostr/relays", () => ({ publish: publishMock }));
 
-import { sendDirectMessage } from "@/nostr/messaging/service";
+import { buildMessageEvents, sendDirectMessage } from "@/nostr/messaging/service";
 import { db } from "@/db/dexie";
 
 const senderSecret = utils.hexToBytes("1".padStart(64, "0"));
@@ -60,5 +60,17 @@ describe("NIP-17 message publication", () => {
     expect(result.relayResults.map(result => result.targetPubkey).sort()).toEqual(
       [senderPubkey, recipientPubkey].sort()
     );
+  });
+
+  it("keeps a stable logical message id when an optimistic task is encoded again", async () => {
+    const options = {
+      recipientPubkeys: [recipientPubkey],
+      content: "same logical task",
+      createdAt: 12345,
+      context,
+    };
+    const first = await buildMessageEvents(options);
+    const retry = await buildMessageEvents(options);
+    expect(retry.message.id).toBe(first.message.id);
   });
 });
