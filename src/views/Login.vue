@@ -38,110 +38,59 @@
         </button>
       </form>
 
-      <form v-else class="login-form" @submit.prevent="doLoginNsec">
-        <div class="field-group">
-          <label class="field-label" for="private-key">私钥</label>
-          <div class="private-key-field">
-            <input
-              id="private-key"
-              ref="nsecInputEl"
-              v-model="nsecInput"
-              class="input private-key-input"
-              :type="showPrivateKey ? 'text' : 'password'"
-              placeholder="nsec1... / 64 位 hex"
-              autocapitalize="none"
-              autocomplete="off"
-              autocorrect="off"
-              spellcheck="false"
-              inputmode="text"
-              autofocus
-              :disabled="loading"
-            />
-            <button
-              class="visibility-button"
-              type="button"
-              :aria-label="showPrivateKey ? '隐藏私钥' : '显示私钥'"
-              :title="showPrivateKey ? '隐藏私钥' : '显示私钥'"
-              :disabled="loading"
-              @click="showPrivateKey = !showPrivateKey"
-            >
-              <span aria-hidden="true">👁</span>
+      <section v-else class="login-form">
+        <div v-if="ks.accounts.length" class="account-picker">
+          <p class="picker-title">此设备上的账号</p>
+          <div v-for="account in ks.accounts" :key="account.pubkey" class="account-option">
+            <button type="button" class="account-select" :disabled="loading" @click="selectAccount(account.pubkey)">
+              <strong>{{ shortPubkey(account.pubkey) }}</strong>
+              <small>{{ account.authType === "google" ? "Google" : account.hasEncryptedKey ? "私钥 · 已加密保存" : "私钥" }}</small>
             </button>
-          </div>
-
-          <div class="key-actions">
-            <button class="paste-button" type="button" :disabled="loading" @click="pastePrivateKey">
-              粘贴私钥
-            </button>
-            <span v-if="recognizedKeyType" class="recognized-key" aria-live="polite">
-              已识别 {{ recognizedKeyType }} 私钥
-            </span>
+            <button type="button" class="remove-account" :disabled="loading" @click="removeAccount(account.pubkey)">从设备移除</button>
           </div>
         </div>
 
-        <div class="encryption-section">
-          <button
-            class="accordion-button"
-            type="button"
-            :aria-expanded="saveEncrypted"
-            aria-controls="local-password-fields"
-            :disabled="loading"
-            @click="saveEncrypted = !saveEncrypted"
-          >
-            <span class="disclosure" aria-hidden="true">{{ saveEncrypted ? "▾" : "▸" }}</span>
-            在本机加密保存私钥
-          </button>
+        <button class="btn btn-primary google-login" type="button" :disabled="loading" @click="loginWithGoogle">
+          {{ loading ? "正在连接…" : "使用 Google 登录" }}
+        </button>
+        <button class="btn btn-secondary" type="button" :disabled="loading" @click="showPrivateLogin = !showPrivateLogin">
+          使用私钥登录
+        </button>
 
-          <div v-if="saveEncrypted" id="local-password-fields" class="password-fields">
-            <label class="field-label" for="local-password">本地保护密码</label>
-            <input
-              id="local-password"
-              v-model="nsecPassword"
-              class="input"
-              type="password"
-              autocomplete="new-password"
-              placeholder="输入密码"
-              :disabled="loading"
-            />
-
-            <label class="field-label" for="confirm-password">确认密码</label>
-            <input
-              id="confirm-password"
-              v-model="confirmPassword"
-              class="input"
-              type="password"
-              autocomplete="new-password"
-              placeholder="再次输入密码"
-              :disabled="loading"
-            />
-
-            <p class="password-note">启用后，下次打开 HaiNei 时只需输入这个密码解锁。</p>
-            <p class="password-note muted">这个密码只用于本机加密，不是 Nostr 密码，也不会上传。</p>
+        <form v-if="showPrivateLogin" class="private-login" @submit.prevent="doLoginNsec">
+          <div class="field-group">
+            <label class="field-label" for="private-key">私钥</label>
+            <div class="private-key-field">
+              <input id="private-key" ref="nsecInputEl" v-model="nsecInput" class="input private-key-input"
+                :type="showPrivateKey ? 'text' : 'password'" placeholder="nsec1... / 64 位 hex" autocapitalize="none"
+                autocomplete="off" autocorrect="off" spellcheck="false" inputmode="text" :disabled="loading" />
+              <button class="visibility-button" type="button" :aria-label="showPrivateKey ? '隐藏私钥' : '显示私钥'"
+                :disabled="loading" @click="showPrivateKey = !showPrivateKey"><span aria-hidden="true">👁</span></button>
+            </div>
+            <div class="key-actions">
+              <button class="paste-button" type="button" :disabled="loading" @click="pastePrivateKey">粘贴私钥</button>
+              <span v-if="recognizedKeyType" class="recognized-key">已识别 {{ recognizedKeyType }} 私钥</span>
+            </div>
           </div>
-        </div>
 
-        <button class="btn btn-primary login-button" type="submit" :disabled="loading">
-          {{ loading ? "正在登录…" : "登录" }}
-        </button>
-
-        <div class="divider" aria-hidden="true"><span>或</span></div>
-
-        <button
-          class="btn btn-secondary"
-          type="button"
-          :class="{ 'plugin-unavailable': !pluginDetected }"
-          :disabled="loading"
-          @click="loginWithExtension"
-        >
-          使用浏览器插件登录
-        </button>
-        <p class="plugin-label">NIP-07</p>
-        <p class="plugin-status" :class="{ detected: pluginDetected }">
-          {{ pluginDetected ? "已检测到浏览器插件" : "当前未检测到插件" }}
-        </p>
-
-        <p class="privacy-note">私钥只保存在你的设备中</p>
-      </form>
+          <div class="encryption-section">
+            <button class="accordion-button" type="button" :aria-expanded="saveEncrypted" aria-controls="local-password-fields"
+              :disabled="loading" @click="saveEncrypted = !saveEncrypted">
+              <span class="disclosure" aria-hidden="true">{{ saveEncrypted ? "▾" : "▸" }}</span>在本机加密保存私钥
+            </button>
+            <div v-if="saveEncrypted" id="local-password-fields" class="password-fields">
+              <label class="field-label" for="local-password">本地保护密码</label>
+              <input id="local-password" v-model="nsecPassword" class="input" type="password" autocomplete="new-password" placeholder="输入密码" :disabled="loading" />
+              <label class="field-label" for="confirm-password">确认密码</label>
+              <input id="confirm-password" v-model="confirmPassword" class="input" type="password" autocomplete="new-password" placeholder="再次输入密码" :disabled="loading" />
+              <p class="password-note">下次选择此账号后，只需输入这个密码解锁。</p>
+              <p class="password-note muted">密码只用于本机加密，不会上传。</p>
+            </div>
+          </div>
+          <button class="btn btn-primary login-button" type="submit" :disabled="loading">{{ loading ? "正在登录…" : "登录" }}</button>
+          <p class="privacy-note">私钥只保存在你的设备中</p>
+        </form>
+      </section>
 
       <p v-if="loginStatus && pageMode !== 'restoring'" class="status-message" role="status" aria-live="polite">
         {{ loginStatus }}
@@ -157,13 +106,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { nip19 } from "nostr-tools";
 import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { logger } from "@/utils/logger";
 
-type LoginMethod = "private-key" | "nip07" | "unlock";
+type LoginMethod = "google" | "private-key" | "unlock" | "switch";
 
 const ks = useKeyStore();
 const route = useRoute();
@@ -178,14 +127,11 @@ const saveEncrypted = ref(false);
 const nsecPassword = ref("");
 const confirmPassword = ref("");
 const unlockPassword = ref("");
-const pluginDetected = ref(typeof window !== "undefined" && !!window.nostr);
 const unlockInProgress = ref(false);
+const showPrivateLogin = ref(false);
 
 const nsecInputEl = ref<HTMLInputElement | null>(null);
 const unlockPasswordEl = ref<HTMLInputElement | null>(null);
-
-let pluginDetectionTimer: number | undefined;
-let pluginDetectionStopTimer: number | undefined;
 
 const needsUnlock = computed(() => !!ks.pkHex && ks.isEncrypted && !ks.isUnlocked);
 const pageMode = computed<"restoring" | "unlock" | "login">(() => {
@@ -212,35 +158,22 @@ const shortAccount = computed(() => {
   }
 });
 
-function detectPlugin() {
-  pluginDetected.value = !!window.nostr;
-  if (pluginDetected.value && pluginDetectionTimer !== undefined) {
-    window.clearInterval(pluginDetectionTimer);
-    pluginDetectionTimer = undefined;
+function shortPubkey(pubkey: string) {
+  try {
+    const npub = nip19.npubEncode(pubkey);
+    return `${npub.slice(0, 12)}...${npub.slice(-6)}`;
+  } catch {
+    return `${pubkey.slice(0, 10)}...${pubkey.slice(-6)}`;
   }
 }
 
 onMounted(async () => {
-  detectPlugin();
-  window.addEventListener("focus", detectPlugin);
-  pluginDetectionTimer = window.setInterval(detectPlugin, 500);
-  pluginDetectionStopTimer = window.setTimeout(() => {
-    if (pluginDetectionTimer !== undefined) {
-      window.clearInterval(pluginDetectionTimer);
-      pluginDetectionTimer = undefined;
-    }
-  }, 5000);
+  ks.refreshAccounts();
 
   if (pageMode.value === "unlock") {
     await nextTick();
     unlockPasswordEl.value?.focus();
   }
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener("focus", detectPlugin);
-  if (pluginDetectionTimer !== undefined) window.clearInterval(pluginDetectionTimer);
-  if (pluginDetectionStopTimer !== undefined) window.clearTimeout(pluginDetectionStopTimer);
 });
 
 watch(pageMode, async (mode) => {
@@ -345,27 +278,41 @@ async function doLoginNsec() {
   }
 }
 
-async function loginWithExtension() {
+async function loginWithGoogle() {
   if (loading.value) return;
   errorMessage.value = "";
-  detectPlugin();
-  if (!pluginDetected.value) {
-    errorMessage.value = "当前浏览器未检测到 NIP-07 插件。\n请使用私钥登录，或在支持 NIP-07 的浏览器中打开 HaiNei。";
-    return;
-  }
-
   loading.value = true;
-  loginStatus.value = "正在等待浏览器插件授权…";
+  loginStatus.value = "正在连接 Google…";
   try {
-    await ks.loginWithExtension();
+    await ks.loginWithGoogle();
     await finishLogin();
   } catch (error) {
-    logLoginFailure("nip07", "authorization", error);
-    errorMessage.value = "登录失败，请重试。";
+    logLoginFailure("google", "authorization", error);
+    errorMessage.value = error instanceof Error ? error.message : "Google 登录失败，请重试。";
   } finally {
     loading.value = false;
     loginStatus.value = "";
   }
+}
+
+async function selectAccount(pubkey: string) {
+  if (loading.value) return;
+  errorMessage.value = "";
+  loading.value = true;
+  try {
+    const result = await ks.selectRememberedAccount(pubkey);
+    if (result === "connected") await finishLogin();
+  } catch (error) {
+    logLoginFailure("switch", "select-account", error);
+    errorMessage.value = error instanceof Error ? error.message : "切换账号失败";
+  } finally {
+    loading.value = false;
+  }
+}
+
+function removeAccount(pubkey: string) {
+  if (loading.value || !window.confirm("只从此设备移除该账号？账号数据不会被删除。")) return;
+  ks.removeAccountFromDevice(pubkey);
 }
 
 async function doUnlock() {
@@ -398,8 +345,8 @@ function switchAccount() {
   clearSensitiveInputs();
   errorMessage.value = "";
   loginStatus.value = "";
-  ks.logout();
-  nextTick(() => nsecInputEl.value?.focus());
+  ks.clearActiveSession();
+  ks.refreshAccounts();
 }
 </script>
 
@@ -458,6 +405,16 @@ function switchAccount() {
   width: 100%;
   animation: slide-up 200ms ease-out;
 }
+.login-form { display: grid; gap: 12px; }
+.account-picker { display: grid; gap: 8px; margin-bottom: 10px; }
+.picker-title { margin: 0 0 2px; color: #8d99aa; font-size: .78rem; }
+.account-option { display: grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; border:1px solid #293445; border-radius:12px; overflow:hidden; }
+.account-select { display:grid; min-width:0; gap:4px; padding:11px 12px; border:0; background:transparent; color:#d8dee9; text-align:left; cursor:pointer; }
+.account-select strong { overflow:hidden; font: .82rem ui-monospace,SFMono-Regular,Menlo,monospace; text-overflow:ellipsis; white-space:nowrap; }
+.account-select small { color:#748095; font-size:.72rem; }
+.remove-account { align-self:stretch; padding:0 10px; border:0; border-left:1px solid #293445; background:transparent; color:#a87878; font-size:.72rem; cursor:pointer; }
+.google-login { margin-top: 2px; }
+.private-login { margin-top:4px; padding-top:18px; border-top:1px solid #252e3c; }
 
 .field-group {
   margin-bottom: 18px;
@@ -647,30 +604,6 @@ function switchAccount() {
 .btn-secondary:hover:not(:disabled) {
   border-color: #526078;
   background: #111923;
-}
-
-.btn-secondary.plugin-unavailable {
-  border-color: #293342;
-  color: #929dad;
-}
-
-.plugin-label {
-  margin: 8px 0 0;
-  color: #748095;
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
-  text-align: center;
-}
-
-.plugin-status {
-  margin: 5px 0 0;
-  color: #687487;
-  font-size: 0.72rem;
-  text-align: center;
-}
-
-.plugin-status.detected {
-  color: #7eaa98;
 }
 
 .privacy-note {

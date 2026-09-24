@@ -12,7 +12,10 @@ export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "src")
+      "@": path.resolve(__dirname, "src"),
+      // nostr-mill 1.8.2's prebuilt ESM mixes Noble v1 and v2 subpaths.
+      // Its published source resolves each dependency from the correct package.
+      "nostr-mill": path.resolve(__dirname, "node_modules/nostr-mill/src/mill-core.js")
     }
   },
   server: {
