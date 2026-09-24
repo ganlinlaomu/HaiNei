@@ -103,6 +103,7 @@ export async function triggerGenericPush(
   signEvent: SignEvent,
   type: PushCategory = "activity",
 ) {
+  if (type !== "message") return;
   const recipients = [...new Set(recipientPubkeys.map(value => value.toLowerCase()))]
     .filter(value => value !== pubkey.toLowerCase());
   if (!recipients.length) return;

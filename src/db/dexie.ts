@@ -153,6 +153,16 @@ export type OutgoingQueueRecord = {
 };
 
 export type OutgoingDmTaskState = "uploading" | "sending" | "sent" | "upload_failed" | "send_failed";
+export type PreparedEncryptedImage = {
+  encryptedBlob: Blob;
+  encryptedName: string;
+  previewBlob: Blob;
+  mime: string;
+  iv: string;
+  key: string;
+  width: number;
+  height: number;
+};
 export type OutgoingDmTaskRecord = {
   accountPubkey: string;
   localId: string;
@@ -161,6 +171,7 @@ export type OutgoingDmTaskRecord = {
   imageBlob?: Blob;
   imageName?: string;
   imageType?: string;
+  preparedImage?: PreparedEncryptedImage;
   state: OutgoingDmTaskState;
   uploadedRef?: string;
   outgoingId?: string;

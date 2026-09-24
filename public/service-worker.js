@@ -89,23 +89,18 @@ self.addEventListener('fetch', (event) => {
 });
 
 self.addEventListener('push', (event) => {
-  let type = 'activity';
-  try {
-    const payload = JSON.parse(event.data?.text() || '{}');
-    if (payload?.type === 'message') type = 'message';
-  } catch {}
-  const isMessage = type === 'message';
+  try { JSON.parse(event.data?.text() || '{}'); } catch {}
   event.waitUntil(self.registration.showNotification('HaiNei', {
-    body: isMessage ? '有新私信' : '有新通知',
+    body: '你有新的私信消息',
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    data: { type }
+    data: { type: 'message' }
   }));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const path = event.notification.data?.type === 'message' ? '/#/conversations' : '/#/notifications';
+  const path = '/#/conversations';
   const target = new URL(path, self.location.origin).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

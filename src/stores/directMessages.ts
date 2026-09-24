@@ -59,6 +59,38 @@ function taskInboxItem(task: OutgoingDmTaskRecord): InboxItem {
     },
   };
 }
+export function matchOutgoingTasksToCanonical(
+  canonical: InboxItem[],
+  tasks: OutgoingDmTaskRecord[],
+  accountPubkey: string,
+) {
+  const taskByMessageId = new Map<string, OutgoingDmTaskRecord>();
+  const matchedLocalIds = new Set<string>();
+  const canonicalIds = new Set(canonical.map(item => item.id));
+
+  for (const task of tasks) {
+    const exactId = task.canonicalMessageId || task.outgoingId;
+    if (!exactId || !canonicalIds.has(exactId)) continue;
+    matchedLocalIds.add(task.localId);
+    if (!taskByMessageId.has(exactId)) taskByMessageId.set(exactId, task);
+  }
+
+  const unmatchedTasks = tasks
+    .filter(task => !matchedLocalIds.has(task.localId))
+    .sort((a, b) => a.createdAt - b.createdAt || a.localId.localeCompare(b.localId));
+  for (const message of canonical) {
+    if (message.pubkey !== accountPubkey || !isDirectMessageTags(message.tags) || taskByMessageId.has(message.id)) continue;
+    const peer = directMessagePeer({ senderPubkey: message.pubkey, recipientPubkeys: message.recipientPubkeys || [] }, accountPubkey);
+    const matchIndex = unmatchedTasks.findIndex(task => task.peerPubkey === peer
+      && task.createdAt === message.created_at
+      && taskContent(task) === message.content);
+    if (matchIndex < 0) continue;
+    const [task] = unmatchedTasks.splice(matchIndex, 1);
+    matchedLocalIds.add(task.localId);
+    taskByMessageId.set(message.id, task);
+  }
+  return { taskByMessageId, matchedLocalIds };
+}
 function canonicalInboxItem(result: PublishedMessage): InboxItem {
   return {
     id: result.message.id, pubkey: result.message.senderPubkey, created_at: result.message.createdAt,
@@ -159,29 +191,20 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         preference: this.preferencesByPeer[peerPubkey.toLowerCase()],
         enforceAuthorization: true,
       });
-      const canonicalIds = new Set(canonical.map(item => item.id));
+      const matches = matchOutgoingTasksToCanonical(canonical, this.outgoingTasks, account);
       const outgoing = this.outgoingTasks
-        .filter(task => {
-          const messageId = task.canonicalMessageId || task.outgoingId;
-          return task.peerPubkey === peerPubkey.toLowerCase() && (!messageId || !canonicalIds.has(messageId));
-        })
+        .filter(task => task.peerPubkey === peerPubkey.toLowerCase() && !matches.matchedLocalIds.has(task.localId))
         .map(taskInboxItem);
-      const taskByCanonical = new Map(this.outgoingTasks
-        .filter(task => task.canonicalMessageId || task.outgoingId)
-        .map(task => [task.canonicalMessageId || task.outgoingId!, task]));
       return [...canonical.map(item => {
-        const task = taskByCanonical.get(item.id);
+        const task = matches.taskByMessageId.get(item.id);
         return task ? { ...item, outgoing: taskInboxItem(task).outgoing } : item;
       }), ...outgoing].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
     },
     conversationItems() {
       const canonical = useMessagesStore().inbox;
-      const canonicalIds = new Set(canonical.map(item => item.id));
+      const matches = matchOutgoingTasksToCanonical(canonical, this.outgoingTasks, this.loadedFor);
       return [...canonical, ...this.outgoingTasks
-        .filter(task => {
-          const messageId = task.canonicalMessageId || task.outgoingId;
-          return !messageId || !canonicalIds.has(messageId);
-        })
+        .filter(task => !matches.matchedLocalIds.has(task.localId))
         .map(taskInboxItem)];
     },
     async refresh(accountPubkey?: string) {
@@ -195,6 +218,18 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       ]);
       if (useKeyStore().pkHex !== account) return;
       const outgoingTasks = await outgoingDmTaskRepository.list(account);
+      if (useKeyStore().pkHex !== account) return;
+      const outgoingMatches = matchOutgoingTasksToCanonical(messages.inbox, outgoingTasks, account);
+      for (const [messageId, task] of outgoingMatches.taskByMessageId) {
+        if (task.outgoingId === messageId && task.canonicalMessageId === messageId) continue;
+        task.outgoingId = messageId;
+        task.canonicalMessageId = messageId;
+        await outgoingDmTaskRepository.update(account, task.localId, {
+          outgoingId: messageId,
+          canonicalMessageId: messageId,
+          updatedAt: Date.now(),
+        });
+      }
       if (useKeyStore().pkHex !== account) return;
       this.outgoingTasks = outgoingTasks.sort((a, b) => a.createdAt - b.createdAt || a.localId.localeCompare(b.localId));
       for (const task of outgoingTasks) {
@@ -360,6 +395,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         imageBlob: undefined,
         imageName: undefined,
         imageType: undefined,
+        preparedImage: undefined,
         lastError: undefined,
       });
     },
@@ -387,6 +423,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
             const media = await uploadEncryptedCommentImage(image, {
               accountPubkey: account,
               signEvent: useKeyStore().signEvent.bind(useKeyStore()),
+              prepared: task.preparedImage,
+              onPrepared: async preparedImage => {
+                task = (await this.patchTask(localId, { preparedImage })) || task;
+              },
             });
             task = (await this.patchTask(localId, { uploadedRef: media.ref, state: "sending", lastError: undefined })) || task;
           } else {
@@ -432,8 +472,9 @@ export const useDirectMessagesStore = defineStore("directMessages", {
             continue;
           }
         }
-        if (["uploading", "sending"].includes(task.state)
-          || (includeFailed && ["upload_failed", "send_failed"].includes(task.state))) {
+        const resumableFailure = task.state === "send_failed"
+          && (!task.imageBlob || !!task.outgoingId || !!task.uploadedRef);
+        if (["uploading", "sending"].includes(task.state) || (includeFailed && resumableFailure)) {
           void this.runTask(task.localId);
         }
       }

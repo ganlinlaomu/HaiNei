@@ -28,7 +28,7 @@ describe("NIP-17 message publication", () => {
     await db.outgoingQueue.clear();
   });
 
-  it("requires every encrypted copy to reach at least one relay", async () => {
+  it("treats recipient delivery as sent even when the sender self-copy misses", async () => {
     publishMock
       .mockResolvedValueOnce([{ relay: "wss://one.test", ok: true, ts: 1 }])
       .mockResolvedValueOnce([{ relay: "wss://one.test", ok: false, reason: "timeout", ts: 2 }]);
@@ -38,8 +38,21 @@ describe("NIP-17 message publication", () => {
       content: "hello",
       relays: ["wss://one.test"],
       context
-    })).rejects.toThrow("加密副本未被任何 relay 接收");
+    })).resolves.toMatchObject({ message: { plaintext: "hello" } });
     expect(publishMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("still fails when the recipient copy is not accepted by a relay", async () => {
+    publishMock
+      .mockResolvedValueOnce([{ relay: "wss://one.test", ok: false, reason: "timeout", ts: 1 }])
+      .mockResolvedValueOnce([{ relay: "wss://one.test", ok: true, ts: 2 }]);
+
+    await expect(sendDirectMessage({
+      recipientPubkeys: [recipientPubkey],
+      content: "hello",
+      relays: ["wss://one.test"],
+      context
+    })).rejects.toThrow("收件人副本未被任何 relay 接收");
   });
 
   it("returns success when recipient and sender copies are acknowledged", async () => {

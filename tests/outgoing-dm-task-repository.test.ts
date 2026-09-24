@@ -15,6 +15,11 @@ function pending(accountPubkey = ACCOUNT): OutgoingDmTaskRecord {
     imageBlob: new Blob(["image"], { type: "image/jpeg" }),
     imageName: "photo.jpg",
     imageType: "image/jpeg",
+    preparedImage: {
+      encryptedBlob: new Blob(["encrypted"]), encryptedName: "photo.encrypted",
+      previewBlob: new Blob(["preview"], { type: "image/jpeg" }), mime: "image/jpeg",
+      iv: "iv", key: "key", width: 10, height: 10,
+    },
     state: "uploading",
     createdAt: 10,
     updatedAt: 10,
@@ -31,6 +36,7 @@ describe("account-scoped outgoing DM task persistence", () => {
     const restored = await outgoingDmTaskRepository.get(ACCOUNT, "local-1");
     expect(restored).toMatchObject({ state: "uploading", imageName: "photo.jpg", text: "pending" });
     expect(await restored!.imageBlob!.text()).toBe("image");
+    expect(await restored!.preparedImage!.encryptedBlob.text()).toBe("encrypted");
   });
 
   it("keeps pending tasks isolated by account", async () => {

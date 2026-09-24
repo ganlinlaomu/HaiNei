@@ -51,11 +51,11 @@ npm exec wrangler -- d1 execute DB --remote --config worker/wrangler.toml \
   --command "SELECT COUNT(*) AS subscription_count FROM hainei_push_subscriptions"
 ```
 
-从另一已接受好友账号产生一次加密活动，确认 `/api/push/trigger` 成功，并且系统通知严格只有：
+从另一已接受好友账号发送一条私信，确认 `/api/push/trigger` 成功，并且系统通知严格只有：
 
 ```text
 HaiNei
-有新通知
+你有新的私信消息
 ```
 
-推送载荷不得包含发送者、pubkey、动态、评论、资料或任何解密内容。最后关闭推送，再次查询计数，确认对应订阅已删除。
+点赞、评论和好友活动不得触发推送；私信推送载荷不得包含发送者、pubkey、消息、动态、评论、资料或任何解密内容。最后关闭推送，再次查询计数，确认对应订阅已删除。
