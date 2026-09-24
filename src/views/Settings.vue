@@ -18,19 +18,36 @@
       <button class="btn btn-primary" type="button" @click="router.push('/login')">前往登录</button>
     </section>
 
-    <section v-else class="card">
+    <section v-else class="card settings-card">
       <h2>设置</h2>
 
-      <button class="profile-link" type="button" @click="router.push('/settings/profile')">
+      <button class="top-level-row" type="button" @click="router.push('/settings/profile')">
         <span><strong>我的资料</strong><small>头像、昵称与简介 · 仅自己和已接受的好友可见</small></span>
-        <span aria-hidden="true">›</span>
+        <span class="row-chevron" aria-hidden="true">›</span>
       </button>
-      <button class="profile-link saved-link" type="button" @click="router.push('/settings/saved')">
+      <button class="top-level-row" type="button" @click="router.push('/settings/saved')">
         <span><strong>已收藏</strong><small>仅保存在当前设备和账号中</small></span>
-        <span aria-hidden="true">›</span>
+        <span class="row-chevron" aria-hidden="true">›</span>
       </button>
 
-      <details class="settings-section" open>
+      <details class="top-level-group">
+        <summary class="top-level-row">
+          <span><strong>账户</strong><small>{{ shortPk }}</small></span>
+          <span class="row-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="top-level-content account-row">
+          <span class="small">已登录：{{ shortPk }}</span>
+          <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
+        </div>
+      </details>
+
+      <details class="top-level-group">
+        <summary class="top-level-row">
+          <span><strong>设置</strong><small>Relay、Media、推送、缓存与诊断</small></span>
+          <span class="row-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="top-level-content technical-settings">
+      <details class="technical-section" open>
         <summary class="section-heading">
           <div>
             <h3>连接 / Relay</h3>
@@ -84,7 +101,7 @@
         </div>
       </details>
 
-      <details class="settings-section">
+      <details class="technical-section">
         <summary class="section-heading">
           <div>
             <h3>图片与视频 / Media</h3>
@@ -159,7 +176,7 @@
         </div>
       </details>
 
-      <details class="settings-section">
+      <details class="technical-section">
         <summary class="section-heading">
           <div><h3>数据使用 / Data Saver</h3><p>{{ settings.dataSaver ? "节省流量" : "标准" }}</p></div>
         </summary>
@@ -170,9 +187,9 @@
         <p class="section-detail">节省流量模式会缩短图片预加载距离，并避免不必要的视频预加载。</p>
       </details>
 
-      <details class="settings-section">
+      <details class="technical-section">
         <summary class="section-heading">
-          <div><h3>后台推送</h3><p>{{ pushStatusText }}</p></div>
+          <div><h3>后台推送 / Web Push</h3><p>{{ pushStatusText }}</p></div>
         </summary>
         <p class="section-detail">推送仅用于私信，固定显示“你有新的私信消息”，不会包含好友名称、消息内容或图片信息。</p>
         <div class="account-row">
@@ -183,7 +200,7 @@
         </div>
       </details>
 
-      <details class="settings-section">
+      <details class="technical-section">
         <summary class="section-heading">
           <div><h3>存储 / Cache</h3><p>{{ cacheStats.count }} 个图片文件 · {{ formatSize(cacheStats.size) }}</p></div>
         </summary>
@@ -204,15 +221,7 @@
         </div>
       </details>
 
-      <details class="settings-section">
-        <summary class="section-heading"><div><h3>账户</h3><p>{{ shortPk }}</p></div></summary>
-        <div class="account-row">
-          <span class="small">已登录：{{ shortPk }}</span>
-          <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
-        </div>
-      </details>
-
-      <details class="settings-section">
+      <details class="technical-section">
         <summary class="section-heading"><div><h3>高级设置 / Diagnostics</h3><p>Relay、NIP-17 与同步日志</p></div></summary>
         <div class="account-row">
           <span class="small">查看 Relay、NIP-17 与消息同步的本地实时日志</span>
@@ -222,6 +231,8 @@
             </button>
             <button class="btn btn-secondary" type="button" @click="router.push('/debug')">系统诊断</button>
           </div>
+        </div>
+      </details>
         </div>
       </details>
     </section>
@@ -531,6 +542,16 @@ onBeforeUnmount(stopStatusPolling);
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.035);
 }
 
+.settings-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.settings-card > h2 {
+  margin: 0;
+  padding: 16px;
+}
+
 h2,
 h3,
 p {
@@ -546,15 +567,38 @@ h3 {
   font-size: 1rem;
 }
 
-.settings-section {
+.top-level-row {
+  display: flex;
+  width: 100%;
+  min-height: 64px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 16px;
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+  background: transparent;
+  color: #1e293b;
+  text-align: left;
+  cursor: pointer;
+  list-style: none;
+}
+.top-level-row::-webkit-details-marker { display: none; }
+.top-level-row > span:first-child { display: grid; min-width: 0; gap: 4px; }
+.top-level-row small { color: #64748b; font-size: .78rem; line-height: 1.4; }
+.row-chevron { flex: 0 0 auto; color: #94a3b8; font-size: 22px; transition: transform 160ms ease; }
+.top-level-group[open] > .top-level-row .row-chevron { transform: rotate(90deg); }
+.top-level-content { padding: 4px 16px 16px; border-top: 1px solid #eef2f6; }
+.top-level-content.account-row { min-height: 64px; }
+.technical-settings { padding-top: 0; }
+
+.technical-section {
   padding: 0;
   border-top: 1px solid #e2e8f0;
 }
-.profile-link{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 0 4px;padding:13px 4px;border:0;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;background:transparent;text-align:left;color:#1e293b}.profile-link span:first-child{display:grid;gap:4px}.profile-link small{color:#64748b;font-size:.78rem}.profile-link span:last-child{color:#94a3b8;font-size:22px}
-.saved-link{margin-top:0;border-top:0}
 
-.settings-section:first-of-type {
-  margin-top: 12px;
+.technical-section:first-child {
+  border-top: 0;
 }
 
 .section-heading {
@@ -576,7 +620,7 @@ h3 {
   transform: rotate(90deg);
   transition: transform 160ms ease;
 }
-.settings-section[open] > .section-heading::after { transform: rotate(-90deg); }
+.technical-section[open] > .section-heading::after { transform: rotate(-90deg); }
 
 .section-heading p {
   margin: 2px 0 0;
@@ -754,10 +798,10 @@ h3 {
   padding-bottom: 16px;
 }
 
-.settings-section > .add-form,
-.settings-section > .media-add-form,
-.settings-section > .item-list,
-.settings-section > .account-row { margin-bottom: 16px; }
+.technical-section > .add-form,
+.technical-section > .media-add-form,
+.technical-section > .item-list,
+.technical-section > .account-row { margin-bottom: 16px; }
 
 .small {
   color: #64748b;
@@ -791,6 +835,10 @@ h3 {
     padding: 14px;
   }
 
+  .settings-card {
+    padding: 0;
+  }
+
   .media-add-form {
     grid-template-columns: 110px minmax(0, 1fr);
   }
@@ -811,6 +859,7 @@ h3 {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .section-heading::after { transition: none; }
+  .section-heading::after,
+  .row-chevron { transition: none; }
 }
 </style>

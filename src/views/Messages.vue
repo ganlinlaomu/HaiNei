@@ -18,12 +18,28 @@
             <ProfileAvatar v-if="showAvatar(index)" :pubkey="peerPubkey" :local-name="localName" :size="28" />
           </span>
           <div class="message-stack">
-            <div class="message-bubble">
-              <span v-if="messageText(message.content)" class="bubble-text">{{ messageText(message.content) }}</span>
-              <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
-              <PostImagePreview v-else-if="hasImage(message.content)" :content="message.content" :show-all="true" alt-text="私信图片" />
+            <div class="message-bubble" :class="{ 'media-caption-bubble': isMediaCaption(message) }">
+              <template v-if="isMediaCaption(message)">
+                <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
+                <PostImagePreview v-else :content="message.content" :show-all="true" alt-text="私信图片" />
+                <div class="caption-area">
+                  <span class="bubble-text">{{ messageText(message.content) }}</span>
+                  <span class="caption-meta" :class="{ failed: isFailed(message) }">
+                    <time>{{ formatBubbleTime(message.created_at) }}</time>
+                    <template v-if="isOwn(message) && message.outgoing">
+                      <span>{{ statusLabel(message) }}</span>
+                      <button v-if="isFailed(message)" type="button" @click="directMessages.retry(message.outgoing.localId)">重试</button>
+                    </template>
+                  </span>
+                </div>
+              </template>
+              <template v-else>
+                <span v-if="messageText(message.content)" class="bubble-text">{{ messageText(message.content) }}</span>
+                <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
+                <PostImagePreview v-else-if="hasImage(message.content)" :content="message.content" :show-all="true" alt-text="私信图片" />
+              </template>
             </div>
-            <span v-if="isOwn(message) && message.outgoing" class="message-status" :class="{ failed: isFailed(message) }">
+            <span v-if="isOwn(message) && message.outgoing && !isMediaCaption(message)" class="message-status" :class="{ failed: isFailed(message) }">
               {{ statusLabel(message) }}
               <button v-if="isFailed(message)" type="button" @click="directMessages.retry(message.outgoing.localId)">重试</button>
             </span>
@@ -81,6 +97,8 @@ const canSend = computed(() => !!keys.pkHex && accepted.value && (!!draft.value.
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
 const messageText = (content: string) => directMessagePreview(content) === "[图片]" ? "" : directMessagePreview(content);
+const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreviewUrl || hasImage(message.content);
+const isMediaCaption = (message: InboxItem) => hasMessageImage(message) && !!messageText(message.content);
 const isOwn = (message: InboxItem) => message.pubkey === keys.pkHex;
 const isFailed = (message: InboxItem) => message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed";
 function statusLabel(message: InboxItem) {
@@ -105,6 +123,9 @@ function showTimestamp(index: number) {
 function formatMessageTime(timestamp: number) {
   const date = new Date(timestamp * 1000);
   return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function formatBubbleTime(timestamp: number) {
+  return new Date(timestamp * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 function scrollToBottom() { void nextTick(() => { if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight; }); }
 
@@ -151,7 +172,7 @@ onBeforeUnmount(removeSelectedImage);
 <style scoped>
 .chat-page{position:fixed;inset:0;z-index:1000;display:grid;width:100%;max-width:none;margin:0;box-sizing:border-box;grid-template-rows:auto minmax(0,1fr) auto auto;background:#fff;color:#0f1419}
 .chat-header{display:grid;grid-template-columns:38px 34px minmax(0,1fr);align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}.chat-header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}
-.message-list{min-height:0;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:9px;font-weight:400;line-height:1.3;opacity:.85}.message-status.failed{color:#dc2626}.message-status button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}
+.message-list{min-height:0;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:9px;font-weight:400;line-height:1.3;opacity:.85}.message-status.failed,.caption-meta.failed{color:#dc2626}.message-status button,.caption-meta button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}.caption-meta{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;color:#718096;font-size:9px;line-height:1.3;white-space:nowrap}
 .selected-image{position:relative;width:70px;height:70px;margin:6px 14px}.selected-image img{width:100%;height:100%;object-fit:cover;border-radius:10px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}
 .chat-composer{display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 12px calc(18px + env(safe-area-inset-bottom));border-top:0;background:transparent}.chat-composer input[type=text]{min-width:0;height:44px;padding:0 16px;border:1px solid #cfd5db;border-radius:999px;outline:0;background:#fff;box-shadow:0 2px 12px rgba(15,23,42,.08);font-size:16px}.chat-composer input[type=text]:focus{border-color:#1d9bf0;box-shadow:0 2px 12px rgba(29,155,240,.13)}.image-input{display:none}.image-button,.send-button{height:44px;color:#1d9bf0;font-weight:700}.image-button{display:grid;width:44px;padding:10px;place-items:center;border:1px solid #cfd5db;border-radius:50%;background:#fff;box-shadow:0 2px 12px rgba(15,23,42,.08)}.image-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.send-button{padding:0 8px;border:0;background:transparent}.chat-composer button:disabled{opacity:.38}
 </style>
