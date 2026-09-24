@@ -1,33 +1,22 @@
 <template>
 
   <!-- bottom nav moved into Headbar file for simplicity; only shown when logged in and unlocked -->
-  <nav v-if="shouldShowBottomNav" class="bottom-nav">
-    <router-link class="nav-item" to="/" @click="handleNavigation">
+  <nav v-if="shouldShowBottomNav" class="bottom-nav" aria-label="主导航">
+    <router-link class="nav-item" to="/" aria-label="首页" @click="handleNavigation">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
         <polyline points="9 22 9 12 15 12 15 22"></polyline>
       </svg>
-      <span class="nav-label">首页</span>
     </router-link>
-    <router-link class="nav-item" to="/friends" @click="handleNavigation">
-      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-        <circle cx="9" cy="7" r="4"></circle>
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-      </svg>
-      <span class="nav-label">好友</span>
-    </router-link>
-    <router-link class="nav-item" to="/conversations" @click="handleNavigation">
+    <router-link class="nav-item" to="/conversations" aria-label="私信" @click="handleNavigation">
       <span class="icon-wrapper">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
         </svg>
         <span v-if="directMessages.unreadCount > 0" class="badge">{{ directMessages.unreadCount }}</span>
       </span>
-      <span class="nav-label">私信</span>
     </router-link>
-    <router-link class="nav-item" to="/notifications" @click="handleNavigation">
+    <router-link class="nav-item" to="/notifications" aria-label="通知" @click="handleNavigation">
       <span class="icon-wrapper">
         <svg
           class="icon"
@@ -50,15 +39,12 @@
           {{ notifications.unreadCount }}
         </span>
       </span>
-
-      <span class="nav-label">通知</span>
     </router-link>
-    <router-link class="nav-item" to="/settings" @click="handleNavigation">
+    <router-link class="nav-item" to="/settings" aria-label="我的" @click="handleNavigation">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="8" r="4"></circle>
         <path d="M4 21a8 8 0 0 1 16 0"></path>
       </svg>
-      <span class="nav-label">我的</span>
     </router-link>
   </nav>
 </template>
@@ -147,7 +133,7 @@ export default defineComponent({
   /* 布局 */
   display: flex;
   justify-content: space-around;
-  align-items: flex-start;
+  align-items: center;
 
   /* 视觉（替代 backdrop-filter，性能友好） */
   background: rgba(255, 255, 255, 0.94);
@@ -174,13 +160,13 @@ export default defineComponent({
 .nav-item {
   flex: 1;
   min-width: 0;
-  padding: 8px 4px;
+  min-height: 48px;
+  padding: 4px;
 
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-start;
-  gap: 4px;
+  justify-content: center;
 
   text-decoration: none;
   color: #64748b;
@@ -223,16 +209,6 @@ export default defineComponent({
 /* 激活态轻微强调（不改 stroke-width，避免重绘） */
 .nav-item.router-link-active .icon {
   transform: scale(1.08);
-}
-
-/* =========================
-   Label
-   ========================= */
-
-.nav-label {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
 }
 
 /* =========================
