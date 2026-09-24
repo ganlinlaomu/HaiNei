@@ -376,8 +376,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       return updated;
     },
     async failTask(localId: string, state: "upload_failed" | "send_failed", error: unknown) {
+      const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
+      const task = this.outgoingTasks.find(item => item.accountPubkey === account && item.localId === localId);
       await this.patchTask(localId, {
-        state,
+        state: state === "upload_failed" && task?.uploadedRef ? "send_failed" : state,
         lastError: error instanceof Error ? error.message : state,
       });
     },

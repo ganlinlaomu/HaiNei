@@ -158,6 +158,7 @@ describe("optimistic outgoing DM tasks", () => {
     await vi.waitFor(() => expect(mocks.upload).toHaveBeenCalledOnce());
     finishUpload({ ref: "blossom+aesgcm:encrypted" });
     await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sending"));
+    expect(direct.peerMessages(PEER)[0].outgoing?.state).not.toBe("sent");
     expect(mocks.send.mock.calls[0][0].content).toBe("配图\n![](blossom+aesgcm:encrypted)");
     finishSend(canonical("canonical-image", "配图\n![](blossom+aesgcm:encrypted)"));
     await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
@@ -203,11 +204,30 @@ describe("optimistic outgoing DM tasks", () => {
     const { direct } = seed();
     const localId = direct.send(PEER, "", new File(["image"], "photo.jpg", { type: "image/jpeg" }));
     await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("send_failed"));
+    expect(direct.outgoingTasks[0].uploadedRef).toBe("blossom+aesgcm:once");
 
     await Promise.all([direct.retry(localId), direct.retry(localId)]);
     expect(mocks.upload).toHaveBeenCalledOnce();
     expect(mocks.publish).toHaveBeenCalledOnce();
     expect(direct.peerMessages(PEER)).toHaveLength(1);
+  });
+
+  it("never regresses an uploaded image task to upload_failed", async () => {
+    const { direct } = seed();
+    direct.outgoingTasks = [{
+      accountPubkey: ACCOUNT, localId: "uploaded", peerPubkey: PEER, text: "",
+      imageBlob: new Blob(["image"], { type: "image/jpeg" }),
+      uploadedRef: "blossom+aesgcm:uploaded", state: "sending",
+      createdAt: 12, updatedAt: 12,
+    }];
+    mocks.tasks.set(`${ACCOUNT}:uploaded`, direct.outgoingTasks[0]);
+
+    await direct.failTask("uploaded", "upload_failed", new Error("cache failed"));
+
+    expect(direct.outgoingTasks[0]).toMatchObject({
+      uploadedRef: "blossom+aesgcm:uploaded",
+      state: "send_failed",
+    });
   });
 
   it("merges and durably relinks a failed optimistic image when the task id link is missing", async () => {

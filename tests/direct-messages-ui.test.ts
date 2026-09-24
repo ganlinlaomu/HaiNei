@@ -138,7 +138,7 @@ describe("direct-message navigation and UI contract", () => {
 
   it("raises the DM composer above the safe-area bottom", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(chat).toContain("calc(12px + env(safe-area-inset-bottom))");
+    expect(chat).toContain("calc(18px + env(safe-area-inset-bottom))");
     expect(chat).toContain("height:44px");
     expect(chat).toContain("grid-template-columns:44px minmax(0,1fr) auto");
     expect(chat).toContain("border-radius:50%");
@@ -150,7 +150,10 @@ describe("direct-message navigation and UI contract", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain("上传中…");
     expect(chat).toContain("发送中…");
-    expect(chat).toContain("✔️ 已发送");
+    expect(chat).toContain("✓ 已发送");
+    expect(chat).not.toContain("✔️ 已发送");
+    expect(chat).toContain("font-size:9px;font-weight:400");
+    expect(chat).toContain("opacity:.85");
     expect(chat).toContain("上传失败 ·");
     expect(chat).toContain("发送失败 ·");
     expect(chat).toContain("directMessages.retry(message.outgoing.localId)");

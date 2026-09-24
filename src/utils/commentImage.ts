@@ -54,7 +54,9 @@ export async function uploadPreparedEncryptedCommentImage(
     width: prepared.width,
     height: prepared.height
   });
-  await storeImageInCache(options.accountPubkey, ref, prepared.previewBlob, prepared.mime);
+  // The encrypted upload is already complete here. A local preview-cache failure
+  // must not turn a successful Blossom upload into an upload failure.
+  await storeImageInCache(options.accountPubkey, ref, prepared.previewBlob, prepared.mime).catch(() => undefined);
   return { type: "image" as const, ref, width: prepared.width, height: prepared.height };
 }
 
