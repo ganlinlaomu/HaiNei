@@ -19,31 +19,42 @@
     </section>
 
     <section v-else class="card settings-card">
-      <h2>设置</h2>
+      <header class="my-profile-summary">
+        <ProfileAvatar :pubkey="keyStore.pkHex" :local-name="nickname" :size="56" />
+        <span>
+          <strong>{{ nickname }}</strong>
+          <small>{{ shortPk }}</small>
+        </span>
+      </header>
 
       <button class="top-level-row" type="button" @click="router.push('/settings/profile')">
-        <span><strong>我的资料</strong><small>头像、昵称与简介 · 仅自己和已接受的好友可见</small></span>
+        <span class="row-main">
+          <span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span>
+          <strong>我的资料</strong>
+        </span>
         <span class="row-chevron" aria-hidden="true">›</span>
       </button>
       <button class="top-level-row" type="button" @click="router.push('/settings/saved')">
-        <span><strong>已收藏</strong><small>仅保存在当前设备和账号中</small></span>
+        <span class="row-main">
+          <span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg></span>
+          <strong>已收藏</strong>
+        </span>
+        <span class="row-chevron" aria-hidden="true">›</span>
+      </button>
+      <button class="top-level-row" type="button" @click="router.push('/friends')">
+        <span class="row-main">
+          <span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 15.5a5 5 0 0 1 7 4.5"/></svg></span>
+          <strong>好友 / 好友分组</strong>
+        </span>
         <span class="row-chevron" aria-hidden="true">›</span>
       </button>
 
       <details class="top-level-group">
         <summary class="top-level-row">
-          <span><strong>账户</strong><small>{{ shortPk }}</small></span>
-          <span class="row-chevron" aria-hidden="true">›</span>
-        </summary>
-        <div class="top-level-content account-row">
-          <span class="small">已登录：{{ shortPk }}</span>
-          <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
-        </div>
-      </details>
-
-      <details class="top-level-group">
-        <summary class="top-level-row">
-          <span><strong>设置</strong><small>Relay、Media、推送、缓存与诊断</small></span>
+          <span class="row-main">
+            <span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></span>
+            <strong>设置</strong>
+          </span>
           <span class="row-chevron" aria-hidden="true">›</span>
         </summary>
         <div class="top-level-content technical-settings">
@@ -235,6 +246,20 @@
       </details>
         </div>
       </details>
+
+      <details class="top-level-group">
+        <summary class="top-level-row">
+          <span class="row-main">
+            <span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg></span>
+            <strong>账户</strong>
+          </span>
+          <span class="row-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div class="top-level-content account-row">
+          <span class="small">当前账户：{{ shortPk }}</span>
+          <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
+        </div>
+      </details>
     </section>
   </main>
 </template>
@@ -242,6 +267,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import {
   inspectRelays,
   onRelayConnectionState,
@@ -249,6 +275,7 @@ import {
   type RelayRuntimeStatus
 } from "@/nostr/relays";
 import { useKeyStore } from "@/stores/keys";
+import { useProfilesStore } from "@/stores/profiles";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import { clearAllCache, getCacheStats } from "@/utils/imageCache";
@@ -268,11 +295,13 @@ import {
 } from "@/services/connectionSettings";
 
 const keyStore = useKeyStore();
+const profiles = useProfilesStore();
 const settings = useSettingsStore();
 const ui = useUIStore();
 const router = useRouter();
 
 const hasAccount = computed(() => !!keyStore.pkHex);
+const nickname = computed(() => profiles.getProfile(keyStore.pkHex)?.nickname?.trim() || "未设置昵称");
 const shortPk = computed(() => keyStore.pkHex ? `${keyStore.pkHex.slice(0, 8)}...${keyStore.pkHex.slice(-6)}` : "");
 const relayList = computed(() => settings.relayList);
 const mediaList = computed(() => settings.mediaList);
@@ -531,9 +560,11 @@ onBeforeUnmount(stopStatusPolling);
 
 <style scoped>
 .settings-container {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 12px 12px calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px);
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px);
+  box-sizing: border-box;
 }
 
 .card {
@@ -544,12 +575,34 @@ onBeforeUnmount(stopStatusPolling);
 
 .settings-card {
   padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
 }
 
-.settings-card > h2 {
-  margin: 0;
-  padding: 16px;
+.my-profile-summary {
+  display: flex;
+  min-height: 88px;
+  align-items: center;
+  gap: 13px;
+  padding: 15px 16px;
+}
+.my-profile-summary > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.my-profile-summary strong {
+  overflow: hidden;
+  color: #172033;
+  font-size: 1.05rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.my-profile-summary small {
+  color: #64748b;
+  font-size: .78rem;
 }
 
 h2,
@@ -584,8 +637,10 @@ h3 {
   list-style: none;
 }
 .top-level-row::-webkit-details-marker { display: none; }
-.top-level-row > span:first-child { display: grid; min-width: 0; gap: 4px; }
-.top-level-row small { color: #64748b; font-size: .78rem; line-height: 1.4; }
+.row-main { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.row-main strong { font-size: .94rem; font-weight: 600; }
+.row-icon { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; color: #475569; }
+.row-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .row-chevron { flex: 0 0 auto; color: #94a3b8; font-size: 22px; transition: transform 160ms ease; }
 .top-level-group[open] > .top-level-row .row-chevron { transform: rotate(90deg); }
 .top-level-content { padding: 4px 16px 16px; border-top: 1px solid #eef2f6; }
@@ -652,7 +707,7 @@ h3 {
 }
 
 .sync-status {
-  margin-bottom: 10px;
+  margin: 10px 12px;
   padding: 9px 12px;
   border-radius: 9px;
   background: #e0f2fe;
@@ -827,8 +882,8 @@ h3 {
 
 @media (max-width: 640px) {
   .settings-container {
-    padding-right: 8px;
-    padding-left: 8px;
+    padding-right: 0;
+    padding-left: 0;
   }
 
   .card {
