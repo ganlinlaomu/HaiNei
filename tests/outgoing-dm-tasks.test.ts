@@ -165,6 +165,23 @@ describe("optimistic outgoing DM tasks", () => {
     expect(direct.peerMessages(PEER)).toHaveLength(1);
   });
 
+  it("does not start a second active upload for the same local task", async () => {
+    let finishUpload!: (value: any) => void;
+    mocks.upload.mockImplementation(() => new Promise(resolve => { finishUpload = resolve; }));
+    mocks.send.mockImplementation(async (options: any) => canonical("canonical-image", options.content));
+    const { direct } = seed();
+    const localId = direct.send(PEER, "", new File(["image"], "photo.jpg", { type: "image/jpeg" }));
+    await vi.waitFor(() => expect(mocks.upload).toHaveBeenCalledOnce());
+
+    const retries = [direct.retry(localId), direct.resumePending(true), direct.retry(localId)];
+    await Promise.resolve();
+    expect(mocks.upload).toHaveBeenCalledOnce();
+
+    finishUpload({ ref: "blossom+aesgcm:single" });
+    await Promise.all(retries);
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
+  });
+
   it("distinguishes upload failure and retries the same local image task", async () => {
     const prepared = {
       encryptedBlob: new Blob(["encrypted"]), encryptedName: "photo.encrypted",

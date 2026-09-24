@@ -160,6 +160,12 @@ function makeDetailedError(message: string, details?: any) {
   return err;
 }
 
+function makePhaseError(phase: string, message: string, details?: any) {
+  const err: any = makeDetailedError(message, details);
+  err.phase = phase;
+  return err;
+}
+
 export function buildBud11AuthorizationHeader(event: unknown): string {
   const json = typeof event === "string" ? event : JSON.stringify(event);
   const bytes = new TextEncoder().encode(json);
@@ -173,7 +179,14 @@ export function buildBud11AuthorizationHeader(event: unknown): string {
 }
 
 async function headProbe(uploadUrl: string, headers: Record<string,string>) {
-  const resp = await fetch(uploadUrl, { method: "HEAD", headers });
+  let resp: Response;
+  try {
+    resp = await fetch(uploadUrl, { method: "HEAD", headers });
+  } catch (error) {
+    throw makePhaseError("head_failed", "HEAD /upload 网络请求失败", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   const xReason = resp.headers.get("X-Reason") || undefined;
   const details = {
     status: resp.status,
@@ -315,16 +328,18 @@ export async function uploadImageToBlossom(
 
   if (!head.ok) {
     // If HEAD failed, surface X-Reason if available (BUD-06)
-    throw makeDetailedError(`HEAD /upload 被拒绝，HTTP ${head.status}` + (head.details?.reason ? `: ${head.details.reason}` : ""), head.details);
+    throw makePhaseError("head_failed", `HEAD /upload 被拒绝，HTTP ${head.status}` + (head.details?.reason ? `: ${head.details.reason}` : ""), head.details);
   }
 
   // 3) Proceed to PUT /upload with raw file body (BUD-02). Include Authorization header if we have it.
   const sendPut = (authHeaderValue?: string) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let timer: any = null;
+    let settled = false;
     const finish = (err?: any, result?: any) => {
+      if (settled) return;
+      settled = true;
       if (timer) { clearTimeout(timer); timer = null; }
-      try { xhr.abort(); } catch {}
       if (err) reject(err); else resolve(result);
     };
 
@@ -337,6 +352,7 @@ export async function uploadImageToBlossom(
       }
 
       xhr.upload.onprogress = (ev) => {
+        if (settled) return;
         if (typeof options?.onProgress === "function") {
           if (ev.lengthComputable) {
             const p = Math.round((ev.loaded / ev.total) * 100);
@@ -346,6 +362,7 @@ export async function uploadImageToBlossom(
       };
 
       xhr.onreadystatechange = () => {
+        if (settled) return;
         if (xhr.readyState !== 4) return;
         const status = xhr.status;
         const text = xhr.responseText || "";
@@ -357,10 +374,10 @@ export async function uploadImageToBlossom(
           }
           let json: any = null;
           try { json = text ? JSON.parse(text) : null; } catch (e) {
-            return finish(makeDetailedError("上传成功但服务器返回无法解析的 JSON 描述", { responseText: text, responseHeaders: respHeaders }));
+            return finish(makePhaseError("descriptor_invalid", "上传成功但服务器返回无法解析的 JSON 描述", { responseText: text, responseHeaders: respHeaders }));
           }
-          if (!json || !json.url) {
-            return finish(makeDetailedError("服务器返回的 Blob descriptor 缺少 url 字段", { descriptor: json, responseHeaders: respHeaders }));
+          if (!json || typeof json.url !== "string" || !json.url.trim()) {
+            return finish(makePhaseError("descriptor_invalid", "服务器返回的 Blob descriptor 缺少 url 字段", { descriptor: json, responseHeaders: respHeaders }));
           }
           return finish(undefined, json);
         } else {
@@ -372,22 +389,32 @@ export async function uploadImageToBlossom(
           } catch {
             if (text) errMsg += `: ${text}`;
           }
-          return finish(makeDetailedError(errMsg, { status, responseText: text, responseHeaders: respHeaders }));
+          return finish(makePhaseError("put_network_error", errMsg, { status, responseText: text, responseHeaders: respHeaders }));
         }
       };
 
-      xhr.onerror = () => finish(makeDetailedError("网络错误：XHR 上传失败（可能为 CORS 或 网络问题）"));
-      xhr.onabort = () => finish(makeDetailedError("上传被中止"));
+      xhr.onerror = () => {
+        if (settled) return;
+        finish(makePhaseError("put_network_error", "网络错误：XHR 上传失败（可能为 CORS 或 网络问题）"));
+      };
+      xhr.onabort = () => {
+        if (settled) return;
+        finish(makePhaseError("put_network_error", "上传被中止"));
+      };
 
-      timer = setTimeout(() => finish(makeDetailedError(`上传超时 (${timeoutMs} ms)`)), timeoutMs);
+      timer = setTimeout(() => {
+        if (settled) return;
+        finish(makePhaseError("put_timeout", `上传超时 (${timeoutMs} ms)`));
+        try { xhr.abort(); } catch {}
+      }, timeoutMs);
 
       try {
         xhr.send(file);
       } catch (sendErr) {
-        finish(makeDetailedError("XHR 发送失败", { sendErr: sendErr instanceof Error ? sendErr.message : String(sendErr) }));
+        finish(makePhaseError("put_network_error", "XHR 发送失败", { sendErr: sendErr instanceof Error ? sendErr.message : String(sendErr) }));
       }
     } catch (outerErr: any) {
-      finish(makeDetailedError("上传流程异常", { error: outerErr && outerErr.message ? outerErr.message : String(outerErr) }));
+      finish(makePhaseError("put_network_error", "上传流程异常", { error: outerErr && outerErr.message ? outerErr.message : String(outerErr) }));
     }
   });
 
@@ -412,7 +439,7 @@ export async function uploadImageToBlossom(
       effectiveAuthorizationHeaderValue = ["Bearer", refreshed.token].join(" ");
       const retryHead = await headProbe(uploadUrl, { ...baseHeaders, Authorization: effectiveAuthorizationHeaderValue });
       if (!retryHead.ok) {
-        throw makeDetailedError(`HEAD /upload 被拒绝，HTTP ${retryHead.status}` + (retryHead.details?.reason ? `: ${retryHead.details.reason}` : ""), retryHead.details);
+        throw makePhaseError("head_failed", `HEAD /upload 被拒绝，HTTP ${retryHead.status}` + (retryHead.details?.reason ? `: ${retryHead.details.reason}` : ""), retryHead.details);
       }
       putResult = await sendPut(effectiveAuthorizationHeaderValue);
     } else {
