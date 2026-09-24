@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from "pinia";
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
 const OTHER = "c".repeat(64);
+const bytes = (value: string) => new TextEncoder().encode(value).buffer;
 
 const mocks = vi.hoisted(() => ({
   key: { pkHex: "a".repeat(64), supportsNip44: true, signEvent: vi.fn(), nip44Encrypt: vi.fn() },
@@ -13,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   upload: vi.fn(),
   queueGet: vi.fn(),
   taskList: vi.fn(),
+  taskPut: vi.fn(),
+  taskUpdate: vi.fn(),
   insert: vi.fn(),
 }));
 
@@ -28,13 +31,8 @@ vi.mock("@/repositories/outgoingDmTaskRepository", () => ({
   outgoingDmTaskRepository: {
     get: vi.fn(async (account: string, localId: string) => mocks.tasks.get(`${account}:${localId}`)),
     list: mocks.taskList,
-    put: vi.fn(async (task: any) => { mocks.tasks.set(`${task.accountPubkey}:${task.localId}`, task); return task; }),
-    update: vi.fn(async (account: string, localId: string, patch: any) => {
-      const key = `${account}:${localId}`;
-      const updated = { ...mocks.tasks.get(key), ...patch };
-      mocks.tasks.set(key, updated);
-      return updated;
-    }),
+    put: mocks.taskPut,
+    update: mocks.taskUpdate,
   },
 }));
 vi.mock("@/repositories/outgoingQueueRepository", () => ({
@@ -91,6 +89,13 @@ beforeEach(() => {
   mocks.upload.mockReset();
   mocks.queueGet.mockReset().mockResolvedValue(undefined);
   mocks.taskList.mockReset().mockImplementation(async (account: string) => [...mocks.tasks.values()].filter(task => task.accountPubkey === account));
+  mocks.taskPut.mockReset().mockImplementation(async (task: any) => { mocks.tasks.set(`${task.accountPubkey}:${task.localId}`, task); return task; });
+  mocks.taskUpdate.mockReset().mockImplementation(async (account: string, localId: string, patch: any) => {
+    const key = `${account}:${localId}`;
+    const updated = { ...mocks.tasks.get(key), ...patch };
+    mocks.tasks.set(key, updated);
+    return updated;
+  });
   mocks.insert.mockReset().mockResolvedValue({ inserted: true });
   vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:preview"), revokeObjectURL: vi.fn() });
   vi.stubGlobal("File", class File extends Blob {
@@ -103,6 +108,12 @@ beforeEach(() => {
 });
 
 describe("optimistic outgoing DM tasks", () => {
+  function containsBlob(value: unknown): boolean {
+    if (value instanceof Blob) return true;
+    if (!value || typeof value !== "object" || value instanceof ArrayBuffer) return false;
+    return Object.values(value).some(containsBlob);
+  }
+
   it("shows text immediately, keeps one bubble, and reconciles to sent", async () => {
     let release!: (value: any) => void;
     mocks.send.mockImplementation((options: any) => new Promise(resolve => {
@@ -158,6 +169,9 @@ describe("optimistic outgoing DM tasks", () => {
 
     expect(direct.peerMessages(PEER)[0].outgoing).toMatchObject({ state: "uploading", imagePreviewUrl: "blob:preview", hasImage: true });
     await vi.waitFor(() => expect(mocks.upload).toHaveBeenCalledOnce());
+    const persisted = mocks.tasks.get(`${ACCOUNT}:${direct.outgoingTasks[0].localId}`);
+    expect(persisted.imageBytes).toBeInstanceOf(ArrayBuffer);
+    expect(containsBlob(persisted)).toBe(false);
     finishUpload({ ref: "blossom+aesgcm:encrypted" });
     await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sending"));
     expect(direct.peerMessages(PEER)[0].outgoing?.state).not.toBe("sent");
@@ -186,8 +200,8 @@ describe("optimistic outgoing DM tasks", () => {
 
   it("distinguishes upload failure and retries the same local image task", async () => {
     const prepared = {
-      encryptedBlob: new Blob(["encrypted"]), encryptedName: "photo.encrypted",
-      previewBlob: new Blob(["preview"], { type: "image/jpeg" }), mime: "image/jpeg",
+      encryptedBytes: bytes("encrypted"), encryptedName: "photo.encrypted",
+      previewBytes: bytes("preview"), mime: "image/jpeg",
       iv: "iv", key: "key", width: 10, height: 10,
     };
     mocks.upload
@@ -197,6 +211,8 @@ describe("optimistic outgoing DM tasks", () => {
       })
       .mockImplementationOnce(async (_file: File, options: any) => {
         expect(options.prepared).toMatchObject({ encryptedName: "photo.encrypted", key: "key" });
+        expect(options.prepared.encryptedBytes).toBeInstanceOf(ArrayBuffer);
+        expect(containsBlob(options.prepared)).toBe(false);
         return { ref: "blossom+aesgcm:retry" };
       });
     mocks.send.mockImplementation(async (options: any) => {
@@ -232,6 +248,67 @@ describe("optimistic outgoing DM tasks", () => {
     expect(direct.peerMessages(PEER)).toHaveLength(1);
   });
 
+  it("resumes an image upload from persisted ArrayBuffer bytes after restart", async () => {
+    const persisted = {
+      accountPubkey: ACCOUNT, localId: "array-buffer", peerPubkey: PEER, text: "恢复图片",
+      imageBytes: bytes("persisted-image"), imageName: "resume.jpg", imageType: "image/jpeg",
+      state: "uploading" as const, createdAt: 15, updatedAt: 15,
+    };
+    mocks.tasks.set(`${ACCOUNT}:array-buffer`, persisted);
+    mocks.upload.mockImplementation(async (file: File) => {
+      expect(file.name).toBe("resume.jpg");
+      expect(new TextDecoder().decode(await file.arrayBuffer())).toBe("persisted-image");
+      return { ref: "blossom+aesgcm:resumed" };
+    });
+    mocks.send.mockImplementation(async (options: any) => canonical("canonical-resumed-image", options.content));
+    const { direct } = seed();
+
+    await direct.refresh(ACCOUNT);
+
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
+    expect(mocks.upload).toHaveBeenCalledOnce();
+  });
+
+  it("does not classify initial IndexedDB persistence failure as upload_failed", async () => {
+    mocks.taskPut.mockRejectedValueOnce(new Error("Error preparing Blob/File data to be stored in object store"));
+    const { direct } = seed();
+
+    direct.send(PEER, "", new File(["image"], "photo.jpg", { type: "image/jpeg" }));
+
+    await vi.waitFor(() => expect(direct.outgoingTasks[0].state).toBe("send_failed"));
+    expect(direct.outgoingTasks[0].lastError).toContain("persist_failed");
+    expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
+  it("keeps prepared bytes and reports send_failed when their IndexedDB write fails", async () => {
+    const prepared = {
+      encryptedBytes: bytes("encrypted"), encryptedName: "photo.encrypted",
+      previewBytes: bytes("preview"), mime: "image/jpeg",
+      iv: "iv", key: "key", width: 10, height: 10,
+    };
+    mocks.upload
+      .mockImplementationOnce(async (_file: File, options: any) => {
+        mocks.taskUpdate.mockRejectedValueOnce(new Error("IndexedDB write failed"));
+        await options.onPrepared(prepared);
+        return { ref: "blossom+aesgcm:not-reached" };
+      })
+      .mockImplementationOnce(async (_file: File, options: any) => {
+        expect(options.prepared).toMatchObject({ encryptedName: "photo.encrypted", key: "key" });
+        return { ref: "blossom+aesgcm:retry" };
+      });
+    mocks.send.mockImplementation(async (options: any) => canonical("canonical-prepared-retry", options.content));
+    const { direct } = seed();
+    const localId = direct.send(PEER, "", new File(["image"], "photo.jpg", { type: "image/jpeg" }));
+
+    await vi.waitFor(() => expect(direct.outgoingTasks[0].state).toBe("send_failed"));
+    expect(direct.outgoingTasks[0].preparedImage).toMatchObject({ encryptedName: "photo.encrypted", key: "key" });
+    expect(direct.outgoingTasks[0].lastError).toContain("persist_failed");
+
+    await direct.retry(localId);
+    expect(mocks.upload).toHaveBeenCalledTimes(2);
+    expect(direct.outgoingTasks[0].state).toBe("sent");
+  });
+
   it("keeps sent terminal when local synced-message persistence fails after Relay success", async () => {
     mocks.upload.mockResolvedValue({ ref: "blossom+aesgcm:accepted" });
     mocks.send.mockImplementation(async (options: any) => {
@@ -257,7 +334,7 @@ describe("optimistic outgoing DM tasks", () => {
     const queued = canonical("canonical-queued", "![](blossom+aesgcm:queued)");
     const persisted = {
       accountPubkey: ACCOUNT, localId: "queue-sent", peerPubkey: PEER, text: "",
-      imageBlob: new Blob(["image"], { type: "image/jpeg" }),
+      imageBytes: bytes("image"), imageName: "photo.jpg", imageType: "image/jpeg",
       uploadedRef: "blossom+aesgcm:queued", outgoingId: "canonical-queued",
       state: "upload_failed", lastError: "stale", createdAt: 20, updatedAt: 20,
     } as const;
@@ -300,7 +377,7 @@ describe("optimistic outgoing DM tasks", () => {
     const { direct } = seed();
     direct.outgoingTasks = [{
       accountPubkey: ACCOUNT, localId: "uploaded", peerPubkey: PEER, text: "",
-      imageBlob: new Blob(["image"], { type: "image/jpeg" }),
+      imageBytes: bytes("image"), imageName: "photo.jpg", imageType: "image/jpeg",
       uploadedRef: "blossom+aesgcm:uploaded", state: "sending",
       createdAt: 12, updatedAt: 12,
     }];
@@ -321,7 +398,7 @@ describe("optimistic outgoing DM tasks", () => {
       localId: "lost-link",
       peerPubkey: PEER,
       text: "这张如何",
-      imageBlob: new Blob(["image"], { type: "image/jpeg" }),
+      imageBytes: bytes("image"), imageName: "photo.jpg", imageType: "image/jpeg",
       uploadedRef: "blossom+aesgcm:encrypted",
       state: "send_failed",
       createdAt: 100,
@@ -390,7 +467,7 @@ describe("optimistic outgoing DM tasks", () => {
     const { direct } = seed();
     direct.outgoingTasks = [{
       accountPubkey: ACCOUNT, localId: "upload-failed", peerPubkey: PEER, text: "",
-      imageBlob: new Blob(["image"], { type: "image/jpeg" }), state: "upload_failed",
+      imageBytes: bytes("image"), imageName: "photo.jpg", imageType: "image/jpeg", state: "upload_failed",
       createdAt: 12, updatedAt: 12,
     }];
 

@@ -159,9 +159,9 @@ export type OutgoingQueueRecord = {
 
 export type OutgoingDmTaskState = "uploading" | "sending" | "sent" | "upload_failed" | "send_failed";
 export type PreparedEncryptedImage = {
-  encryptedBlob: Blob;
+  encryptedBytes: ArrayBuffer;
   encryptedName: string;
-  previewBlob: Blob;
+  previewBytes: ArrayBuffer;
   mime: string;
   iv: string;
   key: string;
@@ -173,7 +173,7 @@ export type OutgoingDmTaskRecord = {
   localId: string;
   peerPubkey: string;
   text: string;
-  imageBlob?: Blob;
+  imageBytes?: ArrayBuffer;
   imageName?: string;
   imageType?: string;
   preparedImage?: PreparedEncryptedImage;

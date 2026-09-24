@@ -31,6 +31,11 @@ const taskPreviewUrls = new Map<string, string>();
 let resumeListenersInstalled = false;
 
 function taskKey(accountPubkey: string, localId: string) { return `${accountPubkey}:${localId}`; }
+function persistenceError(error: unknown) {
+  const wrapped = new Error(error instanceof Error ? error.message : "indexeddb write failed") as Error & { phase: string };
+  wrapped.phase = "persist_failed";
+  return wrapped;
+}
 function mergeTaskVersions(left: OutgoingDmTaskRecord, right: OutgoingDmTaskRecord) {
   if (left.state === "sent" && right.state !== "sent") return left;
   if (right.state === "sent" && left.state !== "sent") return right;
@@ -71,7 +76,7 @@ function taskInboxItem(task: OutgoingDmTaskRecord): InboxItem {
       localId: task.localId,
       state: task.state,
       imagePreviewUrl: task.state === "sent" ? undefined : taskPreviewUrls.get(taskKey(task.accountPubkey, task.localId)),
-      hasImage: !!task.imageBlob || !!task.uploadedRef,
+      hasImage: !!task.imageName || !!task.imageBytes || !!task.preparedImage || !!task.uploadedRef,
       lastError: task.lastError,
     },
   };
@@ -271,8 +276,9 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.outgoingTasks = outgoingTasks.sort((a, b) => a.createdAt - b.createdAt || a.localId.localeCompare(b.localId));
       for (const task of outgoingTasks) {
         const key = taskKey(account, task.localId);
-        if (task.imageBlob && !taskPreviewUrls.has(key) && typeof URL?.createObjectURL === "function") {
-          taskPreviewUrls.set(key, URL.createObjectURL(task.imageBlob));
+        const previewBytes = task.preparedImage?.previewBytes || task.imageBytes;
+        if (previewBytes && !taskPreviewUrls.has(key) && typeof URL?.createObjectURL === "function") {
+          taskPreviewUrls.set(key, URL.createObjectURL(new Blob([previewBytes], { type: task.imageType || task.preparedImage?.mime || "image/jpeg" })));
         }
       }
       const direct = messages.inbox.filter(item => isDirectMessageTags(item.tags));
@@ -403,7 +409,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         localId: createLocalId(),
         peerPubkey: peer,
         text,
-        ...(image ? { imageBlob: image, imageName: image.name, imageType: image.type } : {}),
+        ...(image ? { imageName: image.name, imageType: image.type } : {}),
         state: image ? "uploading" : "sending",
         createdAt: Math.floor(now / 1000),
         updatedAt: now,
@@ -412,10 +418,35 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         taskPreviewUrls.set(taskKey(account, task.localId), URL.createObjectURL(image));
       }
       this.outgoingTasks = [...this.outgoingTasks, task];
-      void outgoingDmTaskRepository.put(task).then(
-        () => { void this.runTask(task.localId); },
-        error => { void this.failTask(task.localId, image ? "upload_failed" : "send_failed", error); },
-      );
+      void (async () => {
+        let durableTask = task;
+        if (image) {
+          try {
+            const imageBytes = await image.arrayBuffer();
+            durableTask = { ...task, imageBytes, updatedAt: Date.now() };
+            const index = this.outgoingTasks.findIndex(item => item.localId === task.localId && item.accountPubkey === account);
+            if (index >= 0) this.outgoingTasks.splice(index, 1, durableTask);
+          } catch (error) {
+            await this.failTask(task.localId, "upload_failed", error);
+            return;
+          }
+        }
+        try {
+          await outgoingDmTaskRepository.put(durableTask);
+        } catch (error) {
+          const index = this.outgoingTasks.findIndex(item => item.localId === task.localId && item.accountPubkey === account);
+          if (index >= 0) {
+            this.outgoingTasks.splice(index, 1, {
+              ...this.outgoingTasks[index],
+              state: "send_failed",
+              lastError: `persist_failed: ${error instanceof Error ? error.message : "indexeddb write failed"}`,
+              updatedAt: Date.now(),
+            });
+          }
+          return;
+        }
+        void this.runTask(task.localId);
+      })();
       return task.localId;
     },
     async patchTask(localId: string, patch: Partial<OutgoingDmTaskRecord>) {
@@ -433,20 +464,28 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
       const updated = { ...current, ...protectedPatch, updatedAt: Date.now() };
       this.outgoingTasks.splice(index, 1, updated);
-      await outgoingDmTaskRepository.update(account, localId, { ...protectedPatch, updatedAt: updated.updatedAt });
+      try {
+        await outgoingDmTaskRepository.update(account, localId, { ...protectedPatch, updatedAt: updated.updatedAt });
+      } catch (error) {
+        throw persistenceError(error);
+      }
       return updated;
     },
     async failTask(localId: string, state: "upload_failed" | "send_failed", error: unknown) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
       const task = this.outgoingTasks.find(item => item.accountPubkey === account && item.localId === localId);
-      const finalState = state === "upload_failed" && task?.uploadedRef ? "send_failed" : state;
+      const finalState = state === "upload_failed" && (task?.uploadedRef || task?.outgoingId) ? "send_failed" : state;
       const phase = typeof error === "object" && error && "phase" in error && typeof error.phase === "string"
         ? error.phase
         : finalState === "send_failed" ? "relay_failed" : "prepare_failed";
-      await this.patchTask(localId, {
-        state: finalState,
-        lastError: `${phase}: ${error instanceof Error ? error.message : finalState}`,
-      });
+      try {
+        await this.patchTask(localId, {
+          state: finalState,
+          lastError: `${phase}: ${error instanceof Error ? error.message : finalState}`,
+        });
+      } catch (persistenceFailure) {
+        console.warn("[dm] local task failure-state persistence failed", persistenceFailure instanceof Error ? persistenceFailure.message : "unknown error");
+      }
     },
     async finishTask(task: OutgoingDmTaskRecord, result: PublishedMessage) {
       try {
@@ -454,7 +493,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           state: "sent",
           outgoingId: result.message.id,
           canonicalMessageId: result.message.id,
-          imageBlob: undefined,
+          imageBytes: undefined,
           imageName: undefined,
           imageType: undefined,
           preparedImage: undefined,
@@ -489,6 +528,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         let task = this.outgoingTasks.find(item => item.accountPubkey === account && item.localId === localId)
           || await outgoingDmTaskRepository.get(account, localId);
         if (!task || task.state === "sent" || useKeyStore().pkHex !== account) return;
+        if (task.imageName && !task.imageBytes && !task.preparedImage && !task.uploadedRef && !task.outgoingId) return;
         const friendships = useFriendshipsStore();
         if (friendships.loadedFor !== account) await friendships.load(account);
         if (!friendships.isAccepted(task.peerPubkey)) {
@@ -496,11 +536,18 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           return;
         }
         try {
-          if (task.imageBlob && !task.uploadedRef) {
+          let persisted: OutgoingDmTaskRecord | undefined;
+          try {
+            persisted = await outgoingDmTaskRepository.get(account, localId);
+            if (!persisted) await outgoingDmTaskRepository.put(task);
+          } catch (error) {
+            throw persistenceError(error);
+          }
+          if (task.imageBytes && !task.uploadedRef) {
             task = (await this.patchTask(localId, { state: "uploading", lastError: undefined })) || task;
-            const imageBlob = task.imageBlob;
-            if (!imageBlob) throw new Error("待上传图片不存在");
-            const image = new File([imageBlob], task.imageName || "image.jpg", { type: task.imageType || imageBlob.type });
+            const imageBytes = task.imageBytes;
+            if (!imageBytes) throw new Error("待上传图片不存在");
+            const image = new File([imageBytes], task.imageName || "image.jpg", { type: task.imageType || "image/jpeg" });
             const media = await uploadEncryptedCommentImage(image, {
               accountPubkey: account,
               signEvent: useKeyStore().signEvent.bind(useKeyStore()),
@@ -528,7 +575,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           await this.finishTask(task, result);
         } catch (error) {
           const current = this.outgoingTasks.find(item => item.accountPubkey === account && item.localId === localId) || task;
-          await this.failTask(localId, current.imageBlob && !current.uploadedRef ? "upload_failed" : "send_failed", error);
+          const phase = typeof error === "object" && error && "phase" in error ? String(error.phase) : "";
+          await this.failTask(localId, phase === "persist_failed"
+            ? "send_failed"
+            : current.imageBytes && !current.uploadedRef && !current.outgoingId ? "upload_failed" : "send_failed", error);
         }
       })().finally(() => activeOutgoingTasks.delete(key));
       activeOutgoingTasks.set(key, work);
@@ -560,7 +610,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           }
         }
         const resumableFailure = task.state === "send_failed"
-          && (!task.imageBlob || !!task.outgoingId || !!task.uploadedRef);
+          && (!task.imageBytes || !!task.outgoingId || !!task.uploadedRef || task.lastError?.startsWith("persist_failed:"));
         if (["uploading", "sending"].includes(task.state) || (includeFailed && resumableFailure)) {
           void this.runTask(task.localId);
         }
