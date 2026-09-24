@@ -172,6 +172,7 @@ beforeAll(async () => {
 
 beforeEach(() => vi.stubGlobal("localStorage", new MemoryStorage()));
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -463,12 +464,108 @@ describe("privacy-preserving push and badge", () => {
       .toBe("推送服务数据库尚未准备好，请检查 Worker 部署和 D1 迁移");
   });
 
+  it("rejects when serviceWorker.ready exceeds 10 seconds", async () => {
+    vi.useFakeTimers();
+    const notification = { permission: "granted", requestPermission: vi.fn() };
+    vi.stubGlobal("window", { location: { origin: "https://app.test" }, PushManager: function PushManager() {}, Notification: notification });
+    vi.stubGlobal("navigator", { serviceWorker: { ready: new Promise(() => {}) } });
+    vi.stubGlobal("Notification", notification);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }),
+    ));
+
+    const result = expect(enablePushNotifications(ACCOUNT, vi.fn())).rejects.toThrow("service worker 未就绪");
+    await vi.advanceTimersByTimeAsync(10_000);
+    await result;
+  });
+
+  it("rejects when pushManager.subscribe exceeds 15 seconds", async () => {
+    vi.useFakeTimers();
+    const notification = { permission: "granted", requestPermission: vi.fn() };
+    const subscribe = vi.fn(() => new Promise(() => {}));
+    vi.stubGlobal("window", { location: { origin: "https://app.test" }, PushManager: function PushManager() {}, Notification: notification });
+    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { getSubscription: vi.fn(async () => null), subscribe } }) } });
+    vi.stubGlobal("Notification", notification);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }),
+    ));
+
+    const result = expect(enablePushNotifications(ACCOUNT, vi.fn())).rejects.toThrow("push subscription 创建超时");
+    await vi.advanceTimersByTimeAsync(15_000);
+    await result;
+  });
+
+  it("reuses an existing valid subscription", async () => {
+    const notification = { permission: "granted", requestPermission: vi.fn() };
+    const existing = {
+      endpoint: "https://push.test/existing",
+      options: { applicationServerKey: new Uint8Array([1]).buffer },
+      toJSON: () => ({ endpoint: "https://push.test/existing", keys: { p256dh: "x", auth: "y" } }),
+      unsubscribe: vi.fn(),
+    };
+    const subscribe = vi.fn();
+    vi.stubGlobal("window", { location: { origin: "https://app.test" }, PushManager: function PushManager() {}, Notification: notification });
+    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { getSubscription: vi.fn(async () => existing), subscribe } }) } });
+    vi.stubGlobal("Notification", notification);
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 })));
+
+    await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
+
+    expect(existing.unsubscribe).not.toHaveBeenCalled();
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
+  it("unsubscribes and replaces an incompatible existing subscription", async () => {
+    const notification = { permission: "granted", requestPermission: vi.fn() };
+    const replacement = { toJSON: () => ({ endpoint: "https://push.test/new", keys: { p256dh: "x", auth: "y" } }) };
+    const existing = {
+      endpoint: "https://push.test/stale",
+      options: { applicationServerKey: new Uint8Array([2]).buffer },
+      toJSON: () => ({ endpoint: "https://push.test/stale", keys: { p256dh: "old", auth: "old" } }),
+      unsubscribe: vi.fn(async () => true),
+    };
+    const subscribe = vi.fn(async () => replacement);
+    vi.stubGlobal("window", { location: { origin: "https://app.test" }, PushManager: function PushManager() {}, Notification: notification });
+    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { getSubscription: vi.fn(async () => existing), subscribe } }) } });
+    vi.stubGlobal("Notification", notification);
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 })));
+
+    await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
+
+    expect(existing.unsubscribe).toHaveBeenCalledOnce();
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(existing.unsubscribe.mock.invocationCallOrder[0]).toBeLessThan(subscribe.mock.invocationCallOrder[0]);
+  });
+
+  it("reaches the auth challenge after browser subscription succeeds", async () => {
+    const notification = { permission: "granted", requestPermission: vi.fn() };
+    const subscription = { toJSON: () => ({ endpoint: "https://push.test/new", keys: { p256dh: "x", auth: "y" } }) };
+    vi.stubGlobal("window", { location: { origin: "https://app.test" }, PushManager: function PushManager() {}, Notification: notification });
+    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { getSubscription: vi.fn(async () => null), subscribe: vi.fn(async () => subscription) } }) } });
+    vi.stubGlobal("Notification", notification);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
+
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://app.test/api/auth/challenge");
+  });
+
   it("sets the local enabled flag only after subscribe succeeds", async () => {
     const subscription = { endpoint: "https://push.test/subscription", toJSON: () => ({ endpoint: "https://push.test/subscription", keys: { p256dh: "x", auth: "y" } }) };
     const subscribe = vi.fn(async () => subscription);
     const notification = { permission: "granted", requestPermission: vi.fn() };
     vi.stubGlobal("window", { location: { origin: "https://app.test" }, PushManager: function PushManager() {}, Notification: notification });
-    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { subscribe } }) } });
+    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { getSubscription: vi.fn(async () => null), subscribe } }) } });
     vi.stubGlobal("Notification", notification);
 
     let finishSubscribe!: (response: Response) => void;
@@ -490,7 +587,7 @@ describe("privacy-preserving push and badge", () => {
   it("does not leave push enabled when authenticated subscribe fails", async () => {
     const notification = { permission: "granted", requestPermission: vi.fn() };
     vi.stubGlobal("window", { location: { origin: "https://app.test" }, PushManager: function PushManager() {}, Notification: notification });
-    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { subscribe: vi.fn(async () => ({ toJSON: () => ({ endpoint: "https://push.test", keys: { p256dh: "x", auth: "y" } }) })) } }) } });
+    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { getSubscription: vi.fn(async () => null), subscribe: vi.fn(async () => ({ toJSON: () => ({ endpoint: "https://push.test", keys: { p256dh: "x", auth: "y" } }) })) } }) } });
     vi.stubGlobal("Notification", notification);
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
