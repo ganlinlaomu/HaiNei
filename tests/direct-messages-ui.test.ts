@@ -136,7 +136,11 @@ describe("direct-message navigation and UI contract", () => {
 
   it("raises the DM composer above the safe-area bottom", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(chat).toContain("calc(15px + env(safe-area-inset-bottom))");
-    expect(chat).toContain("height:43px");
+    expect(chat).toContain("calc(12px + env(safe-area-inset-bottom))");
+    expect(chat).toContain("height:44px");
+    expect(chat).toContain("grid-template-columns:44px minmax(0,1fr) auto");
+    expect(chat).toContain("border-radius:50%");
+    expect(chat).toContain("box-shadow:0 2px 12px");
+    expect(chat).toContain("border-top:0");
   });
 });
