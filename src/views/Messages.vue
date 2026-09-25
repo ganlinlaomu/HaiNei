@@ -105,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import DmAudioMessage from "@/components/DmAudioMessage.vue";
@@ -145,7 +145,7 @@ const windowStart = ref(initialMessageWindowStart(messages.value.length));
 const windowMessages = computed(() => messages.value.slice(windowStart.value));
 const draft = ref("");
 const selectedImage = ref<{ file: File; preview: string } | null>(null);
-const recording = ref<VoiceRecordingSession | null>(null);
+const recording = shallowRef<VoiceRecordingSession | null>(null);
 const startingRecording = ref(false);
 const finishingRecording = ref(false);
 const recordingElapsed = ref(0);
@@ -164,6 +164,7 @@ let loadGeneration = 0;
 let restoreOverflowAnchorFrame: number | null = null;
 let disposed = false;
 let recordingTimer: number | null = null;
+let recordingHealthUnsubscribe: (() => void) | null = null;
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
 const messageText = (content: string) => ["[图片]", "[语音]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
@@ -282,6 +283,22 @@ function stopRecordingTimer() {
   if (recordingTimer !== null) window.clearInterval(recordingTimer);
   recordingTimer = null;
 }
+function stopRecordingHealthWatch() {
+  recordingHealthUnsubscribe?.();
+  recordingHealthUnsubscribe = null;
+}
+function startRecordingTimer(session: VoiceRecordingSession) {
+  if (recordingTimer !== null || !session.isActive()) return;
+  recordingElapsed.value = Math.min(300, session.elapsedMs() / 1000);
+  recordingTimer = window.setInterval(() => {
+    if (recording.value !== session || !session.isActive()) {
+      stopRecordingTimer();
+      if (recording.value === session && !finishingRecording.value) void finishVoiceRecording(session);
+      return;
+    }
+    recordingElapsed.value = Math.min(300, session.elapsedMs() / 1000);
+  }, 250);
+}
 function clearRecordedAudio() {
   if (recordedAudio.value?.preview) URL.revokeObjectURL(recordedAudio.value.preview);
   recordedAudio.value = null;
@@ -291,6 +308,7 @@ function cancelVoiceRecording() {
   recording.value = null;
   finishingRecording.value = false;
   stopRecordingTimer();
+  stopRecordingHealthWatch();
   recordingElapsed.value = 0;
   active?.cancel();
 }
@@ -315,24 +333,20 @@ async function startVoiceRecording() {
   const accountAtStart = keys.pkHex;
   const peerAtStart = peerPubkey.value;
   try {
-    let session: VoiceRecordingSession | undefined;
-    session = await createVoiceRecordingSession({
-      onAutoFinish: () => { if (session) void finishVoiceRecording(session); },
-    });
+    const session = await createVoiceRecordingSession();
     if (disposed || !accepted.value || keys.pkHex !== accountAtStart || peerPubkey.value !== peerAtStart) return session.dispose();
     recording.value = session;
     finishingRecording.value = false;
     recordingElapsed.value = 0;
-    recordingTimer = window.setInterval(() => {
-      recordingElapsed.value = Math.min(300, (Date.now() - session.startedAt) / 1000);
-    }, 250);
-    void session.finished.catch(error => {
+    recordingHealthUnsubscribe = session.onStateChange(health => {
       if (recording.value !== session) return;
-      recording.value = null;
-      finishingRecording.value = false;
-      stopRecordingTimer();
-      voiceError.value = error instanceof Error ? error.message : "录音失败";
+      if (health.active && !finishingRecording.value) startRecordingTimer(session);
+      else stopRecordingTimer();
+      if (["finishing", "stopped", "error"].includes(health.state) && !finishingRecording.value) {
+        void finishVoiceRecording(session);
+      }
     });
+    startRecordingTimer(session);
   } catch (error) {
     voiceError.value = error instanceof Error ? error.message : "无法使用麦克风";
   } finally {
@@ -344,6 +358,7 @@ async function finishVoiceRecording(target?: VoiceRecordingSession) {
   if (!session || recording.value !== session || finishingRecording.value) return;
   const accountAtFinish = keys.pkHex;
   const peerAtFinish = peerPubkey.value;
+  recordingElapsed.value = Math.min(300, session.elapsedMs() / 1000);
   finishingRecording.value = true;
   stopRecordingTimer();
   voiceError.value = "";
@@ -356,6 +371,7 @@ async function finishVoiceRecording(target?: VoiceRecordingSession) {
     if (recording.value === session) {
       recording.value = null;
       recordingElapsed.value = 0;
+      stopRecordingHealthWatch();
     }
     finishingRecording.value = false;
   }
