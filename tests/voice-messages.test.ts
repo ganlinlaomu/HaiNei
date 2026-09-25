@@ -6,51 +6,96 @@ import { decryptDmAudio, prepareEncryptedDmAudio } from "@/utils/encryptedDmAudi
 import { parsePrivateAudioMessage, serializePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { createVoiceRecordingSession, selectVoiceRecordingMime } from "@/utils/voiceRecorder";
 
+class FakeTrack extends EventTarget {
+  kind = "audio";
+  readyState: MediaStreamTrackState = "live";
+  muted = false;
+  stoppedByApp = false;
+  stop = vi.fn(() => {
+    this.stoppedByApp = true;
+    this.readyState = "ended";
+  });
+  end() {
+    this.readyState = "ended";
+    this.dispatchEvent(new Event("ended"));
+  }
+  mute() {
+    this.muted = true;
+    this.dispatchEvent(new Event("mute"));
+  }
+  unmute() {
+    this.muted = false;
+    this.dispatchEvent(new Event("unmute"));
+  }
+}
+
 class FakeRecorder extends EventTarget {
   static supported = new Set(["audio/mp4", "audio/webm;codecs=opus"]);
   static emitStop = true;
   static emitData = true;
   static stopCalls = 0;
-  static startTimeslice = 0;
+  static startArguments: Array<number | undefined> = [];
+  static constructorOptions: Array<MediaRecorderOptions | undefined> = [];
+  static instances: FakeRecorder[] = [];
   static isTypeSupported(type: string) { return FakeRecorder.supported.has(type); }
   state: RecordingState = "inactive";
-  mimeType: string;
-  private interval: ReturnType<typeof setInterval> | null = null;
-  private chunkIndex = 0;
+  mimeType = "audio/mp4";
   constructor(public stream: MediaStream, options?: MediaRecorderOptions) {
     super();
-    this.mimeType = options?.mimeType || "audio/mp4";
+    FakeRecorder.constructorOptions.push(options);
+    FakeRecorder.instances.push(this);
+    if (options?.mimeType) this.mimeType = options.mimeType;
   }
   start(timeslice?: number) {
+    FakeRecorder.startArguments.push(timeslice);
     this.state = "recording";
-    FakeRecorder.startTimeslice = timeslice || 0;
-    if (timeslice) this.interval = setInterval(() => this.emitChunk(`slice-${++this.chunkIndex}|`), timeslice);
+    setTimeout(() => this.dispatchEvent(new Event("start")), 0);
   }
   stop() {
     if (this.state === "inactive") return;
     FakeRecorder.stopCalls += 1;
     this.state = "inactive";
-    if (this.interval) clearInterval(this.interval);
-    setTimeout(() => this.emitChunk("final"), 10);
+    this.flushFinalRecording();
+  }
+  unexpectedStop() {
+    if (this.state === "inactive") return;
+    this.state = "inactive";
+    this.flushFinalRecording();
+  }
+  pause() {
+    if (this.state !== "recording") return;
+    this.state = "paused";
+    this.dispatchEvent(new Event("pause"));
+  }
+  resume() {
+    if (this.state !== "paused") return;
+    this.state = "recording";
+    this.dispatchEvent(new Event("resume"));
+  }
+  fail() {
+    this.dispatchEvent(new Event("error"));
+  }
+  private flushFinalRecording() {
+    setTimeout(() => this.emitFinalData(), 10);
     if (FakeRecorder.emitStop) setTimeout(() => this.dispatchEvent(new Event("stop")), 20);
   }
-  private emitChunk(value: string) {
-    if (!FakeRecorder.emitData || (this.stream as any).__trackStopped()) return;
+  private emitFinalData() {
+    const track = (this.stream.getAudioTracks()[0] as unknown as FakeTrack);
+    if (!FakeRecorder.emitData || track.stoppedByApp) return;
     const data = new Event("dataavailable") as Event & { data: Blob };
-    Object.defineProperty(data, "data", { value: new Blob([value], { type: this.mimeType }) });
+    Object.defineProperty(data, "data", { value: new Blob(["continuous-safari-recording"], { type: this.mimeType }) });
     this.dispatchEvent(data);
   }
 }
 
 function recorderHarness() {
-  let stopped = false;
-  const stop = vi.fn(() => { stopped = true; });
+  const track = new FakeTrack();
   const stream = {
-    getTracks: () => [{ stop }, { stop }],
-    __trackStopped: () => stopped,
+    getAudioTracks: () => [track],
+    getTracks: () => [track],
   } as unknown as MediaStream;
   const getUserMedia = vi.fn(async () => stream);
-  return { stop, getUserMedia };
+  return { track, getUserMedia };
 }
 
 afterEach(() => {
@@ -59,7 +104,9 @@ afterEach(() => {
   FakeRecorder.emitStop = true;
   FakeRecorder.emitData = true;
   FakeRecorder.stopCalls = 0;
-  FakeRecorder.startTimeslice = 0;
+  FakeRecorder.startArguments = [];
+  FakeRecorder.constructorOptions = [];
+  FakeRecorder.instances = [];
 });
 
 describe("voice recording lifecycle", () => {
@@ -71,27 +118,55 @@ describe("voice recording lifecycle", () => {
     FakeRecorder.supported = new Set(["audio/mp4", "audio/webm;codecs=opus"]);
   });
 
-  it("awaits asynchronous dataavailable/stop and preserves the final audio chunk", async () => {
+  it("starts one continuous native recording without a timeslice or forced MIME", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const harness = recorderHarness();
     const session = await createVoiceRecordingSession({
       mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
       Recorder: FakeRecorder as unknown as typeof MediaRecorder,
-      finalChunkGraceMs: 25,
     });
-    await vi.advanceTimersByTimeAsync(2_200);
+    expect(harness.getUserMedia).toHaveBeenCalledWith({ audio: true });
+    expect(FakeRecorder.startArguments).toEqual([undefined]);
+    expect(FakeRecorder.constructorOptions).toEqual([undefined]);
+    expect(session.isActive()).toBe(true);
+  });
+
+  it("stays active beyond 4, 10, and 30 seconds without internal recorder restarts", async () => {
+    vi.useFakeTimers();
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    for (const elapsed of [4_000, 6_000, 20_000]) {
+      await vi.advanceTimersByTimeAsync(elapsed);
+      expect(session.isActive()).toBe(true);
+      expect(harness.track.readyState).toBe("live");
+    }
+    expect(FakeRecorder.startArguments).toHaveLength(1);
+    expect(FakeRecorder.stopCalls).toBe(0);
+  });
+
+  it("waits for final dataavailable then stop before constructing a non-empty Blob", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
     vi.setSystemTime(4_000);
     const finishing = session.finish();
-    expect(FakeRecorder.startTimeslice).toBe(1_000);
-    expect(harness.stop).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(50);
+    expect(harness.track.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(harness.track.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10);
     const result = await finishing;
-    expect(harness.getUserMedia).toHaveBeenCalledWith({ audio: true });
     expect(result).toMatchObject({ mime: "audio/mp4", duration: 3 });
     expect(result!.size).toBeGreaterThan(0);
-    expect(await result!.blob.text()).toBe("slice-1|slice-2|final");
-    expect(harness.stop).toHaveBeenCalledTimes(2);
+    expect(await result!.blob.text()).toBe("continuous-safari-recording");
+    expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 
   it("makes Finish idempotent and never calls MediaRecorder.stop twice", async () => {
@@ -100,7 +175,6 @@ describe("voice recording lifecycle", () => {
     const session = await createVoiceRecordingSession({
       mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
       Recorder: FakeRecorder as unknown as typeof MediaRecorder,
-      finalChunkGraceMs: 5,
     });
     const first = session.finish();
     const second = session.finish();
@@ -108,7 +182,7 @@ describe("voice recording lifecycle", () => {
     await vi.advanceTimersByTimeAsync(30);
     await expect(first).resolves.toMatchObject({ mime: "audio/mp4" });
     expect(FakeRecorder.stopCalls).toBe(1);
-    expect(harness.stop).toHaveBeenCalledTimes(2);
+    expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 
   it("rejects and cleans tracks when Safari never dispatches stop", async () => {
@@ -124,7 +198,7 @@ describe("voice recording lifecycle", () => {
     const rejected = expect(finishing).rejects.toThrow("录音处理超时");
     await vi.advanceTimersByTimeAsync(80);
     await rejected;
-    expect(harness.stop).toHaveBeenCalledTimes(2);
+    expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 
   it("rejects zero-data recordings and still releases every track", async () => {
@@ -134,14 +208,81 @@ describe("voice recording lifecycle", () => {
     const session = await createVoiceRecordingSession({
       mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
       Recorder: FakeRecorder as unknown as typeof MediaRecorder,
-      finalChunkGraceMs: 5,
     });
     const finishing = session.finish();
     const rejected = expect(finishing).rejects.toThrow("未获取到录音数据");
-    expect(harness.stop).not.toHaveBeenCalled();
+    expect(harness.track.stop).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30);
     await rejected;
-    expect(harness.stop).toHaveBeenCalledTimes(2);
+    expect(harness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("settles an unexpected recorder stop and reports inactive health immediately", async () => {
+    vi.useFakeTimers();
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    const health = vi.fn();
+    session.onStateChange(health);
+    FakeRecorder.instances[0].unexpectedStop();
+    expect(session.isActive()).toBe(false);
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(session.finished).resolves.toMatchObject({ size: 27 });
+    expect(health).toHaveBeenLastCalledWith(expect.objectContaining({ state: "stopped", active: false }));
+    expect(harness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("exits recording when the microphone track ends", async () => {
+    vi.useFakeTimers();
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    harness.track.end();
+    expect(session.isActive()).toBe(false);
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(session.finished).resolves.toMatchObject({ mime: "audio/mp4" });
+    expect(harness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat temporary microphone mute/unmute as termination", async () => {
+    vi.useFakeTimers();
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    const health = vi.fn();
+    session.onStateChange(health);
+    harness.track.mute();
+    expect(session.isActive()).toBe(true);
+    expect(health).toHaveBeenLastCalledWith(expect.objectContaining({ trackMuted: true, active: true }));
+    harness.track.unmute();
+    expect(session.isActive()).toBe(true);
+    expect(FakeRecorder.stopCalls).toBe(0);
+  });
+
+  it("freezes health/elapsed while paused and resumes the same recorder", async () => {
+    vi.useFakeTimers();
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    FakeRecorder.instances[0].pause();
+    const pausedAt = session.elapsedMs();
+    expect(session.isActive()).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(session.elapsedMs()).toBe(pausedAt);
+    FakeRecorder.instances[0].resume();
+    expect(session.isActive()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(session.elapsedMs()).toBe(pausedAt + 1_000);
+    expect(FakeRecorder.startArguments).toHaveLength(1);
   });
 
   it("cancels without producing a message and dispose cleans up on account switch/unmount", async () => {
@@ -153,7 +294,7 @@ describe("voice recording lifecycle", () => {
     });
     cancelled.cancel();
     await expect(cancelled.finished).resolves.toBeNull();
-    expect(first.stop).toHaveBeenCalledTimes(2);
+    expect(first.track.stop).toHaveBeenCalledOnce();
 
     const second = recorderHarness();
     const disposed = await createVoiceRecordingSession({
@@ -162,7 +303,7 @@ describe("voice recording lifecycle", () => {
     });
     disposed.dispose();
     await expect(disposed.finished).resolves.toBeNull();
-    expect(second.stop).toHaveBeenCalledTimes(2);
+    expect(second.track.stop).toHaveBeenCalledOnce();
   });
 
   it("automatically finishes at the five-minute limit", async () => {
@@ -172,13 +313,26 @@ describe("voice recording lifecycle", () => {
     const session = await createVoiceRecordingSession({
       mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
       Recorder: FakeRecorder as unknown as typeof MediaRecorder,
-      finalChunkGraceMs: 25,
       onAutoFinish,
     });
     await vi.advanceTimersByTimeAsync(300_050);
     await expect(session.finished).resolves.toMatchObject({ duration: 300 });
     expect(onAutoFinish).toHaveBeenCalledOnce();
-    expect(harness.stop).toHaveBeenCalledTimes(2);
+    expect(harness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("releases the microphone and rejects when MediaRecorder errors", async () => {
+    vi.useFakeTimers();
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    const rejected = expect(session.finished).rejects.toThrow("录音失败");
+    FakeRecorder.instances[0].fail();
+    await rejected;
+    expect(session.isActive()).toBe(false);
+    expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 });
 
@@ -211,7 +365,10 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain("cancelVoiceRecording();");
     expect(messages).toContain("const result = await session.finish()");
     expect(messages).not.toContain("session.finished.then");
-    expect(messages).toContain("onAutoFinish:");
+    expect(messages).toContain("session.onStateChange");
+    expect(messages).toContain("session.isActive()");
+    expect(messages).toContain("session.elapsedMs()");
+    expect(messages).toContain("shallowRef<VoiceRecordingSession");
     expect(messages).toContain("keys.pkHex !== account");
     expect(messages).toContain("peerPubkey.value !== peer");
     expect(messages).toContain("recording.value !== session");
