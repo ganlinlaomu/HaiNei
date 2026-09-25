@@ -29,13 +29,16 @@ function dm(id: string, pubkey: string, recipientPubkeys: string[], created_at: 
 }
 
 describe("direct-message navigation and UI contract", () => {
-  it("has exactly the required five bottom tabs and no compose tab", () => {
+  it("has exactly the required four icon-only bottom tabs and keeps friends under My", () => {
     const source = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
-    const labels = [...source.matchAll(/<span class="nav-label">([^<]+)<\/span>/g)].map(match => match[1]);
-    expect(labels).toEqual(["首页", "好友", "私信", "通知", "我的"]);
+    const labels = [...source.matchAll(/<router-link class="nav-item"[^>]*aria-label="([^"]+)"/g)].map(match => match[1]);
+    expect(labels).toEqual(["首页", "私信", "通知", "我的"]);
     expect(source).toContain('to="/conversations"');
-    expect(source).not.toContain('<span class="nav-label">发帖</span>');
+    expect(source).not.toContain('to="/friends"');
+    expect(source).not.toContain('class="nav-label"');
     expect(source).toContain('to="/settings"');
+    const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
+    expect(settings).toContain("router.push('/friends')");
   });
 
   it("uses the existing composer behind a route-aware floating button", () => {
@@ -46,7 +49,12 @@ describe("direct-message navigation and UI contract", () => {
     expect(app).toContain("ui.openNewConversation()");
     expect(app).toContain('key="message"');
     expect(app).toContain('key="compose"');
-    expect(app).toContain("transition: opacity 140ms ease, transform 140ms ease");
+    expect(app).toContain("transition: opacity 240ms cubic-bezier(.2,.75,.25,1), transform 240ms cubic-bezier(.2,.75,.25,1)");
+    expect(app).toContain(".fab-to-message-enter-from { opacity: 0; transform: scale(.72) rotate(90deg); }");
+    expect(app).toContain(".fab-to-message-leave-to { opacity: 0; transform: scale(.72) rotate(-90deg); }");
+    expect(app).toContain(".fab-to-compose-enter-from { opacity: 0; transform: scale(.72) rotate(-90deg); }");
+    expect(app).toContain(".fab-to-compose-leave-to { opacity: 0; transform: scale(.72) rotate(90deg); }");
+    expect(app).not.toContain('mode="out-in"');
     expect(app).toContain("PostEditorModal");
     expect(app).toContain("ui.blockingOverlays.size === 0");
     expect(app).not.toContain("new PostEditor");
@@ -54,7 +62,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(router).toContain('path: "/messages/:pubkey"');
     expect(router).toContain("hideBottomNav: true");
     const navigation = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
-    expect(navigation).toContain('<nav v-if="shouldShowBottomNav" class="bottom-nav">');
+    expect(navigation).toContain('<nav v-if="shouldShowBottomNav" class="bottom-nav" aria-label="主导航">');
     expect(navigation).not.toContain('<nav v-show="shouldShowBottomNav"');
   });
 
