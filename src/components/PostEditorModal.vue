@@ -160,9 +160,10 @@
             </div>
           </div>
 
-          <!-- 发送和取消按钮移到这里 -->
+          <!-- 草稿和发送操作 -->
           <div class="action-buttons">
-            <button class="cancel-btn" @click="onClose">取消</button>
+            <button class="discard-btn" type="button" @click="discardDraft">丢弃草稿</button>
+            <button class="save-draft-btn" type="button" @click="onClose">保存草稿</button>
             <button class="send-btn" :disabled="sending || uploadingAny || !canSend" @click="onSend">
               {{ sending ? "发送中..." : "发送" }}
             </button>
@@ -422,6 +423,9 @@ export default defineComponent({
     }
 
     function removeVideo() {
+      releaseObjectUrl(videoPreview.value?.thumbnail);
+      releaseObjectUrl(videoPreview.value?.url);
+      releaseObjectUrl(videoPreview.value?.embedUrl);
       videoPreview.value = null;
     }
 
@@ -786,21 +790,29 @@ export default defineComponent({
     function removeUpload(idx:number) {
       const item = uploads.value[idx];
       if (item) discardedUploadIds.add(item.id);
-      if (item && item.preview) { try { URL.revokeObjectURL(item.preview) } catch {} }
+      releaseObjectUrl(item?.preview);
       uploads.value.splice(idx, 1);
     }
 
-    function resetEditor() {
+    function releaseObjectUrl(value?: string | null) {
+      if (!value?.startsWith("blob:")) return;
+      try { URL.revokeObjectURL(value); } catch {}
+    }
+
+    function releaseRuntimeMediaUrls() {
+      for (const item of uploads.value) releaseObjectUrl(item.preview);
+      releaseObjectUrl(videoPreview.value?.thumbnail);
+      releaseObjectUrl(videoPreview.value?.url);
+      releaseObjectUrl(videoPreview.value?.embedUrl);
+    }
+
+    function resetRuntimeEditor() {
+      releaseRuntimeMediaUrls();
       content.value = "";
       error.value = null;
       allFriends.value = true;
       selectedGroups.value = [];
       visibilityOpen.value = false;
-      for (const item of uploads.value) {
-        if (item.preview) {
-          try { URL.revokeObjectURL(item.preview); } catch {}
-        }
-      }
       uploads.value = [];
       videoPreview.value = null;
       sheetDragging.value = false;
@@ -808,6 +820,22 @@ export default defineComponent({
     }
 
     function onClose() {
+      ui.closePostEditor();
+    }
+
+    function clearPersistentDraft(account: string) {
+      for (const item of uploads.value) discardedUploadIds.add(item.id);
+      for (const [id, uploadAccount] of activeUploadAccounts) {
+        if (uploadAccount === account) discardedUploadIds.add(id);
+      }
+      draftPersistenceEnabled = false;
+      clearPostDraft(account);
+    }
+
+    function discardDraft() {
+      const account = draftAccount || keys.pkHex;
+      if (account) clearPersistentDraft(account);
+      resetRuntimeEditor();
       ui.closePostEditor();
     }
 
@@ -935,7 +963,7 @@ export default defineComponent({
         persistDraft();
         draftPersistenceEnabled = false;
         draftAccount = "";
-        resetEditor();
+        resetRuntimeEditor();
         // Return focus to trigger element when modal closes
         if (triggerElement && typeof triggerElement.focus === 'function') {
           setTimeout(() => {
@@ -977,9 +1005,7 @@ export default defineComponent({
       window.removeEventListener("pagehide", persistOnPageHide);
       document.removeEventListener("visibilitychange", persistOnVisibilityChange);
       document.body.classList.remove("post-editor-open");
-      for (const it of uploads.value) {
-        if (it.preview) { try { URL.revokeObjectURL(it.preview) } catch {} }
-      }
+      releaseRuntimeMediaUrls();
     });
 
     async function onSend() {
@@ -1090,12 +1116,7 @@ export default defineComponent({
         });
 
         ui.addToast("发送成功", 1200, "success");
-        for (const item of uploads.value) discardedUploadIds.add(item.id);
-        for (const [id, account] of activeUploadAccounts) {
-          if (account === accountAtSend) discardedUploadIds.add(id);
-        }
-        draftPersistenceEnabled = false;
-        clearPostDraft(accountAtSend);
+        clearPersistentDraft(accountAtSend);
         onClose();
         // Navigate to home page after modal close animation completes (220ms matches the slide-up-leave-active transition)
         setTimeout(()=>{ router.push('/'); }, 220);
@@ -1110,7 +1131,7 @@ export default defineComponent({
 
     return {
       visible, content, sending, allFriends, selectedGroups, groups, countByGroup,
-      canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, toggleAll, toggleGroup,
+      canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, discardDraft, toggleAll, toggleGroup,
       recipientsCount, selectedSet, gLabel, acceptedFriends, uploads, uploadEnabled, uploadingAny,
       visibilityOpen, visibilitySummary,
       onFilesSelected, insertImageUrl, removeUpload, checkBlossom,
@@ -1377,7 +1398,7 @@ export default defineComponent({
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0;
+  opacity: 1;
   transition: all 0.2s ease;
   padding: 4px;
 }
@@ -1386,10 +1407,6 @@ export default defineComponent({
   width: 16px;
   height: 16px;
   stroke: currentColor;
-}
-
-.thumb-container:hover .remove-btn {
-  opacity: 1;
 }
 
 .remove-btn:hover {
@@ -1541,25 +1558,27 @@ export default defineComponent({
 /* action buttons */
 .action-buttons {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   margin-top: 16px;
   justify-content: flex-end;
 }
 
-.cancel-btn {
+.discard-btn,
+.save-draft-btn {
   background: transparent;
-  color: #ef4444;
   min-height: 42px;
-  padding: 8px 20px;
+  padding: 8px 12px;
   border-radius: 10px;
-  border: 1px solid #ef4444;
   cursor: pointer;
   font-size: 14px;
   transition: all 0.2s ease;
 }
+.discard-btn { margin-right:auto; border:0; color:#dc2626; }
+.save-draft-btn { border:1px solid #94a3b8; color:#475569; }
 
-.cancel-btn:hover {
-  background: #ef4444;
+.discard-btn:hover { background:#fef2f2; }
+.save-draft-btn:hover {
+  background: #475569;
   color: white;
   transform: translateY(-1px);
 }
@@ -1628,16 +1647,13 @@ export default defineComponent({
   }
 }
 
-@media (hover: none) {
-  .remove-btn { opacity: 1; }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .slide-up-enter-active,
   .slide-up-leave-active,
   .upload-btn,
   .send-btn,
-  .cancel-btn,
+  .discard-btn,
+  .save-draft-btn,
   .editor-card { transition: none; }
 }
 .error { margin-top:8px; color:#d00; font-size:13px; }
