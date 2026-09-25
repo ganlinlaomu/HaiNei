@@ -146,7 +146,7 @@ describe("direct-message navigation and UI contract", () => {
 
   it("keeps the compact DM composer above the safe-area bottom", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(chat).toContain("calc(8px + env(safe-area-inset-bottom))");
+    expect(chat).toContain("calc(28px + env(safe-area-inset-bottom))");
     expect(chat).toContain('class="composer-normal"');
     expect(chat).toContain('class="composer-recording"');
     expect(chat).toContain('class="composer-preview"');

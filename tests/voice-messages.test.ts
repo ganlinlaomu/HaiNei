@@ -447,7 +447,7 @@ describe("encrypted private audio messages", () => {
     expect(messages).not.toContain("attachment-menu");
     expect(messages).toContain("width:calc(100% - 32px)");
     expect(messages).toContain("height:54px;min-height:54px");
-    expect(messages).toContain("calc(8px + env(safe-area-inset-bottom))");
+    expect(messages).toContain("calc(28px + env(safe-area-inset-bottom))");
     expect(player).toContain("decryptDmAudio");
     expect(player).toContain("URL.revokeObjectURL");
     expect(player).not.toContain("localStorage");
