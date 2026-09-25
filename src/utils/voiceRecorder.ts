@@ -33,7 +33,10 @@ export async function createVoiceRecordingSession(options: {
   mediaDevices?: Pick<MediaDevices, "getUserMedia">;
   Recorder?: typeof MediaRecorder;
   maxDurationMs?: number;
+  stopFallbackMs?: number;
+  finalChunkGraceMs?: number;
   now?: () => number;
+  onAutoFinish?: () => void;
 } = {}): Promise<VoiceRecordingSession> {
   const mediaDevices = options.mediaDevices || navigator.mediaDevices;
   const Recorder = options.Recorder || globalThis.MediaRecorder;
@@ -46,7 +49,9 @@ export async function createVoiceRecordingSession(options: {
     throw new Error("无法使用麦克风，请检查权限设置");
   }
 
-  const stopTracks = () => stream.getTracks().forEach(track => track.stop());
+  const stopTracks = () => stream.getTracks().forEach(track => {
+    try { track.stop(); } catch {}
+  });
   const mime = selectVoiceRecordingMime(Recorder);
   let recorder: MediaRecorder;
   try {
@@ -59,58 +64,109 @@ export async function createVoiceRecordingSession(options: {
   const chunks: Blob[] = [];
   const now = options.now || Date.now;
   const startedAt = now();
-  let discarded = false;
+  let completionMode: "finish" | "cancel" | null = null;
+  let completionAt = startedAt;
   let settled = false;
+  let tracksStopped = false;
+  let stopFallback: ReturnType<typeof setTimeout> | null = null;
+  let finalChunkGrace: ReturnType<typeof setTimeout> | null = null;
   let resolveFinished!: (result: VoiceRecordingResult | null) => void;
   let rejectFinished!: (error: Error) => void;
   const finished = new Promise<VoiceRecordingResult | null>((resolve, reject) => {
     resolveFinished = resolve;
     rejectFinished = reject;
   });
-  const timeout = setTimeout(() => {
-    if (recorder.state !== "inactive") recorder.stop();
-  }, options.maxDurationMs || MAX_VOICE_RECORDING_MS);
-
-  const cleanup = () => {
-    clearTimeout(timeout);
+  const stopTracksOnce = () => {
+    if (tracksStopped) return;
+    tracksStopped = true;
     stopTracks();
   };
+  const clearCompletionTimers = () => {
+    clearTimeout(maxDurationTimer);
+    if (stopFallback) clearTimeout(stopFallback);
+    if (finalChunkGrace) clearTimeout(finalChunkGrace);
+  };
+  const settle = (error?: Error) => {
+    if (settled) return;
+    settled = true;
+    clearCompletionTimers();
+    stopTracksOnce();
+    if (error) return rejectFinished(error);
+    if (completionMode === "cancel") return resolveFinished(null);
+    if (!chunks.length) return rejectFinished(new Error("未获取到录音数据"));
+    const resultMime = recorder.mimeType || chunks.find(chunk => !!chunk.type)?.type || mime;
+    const blob = new Blob(chunks, { type: resultMime });
+    resolveFinished({
+      blob,
+      mime: resultMime,
+      duration: Math.min(300, Math.max(0, (completionAt - startedAt) / 1000)),
+      size: blob.size,
+    });
+  };
+  const scheduleFinalization = () => {
+    if (settled || finalChunkGrace) return;
+    finalChunkGrace = setTimeout(() => settle(), options.finalChunkGraceMs ?? 50);
+  };
+  const requestCompletion = (mode: "finish" | "cancel") => {
+    if (completionMode) return finished;
+    completionMode = mode;
+    completionAt = now();
+    clearTimeout(maxDurationTimer);
+    if (mode === "cancel") {
+      if (recorder.state === "recording" || recorder.state === "paused") {
+        try { recorder.stop(); } catch {}
+      }
+      stopTracksOnce();
+      settle();
+      return finished;
+    }
+    if (recorder.state === "recording" || recorder.state === "paused") {
+      try { recorder.requestData?.(); } catch {}
+      try { recorder.stop(); } catch (error) {
+        settle(error instanceof Error ? error : new Error("录音停止失败"));
+        return finished;
+      }
+    } else {
+      scheduleFinalization();
+    }
+    stopTracksOnce();
+    stopFallback = setTimeout(() => settle(), options.stopFallbackMs ?? 2_000);
+    return finished;
+  };
+  const maxDurationTimer = setTimeout(() => {
+    options.onAutoFinish?.();
+    void requestCompletion("finish");
+  }, options.maxDurationMs || MAX_VOICE_RECORDING_MS);
+
   recorder.addEventListener("dataavailable", event => {
     if (event.data.size) chunks.push(event.data);
   });
   recorder.addEventListener("stop", () => {
-    if (settled) return;
-    settled = true;
-    cleanup();
-    if (discarded) return resolveFinished(null);
-    const resultMime = recorder.mimeType || chunks.find(chunk => !!chunk.type)?.type || mime;
-    const blob = new Blob(chunks, { type: resultMime });
-    resolveFinished({ blob, mime: resultMime, duration: Math.min(300, Math.max(0, (now() - startedAt) / 1000)), size: blob.size });
+    if (!completionMode) {
+      completionMode = "finish";
+      completionAt = now();
+      stopTracksOnce();
+      options.onAutoFinish?.();
+    }
+    scheduleFinalization();
   });
   recorder.addEventListener("error", () => {
-    if (settled) return;
-    settled = true;
-    cleanup();
-    rejectFinished(new Error("录音失败"));
+    settle(new Error("录音失败"));
   });
 
   try {
     recorder.start();
   } catch {
-    cleanup();
+    clearTimeout(maxDurationTimer);
+    stopTracksOnce();
     throw new Error("当前浏览器无法开始录音");
   }
-
-  const stop = () => {
-    if (recorder.state !== "inactive") recorder.stop();
-    else cleanup();
-  };
   return {
     mime: recorder.mimeType || mime,
     startedAt,
     finished,
-    finish: () => { stop(); return finished; },
-    cancel: () => { discarded = true; stop(); },
-    dispose: () => { discarded = true; stop(); },
+    finish: () => requestCompletion("finish"),
+    cancel: () => { void requestCompletion("cancel"); },
+    dispose: () => { void requestCompletion("cancel"); },
   };
 }
