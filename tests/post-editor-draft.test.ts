@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearPostDraft,
@@ -74,7 +76,7 @@ describe("complete post draft media", () => {
     expect(loadPostDraft(OTHER)).toMatchObject({ content: "other", images: [], video: null });
   });
 
-  it("clears text, visibility and completed media together after send", () => {
+  it("clears text, visibility and completed media together after send or discard", () => {
     savePostDraft(ACCOUNT, {
       content: "ready",
       allFriends: true,
@@ -98,5 +100,32 @@ describe("post editor swipe dismissal", () => {
     expect(shouldDismissPostEditor(180, 0.2, 600)).toBe(true);
     expect(shouldDismissPostEditor(50, 0.8, 600)).toBe(true);
     expect(shouldDismissPostEditor(50, 0.2, 600)).toBe(false);
+  });
+});
+
+describe("post editor close and media UX", () => {
+  const source = readFileSync(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
+
+  it("distinguishes draft-saving close from explicit discard", () => {
+    expect(source).toContain('@click="discardDraft">丢弃草稿</button>');
+    expect(source).toContain('@click="onClose">保存草稿</button>');
+    expect(source).not.toContain('@click="onClose">取消</button>');
+    expect(source).toContain("function clearPersistentDraft(account: string)");
+    expect(source).toContain("function resetRuntimeEditor()");
+  });
+
+  it("keeps normal route and swipe closes on the save path", () => {
+    expect(source).toContain("if (ui.showPostEditor) onClose();");
+    expect(source).toContain("onClose();\n        }, 220);");
+    expect(source).toContain("persistDraft();\n        draftPersistenceEnabled = false;");
+  });
+
+  it("releases runtime object URLs without removing restored encrypted references", () => {
+    expect(source).toContain('value?.startsWith("blob:")');
+    expect(source).toContain("URL.revokeObjectURL(value)");
+    expect(source).toContain("releaseRuntimeMediaUrls();");
+    expect(source).toContain("fullContent += `![](${img.encryptedRef})\\n`");
+    expect(source).toMatch(/\.remove-btn \{[\s\S]*?opacity: 1;/);
+    expect(source).not.toContain(".thumb-container:hover .remove-btn");
   });
 });
