@@ -1,6 +1,6 @@
 <template>
   <div 
-    class="home-container" ref="container"
+    class="home-container app-page" ref="container"
   >
     <div
       class="pull-indicator"
@@ -1259,8 +1259,6 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-width: 720px;
-  margin: 0 auto;
   padding: 0 8px 20px;
 }
 .post-card {

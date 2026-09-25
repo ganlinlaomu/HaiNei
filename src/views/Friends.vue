@@ -1,5 +1,5 @@
 <template>
-  <div class="friends-container">
+  <div class="friends-container app-page">
     <!-- Sync Status Bar -->
     <div v-if="friends.syncing" class="sync-status syncing">
       <span class="sync-icon">⟳</span> 同步中...

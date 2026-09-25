@@ -1,5 +1,5 @@
 <template>
-  <main class="profile-view">
+  <main class="profile-view app-page">
     <header class="profile-topbar">
       <button class="back-button" type="button" aria-label="返回" @click="router.back()">‹</button>
       <h1>个人资料</h1>
@@ -88,7 +88,7 @@ watch([() => keys.pkHex, ownerPubkey], load);
 </script>
 
 <style scoped>
-.profile-view{width:100%;max-width:none;margin:0;box-sizing:border-box;padding:8px 14px calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
+.profile-view{width:100%;margin:0 auto;box-sizing:border-box;padding:8px 14px calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
 .profile-topbar{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:48px;margin-bottom:18px}.profile-topbar h1{grid-column:2;margin:0;text-align:center;font-size:18px}.back-button{grid-column:1;width:40px;height:40px;border:0;border-radius:10px;background:transparent;color:#334155;font-size:28px;cursor:pointer}.profile-content{display:flex;flex-direction:column;align-items:center;padding:18px 4px}.profile-content h2{margin:14px 0 8px;font-size:23px;color:#172033}.bio{width:100%;max-width:420px;margin:0;padding:14px 0 20px;color:#475569;line-height:1.65;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere}.bio.empty{color:#94a3b8}.profile-meta{width:100%;max-width:420px;display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid #e2e8f0;color:#64748b;font-size:14px}.profile-meta strong{color:#334155}.friend-state{margin-top:10px;padding:6px 10px;border-radius:999px;background:#ecfdf5;color:#047857;font-size:12px}.message-button{min-width:112px;min-height:42px;margin-top:14px;padding:0 18px;border:0;border-radius:999px;background:#1687e8;color:#fff;font-weight:700;cursor:pointer}.unmute-button{margin-top:14px;min-height:42px;padding:0 14px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;color:#334155}.unavailable{padding:64px 16px;text-align:center}.unavailable h2{margin:0 0 8px;font-size:20px}.unavailable p{margin:0;color:#64748b;font-size:14px}
-@media (min-width:768px){.profile-content,.unavailable{max-width:560px;margin-left:auto;margin-right:auto}}
+@media (min-width:768px){.unavailable{max-width:640px;margin-left:auto;margin-right:auto}}
 </style>

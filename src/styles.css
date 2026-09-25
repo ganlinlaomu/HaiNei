@@ -6,7 +6,9 @@
   --z-bottom-nav: 1100;
   --bottom-nav-height: 80px;
   --navigation-rail-width: 0px;
-  --main-content-max-width: 720px;
+  --app-page-max-width: 720px;
+  --app-page-gutter: 4px;
+  --main-content-max-width: var(--app-page-max-width);
   /* Increased padding to ensure load-more button is always above bottom bar */
   --load-more-padding: 40px;
 }
@@ -40,9 +42,9 @@ body {
 
 /* ✅ App 容器修复 - 唯一的滚动容器 */
 body > #app {
-  max-width: 720px;
+  max-width: var(--app-page-max-width);
   margin: 0 auto;
-  padding: 4px;
+  padding: var(--app-page-gutter);
   width: 100%;
   min-height: 100svh;           /* 🔧 从 100dvh 改为 100svh */
   height: 100%;
@@ -53,8 +55,8 @@ body > #app {
 
 /* 桌面端保持合适的内边距 */
 @media (min-width: 640px) {
-  body > #app {
-    padding: 12px;
+  :root {
+    --app-page-gutter: 12px;
   }
 }
 
@@ -62,7 +64,8 @@ body > #app {
   :root {
     --bottom-nav-height: 0px;
     --navigation-rail-width: 72px;
-    --main-content-max-width: 860px;
+    --app-page-max-width: 860px;
+    --app-page-gutter: 20px;
   }
 
   body {
@@ -72,29 +75,21 @@ body > #app {
   body > #app {
     max-width: none;
     margin: 0;
-    padding: 12px 20px 12px calc(var(--navigation-rail-width) + 20px);
+    padding: 12px var(--app-page-gutter) 12px calc(var(--navigation-rail-width) + var(--app-page-gutter));
   }
 
-  .app-root {
-    width: 100%;
-    max-width: var(--main-content-max-width);
-    margin: 0 auto;
-  }
-
-  .app-root.login-route {
-    max-width: none;
-  }
 }
 
 @media (min-width: 1200px) {
   :root {
     --navigation-rail-width: 84px;
-    --main-content-max-width: 1000px;
+    --app-page-max-width: 960px;
+    --app-page-gutter: 28px;
   }
 
   body > #app {
-    padding-right: 28px;
-    padding-left: calc(var(--navigation-rail-width) + 28px);
+    padding-right: var(--app-page-gutter);
+    padding-left: calc(var(--navigation-rail-width) + var(--app-page-gutter));
   }
 }
 
@@ -103,6 +98,13 @@ body > #app {
   min-height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.app-page {
+  width: 100%;
+  max-width: var(--app-page-max-width);
+  margin-right: auto;
+  margin-left: auto;
 }
 
 /* 头部栏 */
@@ -200,4 +202,3 @@ textarea {
     min-height: 100vh;
   }
 }
-

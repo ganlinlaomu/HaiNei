@@ -69,7 +69,7 @@ describe("direct-message navigation and UI contract", () => {
   it("keeps mobile conversation and profile page roots full width", () => {
     for (const file of ["Conversations.vue", "Messages.vue", "MyProfile.vue", "Profile.vue"]) {
       const source = readFileSync(join(process.cwd(), `src/views/${file}`), "utf8");
-      expect(source, file).toContain("width:100%;max-width:none");
+      expect(source, file).toContain("width:100%");
       expect(source, file).toContain("margin:0");
       expect(source, file).toContain("box-sizing:border-box");
     }

@@ -1,5 +1,5 @@
 <template>
-  <div class="notifications-page">
+  <div class="notifications-page app-page">
     <header class="page-header">
       <h2>通知</h2>
       <button
