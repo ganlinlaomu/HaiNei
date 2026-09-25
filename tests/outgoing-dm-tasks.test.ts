@@ -406,7 +406,8 @@ describe("optimistic outgoing DM tasks", () => {
     } as const;
     direct.outgoingTasks = [failedTask];
     mocks.tasks.set(`${ACCOUNT}:lost-link`, failedTask);
-    messages.inbox = [{
+    await direct.refresh(ACCOUNT);
+    messages.addInbox({
       id: "relay-self-copy",
       pubkey: ACCOUNT,
       recipientPubkeys: [PEER],
@@ -416,18 +417,17 @@ describe("optimistic outgoing DM tasks", () => {
       protocol: "nip17",
       transportKind: 1059,
       tags: [["t", "hainei-dm"]],
-    }];
+    });
 
     expect(direct.peerMessages(PEER)).toHaveLength(1);
     expect(direct.peerMessages(PEER)[0]).toMatchObject({
       id: "relay-self-copy",
       outgoing: { localId: "lost-link", state: "send_failed" },
     });
-    await direct.refresh(ACCOUNT);
-    expect(mocks.tasks.get(`${ACCOUNT}:lost-link`)).toMatchObject({
+    await vi.waitFor(() => expect(mocks.tasks.get(`${ACCOUNT}:lost-link`)).toMatchObject({
       outgoingId: "relay-self-copy",
       canonicalMessageId: "relay-self-copy",
-    });
+    }));
   });
 
   it("reloads and resumes account-scoped pending work while self-copy stays deduplicated", async () => {

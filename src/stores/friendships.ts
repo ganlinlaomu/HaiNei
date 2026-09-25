@@ -9,6 +9,7 @@ import { useKeyStore } from "@/stores/keys";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
+import { notifyDirectMessageAuthorizationChanged } from "@/services/directMessageStateEvents";
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
 
@@ -106,7 +107,10 @@ export const useFriendshipsStore = defineStore("friendships", {
       this.loading = true;
       try {
         const records = await friendshipRepository.list(account);
-        if (this.loadedFor === account) this.records = records;
+        if (this.loadedFor === account) {
+          this.records = records;
+          notifyDirectMessageAuthorizationChanged(account);
+        }
       } finally {
         if (this.loadedFor === account) this.loading = false;
       }
@@ -128,6 +132,7 @@ export const useFriendshipsStore = defineStore("friendships", {
       const index = this.records.findIndex(item => item.peerPubkey === peer);
       if (index >= 0) this.records[index] = record;
       else this.records.push(record);
+      notifyDirectMessageAuthorizationChanged(accountPubkey);
       scheduleAccountStateSync(useKeyStore(), "friendships");
       return { changed: true, record };
     },

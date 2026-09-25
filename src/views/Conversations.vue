@@ -48,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onDeactivated, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import NewConversationSheet from "@/components/NewConversationSheet.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
@@ -100,7 +100,7 @@ const filteredConversations = computed(() => {
 async function load() {
   const account = keys.pkHex;
   if (!account) return;
-  await Promise.all([messages.load(account), friendships.load(account), directMessages.refresh(account), friends.load(account), profiles.load(account)]);
+  await Promise.all([messages.load(account), friendships.load(account), friends.load(account), profiles.load(account)]);
 }
 function openConversation(pubkey: string) {
   void router.push(`/messages/${pubkey}`);
@@ -121,7 +121,6 @@ async function deleteConversation(pubkey: string) {
 onMounted(load);
 onActivated(load);
 onDeactivated(() => ui.closeNewConversation());
-watch(() => `${keys.pkHex}:${messages.inbox.length}:${messages.inbox[0]?.id || ""}`, () => { void directMessages.refresh(keys.pkHex); });
 </script>
 
 <style scoped>

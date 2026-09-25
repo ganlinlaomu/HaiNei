@@ -4,6 +4,7 @@ import { useKeyStore } from "./keys";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
+import { notifyCanonicalMessageAdded } from "@/services/directMessageStateEvents";
 
 export type InboxItem = {
   id: string;
@@ -192,6 +193,7 @@ export const useMessagesStore = defineStore("messages", {
       // keep bounded history
       if (this.inbox.length > 1000) this.inbox.splice(1000);
       this.scheduleInboxSave();
+      notifyCanonicalMessageAdded(this.loadedFor, item);
     },
 
     addOutbox(item: OutboxItem) {
