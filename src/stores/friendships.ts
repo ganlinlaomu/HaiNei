@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { sendDirectMessage } from "@/nostr/messaging/service";
 import { decodeFriendshipControl, friendshipTags, type FriendshipAction, type FriendshipControl } from "@/nostr/messaging/friendshipControl";
-import { getRelaysFromStorage } from "@/nostr/relays";
+import { DEFAULT_RELAYS, getRelaysFromStorage } from "@/nostr/relays";
 import { friendshipRepository } from "@/repositories/friendshipRepository";
 import type { FriendshipAcceptedWindow, FriendshipRecord, FriendshipState } from "@/db/dexie";
 import { useKeyStore } from "@/stores/keys";
@@ -12,6 +12,10 @@ import { scheduleAccountStateSync } from "@/services/accountStateSync";
 import { notifyDirectMessageAuthorizationChanged } from "@/services/directMessageStateEvents";
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
+
+function friendshipControlRelays() {
+  return [...new Set([...getRelaysFromStorage("write"), ...DEFAULT_RELAYS])];
+}
 
 export type FriendshipControlEvent = FriendshipControl & { eventId: string; selfMessage: boolean };
 
@@ -140,7 +144,10 @@ export const useFriendshipsStore = defineStore("friendships", {
       const keys = useKeyStore();
       const account = keys.pkHex;
       const peer = normalized(peerPubkey);
-      if (!keys.isLoggedIn || !keys.supportsNip44 || !account || !peer || peer === account) throw new Error("无法发送好友关系消息");
+      if (!keys.isLoggedIn || !account) throw new Error("请先登录");
+      if (peer === account) throw new Error("不能添加自己为好友");
+      if (!keys.supportsNip44) throw new Error("当前登录方式暂不支持加密好友请求");
+      if (!peer) throw new Error("无法发送好友关系消息");
       if (this.loadedFor !== account) await this.load(account);
       const previousControlAt = this.getRecord(peer)?.lastControlAt || 0;
       const timestamp = Math.max(Math.floor(Date.now() / 1000), previousControlAt + 1);
@@ -148,7 +155,7 @@ export const useFriendshipsStore = defineStore("friendships", {
         recipientPubkeys: [peer],
         content: JSON.stringify({ type: `friend_${action}`, from: account, timestamp, ...(requestId ? { requestId } : {}) }),
         tags: friendshipTags(action),
-        relays: getRelaysFromStorage("write"),
+        relays: friendshipControlRelays(),
         context: { senderPubkey: account, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
       });
       if (keys.pkHex !== account || this.loadedFor !== account) throw new Error("账号已切换");

@@ -5,6 +5,7 @@ import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
 const OTHER = "c".repeat(64);
+const BOOTSTRAP_RELAYS = ["wss://bootstrap.test", "wss://shared.test"];
 
 const mocks = vi.hoisted(() => ({
   key: {
@@ -19,11 +20,15 @@ const mocks = vi.hoisted(() => ({
   put: vi.fn(),
   delete: vi.fn(),
   sendCurrentProfileTo: vi.fn(),
-  requestCurrentProfile: vi.fn()
+  requestCurrentProfile: vi.fn(),
+  getRelaysFromStorage: vi.fn()
 }));
 
 vi.mock("@/stores/keys", () => ({ useKeyStore: () => mocks.key }));
-vi.mock("@/nostr/relays", () => ({ getRelaysFromStorage: () => ["wss://relay.test"] }));
+vi.mock("@/nostr/relays", () => ({
+  DEFAULT_RELAYS: ["wss://bootstrap.test", "wss://shared.test"],
+  getRelaysFromStorage: mocks.getRelaysFromStorage
+}));
 vi.mock("@/nostr/messaging/service", () => ({ sendDirectMessage: mocks.send }));
 vi.mock("@/repositories/friendshipRepository", () => ({
   friendshipRepository: { list: mocks.list, put: mocks.put, delete: mocks.delete }
@@ -63,6 +68,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   setActivePinia(createPinia());
   mocks.key.pkHex = ACCOUNT;
+  mocks.key.isLoggedIn = true;
+  mocks.key.supportsNip44 = true;
+  mocks.getRelaysFromStorage.mockReturnValue(["wss://relay.test"]);
   mocks.list.mockResolvedValue([]);
   mocks.put.mockResolvedValue(undefined);
   mocks.delete.mockResolvedValue(undefined);
@@ -91,6 +99,28 @@ beforeEach(() => {
 });
 
 describe("friendship state and message authorization", () => {
+  it("uses configured write relays plus deduped bootstrap relays for friendship requests", async () => {
+    mocks.getRelaysFromStorage.mockReturnValue(["wss://configured.test", "wss://shared.test"]);
+    await useFriendshipsStore().sendRequest(PEER);
+    expect(mocks.getRelaysFromStorage).toHaveBeenCalledWith("write");
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({
+      relays: ["wss://configured.test", "wss://shared.test", "wss://bootstrap.test"]
+    }));
+  });
+
+  it("falls back to bootstrap relays when configured write relays are empty", async () => {
+    mocks.getRelaysFromStorage.mockReturnValue([]);
+    await useFriendshipsStore().sendRequest(PEER);
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ relays: BOOTSTRAP_RELAYS }));
+  });
+
+  it("rejects unsupported NIP-44 before sending a friendship request", async () => {
+    mocks.key.supportsNip44 = false;
+    await expect(useFriendshipsStore().sendRequest(PEER))
+      .rejects.toThrow("当前登录方式暂不支持加密好友请求");
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
   it("processes unknown requests and control messages bypass the normal friend gate", async () => {
     const friendships = useFriendshipsStore();
     await friendships.load(ACCOUNT);
