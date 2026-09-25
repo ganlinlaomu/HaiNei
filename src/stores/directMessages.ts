@@ -13,6 +13,7 @@ import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { uploadEncryptedCommentImage } from "@/utils/commentImage";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
+import { registerDirectMessageStateOwner } from "@/services/directMessageStateEvents";
 
 type MessageCursor = { lastReadCreatedAt: number; lastReadMessageId: string };
 export type ConversationPreference = {
@@ -229,6 +230,134 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         .filter(task => !matches.matchedLocalIds.has(task.localId))
         .map(taskInboxItem)];
     },
+    recomputeUnreadFromMemory(conversationId?: string) {
+      const account = this.loadedFor;
+      if (!account) return;
+      const friendships = useFriendshipsStore();
+      const visible = useMessagesStore().inbox.filter(item => {
+        if (!isDirectMessageTags(item.tags)) return false;
+        const peer = directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account);
+        return !!peer && !this.preferencesByPeer[peer]?.hidden
+          && afterDeletion(item, this.preferencesByPeer[peer])
+          && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer));
+      });
+      const ids = conversationId
+        ? [conversationId]
+        : [...new Set(visible.map(item => item.conversationId).filter((value): value is string => !!value))];
+      const next = conversationId ? { ...this.unreadByConversation } : {} as Record<string, number>;
+      for (const id of ids) {
+        const conversation = visible.filter(item => item.conversationId === id);
+        const peer = conversation[0] && directMessagePeer({
+          senderPubkey: conversation[0].pubkey,
+          recipientPubkeys: conversation[0].recipientPubkeys || [],
+        }, account);
+        if (!conversation.length || !peer) {
+          delete next[id];
+          continue;
+        }
+        const read = this.readCursors[id];
+        next[id] = friendships.isAccepted(peer)
+          ? conversation.filter(item => item.pubkey !== account && isMessageAfter({ id: item.id, createdAt: item.created_at }, read)).length
+          : 0;
+      }
+      this.unreadByConversation = next;
+    },
+    async ensurePeerState(account: string, peer: string, conversationId?: string) {
+      const needsPreference = !Object.prototype.hasOwnProperty.call(this.preferencesByPeer, peer);
+      const needsCursor = !!conversationId && !Object.prototype.hasOwnProperty.call(this.readCursors, conversationId);
+      if (!needsPreference && !needsCursor) return;
+      const [preferenceRecord, cursorValues] = await Promise.all([
+        needsPreference ? metaRepository.get(account, preferenceKey(peer)).catch(() => undefined) : Promise.resolve(undefined),
+        needsCursor && conversationId ? Promise.all([
+          metaRepository.get(account, readKey(conversationId)).catch(() => undefined),
+          typeof syncedMessageRepository.getReadState === "function" && typeof indexedDB !== "undefined"
+            ? syncedMessageRepository.getReadState(account, conversationId).catch(() => undefined)
+            : Promise.resolve(undefined),
+        ]) : Promise.resolve(undefined),
+      ]);
+      if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      if (needsPreference) {
+        this.preferencesByPeer = { ...this.preferencesByPeer, [peer]: preferenceRecord?.value as ConversationPreference | undefined };
+      }
+      if (needsCursor && conversationId && cursorValues) {
+        const [localRecord, synced] = cursorValues;
+        const local = localRecord?.value as MessageCursor | undefined;
+        const remote = synced?.lastReadCreatedAt === undefined ? undefined : {
+          lastReadCreatedAt: synced.lastReadCreatedAt,
+          lastReadMessageId: synced.lastReadMessageId || "",
+        };
+        const read = !local || (remote && isMessageAfter({ id: remote.lastReadMessageId, createdAt: remote.lastReadCreatedAt }, local)) ? remote : local;
+        this.readCursors = { ...this.readCursors, [conversationId]: read };
+      }
+    },
+    async unhideForNewCanonicalMessages(account: string, peer: string) {
+      const preference = this.preferencesByPeer[peer];
+      if (!preference?.hidden) return;
+      const authorized = directMessagesForPeer(useMessagesStore().inbox, account, peer, {
+        friendship: useFriendshipsStore().getRecord(peer),
+        preference,
+        enforceAuthorization: true,
+      });
+      const newer = authorized.some(item => afterCursor(item, preference.hiddenThroughCreatedAt, preference.hiddenThroughMessageId)
+        && (preference.hiddenMode === "deleted" || item.pubkey !== account));
+      if (!newer) return;
+      const visiblePreference = { ...preference, hidden: false };
+      this.preferencesByPeer = { ...this.preferencesByPeer, [peer]: visiblePreference };
+      try {
+        await metaRepository.put(account, preferenceKey(peer), visiblePreference);
+      } catch (error) {
+        console.warn("[dm] conversation visibility persistence failed", error instanceof Error ? error.message : "unknown error");
+      }
+    },
+    async relinkOutgoingTask(account: string, item: InboxItem) {
+      const task = matchOutgoingTasksToCanonical([item], this.outgoingTasks, account).taskByMessageId.get(item.id);
+      if (!task || (task.outgoingId === item.id && task.canonicalMessageId === item.id)) return;
+      const updatedAt = Date.now();
+      const index = this.outgoingTasks.findIndex(current => current.accountPubkey === account && current.localId === task.localId);
+      if (index >= 0) {
+        this.outgoingTasks.splice(index, 1, { ...this.outgoingTasks[index], outgoingId: item.id, canonicalMessageId: item.id, updatedAt });
+      }
+      try {
+        await outgoingDmTaskRepository.update(account, task.localId, {
+          outgoingId: item.id,
+          canonicalMessageId: item.id,
+          updatedAt,
+        });
+      } catch (error) {
+        console.warn("[dm] outgoing task relink persistence failed", error instanceof Error ? error.message : "unknown error");
+      }
+    },
+    async applyCanonicalMessage(accountPubkey: string, item: InboxItem) {
+      const account = accountPubkey.toLowerCase();
+      if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account || !isDirectMessageTags(item.tags)) return;
+      const peer = directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account);
+      if (!peer) return;
+      await this.ensurePeerState(account, peer, item.conversationId);
+      if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      await this.unhideForNewCanonicalMessages(account, peer);
+      if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      if (item.conversationId) this.recomputeUnreadFromMemory(item.conversationId);
+      await this.relinkOutgoingTask(account, item);
+    },
+    async reconcileAuthorization(accountPubkey: string) {
+      const account = accountPubkey.toLowerCase();
+      if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      for (const peer of Object.keys(this.preferencesByPeer)) {
+        await this.unhideForNewCanonicalMessages(account, peer);
+        if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      }
+      this.recomputeUnreadFromMemory();
+    },
+    claimDerivedStateOwnership() {
+      registerDirectMessageStateOwner({
+        canonicalMessageAdded: (account, item) => {
+          void this.applyCanonicalMessage(account, item).catch(error => console.warn("[dm] incremental message update failed", error));
+        },
+        authorizationChanged: account => {
+          void this.reconcileAuthorization(account).catch(error => console.warn("[dm] authorization update failed", error));
+        },
+      });
+    },
     async refresh(accountPubkey?: string) {
       const account = (accountPubkey || useKeyStore().pkHex).toLowerCase();
       if (!account) return this.reset();
@@ -340,6 +469,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           : 0;
         return [conversationId, count];
       }));
+      this.claimDerivedStateOwnership();
       ensureResumeListeners();
       void this.resumePending(false);
     },

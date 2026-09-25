@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { FriendshipRecord } from "@/db/dexie";
 import type { InboxItem } from "@/stores/messages";
 
@@ -32,6 +34,7 @@ vi.mock("@/repositories/outgoingDmTaskRepository", () => ({
 import { buildDirectConversationSummaries, useDirectMessagesStore } from "@/stores/directMessages";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useMessagesStore } from "@/stores/messages";
+import { notifyDirectMessageAuthorizationChanged } from "@/services/directMessageStateEvents";
 
 function dm(id: string, created_at: number): InboxItem {
   return {
@@ -78,6 +81,39 @@ beforeEach(() => {
 });
 
 describe("direct-message authorization and conversation lifecycle", () => {
+  it("keeps full refresh ownership out of HeaderBar and KeepAlive page watchers", () => {
+    for (const file of ["src/components/HeaderBar.vue", "src/views/Conversations.vue", "src/views/Messages.vue"]) {
+      expect(readFileSync(join(process.cwd(), file), "utf8")).not.toContain("directMessages.refresh(");
+    }
+    expect(readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8")).toContain("useDirectMessagesStore().refresh(pk)");
+  });
+
+  it("increments unread and unhides from a canonical inbox update without a full refresh", async () => {
+    const context = seed([dm("first", 5)], relationship("accepted"));
+    await context.direct.refresh(ACCOUNT);
+    await context.direct.hideConversation(PEER);
+    const refresh = vi.spyOn(context.direct, "refresh");
+
+    context.messageStore.addInbox(dm("new", 6));
+
+    await vi.waitFor(() => expect(summaries().map(item => item.latest.id)).toEqual(["new"]));
+    expect(context.direct.unreadCount).toBe(1);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("recomputes authorization-derived unread in memory when friendship state changes", async () => {
+    const context = seed([dm("historical", 5), dm("blocked", 20)], relationship("removed", 10));
+    await context.direct.refresh(ACCOUNT);
+    expect(context.direct.unreadCount).toBe(0);
+    const refresh = vi.spyOn(context.direct, "refresh");
+
+    context.friendships.records = [relationship("accepted")];
+    notifyDirectMessageAuthorizationChanged(ACCOUNT);
+
+    await vi.waitFor(() => expect(context.direct.unreadCount).toBe(2));
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it("shows and counts accepted incoming DMs but excludes nonaccepted new DMs", async () => {
     let context = seed([dm("accepted-message", 5)], relationship("accepted"));
     await context.direct.refresh(ACCOUNT);
@@ -124,8 +160,8 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(summaries()).toHaveLength(0);
     expect(context.direct.unreadCount).toBe(0);
 
-    context.messageStore.inbox.push(dm("new", 8));
-    await context.direct.refresh(ACCOUNT);
+    context.messageStore.addInbox(dm("new", 8));
+    await vi.waitFor(() => expect(summaries().map(item => item.latest.id)).toEqual(["new"]));
     expect(summaries().map(item => item.latest.id)).toEqual(["new"]);
     expect(context.direct.peerMessages(PEER).map(item => item.id)).toEqual(["new"]);
     expect(context.direct.unreadCount).toBe(1);
@@ -139,5 +175,18 @@ describe("direct-message authorization and conversation lifecycle", () => {
     await context.direct.refresh(ACCOUNT);
     expect(context.direct.peerMessages(PEER)).toHaveLength(0);
     expect(summaries()).toHaveLength(0);
+  });
+
+  it("ignores incremental source events for a different account", async () => {
+    const context = seed([dm("current", 5)], relationship("accepted"));
+    await context.direct.refresh(ACCOUNT);
+    const originalUnread = context.direct.unreadCount;
+    context.messageStore.loadedFor = "c".repeat(64);
+
+    context.messageStore.addInbox(dm("other-account", 30));
+    await Promise.resolve();
+
+    expect(context.direct.loadedFor).toBe(ACCOUNT);
+    expect(context.direct.unreadCount).toBe(originalUnread);
   });
 });

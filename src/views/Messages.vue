@@ -132,7 +132,7 @@ function scrollToBottom() { void nextTick(() => { if (messageList.value) message
 async function load() {
   const account = keys.pkHex;
   if (!account || peerPubkey.value === account) return void router.replace("/conversations");
-  await Promise.all([messageStore.load(account), directMessages.refresh(account), friendships.load(account), friends.load(account), profiles.load(account)]);
+  await Promise.all([messageStore.load(account), friendships.load(account), friends.load(account), profiles.load(account)]);
   await directMessages.markPeerRead(peerPubkey.value);
   scrollToBottom();
 }
@@ -162,7 +162,6 @@ function submitMessage() {
 onMounted(load);
 watch([() => keys.pkHex, peerPubkey], load);
 watch(() => `${messageStore.inbox.length}:${messageStore.inbox[0]?.id || ""}`, async () => {
-  await directMessages.refresh(keys.pkHex);
   await directMessages.markPeerRead(peerPubkey.value);
   scrollToBottom();
 });
