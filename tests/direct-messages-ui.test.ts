@@ -144,14 +144,16 @@ describe("direct-message navigation and UI contract", () => {
     expect(conversations).toContain("`/messages/${pubkey}`");
   });
 
-  it("raises the DM composer above the safe-area bottom", () => {
+  it("keeps the compact DM composer above the safe-area bottom", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(chat).toContain("calc(10px + env(safe-area-inset-bottom))");
+    expect(chat).toContain("calc(8px + env(safe-area-inset-bottom))");
     expect(chat).toContain('class="composer-normal"');
     expect(chat).toContain('class="composer-recording"');
     expect(chat).toContain('class="composer-preview"');
     expect(chat).toContain('aria-label="发送"');
-    expect(chat).toContain("border-radius:27px");
+    expect(chat).toContain("width:calc(100% - 32px)");
+    expect(chat).toContain("height:54px;min-height:54px");
+    expect(chat).toContain("border-radius:28px");
     expect(chat).toContain("border-radius:50%");
     expect(chat).toContain("box-shadow:0 4px 18px");
     expect(chat).toContain("width:min(100%,720px)");

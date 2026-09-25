@@ -12,6 +12,7 @@ export type VoiceRecordingState = "recording" | "paused" | "finishing" | "stoppe
 export type VoiceRecordingHealth = {
   state: VoiceRecordingState;
   active: boolean;
+  streamActive: boolean;
   trackMuted: boolean;
 };
 
@@ -45,6 +46,7 @@ export async function createVoiceRecordingSession(options: {
   Recorder?: typeof MediaRecorder;
   maxDurationMs?: number;
   stopFallbackMs?: number;
+  muteGraceMs?: number;
   now?: () => number;
   onAutoFinish?: () => void;
 } = {}): Promise<VoiceRecordingSession> {
@@ -94,9 +96,11 @@ export async function createVoiceRecordingSession(options: {
   let settled = false;
   let tracksStopped = false;
   let stopFallback: ReturnType<typeof setTimeout> | null = null;
+  let muteGraceTimer: ReturnType<typeof setTimeout> | null = null;
   let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   let activeSince: number | null = startedAt;
   let activeElapsedMs = 0;
+  let emptyDataError: Error | null = null;
   const healthListeners = new Set<(health: VoiceRecordingHealth) => void>();
   let resolveFinished!: (result: VoiceRecordingResult | null) => void;
   let rejectFinished!: (error: Error) => void;
@@ -105,13 +109,36 @@ export async function createVoiceRecordingSession(options: {
     rejectFinished = reject;
   });
 
+  const diagnosticsEnabled = import.meta.env.DEV && !options.Recorder;
+  const diagnose = (event: string) => {
+    if (!diagnosticsEnabled) return;
+    console.debug("[voice-recorder]", {
+      timestamp: new Date().toISOString(),
+      event,
+      recorderState: recorder.state,
+      streamActive: stream.active,
+      tracks: tracks.map(track => ({ readyState: track.readyState, muted: track.muted })),
+    });
+  };
+  const streamIsActive = () => stream.active !== false;
   const hasLiveTrack = () => tracks.some(track => track.readyState === "live");
-  const isActive = () => !settled && recorder.state === "recording" && hasLiveTrack();
-  const elapsedMs = () => Math.max(0, activeElapsedMs + (isActive() && activeSince !== null ? now() - activeSince : 0));
+  const allTracksMuted = () => tracks.length > 0 && tracks.every(track => track.muted);
+  const rawIsActive = () => !settled
+    && recorder.state === "recording"
+    && streamIsActive()
+    && hasLiveTrack()
+    && !allTracksMuted();
+  const isActive = () => {
+    const active = rawIsActive();
+    if (!active && !completionMode && !settled) syncHealth("poll");
+    return active;
+  };
+  const elapsedMs = () => Math.max(0, activeElapsedMs + (rawIsActive() && activeSince !== null ? now() - activeSince : 0));
   const health = (): VoiceRecordingHealth => ({
     state,
-    active: isActive(),
-    trackMuted: tracks.length > 0 && tracks.every(track => track.muted),
+    active: rawIsActive(),
+    streamActive: streamIsActive(),
+    trackMuted: allTracksMuted(),
   });
   const emitHealth = () => healthListeners.forEach(listener => listener(health()));
   const setState = (next: VoiceRecordingState) => {
@@ -131,8 +158,10 @@ export async function createVoiceRecordingSession(options: {
   const clearTimers = () => {
     if (maxDurationTimer) clearTimeout(maxDurationTimer);
     if (stopFallback) clearTimeout(stopFallback);
+    if (muteGraceTimer) clearTimeout(muteGraceTimer);
     maxDurationTimer = null;
     stopFallback = null;
+    muteGraceTimer = null;
   };
   const removeListeners = () => {
     recorder.removeEventListener("start", onStart);
@@ -141,6 +170,8 @@ export async function createVoiceRecordingSession(options: {
     recorder.removeEventListener("error", onError);
     recorder.removeEventListener("pause", onPause);
     recorder.removeEventListener("resume", onResume);
+    stream.removeEventListener("active", onStreamActive);
+    stream.removeEventListener("inactive", onStreamInactive);
     tracks.forEach(track => {
       track.removeEventListener("ended", onTrackEnded);
       track.removeEventListener("mute", onTrackMute);
@@ -170,7 +201,7 @@ export async function createVoiceRecordingSession(options: {
     stopTracksOnce();
     if (!blob.size) {
       setState("error");
-      rejectFinished(new Error("未获取到录音数据，请重试"));
+      rejectFinished(emptyDataError || new Error("未获取到录音数据，请重试"));
       return;
     }
     setState("stopped");
@@ -184,7 +215,9 @@ export async function createVoiceRecordingSession(options: {
   const startStopWatchdog = () => {
     if (stopFallback || settled) return;
     stopFallback = setTimeout(
-      () => settle(new Error("录音处理超时，请重试")),
+      () => settle(completionMode === "unexpected"
+        ? emptyDataError || new Error("麦克风录音已被系统中断，请重试")
+        : new Error("录音处理超时，请重试")),
       options.stopFallbackMs ?? 3_000,
     );
   };
@@ -211,9 +244,10 @@ export async function createVoiceRecordingSession(options: {
     startStopWatchdog();
     return finished;
   };
-  const requestUnexpectedCompletion = () => {
+  const requestUnexpectedCompletion = (reason = new Error("麦克风录音已被系统中断，请重试")) => {
     if (completionMode || settled) return;
     completionMode = "unexpected";
+    emptyDataError = reason;
     captureActiveTime();
     if (maxDurationTimer) clearTimeout(maxDurationTimer);
     maxDurationTimer = null;
@@ -227,41 +261,98 @@ export async function createVoiceRecordingSession(options: {
     startStopWatchdog();
   };
 
+  function syncHealth(source: string) {
+    if (completionMode || settled) return;
+    if (recorder.state === "inactive") {
+      diagnose(`${source}:inactive`);
+      requestUnexpectedCompletion();
+      return;
+    }
+    if (!streamIsActive() || !hasLiveTrack()) {
+      captureActiveTime();
+      emitHealth();
+      diagnose(`${source}:interrupted`);
+      requestUnexpectedCompletion();
+      return;
+    }
+    if (recorder.state === "paused") {
+      captureActiveTime();
+      setState("paused");
+      return;
+    }
+    if (allTracksMuted()) {
+      captureActiveTime();
+      emitHealth();
+      if (!muteGraceTimer) {
+        muteGraceTimer = setTimeout(() => {
+          muteGraceTimer = null;
+          if (!completionMode && !settled && allTracksMuted()) {
+            diagnose("mute-timeout");
+            requestUnexpectedCompletion();
+          }
+        }, options.muteGraceMs ?? 1_000);
+      }
+      return;
+    }
+    if (muteGraceTimer) {
+      clearTimeout(muteGraceTimer);
+      muteGraceTimer = null;
+    }
+    if (activeSince === null) activeSince = now();
+    state = "recording";
+    emitHealth();
+  }
+
   function onStart() {
-    if (!completionMode && !settled) setState("recording");
+    diagnose("start");
+    if (!completionMode && !settled) syncHealth("start");
   }
   function onDataAvailable(event: BlobEvent) {
     if (event.data.size) chunks.push(event.data);
   }
   function onStop() {
+    diagnose("stop");
     // MediaRecorder guarantees the final dataavailable caused by stop() before stop.
     if (!completionMode) {
       completionMode = "unexpected";
+      emptyDataError = new Error("麦克风录音已被系统中断，请重试");
       captureActiveTime();
     }
     settle();
   }
   function onError() {
-    if (!completionMode) completionMode = "unexpected";
-    settle(new Error("录音失败，请重试"));
+    diagnose("error");
+    requestUnexpectedCompletion(new Error("录音失败，请重试"));
   }
   function onPause() {
+    diagnose("pause");
     captureActiveTime();
     if (!completionMode && !settled) setState("paused");
   }
   function onResume() {
+    diagnose("resume");
     if (completionMode || settled) return;
-    activeSince = now();
-    setState("recording");
+    syncHealth("resume");
   }
   function onTrackEnded() {
+    diagnose("ended");
     requestUnexpectedCompletion();
   }
   function onTrackMute() {
-    emitHealth();
+    diagnose("mute");
+    syncHealth("mute");
   }
   function onTrackUnmute() {
-    emitHealth();
+    diagnose("unmute");
+    syncHealth("unmute");
+  }
+  function onStreamActive() {
+    diagnose("stream-active");
+    syncHealth("stream-active");
+  }
+  function onStreamInactive() {
+    diagnose("stream-inactive");
+    requestUnexpectedCompletion();
   }
 
   recorder.addEventListener("start", onStart);
@@ -270,6 +361,8 @@ export async function createVoiceRecordingSession(options: {
   recorder.addEventListener("error", onError);
   recorder.addEventListener("pause", onPause);
   recorder.addEventListener("resume", onResume);
+  stream.addEventListener("active", onStreamActive);
+  stream.addEventListener("inactive", onStreamInactive);
   tracks.forEach(track => {
     track.addEventListener("ended", onTrackEnded);
     track.addEventListener("mute", onTrackMute);
@@ -278,7 +371,7 @@ export async function createVoiceRecordingSession(options: {
 
   try {
     recorder.start();
-    if (recorder.state !== "recording" || !hasLiveTrack()) throw new Error("inactive");
+    if (recorder.state !== "recording" || !streamIsActive() || !hasLiveTrack()) throw new Error("inactive");
   } catch {
     clearTimers();
     removeListeners();
@@ -290,6 +383,7 @@ export async function createVoiceRecordingSession(options: {
     options.onAutoFinish?.();
     void requestCompletion("finish");
   }, options.maxDurationMs || MAX_VOICE_RECORDING_MS);
+  syncHealth("initial");
 
   return {
     mime: recorder.mimeType,
