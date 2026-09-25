@@ -146,12 +146,15 @@ describe("direct-message navigation and UI contract", () => {
 
   it("raises the DM composer above the safe-area bottom", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(chat).toContain("calc(18px + env(safe-area-inset-bottom))");
-    expect(chat).toContain("height:44px");
-    expect(chat).toContain("grid-template-columns:44px 44px minmax(0,1fr) auto");
+    expect(chat).toContain("calc(10px + env(safe-area-inset-bottom))");
+    expect(chat).toContain('class="composer-normal"');
+    expect(chat).toContain('class="composer-recording"');
+    expect(chat).toContain('class="composer-preview"');
+    expect(chat).toContain('aria-label="发送"');
+    expect(chat).toContain("border-radius:27px");
     expect(chat).toContain("border-radius:50%");
-    expect(chat).toContain("box-shadow:0 2px 12px");
-    expect(chat).toContain("border-top:0");
+    expect(chat).toContain("box-shadow:0 4px 18px");
+    expect(chat).toContain("width:min(100%,720px)");
   });
 
   it("uses per-message optimistic status without blocking the composer", () => {
