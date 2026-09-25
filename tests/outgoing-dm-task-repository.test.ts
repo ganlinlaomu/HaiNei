@@ -71,4 +71,33 @@ describe("account-scoped outgoing DM task persistence", () => {
     expect((await outgoingDmTaskRepository.list(ACCOUNT)).map(task => task.localId)).toEqual(["local-1"]);
     expect((await outgoingDmTaskRepository.list(OTHER)).map(task => task.localId)).toEqual(["local-2"]);
   });
+
+  it("persists encrypted audio as clone-safe data and drops runtime objects", async () => {
+    const runtimeRecorder = { stop() {} };
+    await outgoingDmTaskRepository.put({
+      accountPubkey: ACCOUNT,
+      localId: "voice-1",
+      peerPubkey: OTHER,
+      text: "",
+      mediaType: "audio",
+      audioMime: "audio/mp4",
+      audioDuration: 9,
+      audioSize: 5,
+      preparedAudio: {
+        encryptedBytes: bytes("cipher"), encryptedName: "voice.encrypted", mime: "audio/mp4",
+        iv: "iv", key: "key", duration: 9, size: 5,
+      },
+      state: "uploading",
+      createdAt: 1,
+      updatedAt: 1,
+      recorder: runtimeRecorder,
+      previewUrl: "blob:runtime",
+    } as OutgoingDmTaskRecord & { recorder: unknown; previewUrl: string });
+
+    const stored = await db.outgoingDmTasks.get([ACCOUNT, "voice-1"]) as any;
+    expect(new TextDecoder().decode(stored.preparedAudio.encryptedBytes)).toBe("cipher");
+    expect(stored).not.toHaveProperty("recorder");
+    expect(stored).not.toHaveProperty("previewUrl");
+    expect(JSON.stringify(stored)).not.toContain("blob:runtime");
+  });
 });

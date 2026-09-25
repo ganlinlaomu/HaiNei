@@ -14,6 +14,52 @@ function isReadableBlob(value: unknown): value is Blob {
   return typeof Blob !== "undefined" && value instanceof Blob && typeof value.arrayBuffer === "function";
 }
 
+function cloneBuffer(value: ArrayBuffer) {
+  return value.slice(0);
+}
+
+function plainOutgoingTask(record: OutgoingDmTaskRecord): OutgoingDmTaskRecord {
+  return {
+    accountPubkey: record.accountPubkey,
+    localId: record.localId,
+    peerPubkey: record.peerPubkey,
+    text: record.text,
+    ...(record.imageBytes ? { imageBytes: cloneBuffer(record.imageBytes) } : {}),
+    ...(record.imageName ? { imageName: record.imageName } : {}),
+    ...(record.imageType ? { imageType: record.imageType } : {}),
+    ...(record.preparedImage ? { preparedImage: {
+      encryptedBytes: cloneBuffer(record.preparedImage.encryptedBytes),
+      encryptedName: record.preparedImage.encryptedName,
+      previewBytes: cloneBuffer(record.preparedImage.previewBytes),
+      mime: record.preparedImage.mime,
+      iv: record.preparedImage.iv,
+      key: record.preparedImage.key,
+      width: record.preparedImage.width,
+      height: record.preparedImage.height,
+    } } : {}),
+    ...(record.mediaType ? { mediaType: record.mediaType } : {}),
+    ...(record.preparedAudio ? { preparedAudio: {
+      encryptedBytes: cloneBuffer(record.preparedAudio.encryptedBytes),
+      encryptedName: record.preparedAudio.encryptedName,
+      mime: record.preparedAudio.mime,
+      iv: record.preparedAudio.iv,
+      key: record.preparedAudio.key,
+      duration: record.preparedAudio.duration,
+      size: record.preparedAudio.size,
+    } } : {}),
+    ...(record.audioMime ? { audioMime: record.audioMime } : {}),
+    ...(record.audioDuration !== undefined ? { audioDuration: record.audioDuration } : {}),
+    ...(record.audioSize !== undefined ? { audioSize: record.audioSize } : {}),
+    state: record.state,
+    ...(record.uploadedRef ? { uploadedRef: record.uploadedRef } : {}),
+    ...(record.outgoingId ? { outgoingId: record.outgoingId } : {}),
+    ...(record.canonicalMessageId ? { canonicalMessageId: record.canonicalMessageId } : {}),
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    ...(record.lastError ? { lastError: record.lastError } : {}),
+  };
+}
+
 /** Convert pre-migration Blob fields once, without ever writing them back. */
 export async function normalizeOutgoingDmTask(record: LegacyOutgoingDmTask) {
   const normalized: Record<string, unknown> = { ...record };
@@ -40,7 +86,18 @@ export async function normalizeOutgoingDmTask(record: LegacyOutgoingDmTask) {
     if ("previewBlob" in prepared) { delete prepared.previewBlob; changed = true; }
     normalized.preparedImage = prepared;
   }
-  return { task: normalized as OutgoingDmTaskRecord, changed };
+  if (record.preparedAudio) {
+    normalized.preparedAudio = {
+      encryptedBytes: cloneBuffer(record.preparedAudio.encryptedBytes),
+      encryptedName: record.preparedAudio.encryptedName,
+      mime: record.preparedAudio.mime,
+      iv: record.preparedAudio.iv,
+      key: record.preparedAudio.key,
+      duration: record.preparedAudio.duration,
+      size: record.preparedAudio.size,
+    };
+  }
+  return { task: plainOutgoingTask(normalized as OutgoingDmTaskRecord), changed };
 }
 
 export class OutgoingDmTaskRepository {
