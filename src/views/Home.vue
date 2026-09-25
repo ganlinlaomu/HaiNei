@@ -99,9 +99,13 @@ const videoDataRE = /\[video:(\{[^\]]+\})\]/g;
 const videoUrlPatterns = getVideoUrlRemovalPatterns();
 
 // Constants for scroll and layout calculations
-const BOTTOM_NAV_HEIGHT = 80; // Must match --bottom-nav-height in styles.css
 const SCROLL_SAFE_OFFSET = 20; // Extra padding to ensure elements are fully visible
 const SCROLL_CONTAINER_SELECTOR = 'body > #app'; // Main scrollable container
+
+function bottomNavigationHeight() {
+  const value = getComputedStyle(document.documentElement).getPropertyValue("--bottom-nav-height");
+  return Number.parseFloat(value) || 0;
+}
 
 function compareHomeMessages(a: { id: string; created_at?: number }, b: { id: string; created_at?: number }) {
   return (b.created_at || 0) - (a.created_at || 0) || String(a.id).localeCompare(String(b.id));
@@ -810,7 +814,7 @@ async function safeUpdateLocalRefs() {
     
     // Calculate safe viewing area (viewport minus bottom bar)
     const viewportHeight = containerRect.height;
-    const safeViewportBottom = viewportHeight - BOTTOM_NAV_HEIGHT - SCROLL_SAFE_OFFSET;
+    const safeViewportBottom = viewportHeight - bottomNavigationHeight() - SCROLL_SAFE_OFFSET;
     
     // Determine if element needs scrolling
     if (elementTop < SCROLL_SAFE_OFFSET) {

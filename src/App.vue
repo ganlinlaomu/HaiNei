@@ -209,7 +209,7 @@ body.post-editor-open > #app {
 
 .composer-loading-overlay {
   position: fixed;
-  inset: 0 0 calc(80px + env(safe-area-inset-bottom)) 0;
+  inset: 0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom)) 0;
   z-index: 2000;
   display: flex;
   align-items: flex-end;
@@ -224,7 +224,7 @@ body.post-editor-open > #app {
   place-items: center;
   right: max(18px, env(safe-area-inset-right));
   bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 18px);
-  z-index: 10000;
+  z-index: 1200;
   width: 54px;
   height: 54px;
   padding: 0;
@@ -302,8 +302,16 @@ body.post-editor-open > #app {
   to { transform: rotate(360deg); }
 }
 
-@media (min-width: 720px) {
-  .composer-loading-overlay { align-items: center; }
+@media (min-width: 768px) {
+  .composer-loading-overlay {
+    inset: 0;
+    align-items: center;
+  }
+
+  .compose-fab {
+    right: max(28px, calc((100vw - var(--navigation-rail-width) - var(--main-content-max-width)) / 2 + 28px));
+    bottom: 28px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

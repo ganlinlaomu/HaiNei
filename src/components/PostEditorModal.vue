@@ -1037,8 +1037,8 @@ export default defineComponent({
 .editor-overlay {
   position: fixed;
   inset: 0;
-  /* Reserve space for bottom navigation (80px height) */
-  bottom: 80px;
+  /* Reserve space for the mobile bottom navigation. */
+  bottom: var(--bottom-nav-height);
   display: flex;
   align-items: flex-end; /* start from bottom */
   justify-content: center;
@@ -1522,11 +1522,18 @@ export default defineComponent({
 }
 
 /* responsive */
-@media (min-width:720px) {
-  .editor-overlay { align-items:center; }
+@media (min-width:768px) {
+  .editor-overlay {
+    bottom: 0;
+    align-items: center;
+    padding: 24px;
+  }
   .editor-card { 
-    border-radius:12px; 
-    max-height:80vh;
+    border-radius: 16px;
+    max-height: calc(100dvh - 48px);
+  }
+  .editor-body {
+    max-height: calc(100dvh - 132px);
   }
 }
 
