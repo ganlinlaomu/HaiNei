@@ -1,12 +1,26 @@
 <template>
   <transition name="slide-up">
     <div class="editor-overlay" v-if="visible" @keydown.esc="onClose" @click.self="onClose" tabindex="-1" ref="overlay">
-      <div class="editor-card" role="dialog" aria-modal="true" @click.stop>
+      <div
+        ref="editorCard"
+        class="editor-card"
+        :class="{ dragging: sheetDragging }"
+        :style="sheetStyle"
+        role="dialog"
+        aria-modal="true"
+        @click.stop
+        @click.capture="onSheetClickCapture"
+        @pointerdown="onSheetPointerDown"
+        @pointermove="onSheetPointerMove"
+        @pointerup="onSheetPointerEnd"
+        @pointercancel="onSheetPointerCancel"
+      >
         <header class="editor-header">
+          <div class="drag-handle" aria-hidden="true"></div>
           <div class="title">发帖</div>
         </header>
 
-        <main class="editor-body">
+        <main ref="editorBody" class="editor-body">
           <textarea
             v-model="content"
             ref="textarea"
@@ -34,6 +48,12 @@
               <div v-for="(item, idx) in uploads" :key="item.id" class="preview-item">
                 <div class="thumb-container">
                   <img v-if="item.preview" :src="item.preview" class="thumb-image" />
+                  <PostImagePreview
+                    v-else-if="item.encryptedRef"
+                    :content="`![](${item.encryptedRef})`"
+                    :show-all="true"
+                    alt-text="草稿图片"
+                  />
                   <div v-else class="thumb-placeholder">图片</div>
                   
                   <!-- Upload progress overlay -->
@@ -56,7 +76,7 @@
                   </div>
                   
                   <!-- Remove button -->
-                  <button type="button" class="remove-btn" @click="removeUpload(idx)" :aria-label="`删除图片 ${item.file.name}`" :title="item.file.name">
+                  <button type="button" class="remove-btn" @click="removeUpload(idx)" :aria-label="`删除图片 ${item.name}`" :title="item.name">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <line x1="18" y1="6" x2="6" y2="18"></line>
                       <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -143,7 +163,7 @@
           <!-- 发送和取消按钮移到这里 -->
           <div class="action-buttons">
             <button class="cancel-btn" @click="onClose">取消</button>
-            <button class="send-btn" :disabled="sending || !canSend" @click="onSend">
+            <button class="send-btn" :disabled="sending || uploadingAny || !canSend" @click="onSend">
               {{ sending ? "发送中..." : "发送" }}
             </button>
           </div>
@@ -165,10 +185,12 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { usePostsStore } from "@/stores/posts";
 import { useMessagesStore } from "@/stores/messages";
 import { useUIStore } from "@/stores/ui";
+import PostImagePreview from "@/components/PostImagePreview.vue";
 import { uploadImageToBlossomWithFallback, getBlossomConfig } from "@/utils/blossom";
 import { resizeImageFile } from "@/utils/imageResize";
 import { compressImageToTargetSize } from "@/utils/imageCompression";
 import {
+  decodeEncryptedImageRef,
   encodeEncryptedImageRef,
   variantToEncryptedImageRef,
   type EncryptedImageMetadata,
@@ -178,8 +200,17 @@ import { encodeEncryptedVideoRef, type EncryptedVideoMetadata } from "@/utils/en
 import { encryptVideoFile, exportKeyToBase64 } from "@/utils/videoCrypto";
 import { bytesToBase64 } from "@/nostr/crypto";
 import { parseVideoUrl as parseVideoUrlUtil } from "@/utils/videoUtils";
-import { clearPostDraft, loadPostDraft, savePostDraft } from "@/utils/postDraft";
+import {
+  clearPostDraft,
+  loadPostDraft,
+  mergeCompletedPostDraftImage,
+  mergeCompletedPostDraftVideo,
+  savePostDraft,
+  type PostDraftImage,
+  type PostDraftVideo,
+} from "@/utils/postDraft";
 import { storeImageInCache } from "@/utils/imageCache";
+import { canStartPostEditorDrag, shouldDismissPostEditor } from "@/utils/postEditorGesture";
 
 // Video metadata format constants
 const VIDEO_METADATA_PREFIX = '[video:';
@@ -187,7 +218,8 @@ const VIDEO_METADATA_SUFFIX = ']';
 
 type UploadItem = {
   id: string;
-  file: File;
+  name: string;
+  file?: File;
   preview: string | null;
   status: "pending" | "uploading" | "done" | "error";
   progress: number;
@@ -208,6 +240,7 @@ type UploadItem = {
   previewHeight?: number;
   previewMetadata?: EncryptedImageVariant;
   previewEncryptedRef?: string;
+  encryptedRef?: string;
 };
 
 type PreparedEncryptedImage = {
@@ -219,6 +252,7 @@ type PreparedEncryptedImage = {
 
 export default defineComponent({
   name: "PostEditorModal",
+  components: { PostImagePreview },
   setup() {
     const router = useRouter();
     const route = useRoute();
@@ -235,25 +269,53 @@ export default defineComponent({
     const error = ref<string | null>(null);
     const textarea = ref<HTMLTextAreaElement | null>(null);
     const overlay = ref<HTMLElement | null>(null);
+    const editorCard = ref<HTMLElement | null>(null);
+    const editorBody = ref<HTMLElement | null>(null);
+    const sheetDragging = ref(false);
+    const sheetOffset = ref(0);
+    const sheetStyle = computed(() => ({ transform: `translateY(${sheetOffset.value}px)` }));
+    let dragCandidate = false;
+    let dragStartY = 0;
+    let dragStartAt = 0;
+    let dragPointerId: number | null = null;
+    let suppressSheetClick = false;
+    let dismissTimer: number | null = null;
 
     // recipients selection state
     const allFriends = ref(true);
     const selectedGroups = ref<Array<string>>([]);
     const visibilityOpen = ref(false);
     let draftPersistenceEnabled = false;
+    let draftAccount = "";
 
-    function persistDraft() {
-      if (!draftPersistenceEnabled || !keys.pkHex) return;
-      savePostDraft(keys.pkHex, {
+    function completedDraftImages(): PostDraftImage[] {
+      return uploads.value.flatMap(item => item.status === "done" && item.encryptedRef && item.previewEncryptedRef
+        ? [{
+            id: item.id,
+            name: item.name,
+            encryptedRef: item.encryptedRef,
+            previewEncryptedRef: item.previewEncryptedRef,
+            mime: item.originalMime || "image/jpeg",
+            ...(item.width ? { width: item.width } : {}),
+            ...(item.height ? { height: item.height } : {}),
+          }]
+        : []);
+    }
+
+    function persistDraft(account = draftAccount) {
+      if (!draftPersistenceEnabled || !account) return;
+      savePostDraft(account, {
         content: content.value,
         allFriends: allFriends.value,
         selectedGroups: [...selectedGroups.value],
+        images: completedDraftImages(),
+        video: videoPreview.value,
       });
     }
 
     const canSend = computed(() => {
       const hasText = content.value.trim().length > 0;
-      const hasUploadedImages = uploads.value.some(u => u.status === 'done' && u.url);
+      const hasUploadedImages = uploads.value.some(u => u.status === 'done' && u.encryptedRef);
       const hasVideo = videoPreview.value !== null;
       return hasText || hasUploadedImages || hasVideo;
     });
@@ -346,16 +408,13 @@ export default defineComponent({
     }
 
     const uploads = ref<UploadItem[]>([]);
+    const discardedUploadIds = new Set<string>();
+    const activeUploadAccounts = new Map<string, string>();
     const uploadEnabled = ref(false);
     const uploadingAny = computed(() => uploads.value.some(u => u.status === "uploading"));
 
     // Video support
-    const videoPreview = ref<{
-      url: string;
-      provider: string;
-      embedUrl?: string;
-      thumbnail?: string;
-    } | null>(null);
+    const videoPreview = ref<PostDraftVideo | null>(null);
 
     function parseVideoUrl(url: string): { url: string; provider: string; embedUrl?: string; thumbnail?: string } | null {
       // Use the shared utility function
@@ -395,20 +454,21 @@ export default defineComponent({
         // Check if it's a video file
         if (f.type.startsWith('video/')) {
           // For video files, use video upload
-          const item: UploadItem = { 
+          const item: UploadItem = {
             id: toId(), 
+            name: f.name,
             file: f, 
             preview: null, // Videos don't need local preview
             status: "pending", 
             progress: 0 
           };
           uploads.value.push(item);
-          void startVideoUpload(item);
+          void startVideoUpload(item, keys.pkHex);
         } else {
           // For image files, use image upload
-          const item: UploadItem = { id: toId(), file: f, preview: makePreview(f), status: "pending", progress: 0 };
+          const item: UploadItem = { id: toId(), name: f.name, file: f, preview: makePreview(f), status: "pending", progress: 0 };
           uploads.value.push(item);
-          void startUpload(item);
+          void startUpload(item, keys.pkHex);
         }
       }
       input.value = "";
@@ -479,13 +539,16 @@ export default defineComponent({
       throw new Error("未找到可用签名器（keys.signEvent / window.nostr / 本地 skHex）");
     }
 
-    async function startUpload(item: UploadItem) {
+    async function startUpload(item: UploadItem, accountAtStart: string) {
+      const file = item.file;
+      if (!accountAtStart || !file) return;
+      activeUploadAccounts.set(item.id, accountAtStart);
       updateUploadItem(item.id, { status: "uploading", progress: 0, errorShort: undefined, errorDetails: undefined });
 
       try {
         // 👇 关键：上传前使用智能压缩，目标大小 200-300KB
-        console.log(`开始压缩图片: ${item.file.name}`);
-        const compressionResult = await compressImageToTargetSize(item.file, {
+        console.log(`开始压缩图片: ${file.name}`);
+        const compressionResult = await compressImageToTargetSize(file, {
           minTargetSize: 200 * 1024, // 200KB
           maxTargetSize: 300 * 1024, // 300KB
           maxIterations: 10
@@ -502,8 +565,6 @@ export default defineComponent({
         const previewFile = await resizeImageFile(compressedFile, { maxSize: 960, quality: 0.76 });
         const [width, height] = await imageDimensions(compressedFile);
         const [previewWidth, previewHeight] = await imageDimensions(previewFile);
-        const accountAtStart = keys.pkHex;
-        if (!accountAtStart) throw new Error("请先登录");
         const [preparedOriginal, preparedPreview] = await Promise.all([
           prepareEncryptedImage(compressedFile),
           prepareEncryptedImage(previewFile),
@@ -523,7 +584,6 @@ export default defineComponent({
             reportProgress();
           }),
         ]);
-        if (keys.pkHex !== accountAtStart) throw new Error("账户已切换，请重新选择图片");
         const previewMetadata: EncryptedImageVariant = {
           url: preview.url,
           mime: preview.mime,
@@ -534,12 +594,37 @@ export default defineComponent({
           height: previewHeight,
         };
         const previewEncryptedRef = variantToEncryptedImageRef(previewMetadata);
-        await storeImageInCache(accountAtStart, previewEncryptedRef, previewFile, preview.mime);
-        
-        // Store encryption metadata
-        updateUploadItem(item.id, { 
+        await storeImageInCache(accountAtStart, previewEncryptedRef, previewFile, preview.mime)
+          .catch(cacheError => console.warn("draft preview cache failed", cacheError));
+
+        const metadata: EncryptedImageMetadata = {
+          v: 2,
           url: original.url,
-          status: "done", 
+          mime: original.mime,
+          alg: "AES-GCM",
+          iv: original.iv,
+          key: await exportKeyToBase64(original.key),
+          width,
+          height,
+          preview: previewMetadata,
+        };
+        const encryptedRef = encodeEncryptedImageRef(metadata);
+        const completedImage: PostDraftImage = {
+          id: item.id,
+          name: item.name,
+          encryptedRef,
+          previewEncryptedRef,
+          mime: original.mime,
+          width,
+          height,
+        };
+        if (discardedUploadIds.has(item.id)) return;
+        mergeCompletedPostDraftImage(accountAtStart, completedImage);
+
+        if (keys.pkHex !== accountAtStart || !ui.showPostEditor) return;
+        const patch: Partial<UploadItem> = {
+          url: original.url,
+          status: "done",
           progress: 100,
           encryptionKey: original.key,
           encryptionIv: original.iv,
@@ -554,14 +639,22 @@ export default defineComponent({
           previewHeight,
           previewMetadata,
           previewEncryptedRef,
-        });
+          encryptedRef,
+        };
+        if (uploads.value.some(upload => upload.id === item.id)) updateUploadItem(item.id, patch);
+        else uploads.value.push({ id: item.id, name: item.name, preview: null, status: "done", progress: 100, ...patch });
+        persistDraft(accountAtStart);
       } catch (err:any) {
         console.error("upload error raw:", err);
         const errorShort = err && err.message ? String(err.message) : "上传失败";
         let errorDetails: string;
         try { errorDetails = err && err.details ? JSON.stringify(err.details, null, 2) : JSON.stringify(err, Object.getOwnPropertyNames(err), 2); } catch { errorDetails = String(err); }
-        updateUploadItem(item.id, { status: "error", errorShort, errorDetails });
-        ui.addToast(`上传失败: ${errorShort}`, 3000, "error");
+        if (keys.pkHex === accountAtStart && ui.showPostEditor) {
+          updateUploadItem(item.id, { status: "error", errorShort, errorDetails });
+          ui.addToast(`上传失败: ${errorShort}`, 3000, "error");
+        }
+      } finally {
+        activeUploadAccounts.delete(item.id);
       }
     }
 
@@ -601,7 +694,10 @@ export default defineComponent({
       return { url: descriptor.url, key: prepared.key, iv: prepared.iv, mime: prepared.mime };
     }
 
-    async function startVideoUpload(item: UploadItem) {
+    async function startVideoUpload(item: UploadItem, accountAtStart: string) {
+      const file = item.file;
+      if (!accountAtStart || !file) return;
+      activeUploadAccounts.set(item.id, accountAtStart);
       updateUploadItem(item.id, { status: "uploading", progress: 0, errorShort: undefined, errorDetails: undefined });
 
       try {
@@ -611,21 +707,21 @@ export default defineComponent({
           true,
           ["encrypt", "decrypt"]
         );
-        const originalMime = item.file.type || "video/mp4";
+        const originalMime = file.type || "video/mp4";
         
         // Encrypt video file
-        const { encryptedBytes, iv } = await encryptVideoFile(item.file, encryptionKey);
+        const { encryptedBytes, iv } = await encryptVideoFile(file, encryptionKey);
         
         // Create a new File from encrypted bytes with octet-stream type
         const encryptedFile = new File(
           [encryptedBytes],
-          item.file.name.replace(/\.[^.]*$/, '') + ".enc",
+          file.name.replace(/\.[^.]*$/, '') + ".enc",
           { type: "application/octet-stream" }
         );
         
         // Upload encrypted file with fallback to multiple servers
         const descriptor = await uploadImageToBlossomWithFallback(encryptedFile, {
-          accountPubkey: keys.pkHex || undefined,
+          accountPubkey: accountAtStart,
           signEvent: signEventWrapper,
           onProgress: (p:number) => { updateUploadItem(item.id, { progress: p }); }
         });
@@ -641,16 +737,18 @@ export default defineComponent({
           alg: "AES-GCM",
           iv: iv,
           key: keyBase64,
-          size: item.file.size
+          size: file.size
         });
-        
-        // Set as video preview with encrypted reference
-        videoPreview.value = {
+        const completedVideo: PostDraftVideo = {
           url: encryptedRef,
           provider: 'Encrypted',
           embedUrl: encryptedRef
         };
-        
+
+        if (discardedUploadIds.has(item.id)) return;
+        mergeCompletedPostDraftVideo(accountAtStart, completedVideo);
+        if (keys.pkHex !== accountAtStart || !ui.showPostEditor) return;
+        videoPreview.value = completedVideo;
         updateUploadItem(item.id, { 
           url: descriptor.url, 
           status: "done", 
@@ -663,13 +761,18 @@ export default defineComponent({
         // Remove from uploads list since we show it in videoPreview
         const idx = uploads.value.findIndex(u => u.id === item.id);
         if (idx !== -1) uploads.value.splice(idx, 1);
+        persistDraft(accountAtStart);
       } catch (err:any) {
         console.error("video upload error:", err);
         const errorShort = err && err.message ? String(err.message) : "上传失败";
         let errorDetails: string;
         try { errorDetails = err && err.details ? JSON.stringify(err.details, null, 2) : JSON.stringify(err, Object.getOwnPropertyNames(err), 2); } catch { errorDetails = String(err); }
-        updateUploadItem(item.id, { status: "error", errorShort, errorDetails });
-        ui.addToast(`视频上传失败: ${errorShort}`, 3000, "error");
+        if (keys.pkHex === accountAtStart && ui.showPostEditor) {
+          updateUploadItem(item.id, { status: "error", errorShort, errorDetails });
+          ui.addToast(`视频上传失败: ${errorShort}`, 3000, "error");
+        }
+      } finally {
+        activeUploadAccounts.delete(item.id);
       }
     }
 
@@ -682,6 +785,7 @@ export default defineComponent({
 
     function removeUpload(idx:number) {
       const item = uploads.value[idx];
+      if (item) discardedUploadIds.add(item.id);
       if (item && item.preview) { try { URL.revokeObjectURL(item.preview) } catch {} }
       uploads.value.splice(idx, 1);
     }
@@ -699,24 +803,93 @@ export default defineComponent({
       }
       uploads.value = [];
       videoPreview.value = null;
+      sheetDragging.value = false;
+      sheetOffset.value = 0;
     }
 
     function onClose() {
       ui.closePostEditor();
     }
 
+    function onSheetPointerDown(event: PointerEvent) {
+      if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+      dragCandidate = (editorBody.value?.scrollTop || 0) <= 0;
+      dragStartY = event.clientY;
+      dragStartAt = performance.now();
+      dragPointerId = event.pointerId;
+      sheetOffset.value = 0;
+    }
+
+    function onSheetPointerMove(event: PointerEvent) {
+      if (!dragCandidate || dragPointerId !== event.pointerId) return;
+      const deltaY = event.clientY - dragStartY;
+      if (!sheetDragging.value) {
+        if (deltaY < -6 || (editorBody.value?.scrollTop || 0) > 0) {
+          dragCandidate = false;
+          return;
+        }
+        if (deltaY < 6 || !canStartPostEditorDrag(editorBody.value?.scrollTop || 0, deltaY)) return;
+        sheetDragging.value = true;
+        editorCard.value?.setPointerCapture(event.pointerId);
+      }
+      event.preventDefault();
+      sheetOffset.value = Math.max(0, deltaY);
+    }
+
+    function finishSheetDrag(event: PointerEvent, cancelled: boolean) {
+      if (dragPointerId !== event.pointerId) return;
+      const wasDragging = sheetDragging.value;
+      const distance = sheetOffset.value;
+      const elapsed = Math.max(1, performance.now() - dragStartAt);
+      const velocity = distance / elapsed;
+      dragCandidate = false;
+      dragPointerId = null;
+      sheetDragging.value = false;
+      if (!wasDragging) return;
+
+      suppressSheetClick = true;
+      window.setTimeout(() => { suppressSheetClick = false; }, 0);
+      if (!cancelled && shouldDismissPostEditor(distance, velocity, editorCard.value?.offsetHeight || 0)) {
+        sheetOffset.value = editorCard.value?.offsetHeight || window.innerHeight;
+        if (dismissTimer !== null) window.clearTimeout(dismissTimer);
+        dismissTimer = window.setTimeout(() => {
+          dismissTimer = null;
+          onClose();
+        }, 220);
+      } else {
+        sheetOffset.value = 0;
+      }
+    }
+
+    function onSheetPointerEnd(event: PointerEvent) {
+      finishSheetDrag(event, false);
+    }
+
+    function onSheetPointerCancel(event: PointerEvent) {
+      finishSheetDrag(event, true);
+    }
+
+    function onSheetClickCapture(event: MouseEvent) {
+      if (!suppressSheetClick) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
     // Store the element that triggered the modal for focus return
     let triggerElement: HTMLElement | null = null;
+    let openGeneration = 0;
 
     // Initialize when modal opens
     watch(() => ui.showPostEditor, async (show) => {
+      const generation = ++openGeneration;
       document.body.classList.toggle("post-editor-open", show);
       if (show) {
         // Store currently focused element to return focus later
         triggerElement = document.activeElement as HTMLElement;
         
+        const accountAtOpen = keys.pkHex;
         await checkBlossom();
-        if (!keys.pkHex) {
+        if (!accountAtOpen) {
           ui.closePostEditor();
           ui.addToast("请先登录", 2000, "error");
           return;
@@ -724,10 +897,30 @@ export default defineComponent({
         await friends.load();
         await friendships.load();
         await msgs.load();
-        const draft = loadPostDraft(keys.pkHex);
+        if (generation !== openGeneration || !ui.showPostEditor || keys.pkHex !== accountAtOpen) return;
+        draftAccount = accountAtOpen;
+        const draft = loadPostDraft(accountAtOpen);
         content.value = draft?.content || "";
         allFriends.value = draft?.allFriends ?? true;
         selectedGroups.value = (draft?.selectedGroups || []).filter(group => groups.value.includes(group));
+        uploads.value = (draft?.images || []).map(image => {
+          const metadata = decodeEncryptedImageRef(image.encryptedRef);
+          return {
+            id: image.id,
+            name: image.name,
+            preview: null,
+            status: "done" as const,
+            progress: 100,
+            url: metadata?.url,
+            originalMime: image.mime,
+            width: image.width,
+            height: image.height,
+            previewMetadata: metadata?.preview,
+            previewEncryptedRef: image.previewEncryptedRef,
+            encryptedRef: image.encryptedRef,
+          };
+        });
+        videoPreview.value = draft?.video || null;
         draftPersistenceEnabled = true;
         await nextTick();
         // Focus overlay to enable keyboard events (ESC key)
@@ -741,6 +934,7 @@ export default defineComponent({
         // programmatic route change, so cleanup cannot live only in onClose().
         persistDraft();
         draftPersistenceEnabled = false;
+        draftAccount = "";
         resetEditor();
         // Return focus to trigger element when modal closes
         if (triggerElement && typeof triggerElement.focus === 'function') {
@@ -751,7 +945,17 @@ export default defineComponent({
       }
     }, { immediate: true });
 
-    watch([content, allFriends, selectedGroups], persistDraft, { deep: true });
+    watch(
+      [
+        content,
+        allFriends,
+        selectedGroups,
+        () => uploads.value.map(item => item.encryptedRef || "").join("|"),
+        videoPreview,
+      ],
+      () => persistDraft(),
+      { deep: true }
+    );
     const persistOnPageHide = () => persistDraft();
     const persistOnVisibilityChange = () => { if (document.visibilityState === "hidden") persistDraft(); };
     window.addEventListener("pagehide", persistOnPageHide);
@@ -762,9 +966,14 @@ export default defineComponent({
     watch(() => route.fullPath, () => {
       if (ui.showPostEditor) onClose();
     });
+    watch(() => keys.pkHex, account => {
+      if (ui.showPostEditor && draftAccount && account !== draftAccount) onClose();
+    });
 
     onBeforeUnmount(()=>{
+      openGeneration += 1;
       persistDraft();
+      if (dismissTimer !== null) window.clearTimeout(dismissTimer);
       window.removeEventListener("pagehide", persistOnPageHide);
       document.removeEventListener("visibilitychange", persistOnVisibilityChange);
       document.body.classList.remove("post-editor-open");
@@ -777,6 +986,8 @@ export default defineComponent({
       // Use pkHex check for consistency with onMounted and reliability
       if (!keys.pkHex) { error.value = "请先登录"; return; }
       if (!canSend.value) { error.value = "请输入内容"; return; }
+      if (uploadingAny.value) { error.value = "请等待媒体上传完成"; return; }
+      const accountAtSend = keys.pkHex;
       sending.value = true;
       error.value = null;
 
@@ -789,11 +1000,15 @@ export default defineComponent({
       try {
         // Build content with uploaded images appended
         let fullContent = content.value;
-        const uploadedImages = uploads.value.filter(u => u.status === 'done' && u.url);
+        const uploadedImages = uploads.value.filter(u => u.status === 'done' && (u.encryptedRef || u.url));
         if (uploadedImages.length > 0) {
           // Add images as markdown at the end
           if (fullContent.length > 0 && !fullContent.endsWith("\n")) fullContent += "\n";
           for (const img of uploadedImages) {
+            if (img.encryptedRef) {
+              fullContent += `![](${img.encryptedRef})\n`;
+              continue;
+            }
             // Create encrypted image reference
             if (img.encryptionKey && img.encryptionIv && img.originalMime) {
               // Export key to raw bytes
@@ -859,7 +1074,7 @@ export default defineComponent({
         // of arrival order.
         msgs.addInbox({
           id: message.id,
-          pubkey: keys.pkHex,
+          pubkey: accountAtSend,
           created_at: message.createdAt,
           content: fullContent,
           protocol: message.protocol,
@@ -875,8 +1090,12 @@ export default defineComponent({
         });
 
         ui.addToast("发送成功", 1200, "success");
+        for (const item of uploads.value) discardedUploadIds.add(item.id);
+        for (const [id, account] of activeUploadAccounts) {
+          if (account === accountAtSend) discardedUploadIds.add(id);
+        }
         draftPersistenceEnabled = false;
-        clearPostDraft(keys.pkHex);
+        clearPostDraft(accountAtSend);
         onClose();
         // Navigate to home page after modal close animation completes (220ms matches the slide-up-leave-active transition)
         setTimeout(()=>{ router.push('/'); }, 220);
@@ -891,10 +1110,12 @@ export default defineComponent({
 
     return {
       visible, content, sending, allFriends, selectedGroups, groups, countByGroup,
-      canSend, textarea, overlay, error, onSend, onClose, toggleAll, toggleGroup,
+      canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, toggleAll, toggleGroup,
       recipientsCount, selectedSet, gLabel, acceptedFriends, uploads, uploadEnabled, uploadingAny,
       visibilityOpen, visibilitySummary,
       onFilesSelected, insertImageUrl, removeUpload, checkBlossom,
+      sheetDragging, sheetStyle, onSheetPointerDown, onSheetPointerMove, onSheetPointerEnd,
+      onSheetPointerCancel, onSheetClickCapture,
       // Video support
       videoPreview, removeVideo, onPaste
     };
@@ -932,16 +1153,26 @@ export default defineComponent({
   transform: translateY(0);
   box-sizing: border-box;
   contain: layout paint;
+  touch-action: pan-y;
+  will-change: transform;
+  transition: transform 220ms cubic-bezier(.2,.8,.2,1);
 }
+.editor-card.dragging { transition: none; }
 
 /* header */
 .editor-header {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 14px 16px;
+  gap: 7px;
+  padding: 8px 16px 12px;
   border-bottom: 1px solid #eee;
+  touch-action: none;
+  cursor: grab;
 }
+.editor-card.dragging .editor-header { cursor: grabbing; }
+.drag-handle { width: 38px; height: 5px; border-radius: 999px; background: #cbd5e1; }
 .icon-btn {
   background: transparent;
   border: none;
@@ -1073,6 +1304,15 @@ export default defineComponent({
   object-fit: cover;
   display: block;
 }
+.thumb-container :deep(.post-image-preview),
+.thumb-container :deep(.carousel-shell),
+.thumb-container :deep(.carousel),
+.thumb-container :deep(.carousel-slide) { width:100%; height:100%; margin:0; border-radius:0; }
+.thumb-container :deep(.carousel-shell) { max-height:none; aspect-ratio:1 / 1!important; }
+.thumb-container :deep(.carousel-image) { width:100%; height:100%; object-fit:cover; }
+.thumb-container :deep(.carousel-dots),
+.thumb-container :deep(.carousel-counter),
+.thumb-container :deep(.carousel-nav) { display:none; }
 
 .thumb-placeholder {
   width: 100%;
@@ -1397,7 +1637,8 @@ export default defineComponent({
   .slide-up-leave-active,
   .upload-btn,
   .send-btn,
-  .cancel-btn { transition: none; }
+  .cancel-btn,
+  .editor-card { transition: none; }
 }
 .error { margin-top:8px; color:#d00; font-size:13px; }
 .small { color:#64748b; font-size:12px; }
