@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearPostDraft,
   loadPostDraft,
@@ -11,6 +11,13 @@ import {
   type PostDraftImage,
 } from "@/utils/postDraft";
 import { canStartPostEditorDrag, shouldDismissPostEditor } from "@/utils/postEditorGesture";
+import {
+  releasePostEditorMediaUrls,
+  restoreDraftImageUploads,
+  serializeCompletedDraftImages,
+  type PostEditorUploadItem,
+} from "@/utils/postEditorMediaDraft";
+import { cacheEncryptedPreviewBestEffort } from "@/utils/postEditorMediaUpload";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -121,11 +128,68 @@ describe("post editor close and media UX", () => {
   });
 
   it("releases runtime object URLs without removing restored encrypted references", () => {
-    expect(source).toContain('value?.startsWith("blob:")');
-    expect(source).toContain("URL.revokeObjectURL(value)");
-    expect(source).toContain("releaseRuntimeMediaUrls();");
+    expect(source).toContain("releasePostEditorMediaUrls(uploads.value, videoPreview.value);");
     expect(source).toContain("fullContent += `![](${img.encryptedRef})\\n`");
     expect(source).toMatch(/\.remove-btn \{[\s\S]*?opacity: 1;/);
     expect(source).not.toContain(".thumb-container:hover .remove-btn");
+  });
+});
+
+describe("post editor media helpers", () => {
+  const completedUpload: PostEditorUploadItem = {
+    id: image.id,
+    name: image.name,
+    preview: "blob:runtime-preview",
+    status: "done",
+    progress: 100,
+    encryptedRef: image.encryptedRef,
+    previewEncryptedRef: image.previewEncryptedRef,
+    originalMime: image.mime,
+    width: image.width,
+    height: image.height,
+  };
+
+  it("serializes only completed encrypted media and restores refs as sendable state", () => {
+    const pending = { ...completedUpload, id: "pending", status: "uploading" as const };
+    expect(serializeCompletedDraftImages([completedUpload, pending])).toEqual([image]);
+
+    const [restored] = restoreDraftImageUploads([image]);
+    expect(restored).toMatchObject({
+      status: "done",
+      progress: 100,
+      preview: null,
+      encryptedRef: image.encryptedRef,
+      previewEncryptedRef: image.previewEncryptedRef,
+    });
+  });
+
+  it("releases only runtime Blob URLs and never touches remote media refs", () => {
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { value: revokeObjectURL, configurable: true });
+    try {
+      releasePostEditorMediaUrls(
+        [completedUpload, { ...completedUpload, id: "remote", preview: "https://media.example/preview" }],
+        { url: "blossom+aesgcm+video:remote", provider: "Encrypted", thumbnail: "blob:video-thumb" }
+      );
+      expect(revokeObjectURL.mock.calls).toEqual([["blob:runtime-preview"], ["blob:video-thumb"]]);
+    } finally {
+      Object.defineProperty(URL, "revokeObjectURL", { value: originalRevokeObjectURL, configurable: true });
+    }
+  });
+
+  it("treats preview cache writes as best-effort", async () => {
+    const cacheFailure = vi.fn().mockRejectedValue(new Error("cache unavailable"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(cacheEncryptedPreviewBestEffort(
+      ACCOUNT,
+      image.previewEncryptedRef,
+      new File(["preview"], "preview.jpg", { type: "image/jpeg" }),
+      image.mime,
+      cacheFailure
+    )).resolves.toBeUndefined();
+    expect(cacheFailure).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
   });
 });
