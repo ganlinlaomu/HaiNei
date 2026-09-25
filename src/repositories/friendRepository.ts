@@ -23,9 +23,16 @@ export class FriendRepository {
   async put(accountPubkey: string, friend: DBFriend) {
     const account = normalizeAccountPubkey(accountPubkey);
     const record: AccountFriendRecord = {
-      ...friend,
+      accountPubkey: account,
       pubkey: normalizeAccountPubkey(friend.pubkey),
-      accountPubkey: account
+      ...(typeof friend.name === "string" ? { name: friend.name } : {}),
+      ...(typeof friend.group === "string" ? { group: friend.group } : {}),
+      ...(Array.isArray(friend.groups)
+        ? { groups: Array.from(friend.groups).filter((group): group is string => typeof group === "string") }
+        : {}),
+      ...(typeof friend.note === "string" ? { note: friend.note } : {}),
+      ...(typeof friend.updatedAt === "number" ? { updatedAt: friend.updatedAt } : {}),
+      ...(typeof friend.deleted === "boolean" ? { deleted: friend.deleted } : {})
     };
     await this.database.accountFriends.put(record);
     return record;

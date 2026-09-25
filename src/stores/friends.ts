@@ -3,6 +3,7 @@ import { friendRepository } from "@/repositories/friendRepository";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
+import type { DBFriend } from "@/db/dexie";
 
 export type Friend = {
   id?: string;
@@ -53,17 +54,24 @@ export const useFriendsStore = defineStore("friends", {
       this.syncError = "";
       this.version++;
     },
-    save() {
+    async persist(records: DBFriend[]) {
       const account = this.loadedFor;
       if (!account) return;
-      if (typeof indexedDB !== "undefined") for (const friend of this.list) void friendRepository.put(account, friend);
-      scheduleAccountStateSync(useKeyStore(), "friend_metadata");
+      const keys = useKeyStore();
+      if (typeof indexedDB !== "undefined") {
+        await Promise.all(records.map(friend => friendRepository.put(account, friend)));
+      }
+      if (this.loadedFor !== account || keys.pkHex.toLowerCase() !== account) return;
+      scheduleAccountStateSync(keys, "friend_metadata");
+    },
+    save() {
+      return this.persist(this.list);
     },
     add(friend: Friend) {
       if (!friend.pubkey || !friend.name?.trim() || this.list.some(item => item.pubkey === friend.pubkey.toLowerCase())) return false;
       this.list.push(normalized({ ...friend, updatedAt: Date.now() }));
       this.version++;
-      this.save();
+      void this.save();
       return true;
     },
     remove(pubkey: string) {
@@ -72,8 +80,7 @@ export const useFriendsStore = defineStore("friends", {
       if (!existing) return false;
       this.list = this.list.filter(friend => friend.pubkey !== peer);
       this.version++;
-      if (typeof indexedDB !== "undefined") void friendRepository.put(this.loadedFor, { ...existing, pubkey: peer, deleted: true, updatedAt: Date.now() });
-      scheduleAccountStateSync(useKeyStore(), "friend_metadata");
+      void this.persist([{ ...existing, pubkey: peer, deleted: true, updatedAt: Date.now() }]);
       return true;
     },
     update(pubkey: string, patch: Partial<Friend>) {
@@ -81,7 +88,7 @@ export const useFriendsStore = defineStore("friends", {
       if (!friend || (patch.name !== undefined && !patch.name.trim())) return false;
       Object.assign(friend, patch, { updatedAt: Date.now() });
       this.version++;
-      this.save();
+      void this.save();
       return true;
     },
     async publishToRelays() { return false; },
