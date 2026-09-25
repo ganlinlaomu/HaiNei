@@ -29,6 +29,17 @@ class FakeTrack extends EventTarget {
   }
 }
 
+class FakeStream extends EventTarget {
+  active = true;
+  constructor(public track: FakeTrack) { super(); }
+  getAudioTracks() { return [this.track]; }
+  getTracks() { return [this.track]; }
+  deactivate() {
+    this.active = false;
+    this.dispatchEvent(new Event("inactive"));
+  }
+}
+
 class FakeRecorder extends EventTarget {
   static supported = new Set(["audio/mp4", "audio/webm;codecs=opus"]);
   static emitStop = true;
@@ -90,12 +101,10 @@ class FakeRecorder extends EventTarget {
 
 function recorderHarness() {
   const track = new FakeTrack();
-  const stream = {
-    getAudioTracks: () => [track],
-    getTracks: () => [track],
-  } as unknown as MediaStream;
+  const fakeStream = new FakeStream(track);
+  const stream = fakeStream as unknown as MediaStream;
   const getUserMedia = vi.fn(async () => stream);
-  return { track, getUserMedia };
+  return { track, stream: fakeStream, getUserMedia };
 }
 
 afterEach(() => {
@@ -248,7 +257,7 @@ describe("voice recording lifecycle", () => {
     expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 
-  it("does not treat temporary microphone mute/unmute as termination", async () => {
+  it("freezes elapsed immediately on mute and resumes when unmuted within one second", async () => {
     vi.useFakeTimers();
     const harness = recorderHarness();
     const session = await createVoiceRecordingSession({
@@ -257,12 +266,67 @@ describe("voice recording lifecycle", () => {
     });
     const health = vi.fn();
     session.onStateChange(health);
+    await vi.advanceTimersByTimeAsync(2_000);
     harness.track.mute();
-    expect(session.isActive()).toBe(true);
-    expect(health).toHaveBeenLastCalledWith(expect.objectContaining({ trackMuted: true, active: true }));
+    const mutedAt = session.elapsedMs();
+    expect(session.isActive()).toBe(false);
+    expect(health).toHaveBeenLastCalledWith(expect.objectContaining({ trackMuted: true, active: false }));
+    await vi.advanceTimersByTimeAsync(900);
+    expect(session.elapsedMs()).toBe(mutedAt);
     harness.track.unmute();
     expect(session.isActive()).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(session.elapsedMs()).toBe(mutedAt + 500);
     expect(FakeRecorder.stopCalls).toBe(0);
+  });
+
+  it("interrupts after all live audio tracks stay muted for one second", async () => {
+    vi.useFakeTimers();
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    harness.track.mute();
+    expect(session.isActive()).toBe(false);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(FakeRecorder.stopCalls).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(FakeRecorder.stopCalls).toBe(1);
+    expect(harness.track.readyState).toBe("live");
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(session.finished).resolves.toMatchObject({ size: 27 });
+    expect(harness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("shows the system-interruption error when a muted recording has no usable bytes", async () => {
+    vi.useFakeTimers();
+    FakeRecorder.emitData = false;
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    harness.track.mute();
+    const rejected = expect(session.finished).rejects.toThrow("麦克风录音已被系统中断，请重试");
+    await vi.advanceTimersByTimeAsync(1_020);
+    await rejected;
+    expect(harness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("interrupts when MediaStream.active becomes false", async () => {
+    vi.useFakeTimers();
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    harness.stream.deactivate();
+    expect(session.isActive()).toBe(false);
+    expect(FakeRecorder.stopCalls).toBe(1);
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(session.finished).resolves.toMatchObject({ mime: "audio/mp4" });
+    expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 
   it("freezes health/elapsed while paused and resumes the same recorder", async () => {
@@ -323,6 +387,7 @@ describe("voice recording lifecycle", () => {
 
   it("releases the microphone and rejects when MediaRecorder errors", async () => {
     vi.useFakeTimers();
+    FakeRecorder.emitData = false;
     const harness = recorderHarness();
     const session = await createVoiceRecordingSession({
       mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
@@ -330,6 +395,7 @@ describe("voice recording lifecycle", () => {
     });
     const rejected = expect(session.finished).rejects.toThrow("录音失败");
     FakeRecorder.instances[0].fail();
+    await vi.advanceTimersByTimeAsync(20);
     await rejected;
     expect(session.isActive()).toBe(false);
     expect(harness.track.stop).toHaveBeenCalledOnce();
@@ -379,6 +445,9 @@ describe("encrypted private audio messages", () => {
     expect(messages).not.toContain('capture="');
     expect(messages).not.toContain("attachmentMenuOpen");
     expect(messages).not.toContain("attachment-menu");
+    expect(messages).toContain("width:calc(100% - 32px)");
+    expect(messages).toContain("height:54px;min-height:54px");
+    expect(messages).toContain("calc(8px + env(safe-area-inset-bottom))");
     expect(player).toContain("decryptDmAudio");
     expect(player).toContain("URL.revokeObjectURL");
     expect(player).not.toContain("localStorage");
