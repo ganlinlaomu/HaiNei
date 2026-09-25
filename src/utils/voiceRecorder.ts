@@ -70,6 +70,7 @@ export async function createVoiceRecordingSession(options: {
   let tracksStopped = false;
   let stopFallback: ReturnType<typeof setTimeout> | null = null;
   let finalChunkGrace: ReturnType<typeof setTimeout> | null = null;
+  let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   let resolveFinished!: (result: VoiceRecordingResult | null) => void;
   let rejectFinished!: (error: Error) => void;
   const finished = new Promise<VoiceRecordingResult | null>((resolve, reject) => {
@@ -82,20 +83,32 @@ export async function createVoiceRecordingSession(options: {
     stopTracks();
   };
   const clearCompletionTimers = () => {
-    clearTimeout(maxDurationTimer);
+    if (maxDurationTimer) clearTimeout(maxDurationTimer);
     if (stopFallback) clearTimeout(stopFallback);
     if (finalChunkGrace) clearTimeout(finalChunkGrace);
+  };
+  const removeRecorderListeners = () => {
+    recorder.removeEventListener("dataavailable", onDataAvailable);
+    recorder.removeEventListener("stop", onStop);
+    recorder.removeEventListener("error", onError);
   };
   const settle = (error?: Error) => {
     if (settled) return;
     settled = true;
     clearCompletionTimers();
-    stopTracksOnce();
-    if (error) return rejectFinished(error);
-    if (completionMode === "cancel") return resolveFinished(null);
-    if (!chunks.length) return rejectFinished(new Error("未获取到录音数据"));
+    removeRecorderListeners();
+    if (completionMode === "cancel") {
+      stopTracksOnce();
+      return resolveFinished(null);
+    }
+    if (error) {
+      stopTracksOnce();
+      return rejectFinished(error);
+    }
     const resultMime = recorder.mimeType || chunks.find(chunk => !!chunk.type)?.type || mime;
     const blob = new Blob(chunks, { type: resultMime });
+    stopTracksOnce();
+    if (!blob.size) return rejectFinished(new Error("未获取到录音数据，请重试"));
     resolveFinished({
       blob,
       mime: resultMime,
@@ -111,53 +124,54 @@ export async function createVoiceRecordingSession(options: {
     if (completionMode) return finished;
     completionMode = mode;
     completionAt = now();
-    clearTimeout(maxDurationTimer);
+    if (maxDurationTimer) clearTimeout(maxDurationTimer);
     if (mode === "cancel") {
       if (recorder.state === "recording" || recorder.state === "paused") {
         try { recorder.stop(); } catch {}
       }
-      stopTracksOnce();
       settle();
       return finished;
     }
     if (recorder.state === "recording" || recorder.state === "paused") {
-      try { recorder.requestData?.(); } catch {}
       try { recorder.stop(); } catch (error) {
         settle(error instanceof Error ? error : new Error("录音停止失败"));
         return finished;
       }
-    } else {
-      scheduleFinalization();
     }
-    stopTracksOnce();
-    stopFallback = setTimeout(() => settle(), options.stopFallbackMs ?? 2_000);
+    stopFallback = setTimeout(
+      () => settle(new Error("录音处理超时，请重试")),
+      options.stopFallbackMs ?? 2_000,
+    );
     return finished;
   };
-  const maxDurationTimer = setTimeout(() => {
+  function onDataAvailable(event: BlobEvent) {
+    if (event.data.size) chunks.push(event.data);
+  }
+  function onStop() {
+    if (!completionMode) {
+      completionMode = "finish";
+      completionAt = now();
+      options.onAutoFinish?.();
+    }
+    scheduleFinalization();
+  }
+  function onError() {
+    settle(new Error("录音失败"));
+  }
+
+  recorder.addEventListener("dataavailable", onDataAvailable);
+  recorder.addEventListener("stop", onStop);
+  recorder.addEventListener("error", onError);
+  maxDurationTimer = setTimeout(() => {
     options.onAutoFinish?.();
     void requestCompletion("finish");
   }, options.maxDurationMs || MAX_VOICE_RECORDING_MS);
 
-  recorder.addEventListener("dataavailable", event => {
-    if (event.data.size) chunks.push(event.data);
-  });
-  recorder.addEventListener("stop", () => {
-    if (!completionMode) {
-      completionMode = "finish";
-      completionAt = now();
-      stopTracksOnce();
-      options.onAutoFinish?.();
-    }
-    scheduleFinalization();
-  });
-  recorder.addEventListener("error", () => {
-    settle(new Error("录音失败"));
-  });
-
   try {
-    recorder.start();
+    recorder.start(1_000);
   } catch {
-    clearTimeout(maxDurationTimer);
+    clearCompletionTimers();
+    removeRecorderListeners();
     stopTracksOnce();
     throw new Error("当前浏览器无法开始录音");
   }
