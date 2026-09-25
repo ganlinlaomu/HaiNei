@@ -79,6 +79,7 @@ import { useProfilesStore } from "@/stores/profiles";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { buildHeightPrefix, resolveVirtualRange, updateHeightPrefix } from "@/utils/virtualFeed";
 
 
 // reuse the regex logic from extractImageUrls to strip out image markdown and plain image URLs
@@ -141,52 +142,96 @@ export default defineComponent({
     const virtualStart = ref(0);
     const virtualEnd = ref(12);
     const postHeights = new Map<string, number>();
+    const postIndexes = new Map<string, number>();
+    const heightPrefix = ref<number[]>([0]);
     const ESTIMATED_POST_HEIGHT = 420;
+    const POST_GAP = 10;
     const OVERSCAN_PX = 900;
     const virtualMessages = computed(() => displayedMessages.value.slice(virtualStart.value, virtualEnd.value));
-    const rangeHeight = (start: number, end: number) => displayedMessages.value
-      .slice(start, end).reduce((sum, message) => sum + (postHeights.get(message.id) || ESTIMATED_POST_HEIGHT) + 10, 0);
+    const rangeHeight = (start: number, end: number) =>
+      (heightPrefix.value[end] || 0) - (heightPrefix.value[start] || 0);
     const topSpacerHeight = computed(() => rangeHeight(0, virtualStart.value));
     const bottomSpacerHeight = computed(() => rangeHeight(virtualEnd.value, displayedMessages.value.length));
 
+    function rebuildHeightIndex() {
+      postIndexes.clear();
+      const heights = displayedMessages.value.map((message, index) => {
+        postIndexes.set(message.id, index);
+        return (postHeights.get(message.id) || ESTIMATED_POST_HEIGHT) + POST_GAP;
+      });
+      heightPrefix.value = buildHeightPrefix(heights);
+      virtualStart.value = Math.min(virtualStart.value, Math.max(0, heights.length - 1));
+      virtualEnd.value = Math.min(heights.length, Math.max(virtualStart.value + 1, virtualEnd.value));
+    }
+
     function updateVirtualWindow() {
-      const scroller = document.querySelector(SCROLL_CONTAINER_SELECTOR) as HTMLElement | null;
-      if (!scroller || !feedElement.value || displayedMessages.value.length === 0) return;
-      const localTop = Math.max(0, scroller.scrollTop - feedElement.value.offsetTop);
-      const lowerBound = Math.max(0, localTop - OVERSCAN_PX);
-      const upperBound = localTop + scroller.clientHeight + OVERSCAN_PX;
-      let cursor = 0;
-      let start = 0;
-      while (start < displayedMessages.value.length) {
-        const height = (postHeights.get(displayedMessages.value[start].id) || ESTIMATED_POST_HEIGHT) + 10;
-        if (cursor + height >= lowerBound) break;
-        cursor += height;
-        start += 1;
-      }
-      let end = start;
-      while (end < displayedMessages.value.length && cursor < upperBound) {
-        cursor += (postHeights.get(displayedMessages.value[end].id) || ESTIMATED_POST_HEIGHT) + 10;
-        end += 1;
-      }
-      virtualStart.value = start;
-      virtualEnd.value = Math.max(start + 1, end);
+      if (!scrollContainer || !feedElement.value || displayedMessages.value.length === 0) return;
+      const localTop = Math.max(0, scrollContainer.scrollTop - feedElement.value.offsetTop);
+      const range = resolveVirtualRange(heightPrefix.value, localTop, scrollContainer.clientHeight, OVERSCAN_PX);
+      virtualStart.value = range.start;
+      virtualEnd.value = range.end;
     }
 
     function recordPostHeight(id: string, height: number) {
-      if (!height || Math.abs((postHeights.get(id) || 0) - height) < 1) return;
+      const index = postIndexes.get(id);
+      if (!height || index === undefined) return;
+      const previousHeight = postHeights.get(id) || ESTIMATED_POST_HEIGHT;
+      const delta = height - previousHeight;
+      if (Math.abs(delta) < 1) return;
+
+      const localTop = scrollContainer && feedElement.value
+        ? Math.max(0, scrollContainer.scrollTop - feedElement.value.offsetTop)
+        : 0;
+      const measuredPostWasAboveViewport = (heightPrefix.value[index + 1] || 0) <= localTop;
       postHeights.set(id, height);
+      heightPrefix.value = updateHeightPrefix(heightPrefix.value, index, delta);
+
+      if (measuredPostWasAboveViewport) queueScrollAnchorAdjustment(delta);
+      scheduleVirtualWindowUpdate();
     }
 
     let scrollContainer: HTMLElement | null = null;
+    let virtualFrame: number | null = null;
+    let virtualScrollActive = false;
+    let pendingAnchorAdjustment = 0;
+    let anchorAdjustmentQueued = false;
+
+    function scheduleVirtualWindowUpdate() {
+      if (!virtualScrollActive || virtualFrame !== null) return;
+      virtualFrame = requestAnimationFrame(() => {
+        virtualFrame = null;
+        updateVirtualWindow();
+      });
+    }
+
+    function queueScrollAnchorAdjustment(delta: number) {
+      pendingAnchorAdjustment += delta;
+      if (anchorAdjustmentQueued) return;
+      anchorAdjustmentQueued = true;
+      void nextTick(() => {
+        anchorAdjustmentQueued = false;
+        const adjustment = pendingAnchorAdjustment;
+        pendingAnchorAdjustment = 0;
+        if (!virtualScrollActive || !scrollContainer || !adjustment) return;
+        scrollContainer.scrollTop += adjustment;
+        scheduleVirtualWindowUpdate();
+      });
+    }
+
     function attachVirtualScroll() {
       detachVirtualScroll();
       scrollContainer = document.querySelector(SCROLL_CONTAINER_SELECTOR) as HTMLElement | null;
-      scrollContainer?.addEventListener("scroll", updateVirtualWindow, { passive: true });
-      requestAnimationFrame(updateVirtualWindow);
+      virtualScrollActive = !!scrollContainer;
+      scrollContainer?.addEventListener("scroll", scheduleVirtualWindowUpdate, { passive: true });
+      scheduleVirtualWindowUpdate();
     }
     function detachVirtualScroll() {
-      scrollContainer?.removeEventListener("scroll", updateVirtualWindow);
+      virtualScrollActive = false;
+      scrollContainer?.removeEventListener("scroll", scheduleVirtualWindowUpdate);
       scrollContainer = null;
+      if (virtualFrame !== null) cancelAnimationFrame(virtualFrame);
+      virtualFrame = null;
+      pendingAnchorAdjustment = 0;
     }
     const pendingMessages = ref([] as any[]); // Messages fetched but not yet displayed
     const isInitialLoad = ref(true); // Track if this is the first load
@@ -709,7 +754,7 @@ async function safeUpdateLocalRefs() {
   }
 
   const targetIndex = displayedMessages.value.findIndex(message => message.id === mid);
-  const jumpScroller = document.querySelector(SCROLL_CONTAINER_SELECTOR) as HTMLElement | null;
+  const jumpScroller = scrollContainer;
   if (targetIndex >= 0 && jumpScroller && feedElement.value) {
     virtualStart.value = Math.max(0, targetIndex - 2);
     virtualEnd.value = Math.min(displayedMessages.value.length, targetIndex + 4);
@@ -755,10 +800,9 @@ async function safeUpdateLocalRefs() {
   await nextTick();
   
   // Get the scrollable container
-  const scrollContainer = document.querySelector(SCROLL_CONTAINER_SELECTOR) as HTMLElement | null;
-  if (scrollContainer) {
+  if (jumpScroller) {
     const rect = el.getBoundingClientRect();
-    const containerRect = scrollContainer.getBoundingClientRect();
+    const containerRect = jumpScroller.getBoundingClientRect();
     
     // Calculate where the element currently is in the viewport
     const elementTop = rect.top - containerRect.top;
@@ -771,14 +815,14 @@ async function safeUpdateLocalRefs() {
     // Determine if element needs scrolling
     if (elementTop < SCROLL_SAFE_OFFSET) {
       // Element is above viewport, scroll to bring it to top with safe offset
-      const targetTop = scrollContainer.scrollTop + elementTop - SCROLL_SAFE_OFFSET;
-      scrollContainer.scrollTo({ top: targetTop, behavior: 'smooth' });
+      const targetTop = jumpScroller.scrollTop + elementTop - SCROLL_SAFE_OFFSET;
+      jumpScroller.scrollTo({ top: targetTop, behavior: 'smooth' });
     } else if (elementBottom > safeViewportBottom) {
       // Element extends into bottom bar area
       // Try to scroll to show it at the top of safe area
       const desiredScrollDelta = elementTop - SCROLL_SAFE_OFFSET;
-      const targetTop = scrollContainer.scrollTop + desiredScrollDelta;
-      scrollContainer.scrollTo({ top: targetTop, behavior: 'smooth' });
+      const targetTop = jumpScroller.scrollTop + desiredScrollDelta;
+      jumpScroller.scrollTo({ top: targetTop, behavior: 'smooth' });
     }
     // If element is already fully visible in safe area, no scroll needed
   } else {
@@ -989,7 +1033,10 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
   },
   { immediate: true }
 );
-   watch(() => displayedMessages.value.length, () => nextTick(updateVirtualWindow));
+   watch(displayedMessages, () => {
+     rebuildHeightIndex();
+     void nextTick(scheduleVirtualWindowUpdate);
+   }, { flush: "sync" });
    watch(
      () => keys.pkHex,
      (accountPk, previousPk) => {
