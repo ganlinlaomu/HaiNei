@@ -191,14 +191,13 @@ import { uploadImageToBlossomWithFallback, getBlossomConfig } from "@/utils/blos
 import { resizeImageFile } from "@/utils/imageResize";
 import { compressImageToTargetSize } from "@/utils/imageCompression";
 import {
-  decodeEncryptedImageRef,
   encodeEncryptedImageRef,
   variantToEncryptedImageRef,
   type EncryptedImageMetadata,
   type EncryptedImageVariant,
 } from "@/utils/encryptedImageRef";
-import { encodeEncryptedVideoRef, type EncryptedVideoMetadata } from "@/utils/encryptedVideoRef";
-import { encryptVideoFile, exportKeyToBase64 } from "@/utils/videoCrypto";
+import { encodeEncryptedVideoRef } from "@/utils/encryptedVideoRef";
+import { exportKeyToBase64 } from "@/utils/videoCrypto";
 import { bytesToBase64 } from "@/nostr/crypto";
 import { parseVideoUrl as parseVideoUrlUtil } from "@/utils/videoUtils";
 import {
@@ -210,46 +209,25 @@ import {
   type PostDraftImage,
   type PostDraftVideo,
 } from "@/utils/postDraft";
-import { storeImageInCache } from "@/utils/imageCache";
 import { canStartPostEditorDrag, shouldDismissPostEditor } from "@/utils/postEditorGesture";
+import {
+  releaseObjectUrl,
+  releasePostEditorMediaUrls,
+  restoreDraftImageUploads,
+  serializeCompletedDraftImages,
+  type PostEditorUploadItem,
+} from "@/utils/postEditorMediaDraft";
+import {
+  cacheEncryptedPreviewBestEffort,
+  imageDimensions,
+  prepareEncryptedImage,
+  prepareEncryptedVideo,
+  uploadPreparedImage,
+} from "@/utils/postEditorMediaUpload";
 
 // Video metadata format constants
 const VIDEO_METADATA_PREFIX = '[video:';
 const VIDEO_METADATA_SUFFIX = ']';
-
-type UploadItem = {
-  id: string;
-  name: string;
-  file?: File;
-  preview: string | null;
-  status: "pending" | "uploading" | "done" | "error";
-  progress: number;
-  url?: string;
-  errorShort?: string;
-  errorDetails?: string;
-  // Encryption metadata for encrypted uploads
-  encryptionKey?: CryptoKey;
-  encryptionIv?: string;
-  originalMime?: string;
-  width?: number;
-  height?: number;
-  previewUrl?: string;
-  previewEncryptionKey?: CryptoKey;
-  previewEncryptionIv?: string;
-  previewMime?: string;
-  previewWidth?: number;
-  previewHeight?: number;
-  previewMetadata?: EncryptedImageVariant;
-  previewEncryptedRef?: string;
-  encryptedRef?: string;
-};
-
-type PreparedEncryptedImage = {
-  encryptedFile: File;
-  key: CryptoKey;
-  iv: string;
-  mime: string;
-};
 
 export default defineComponent({
   name: "PostEditorModal",
@@ -289,27 +267,13 @@ export default defineComponent({
     let draftPersistenceEnabled = false;
     let draftAccount = "";
 
-    function completedDraftImages(): PostDraftImage[] {
-      return uploads.value.flatMap(item => item.status === "done" && item.encryptedRef && item.previewEncryptedRef
-        ? [{
-            id: item.id,
-            name: item.name,
-            encryptedRef: item.encryptedRef,
-            previewEncryptedRef: item.previewEncryptedRef,
-            mime: item.originalMime || "image/jpeg",
-            ...(item.width ? { width: item.width } : {}),
-            ...(item.height ? { height: item.height } : {}),
-          }]
-        : []);
-    }
-
     function persistDraft(account = draftAccount) {
       if (!draftPersistenceEnabled || !account) return;
       savePostDraft(account, {
         content: content.value,
         allFriends: allFriends.value,
         selectedGroups: [...selectedGroups.value],
-        images: completedDraftImages(),
+        images: serializeCompletedDraftImages(uploads.value),
         video: videoPreview.value,
       });
     }
@@ -408,7 +372,7 @@ export default defineComponent({
       else selectedGroups.value.splice(idx, 1);
     }
 
-    const uploads = ref<UploadItem[]>([]);
+    const uploads = ref<PostEditorUploadItem[]>([]);
     const discardedUploadIds = new Set<string>();
     const activeUploadAccounts = new Map<string, string>();
     const uploadEnabled = ref(false);
@@ -430,7 +394,7 @@ export default defineComponent({
     }
 
     // Immutable update helper for upload items to ensure Vue reactivity
-    function updateUploadItem(id: string, patch: Partial<UploadItem>) {
+    function updateUploadItem(id: string, patch: Partial<PostEditorUploadItem>) {
       const idx = uploads.value.findIndex(u => u.id === id);
       if (idx === -1) return;
       uploads.value.splice(idx, 1, { ...uploads.value[idx], ...patch });
@@ -458,7 +422,7 @@ export default defineComponent({
         // Check if it's a video file
         if (f.type.startsWith('video/')) {
           // For video files, use video upload
-          const item: UploadItem = {
+          const item: PostEditorUploadItem = {
             id: toId(), 
             name: f.name,
             file: f, 
@@ -470,7 +434,7 @@ export default defineComponent({
           void startVideoUpload(item, keys.pkHex);
         } else {
           // For image files, use image upload
-          const item: UploadItem = { id: toId(), name: f.name, file: f, preview: makePreview(f), status: "pending", progress: 0 };
+          const item: PostEditorUploadItem = { id: toId(), name: f.name, file: f, preview: makePreview(f), status: "pending", progress: 0 };
           uploads.value.push(item);
           void startUpload(item, keys.pkHex);
         }
@@ -543,7 +507,7 @@ export default defineComponent({
       throw new Error("未找到可用签名器（keys.signEvent / window.nostr / 本地 skHex）");
     }
 
-    async function startUpload(item: UploadItem, accountAtStart: string) {
+    async function startUpload(item: PostEditorUploadItem, accountAtStart: string) {
       const file = item.file;
       if (!accountAtStart || !file) return;
       activeUploadAccounts.set(item.id, accountAtStart);
@@ -579,11 +543,11 @@ export default defineComponent({
           progress: Math.round(originalProgress * 0.7 + previewProgress * 0.3),
         });
         const [original, preview] = await Promise.all([
-          uploadPreparedImage(preparedOriginal, accountAtStart, progress => {
+          uploadPreparedImage(preparedOriginal, accountAtStart, signEventWrapper, progress => {
             originalProgress = progress;
             reportProgress();
           }),
-          uploadPreparedImage(preparedPreview, accountAtStart, progress => {
+          uploadPreparedImage(preparedPreview, accountAtStart, signEventWrapper, progress => {
             previewProgress = progress;
             reportProgress();
           }),
@@ -598,8 +562,7 @@ export default defineComponent({
           height: previewHeight,
         };
         const previewEncryptedRef = variantToEncryptedImageRef(previewMetadata);
-        await storeImageInCache(accountAtStart, previewEncryptedRef, previewFile, preview.mime)
-          .catch(cacheError => console.warn("draft preview cache failed", cacheError));
+        await cacheEncryptedPreviewBestEffort(accountAtStart, previewEncryptedRef, previewFile, preview.mime);
 
         const metadata: EncryptedImageMetadata = {
           v: 2,
@@ -626,7 +589,7 @@ export default defineComponent({
         mergeCompletedPostDraftImage(accountAtStart, completedImage);
 
         if (keys.pkHex !== accountAtStart || !ui.showPostEditor) return;
-        const patch: Partial<UploadItem> = {
+        const patch: Partial<PostEditorUploadItem> = {
           url: original.url,
           status: "done",
           progress: 100,
@@ -662,84 +625,32 @@ export default defineComponent({
       }
     }
 
-    async function imageDimensions(file: File): Promise<[number, number]> {
-      const bitmap = await createImageBitmap(file);
-      const dimensions: [number, number] = [bitmap.width, bitmap.height];
-      bitmap.close();
-      return dimensions;
-    }
-
-    async function prepareEncryptedImage(file: File): Promise<PreparedEncryptedImage> {
-      const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      const encryptedBytes = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv },
-        key,
-        await file.arrayBuffer()
-      );
-      const encryptedFile = new File(
-        [encryptedBytes],
-        file.name.replace(/\.[^.]*$/, "") + ".enc",
-        { type: "application/octet-stream" }
-      );
-      return { encryptedFile, key, iv: bytesToBase64(iv), mime: file.type || "image/jpeg" };
-    }
-
-    async function uploadPreparedImage(
-      prepared: PreparedEncryptedImage,
-      accountPubkey: string,
-      onProgress: (progress: number) => void
-    ) {
-      const descriptor = await uploadImageToBlossomWithFallback(prepared.encryptedFile, {
-        accountPubkey,
-        signEvent: signEventWrapper,
-        onProgress,
-      });
-      return { url: descriptor.url, key: prepared.key, iv: prepared.iv, mime: prepared.mime };
-    }
-
-    async function startVideoUpload(item: UploadItem, accountAtStart: string) {
+    async function startVideoUpload(item: PostEditorUploadItem, accountAtStart: string) {
       const file = item.file;
       if (!accountAtStart || !file) return;
       activeUploadAccounts.set(item.id, accountAtStart);
       updateUploadItem(item.id, { status: "uploading", progress: 0, errorShort: undefined, errorDetails: undefined });
 
       try {
-        // Generate encryption key
-        const encryptionKey = await crypto.subtle.generateKey(
-          { name: "AES-GCM", length: 256 },
-          true,
-          ["encrypt", "decrypt"]
-        );
-        const originalMime = file.type || "video/mp4";
-        
-        // Encrypt video file
-        const { encryptedBytes, iv } = await encryptVideoFile(file, encryptionKey);
-        
-        // Create a new File from encrypted bytes with octet-stream type
-        const encryptedFile = new File(
-          [encryptedBytes],
-          file.name.replace(/\.[^.]*$/, '') + ".enc",
-          { type: "application/octet-stream" }
-        );
+        const prepared = await prepareEncryptedVideo(file);
         
         // Upload encrypted file with fallback to multiple servers
-        const descriptor = await uploadImageToBlossomWithFallback(encryptedFile, {
+        const descriptor = await uploadImageToBlossomWithFallback(prepared.encryptedFile, {
           accountPubkey: accountAtStart,
           signEvent: signEventWrapper,
           onProgress: (p:number) => { updateUploadItem(item.id, { progress: p }); }
         });
         
         // Export encryption key to base64
-        const keyBase64 = await exportKeyToBase64(encryptionKey);
+        const keyBase64 = await exportKeyToBase64(prepared.key);
         
         // Create encrypted video reference
         const encryptedRef = encodeEncryptedVideoRef({
           v: 1,
           url: descriptor.url,
-          mime: originalMime,
+          mime: prepared.mime,
           alg: "AES-GCM",
-          iv: iv,
+          iv: prepared.iv,
           key: keyBase64,
           size: file.size
         });
@@ -757,9 +668,9 @@ export default defineComponent({
           url: descriptor.url, 
           status: "done", 
           progress: 100,
-          encryptionKey,
-          encryptionIv: iv,
-          originalMime
+          encryptionKey: prepared.key,
+          encryptionIv: prepared.iv,
+          originalMime: prepared.mime
         });
         
         // Remove from uploads list since we show it in videoPreview
@@ -780,7 +691,7 @@ export default defineComponent({
       }
     }
 
-    function insertImageUrl(item: UploadItem) {
+    function insertImageUrl(item: PostEditorUploadItem) {
       if (item.status === "done" && item.url) {
         if (content.value.length>0 && !content.value.endsWith("\n")) content.value += "\n";
         content.value += `![](${item.url})\n`;
@@ -794,20 +705,8 @@ export default defineComponent({
       uploads.value.splice(idx, 1);
     }
 
-    function releaseObjectUrl(value?: string | null) {
-      if (!value?.startsWith("blob:")) return;
-      try { URL.revokeObjectURL(value); } catch {}
-    }
-
-    function releaseRuntimeMediaUrls() {
-      for (const item of uploads.value) releaseObjectUrl(item.preview);
-      releaseObjectUrl(videoPreview.value?.thumbnail);
-      releaseObjectUrl(videoPreview.value?.url);
-      releaseObjectUrl(videoPreview.value?.embedUrl);
-    }
-
     function resetRuntimeEditor() {
-      releaseRuntimeMediaUrls();
+      releasePostEditorMediaUrls(uploads.value, videoPreview.value);
       content.value = "";
       error.value = null;
       allFriends.value = true;
@@ -931,23 +830,7 @@ export default defineComponent({
         content.value = draft?.content || "";
         allFriends.value = draft?.allFriends ?? true;
         selectedGroups.value = (draft?.selectedGroups || []).filter(group => groups.value.includes(group));
-        uploads.value = (draft?.images || []).map(image => {
-          const metadata = decodeEncryptedImageRef(image.encryptedRef);
-          return {
-            id: image.id,
-            name: image.name,
-            preview: null,
-            status: "done" as const,
-            progress: 100,
-            url: metadata?.url,
-            originalMime: image.mime,
-            width: image.width,
-            height: image.height,
-            previewMetadata: metadata?.preview,
-            previewEncryptedRef: image.previewEncryptedRef,
-            encryptedRef: image.encryptedRef,
-          };
-        });
+        uploads.value = restoreDraftImageUploads(draft?.images || []);
         videoPreview.value = draft?.video || null;
         draftPersistenceEnabled = true;
         await nextTick();
@@ -1005,7 +888,7 @@ export default defineComponent({
       window.removeEventListener("pagehide", persistOnPageHide);
       document.removeEventListener("visibilitychange", persistOnVisibilityChange);
       document.body.classList.remove("post-editor-open");
-      releaseRuntimeMediaUrls();
+      releasePostEditorMediaUrls(uploads.value, videoPreview.value);
     });
 
     async function onSend() {
