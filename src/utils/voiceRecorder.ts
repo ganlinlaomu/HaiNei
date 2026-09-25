@@ -46,7 +46,6 @@ export async function createVoiceRecordingSession(options: {
   Recorder?: typeof MediaRecorder;
   maxDurationMs?: number;
   stopFallbackMs?: number;
-  muteGraceMs?: number;
   now?: () => number;
   onAutoFinish?: () => void;
 } = {}): Promise<VoiceRecordingSession> {
@@ -64,17 +63,28 @@ export async function createVoiceRecordingSession(options: {
   const tracks = typeof stream.getAudioTracks === "function"
     ? stream.getAudioTracks()
     : stream.getTracks().filter(track => !track.kind || track.kind === "audio");
-  const stopTracks = () => stream.getTracks().forEach(track => {
+  let recorder!: MediaRecorder;
+  const diagnose = (event: string, reason?: string) => {
+    console.info("[voice-recorder]", {
+      timestamp: new Date().toISOString(),
+      event,
+      ...(reason ? { reason } : {}),
+      recorderState: recorder?.state || "unavailable",
+      streamActive: stream.active,
+      tracks: tracks.map(track => ({ readyState: track.readyState, muted: track.muted })),
+    });
+  };
+  const stopTracks = (reason: string) => stream.getTracks().forEach((track, index) => {
+    diagnose("app-track-stop", `${reason}:${index}`);
     try { track.stop(); } catch {}
   });
   if (!tracks.length || tracks.every(track => track.readyState === "ended")) {
-    stopTracks();
+    stopTracks("no-live-audio-track");
     throw new Error("未检测到可用的麦克风");
   }
 
   // Safari is most reliable when it chooses its own native container/codec.
   // Only try an explicit supported type if the default constructor itself fails.
-  let recorder: MediaRecorder;
   try {
     recorder = new Recorder(stream);
   } catch {
@@ -83,7 +93,7 @@ export async function createVoiceRecordingSession(options: {
       if (!fallbackMime) throw new Error("unsupported");
       recorder = new Recorder(stream, { mimeType: fallbackMime });
     } catch {
-      stopTracks();
+      stopTracks("recorder-construction-failed");
       throw new Error("当前浏览器无法开始录音");
     }
   }
@@ -93,10 +103,10 @@ export async function createVoiceRecordingSession(options: {
   const startedAt = now();
   let state: VoiceRecordingState = "recording";
   let completionMode: "finish" | "cancel" | "unexpected" | null = null;
+  let completionReason = "";
   let settled = false;
   let tracksStopped = false;
   let stopFallback: ReturnType<typeof setTimeout> | null = null;
-  let muteGraceTimer: ReturnType<typeof setTimeout> | null = null;
   let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   let activeSince: number | null = startedAt;
   let activeElapsedMs = 0;
@@ -109,25 +119,13 @@ export async function createVoiceRecordingSession(options: {
     rejectFinished = reject;
   });
 
-  const diagnosticsEnabled = import.meta.env.DEV && !options.Recorder;
-  const diagnose = (event: string) => {
-    if (!diagnosticsEnabled) return;
-    console.debug("[voice-recorder]", {
-      timestamp: new Date().toISOString(),
-      event,
-      recorderState: recorder.state,
-      streamActive: stream.active,
-      tracks: tracks.map(track => ({ readyState: track.readyState, muted: track.muted })),
-    });
-  };
   const streamIsActive = () => stream.active !== false;
   const hasLiveTrack = () => tracks.some(track => track.readyState === "live");
   const allTracksMuted = () => tracks.length > 0 && tracks.every(track => track.muted);
   const rawIsActive = () => !settled
     && recorder.state === "recording"
     && streamIsActive()
-    && hasLiveTrack()
-    && !allTracksMuted();
+    && hasLiveTrack();
   const isActive = () => {
     const active = rawIsActive();
     if (!active && !completionMode && !settled) syncHealth("poll");
@@ -150,18 +148,20 @@ export async function createVoiceRecordingSession(options: {
     activeElapsedMs += Math.max(0, now() - activeSince);
     activeSince = null;
   };
-  const stopTracksOnce = () => {
+  const stopTracksOnce = (reason: string) => {
     if (tracksStopped) return;
     tracksStopped = true;
-    stopTracks();
+    stopTracks(reason);
+  };
+  const stopRecorder = (reason: string) => {
+    diagnose("app-recorder-stop", reason);
+    recorder.stop();
   };
   const clearTimers = () => {
     if (maxDurationTimer) clearTimeout(maxDurationTimer);
     if (stopFallback) clearTimeout(stopFallback);
-    if (muteGraceTimer) clearTimeout(muteGraceTimer);
     maxDurationTimer = null;
     stopFallback = null;
-    muteGraceTimer = null;
   };
   const removeListeners = () => {
     recorder.removeEventListener("start", onStart);
@@ -185,20 +185,20 @@ export async function createVoiceRecordingSession(options: {
     clearTimers();
     removeListeners();
     if (completionMode === "cancel") {
-      stopTracksOnce();
+      stopTracksOnce(completionReason || "cancelled");
       setState("cancelled");
       resolveFinished(null);
       return;
     }
     if (error) {
-      stopTracksOnce();
+      stopTracksOnce(completionReason || "error");
       setState("error");
       rejectFinished(error);
       return;
     }
     const resultMime = recorder.mimeType || chunks.find(chunk => !!chunk.type)?.type || "application/octet-stream";
     const blob = new Blob(chunks, { type: resultMime });
-    stopTracksOnce();
+    stopTracksOnce(completionReason || "finalized");
     if (!blob.size) {
       setState("error");
       rejectFinished(emptyDataError || new Error("未获取到录音数据，请重试"));
@@ -221,22 +221,23 @@ export async function createVoiceRecordingSession(options: {
       options.stopFallbackMs ?? 3_000,
     );
   };
-  const requestCompletion = (mode: "finish" | "cancel") => {
+  const requestCompletion = (mode: "finish" | "cancel", reason: string) => {
     if (completionMode) return finished;
     completionMode = mode;
+    completionReason = reason;
     captureActiveTime();
     if (maxDurationTimer) clearTimeout(maxDurationTimer);
     maxDurationTimer = null;
     if (mode === "cancel") {
       if (recorder.state === "recording" || recorder.state === "paused") {
-        try { recorder.stop(); } catch {}
+        try { stopRecorder(reason); } catch {}
       }
       settle();
       return finished;
     }
     setState("finishing");
     if (recorder.state === "recording" || recorder.state === "paused") {
-      try { recorder.stop(); } catch (error) {
+      try { stopRecorder(reason); } catch (error) {
         settle(error instanceof Error ? error : new Error("录音停止失败"));
         return finished;
       }
@@ -244,17 +245,21 @@ export async function createVoiceRecordingSession(options: {
     startStopWatchdog();
     return finished;
   };
-  const requestUnexpectedCompletion = (reason = new Error("麦克风录音已被系统中断，请重试")) => {
+  const requestUnexpectedCompletion = (
+    error = new Error("麦克风录音已被系统中断，请重试"),
+    reason = "unexpected-interruption",
+  ) => {
     if (completionMode || settled) return;
     completionMode = "unexpected";
-    emptyDataError = reason;
+    completionReason = reason;
+    emptyDataError = error;
     captureActiveTime();
     if (maxDurationTimer) clearTimeout(maxDurationTimer);
     maxDurationTimer = null;
     setState("finishing");
     if (recorder.state === "recording" || recorder.state === "paused") {
-      try { recorder.stop(); } catch (error) {
-        settle(error instanceof Error ? error : new Error("录音意外中断"));
+      try { stopRecorder(reason); } catch (cause) {
+        settle(cause instanceof Error ? cause : new Error("录音意外中断"));
         return;
       }
     }
@@ -265,38 +270,20 @@ export async function createVoiceRecordingSession(options: {
     if (completionMode || settled) return;
     if (recorder.state === "inactive") {
       diagnose(`${source}:inactive`);
-      requestUnexpectedCompletion();
+      requestUnexpectedCompletion(undefined, "recorder-inactive");
       return;
     }
     if (!streamIsActive() || !hasLiveTrack()) {
       captureActiveTime();
       emitHealth();
       diagnose(`${source}:interrupted`);
-      requestUnexpectedCompletion();
+      requestUnexpectedCompletion(undefined, !streamIsActive() ? "stream-inactive" : "track-ended");
       return;
     }
     if (recorder.state === "paused") {
       captureActiveTime();
       setState("paused");
       return;
-    }
-    if (allTracksMuted()) {
-      captureActiveTime();
-      emitHealth();
-      if (!muteGraceTimer) {
-        muteGraceTimer = setTimeout(() => {
-          muteGraceTimer = null;
-          if (!completionMode && !settled && allTracksMuted()) {
-            diagnose("mute-timeout");
-            requestUnexpectedCompletion();
-          }
-        }, options.muteGraceMs ?? 1_000);
-      }
-      return;
-    }
-    if (muteGraceTimer) {
-      clearTimeout(muteGraceTimer);
-      muteGraceTimer = null;
     }
     if (activeSince === null) activeSince = now();
     state = "recording";
@@ -311,10 +298,11 @@ export async function createVoiceRecordingSession(options: {
     if (event.data.size) chunks.push(event.data);
   }
   function onStop() {
-    diagnose("stop");
+    diagnose("recorder-stop");
     // MediaRecorder guarantees the final dataavailable caused by stop() before stop.
     if (!completionMode) {
       completionMode = "unexpected";
+      completionReason = "unexpected-recorder-stop";
       emptyDataError = new Error("麦克风录音已被系统中断，请重试");
       captureActiveTime();
     }
@@ -322,7 +310,7 @@ export async function createVoiceRecordingSession(options: {
   }
   function onError() {
     diagnose("error");
-    requestUnexpectedCompletion(new Error("录音失败，请重试"));
+    requestUnexpectedCompletion(new Error("录音失败，请重试"), "recorder-error");
   }
   function onPause() {
     diagnose("pause");
@@ -336,15 +324,15 @@ export async function createVoiceRecordingSession(options: {
   }
   function onTrackEnded() {
     diagnose("ended");
-    requestUnexpectedCompletion();
+    requestUnexpectedCompletion(undefined, "track-ended");
   }
   function onTrackMute() {
     diagnose("mute");
-    syncHealth("mute");
+    emitHealth();
   }
   function onTrackUnmute() {
     diagnose("unmute");
-    syncHealth("unmute");
+    emitHealth();
   }
   function onStreamActive() {
     diagnose("stream-active");
@@ -352,7 +340,7 @@ export async function createVoiceRecordingSession(options: {
   }
   function onStreamInactive() {
     diagnose("stream-inactive");
-    requestUnexpectedCompletion();
+    requestUnexpectedCompletion(undefined, "stream-inactive");
   }
 
   recorder.addEventListener("start", onStart);
@@ -375,13 +363,13 @@ export async function createVoiceRecordingSession(options: {
   } catch {
     clearTimers();
     removeListeners();
-    stopTracksOnce();
+    stopTracksOnce("recorder-start-failed");
     throw new Error("当前浏览器无法开始录音");
   }
 
   maxDurationTimer = setTimeout(() => {
     options.onAutoFinish?.();
-    void requestCompletion("finish");
+    void requestCompletion("finish", "max-duration");
   }, options.maxDurationMs || MAX_VOICE_RECORDING_MS);
   syncHealth("initial");
 
@@ -389,9 +377,9 @@ export async function createVoiceRecordingSession(options: {
     mime: recorder.mimeType,
     startedAt,
     finished,
-    finish: () => requestCompletion("finish"),
-    cancel: () => { void requestCompletion("cancel"); },
-    dispose: () => { void requestCompletion("cancel"); },
+    finish: () => requestCompletion("finish", "user-finish"),
+    cancel: () => { void requestCompletion("cancel", "user-cancel"); },
+    dispose: () => { void requestCompletion("cancel", "session-dispose"); },
     isActive,
     elapsedMs,
     onStateChange(listener) {

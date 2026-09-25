@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeEncryptedImageRef } from "@/utils/encryptedImageRef";
 import { decryptDmAudio, prepareEncryptedDmAudio } from "@/utils/encryptedDmAudio";
 import { parsePrivateAudioMessage, serializePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
@@ -107,6 +107,10 @@ function recorderHarness() {
   return { track, stream: fakeStream, getUserMedia };
 }
 
+beforeEach(() => {
+  vi.spyOn(console, "info").mockImplementation(() => {});
+});
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -116,6 +120,7 @@ afterEach(() => {
   FakeRecorder.startArguments = [];
   FakeRecorder.constructorOptions = [];
   FakeRecorder.instances = [];
+  vi.restoreAllMocks();
 });
 
 describe("voice recording lifecycle", () => {
@@ -176,6 +181,12 @@ describe("voice recording lifecycle", () => {
     expect(result!.size).toBeGreaterThan(0);
     expect(await result!.blob.text()).toBe("continuous-safari-recording");
     expect(harness.track.stop).toHaveBeenCalledOnce();
+    expect(console.info).toHaveBeenCalledWith("[voice-recorder]", expect.objectContaining({
+      event: "app-recorder-stop", reason: "user-finish",
+    }));
+    expect(console.info).toHaveBeenCalledWith("[voice-recorder]", expect.objectContaining({
+      event: "app-track-stop", reason: "user-finish:0",
+    }));
   });
 
   it("makes Finish idempotent and never calls MediaRecorder.stop twice", async () => {
@@ -257,7 +268,7 @@ describe("voice recording lifecycle", () => {
     expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 
-  it("freezes elapsed immediately on mute and resumes when unmuted within one second", async () => {
+  it("keeps the same recording active while muted for more than three seconds", async () => {
     vi.useFakeTimers();
     const harness = recorderHarness();
     const session = await createVoiceRecordingSession({
@@ -269,49 +280,19 @@ describe("voice recording lifecycle", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     harness.track.mute();
     const mutedAt = session.elapsedMs();
-    expect(session.isActive()).toBe(false);
-    expect(health).toHaveBeenLastCalledWith(expect.objectContaining({ trackMuted: true, active: false }));
-    await vi.advanceTimersByTimeAsync(900);
-    expect(session.elapsedMs()).toBe(mutedAt);
+    expect(session.isActive()).toBe(true);
+    expect(health).toHaveBeenLastCalledWith(expect.objectContaining({ trackMuted: true, active: true }));
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(session.elapsedMs()).toBe(mutedAt + 3_500);
+    expect(FakeRecorder.stopCalls).toBe(0);
     harness.track.unmute();
     expect(session.isActive()).toBe(true);
     await vi.advanceTimersByTimeAsync(500);
-    expect(session.elapsedMs()).toBe(mutedAt + 500);
+    expect(session.elapsedMs()).toBe(mutedAt + 4_000);
     expect(FakeRecorder.stopCalls).toBe(0);
-  });
-
-  it("interrupts after all live audio tracks stay muted for one second", async () => {
-    vi.useFakeTimers();
-    const harness = recorderHarness();
-    const session = await createVoiceRecordingSession({
-      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
-      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
-    });
-    harness.track.mute();
-    expect(session.isActive()).toBe(false);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(FakeRecorder.stopCalls).toBe(0);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(FakeRecorder.stopCalls).toBe(1);
-    expect(harness.track.readyState).toBe("live");
-    await vi.advanceTimersByTimeAsync(20);
-    await expect(session.finished).resolves.toMatchObject({ size: 27 });
-    expect(harness.track.stop).toHaveBeenCalledOnce();
-  });
-
-  it("shows the system-interruption error when a muted recording has no usable bytes", async () => {
-    vi.useFakeTimers();
-    FakeRecorder.emitData = false;
-    const harness = recorderHarness();
-    const session = await createVoiceRecordingSession({
-      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
-      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
-    });
-    harness.track.mute();
-    const rejected = expect(session.finished).rejects.toThrow("麦克风录音已被系统中断，请重试");
-    await vi.advanceTimersByTimeAsync(1_020);
-    await rejected;
-    expect(harness.track.stop).toHaveBeenCalledOnce();
+    expect(FakeRecorder.instances).toHaveLength(1);
+    expect(console.info).toHaveBeenCalledWith("[voice-recorder]", expect.objectContaining({ event: "mute" }));
+    expect(console.info).toHaveBeenCalledWith("[voice-recorder]", expect.objectContaining({ event: "unmute" }));
   });
 
   it("interrupts when MediaStream.active becomes false", async () => {
@@ -359,6 +340,9 @@ describe("voice recording lifecycle", () => {
     cancelled.cancel();
     await expect(cancelled.finished).resolves.toBeNull();
     expect(first.track.stop).toHaveBeenCalledOnce();
+    expect(console.info).toHaveBeenCalledWith("[voice-recorder]", expect.objectContaining({
+      event: "app-recorder-stop", reason: "user-cancel",
+    }));
 
     const second = recorderHarness();
     const disposed = await createVoiceRecordingSession({
