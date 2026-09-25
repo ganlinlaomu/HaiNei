@@ -2,13 +2,11 @@ import { createRouter, createWebHashHistory, RouteRecordRaw } from "vue-router";
 import { nextTick } from "vue";
 import Login from "@/views/Login.vue";
 import Home from "@/views/Home.vue";
+import { loadConversationsView, loadNotificationsView, loadSettingsView } from "@/router/lazyViews";
 // Lazy load less frequently accessed views
 const Friends = () => import("@/views/Friends.vue");
-const Settings = () => import("@/views/Settings.vue");
 const MyProfile = () => import("@/views/MyProfile.vue");
 const Profile = () => import("@/views/Profile.vue");
-const Notifications = () => import("@/views/Notifications.vue");
-const Conversations = () => import("@/views/Conversations.vue");
 const Messages = () => import("@/views/Messages.vue");
 const Debug = () => import("@/views/Debug.vue");
 const Saved = () => import("@/views/Saved.vue");
@@ -44,7 +42,7 @@ const routes: Array<RouteRecordRaw> = [
   {
     path: "/notifications",
     name: "Notifications",
-    component: Notifications,
+    component: loadNotificationsView,
     meta: { requiresAuth: true }
   },
   {
@@ -56,7 +54,7 @@ const routes: Array<RouteRecordRaw> = [
   {
     path: "/conversations",
     name: "Conversations",
-    component: Conversations,
+    component: loadConversationsView,
     meta: { requiresAuth: true }
   },
   {
@@ -68,7 +66,7 @@ const routes: Array<RouteRecordRaw> = [
   {
     path: "/settings",
     name: "Settings",
-    component: Settings,
+    component: loadSettingsView,
     meta: { requiresAuth: true }
   },
   {

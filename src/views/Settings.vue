@@ -222,7 +222,7 @@
             <div v-if="cacheStats.oldestTimestamp">最早缓存：{{ new Date(cacheStats.oldestTimestamp).toLocaleDateString() }}</div>
           </div>
           <div class="button-row">
-            <button class="btn btn-secondary" type="button" :disabled="loadingCache" @click="refreshCacheStats">
+            <button class="btn btn-secondary" type="button" :disabled="loadingCache" @click="refreshCacheStats(true)">
               {{ loadingCache ? "加载中…" : "刷新统计" }}
             </button>
             <button class="btn btn-warning" type="button" :disabled="clearingCache" @click="clearCache">
@@ -293,6 +293,7 @@ import {
   type RelayConfig,
   type RelaySource
 } from "@/services/connectionSettings";
+import { isAccountResourceStale, runAfterFirstPaint } from "@/utils/bottomTabActivation";
 
 const keyStore = useKeyStore();
 const profiles = useProfilesStore();
@@ -327,6 +328,11 @@ const pushStatusText = computed(() => !pushSupported
 let statusInterval: ReturnType<typeof setInterval> | null = null;
 let statusUnsubscribe: (() => void) | null = null;
 let cacheRequestId = 0;
+let cacheStatsAccount = "";
+let cacheStatsUpdatedAt = 0;
+let cacheRefresh: { account: string; promise: Promise<void> } | null = null;
+let cancelScheduledCacheRefresh: (() => void) | null = null;
+const CACHE_STATS_MAX_AGE_MS = 5 * 60_000;
 
 function relaySourceLabel(source: RelaySource) {
   return source === "user" ? "用户" : source === "nip65" ? "NIP-65" : "默认";
@@ -454,25 +460,48 @@ function stopStatusPolling() {
   statusUnsubscribe = null;
 }
 
-async function refreshCacheStats() {
+async function refreshCacheStats(force = false) {
   const account = keyStore.pkHex;
   if (!account) {
     Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
     return;
   }
+  if (!force && !isAccountResourceStale(
+    account,
+    cacheStatsAccount,
+    cacheStatsUpdatedAt,
+    CACHE_STATS_MAX_AGE_MS
+  )) return;
+  if (!force && cacheRefresh?.account === account) return cacheRefresh.promise;
   const requestId = ++cacheRequestId;
   loadingCache.value = true;
-  try {
-    const stats = await getCacheStats(account);
-    if (requestId !== cacheRequestId || keyStore.pkHex !== account) return;
-    Object.assign(cacheStats, stats);
-  } catch {
-    if (requestId === cacheRequestId && keyStore.pkHex === account) {
-      ui.addToast("获取缓存统计失败", 2_000, "error");
+  const promise = (async () => {
+    try {
+      const stats = await getCacheStats(account);
+      if (requestId !== cacheRequestId || keyStore.pkHex !== account) return;
+      Object.assign(cacheStats, stats);
+      cacheStatsAccount = account;
+      cacheStatsUpdatedAt = Date.now();
+    } catch {
+      if (requestId === cacheRequestId && keyStore.pkHex === account) {
+        ui.addToast("获取缓存统计失败", 2_000, "error");
+      }
+    } finally {
+      if (requestId === cacheRequestId) loadingCache.value = false;
+      if (cacheRefresh?.promise === promise) cacheRefresh = null;
     }
-  } finally {
-    if (requestId === cacheRequestId) loadingCache.value = false;
-  }
+  })();
+  cacheRefresh = { account, promise };
+  return promise;
+}
+
+function scheduleCacheStatsRefresh(force = false) {
+  if (cancelScheduledCacheRefresh && !force) return;
+  cancelScheduledCacheRefresh?.();
+  cancelScheduledCacheRefresh = runAfterFirstPaint(() => {
+    cancelScheduledCacheRefresh = null;
+    void refreshCacheStats(force);
+  });
 }
 
 async function clearCache() {
@@ -482,7 +511,7 @@ async function clearCache() {
   try {
     await clearAllCache(account);
     if (keyStore.pkHex !== account) return;
-    await refreshCacheStats();
+    await refreshCacheStats(true);
     if (keyStore.pkHex === account) ui.addToast("缓存已清空", 2_000, "success");
   } catch {
     if (keyStore.pkHex === account) ui.addToast("清空缓存失败", 2_000, "error");
@@ -536,26 +565,40 @@ async function retryFailedQueue() {
 
 watch(() => keyStore.pkHex, async pk => {
   cacheRequestId += 1;
+  cacheRefresh = null;
+  cancelScheduledCacheRefresh?.();
+  cancelScheduledCacheRefresh = null;
+  loadingCache.value = false;
   if (!pk) {
     settings.reset();
     Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
+    cacheStatsAccount = "";
+    cacheStatsUpdatedAt = 0;
     for (const url of Object.keys(statuses)) delete statuses[url];
     pushEnabled.value = false;
     return;
   }
+  if (cacheStatsAccount !== pk) Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
   pushEnabled.value = pushEnabledForAccount(pk);
   if (settings.loadedFor !== pk) await settings.load(pk);
   if (keyStore.pkHex !== pk || settings.loadedFor !== pk) return;
-  await refreshCacheStats();
+  scheduleCacheStatsRefresh();
 }, { immediate: true });
 
 onMounted(startStatusPolling);
 onActivated(() => {
   startStatusPolling();
-  void refreshCacheStats();
+  scheduleCacheStatsRefresh();
 });
-onDeactivated(stopStatusPolling);
-onBeforeUnmount(stopStatusPolling);
+onDeactivated(() => {
+  stopStatusPolling();
+  cancelScheduledCacheRefresh?.();
+  cancelScheduledCacheRefresh = null;
+});
+onBeforeUnmount(() => {
+  stopStatusPolling();
+  cancelScheduledCacheRefresh?.();
+});
 </script>
 
 <style scoped>

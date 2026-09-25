@@ -61,6 +61,7 @@ import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { formatRelativeTime } from "@/utils/format";
+import { loadAccountStoresOnce } from "@/utils/bottomTabActivation";
 
 const router = useRouter();
 const keys = useKeyStore();
@@ -100,7 +101,7 @@ const filteredConversations = computed(() => {
 async function load() {
   const account = keys.pkHex;
   if (!account) return;
-  await Promise.all([messages.load(account), friendships.load(account), friends.load(account), profiles.load(account)]);
+  await loadAccountStoresOnce(account, [messages, friendships, friends, profiles]);
 }
 function openConversation(pubkey: string) {
   void router.push(`/messages/${pubkey}`);

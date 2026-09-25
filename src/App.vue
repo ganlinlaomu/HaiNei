@@ -59,6 +59,7 @@ import { useUIStore } from "@/stores/ui";
 import { loadPostEditor, preloadPostEditor } from "@/components/postEditorLoader";
 import { useKeyStore } from "@/stores/keys";
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
+import { preloadBottomTabViews } from "@/router/lazyViews";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
 
@@ -82,6 +83,8 @@ export default defineComponent({
       && ui.blockingOverlays.size === 0);
     let disposed = false;
     let idleHandle: number | null = null;
+    let bottomTabIdleHandle: number | null = null;
+    let bottomTabsPreloaded = false;
 
     async function preparePostEditor() {
       postEditorLoadError.value = false;
@@ -107,6 +110,18 @@ export default defineComponent({
           void preparePostEditor();
         }, 1_200);
       }
+    }
+
+    function scheduleBottomTabWarmup() {
+      if (bottomTabsPreloaded || bottomTabIdleHandle !== null || !keys.isLoggedIn || !keys.isUnlocked) return;
+      const warmup = () => {
+        bottomTabIdleHandle = null;
+        bottomTabsPreloaded = true;
+        void preloadBottomTabViews();
+      };
+      const requestIdle = (window as any).requestIdleCallback as undefined | ((callback: () => void, options?: { timeout: number }) => number);
+      if (requestIdle) bottomTabIdleHandle = requestIdle(warmup, { timeout: 2_000 });
+      else bottomTabIdleHandle = window.setTimeout(warmup, 800);
     }
 
     function handleFabIntent() {
@@ -135,7 +150,10 @@ export default defineComponent({
     });
     watch(
       () => [keys.isLoggedIn, keys.isUnlocked] as const,
-      ([isLoggedIn, isUnlocked]) => { warmReadRelaysForSession({ isLoggedIn, isUnlocked }); },
+      ([isLoggedIn, isUnlocked]) => {
+        warmReadRelaysForSession({ isLoggedIn, isUnlocked });
+        if (isLoggedIn && isUnlocked) scheduleBottomTabWarmup();
+      },
       { immediate: true }
     );
     onMounted(schedulePostEditorWarmup);
@@ -145,6 +163,11 @@ export default defineComponent({
         const cancelIdle = (window as any).cancelIdleCallback as undefined | ((handle: number) => void);
         if (cancelIdle) cancelIdle(idleHandle);
         else window.clearTimeout(idleHandle);
+      }
+      if (bottomTabIdleHandle !== null) {
+        const cancelIdle = (window as any).cancelIdleCallback as undefined | ((handle: number) => void);
+        if (cancelIdle) cancelIdle(bottomTabIdleHandle);
+        else window.clearTimeout(bottomTabIdleHandle);
       }
       document.body.classList.remove("login-page", "post-editor-open");
     });
