@@ -13,8 +13,8 @@ describe("responsive application layout", () => {
     expect(styles).toMatch(/@media \(min-width: 768px\)[\s\S]*?--bottom-nav-height: 0px/);
     expect(styles).toMatch(/@media \(min-width: 768px\)[\s\S]*?--navigation-rail-width: 72px/);
     expect(styles).toMatch(/@media \(min-width: 1200px\)[\s\S]*?--navigation-rail-width: 84px/);
-    expect(styles).toMatch(/--main-content-max-width: 860px/);
-    expect(styles).toMatch(/--main-content-max-width: 1000px/);
+    expect(styles).toMatch(/--app-page-max-width: 860px/);
+    expect(styles).toMatch(/--app-page-max-width: 960px/);
     expect(styles).toMatch(/body > #app \{[\s\S]*?max-width: none;[\s\S]*?var\(--navigation-rail-width\)/);
   });
 
@@ -43,5 +43,19 @@ describe("responsive application layout", () => {
     const home = source("src/views/Home.vue");
     expect(home).toContain("bottomNavigationHeight()");
     expect(home).not.toContain("const BOTTOM_NAV_HEIGHT = 80");
+  });
+
+  it("aligns normal pages to one shared responsive content container", () => {
+    const styles = source("src/styles.css");
+    expect(styles).toMatch(/\.app-page \{[\s\S]*?max-width: var\(--app-page-max-width\)/);
+    expect(styles).toContain("--app-page-gutter: 20px");
+    expect(styles).toContain("--app-page-gutter: 28px");
+
+    for (const view of ["Home", "Conversations", "Notifications", "Settings", "Friends", "MyProfile", "Profile", "Saved"]) {
+      expect(source(`src/views/${view}.vue`), view).toMatch(/class="[^"]*app-page[^"]*"/);
+    }
+
+    expect(source("src/views/Home.vue")).not.toContain("max-width: 720px");
+    expect(source("src/views/Saved.vue")).not.toContain("max-width:720px");
   });
 });

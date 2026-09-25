@@ -1,5 +1,5 @@
 <template>
-  <main class="settings-container">
+  <main class="settings-container app-page">
     <div v-if="settings.syncing" class="sync-status">{{ settings.syncStatusText || "正在同步加密设置…" }}</div>
     <div v-else-if="settings.syncError" class="sync-status sync-warning">{{ settings.syncError }}</div>
     <div
@@ -604,8 +604,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .settings-container {
   width: 100%;
-  max-width: none;
-  margin: 0;
+  margin: 0 auto;
   padding: 0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px);
   box-sizing: border-box;
 }
