@@ -1,4 +1,5 @@
 import type { CanonicalMessage } from "./protocol";
+import { parsePrivateAudioMessage } from "./privateMedia";
 
 export const DIRECT_MESSAGE_TYPE = "hainei-dm";
 
@@ -31,6 +32,7 @@ export function directMessagePeer(
 }
 
 export function directMessagePreview(content: string) {
+  if (parsePrivateAudioMessage(content)) return "[语音]";
   const hasImage = /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
   const text = content
     .replace(/!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/gi, "")

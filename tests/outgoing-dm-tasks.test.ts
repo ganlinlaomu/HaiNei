@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   send: vi.fn(),
   publish: vi.fn(),
   upload: vi.fn(),
+  prepareAudio: vi.fn(),
+  uploadAudio: vi.fn(),
   queueGet: vi.fn(),
   taskList: vi.fn(),
   taskPut: vi.fn(),
@@ -27,6 +29,10 @@ vi.mock("@/nostr/messaging/service", () => ({
   registerOutgoingPushSigner: vi.fn(),
 }));
 vi.mock("@/utils/commentImage", () => ({ uploadEncryptedCommentImage: mocks.upload }));
+vi.mock("@/utils/encryptedDmAudio", () => ({
+  prepareEncryptedDmAudio: mocks.prepareAudio,
+  uploadPreparedEncryptedDmAudio: mocks.uploadAudio,
+}));
 vi.mock("@/repositories/outgoingDmTaskRepository", () => ({
   outgoingDmTaskRepository: {
     get: vi.fn(async (account: string, localId: string) => mocks.tasks.get(`${account}:${localId}`)),
@@ -87,6 +93,8 @@ beforeEach(() => {
   mocks.send.mockReset();
   mocks.publish.mockReset();
   mocks.upload.mockReset();
+  mocks.prepareAudio.mockReset();
+  mocks.uploadAudio.mockReset();
   mocks.queueGet.mockReset().mockResolvedValue(undefined);
   mocks.taskList.mockReset().mockImplementation(async (account: string) => [...mocks.tasks.values()].filter(task => task.accountPubkey === account));
   mocks.taskPut.mockReset().mockImplementation(async (task: any) => { mocks.tasks.set(`${task.accountPubkey}:${task.localId}`, task); return task; });
@@ -179,6 +187,40 @@ describe("optimistic outgoing DM tasks", () => {
     finishSend(canonical("canonical-image", "配图\n![](blossom+aesgcm:encrypted)"));
     await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
     expect(direct.peerMessages(PEER)).toHaveLength(1);
+  });
+
+  it("keeps encrypted voice uploading until NIP-17 publish succeeds", async () => {
+    const preparedAudio = {
+      encryptedBytes: bytes("cipher"), encryptedName: "voice.encrypted", mime: "audio/mp4",
+      iv: "iv", key: "key", duration: 4, size: 5,
+    };
+    let finishUpload!: (value: any) => void;
+    let finishSend!: (value: any) => void;
+    mocks.prepareAudio.mockResolvedValue(preparedAudio);
+    mocks.uploadAudio.mockImplementation(() => new Promise(resolve => { finishUpload = resolve; }));
+    mocks.send.mockImplementation((options: any) => new Promise(resolve => {
+      void options.onQueued("canonical-audio");
+      finishSend = resolve;
+    }));
+    const { direct } = seed();
+    direct.sendAudio(PEER, { blob: new Blob(["voice"], { type: "audio/mp4" }), mime: "audio/mp4", duration: 4, size: 5 });
+
+    expect(direct.peerMessages(PEER)[0].outgoing).toMatchObject({ state: "uploading", hasAudio: true, audioPreviewUrl: "blob:preview" });
+    await vi.waitFor(() => expect(mocks.uploadAudio).toHaveBeenCalledOnce());
+    const persisted = mocks.tasks.get(`${ACCOUNT}:${direct.outgoingTasks[0].localId}`);
+    expect(persisted.preparedAudio.encryptedBytes).toBeInstanceOf(ArrayBuffer);
+    expect(containsBlob(persisted)).toBe(false);
+
+    finishUpload({ encryptedRef: "blossom+aesgcm:voice", mime: "audio/mp4", duration: 4, size: 5 });
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sending"));
+    expect(direct.peerMessages(PEER)[0].outgoing?.state).not.toBe("sent");
+    const content = mocks.send.mock.calls[0][0].content;
+    expect(JSON.parse(content)).toEqual({
+      type: "audio",
+      media: { encryptedRef: "blossom+aesgcm:voice", mime: "audio/mp4", duration: 4, size: 5 },
+    });
+    finishSend(canonical("canonical-audio", content));
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
   });
 
   it("does not start a second active upload for the same local task", async () => {

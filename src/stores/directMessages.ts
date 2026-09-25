@@ -12,6 +12,8 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { uploadEncryptedCommentImage } from "@/utils/commentImage";
+import { prepareEncryptedDmAudio, uploadPreparedEncryptedDmAudio } from "@/utils/encryptedDmAudio";
+import { serializePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
 import { registerDirectMessageStateOwner } from "@/services/directMessageStateEvents";
 
@@ -59,7 +61,15 @@ function createLocalId() {
     : Math.random().toString(36).slice(2);
   return `${Date.now().toString(36)}-${random}`;
 }
-function taskContent(task: OutgoingDmTaskRecord) {
+export function taskContent(task: OutgoingDmTaskRecord) {
+  if (task.mediaType === "audio" && task.uploadedRef) {
+    return serializePrivateAudioMessage({
+      encryptedRef: task.uploadedRef,
+      mime: task.audioMime || "",
+      duration: task.audioDuration || 0,
+      size: task.audioSize || 0,
+    });
+  }
   return `${task.text}${task.text && task.uploadedRef ? "\n" : ""}${task.uploadedRef ? `![](${task.uploadedRef})` : ""}`;
 }
 function taskInboxItem(task: OutgoingDmTaskRecord): InboxItem {
@@ -77,7 +87,12 @@ function taskInboxItem(task: OutgoingDmTaskRecord): InboxItem {
       localId: task.localId,
       state: task.state,
       imagePreviewUrl: task.state === "sent" ? undefined : taskPreviewUrls.get(taskKey(task.accountPubkey, task.localId)),
-      hasImage: !!task.imageName || !!task.imageBytes || !!task.preparedImage || !!task.uploadedRef,
+      audioPreviewUrl: task.mediaType === "audio" && task.state !== "sent" ? taskPreviewUrls.get(taskKey(task.accountPubkey, task.localId)) : undefined,
+      audioMime: task.audioMime,
+      audioDuration: task.audioDuration,
+      audioSize: task.audioSize,
+      hasImage: task.mediaType !== "audio" && (!!task.imageName || !!task.imageBytes || !!task.preparedImage || !!task.uploadedRef),
+      hasAudio: task.mediaType === "audio",
       lastError: task.lastError,
     },
   };
@@ -579,6 +594,54 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       })();
       return task.localId;
     },
+    sendAudio(peerPubkey: string, recording: { blob: Blob; mime: string; duration: number; size: number }) {
+      const keys = useKeyStore();
+      const account = keys.pkHex.toLowerCase();
+      const peer = peerPubkey.trim().toLowerCase();
+      const friendships = useFriendshipsStore();
+      if (!canStartDirectMessage(account, peer, friendships.isAccepted)) throw new Error(peer === account ? "无法向自己发送私信" : "只能向已接受的好友发送私信");
+      if (!recording.blob.size || !recording.mime.startsWith("audio/") || recording.duration <= 0 || recording.duration > 300) {
+        throw new Error("语音消息无效");
+      }
+      const now = Date.now();
+      const task: OutgoingDmTaskRecord = {
+        accountPubkey: account,
+        localId: createLocalId(),
+        peerPubkey: peer,
+        text: "",
+        mediaType: "audio",
+        audioMime: recording.mime,
+        audioDuration: recording.duration,
+        audioSize: recording.blob.size,
+        state: "uploading",
+        createdAt: Math.floor(now / 1000),
+        updatedAt: now,
+      };
+      if (typeof URL?.createObjectURL === "function") {
+        taskPreviewUrls.set(taskKey(account, task.localId), URL.createObjectURL(recording.blob));
+      }
+      this.outgoingTasks = [...this.outgoingTasks, task];
+      void (async () => {
+        try {
+          await outgoingDmTaskRepository.put(task);
+          const preparedAudio = await prepareEncryptedDmAudio(recording.blob, recording.duration);
+          const updated = { ...task, preparedAudio, updatedAt: Date.now() };
+          await outgoingDmTaskRepository.put(updated);
+          if (useKeyStore().pkHex !== account || this.loadedFor !== account) return;
+          const index = this.outgoingTasks.findIndex(item => item.accountPubkey === account && item.localId === task.localId);
+          if (index >= 0) this.outgoingTasks.splice(index, 1, updated);
+          void this.runTask(task.localId);
+        } catch (error) {
+          if (useKeyStore().pkHex === account && this.loadedFor === account) await this.failTask(task.localId, "upload_failed", error);
+          else await outgoingDmTaskRepository.update(account, task.localId, {
+            state: "upload_failed",
+            lastError: `prepare_failed: ${error instanceof Error ? error.message : "录音加密失败"}`,
+            updatedAt: Date.now(),
+          });
+        }
+      })();
+      return task.localId;
+    },
     async patchTask(localId: string, patch: Partial<OutgoingDmTaskRecord>) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
       const index = this.outgoingTasks.findIndex(task => task.accountPubkey === account && task.localId === localId);
@@ -627,6 +690,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           imageName: undefined,
           imageType: undefined,
           preparedImage: undefined,
+          preparedAudio: undefined,
           lastError: undefined,
         });
       } catch (error) {
@@ -659,6 +723,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           || await outgoingDmTaskRepository.get(account, localId);
         if (!task || task.state === "sent" || useKeyStore().pkHex !== account) return;
         if (task.imageName && !task.imageBytes && !task.preparedImage && !task.uploadedRef && !task.outgoingId) return;
+        if (task.mediaType === "audio" && !task.preparedAudio && !task.uploadedRef && !task.outgoingId) return;
         const friendships = useFriendshipsStore();
         if (friendships.loadedFor !== account) await friendships.load(account);
         if (!friendships.isAccepted(task.peerPubkey)) {
@@ -687,6 +752,22 @@ export const useDirectMessagesStore = defineStore("directMessages", {
               },
             });
             task = (await this.patchTask(localId, { uploadedRef: media.ref, state: "sending", lastError: undefined })) || task;
+          } else if (task.mediaType === "audio" && task.preparedAudio && !task.uploadedRef) {
+            task = (await this.patchTask(localId, { state: "uploading", lastError: undefined })) || task;
+            const preparedAudio = task.preparedAudio;
+            if (!preparedAudio) throw new Error("待上传语音不存在");
+            const media = await uploadPreparedEncryptedDmAudio(preparedAudio, {
+              accountPubkey: account,
+              signEvent: useKeyStore().signEvent.bind(useKeyStore()),
+            });
+            task = (await this.patchTask(localId, {
+              uploadedRef: media.encryptedRef,
+              audioMime: media.mime,
+              audioDuration: media.duration,
+              audioSize: media.size,
+              state: "sending",
+              lastError: undefined,
+            })) || task;
           } else {
             task = (await this.patchTask(localId, { state: "sending", lastError: undefined })) || task;
           }
@@ -708,7 +789,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           const phase = typeof error === "object" && error && "phase" in error ? String(error.phase) : "";
           await this.failTask(localId, phase === "persist_failed"
             ? "send_failed"
-            : current.imageBytes && !current.uploadedRef && !current.outgoingId ? "upload_failed" : "send_failed", error);
+            : (current.imageBytes || current.preparedAudio) && !current.uploadedRef && !current.outgoingId ? "upload_failed" : "send_failed", error);
         }
       })().finally(() => activeOutgoingTasks.delete(key));
       activeOutgoingTasks.set(key, work);
@@ -740,7 +821,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           }
         }
         const resumableFailure = task.state === "send_failed"
-          && (!task.imageBytes || !!task.outgoingId || !!task.uploadedRef || task.lastError?.startsWith("persist_failed:"));
+          && ((!task.imageBytes && !task.preparedAudio) || !!task.outgoingId || !!task.uploadedRef || task.lastError?.startsWith("persist_failed:"));
         if (["uploading", "sending"].includes(task.state) || (includeFailed && resumableFailure)) {
           void this.runTask(task.localId);
         }

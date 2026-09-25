@@ -24,7 +24,12 @@ export type InboxItem = {
     localId: string;
     state: "uploading" | "sending" | "sent" | "upload_failed" | "send_failed";
     imagePreviewUrl?: string;
+    audioPreviewUrl?: string;
+    audioMime?: string;
+    audioDuration?: number;
+    audioSize?: number;
     hasImage: boolean;
+    hasAudio?: boolean;
     lastError?: string;
   };
   _localMeta?: {

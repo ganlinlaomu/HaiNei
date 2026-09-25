@@ -168,6 +168,15 @@ export type PreparedEncryptedImage = {
   width: number;
   height: number;
 };
+export type PreparedEncryptedAudio = {
+  encryptedBytes: ArrayBuffer;
+  encryptedName: string;
+  mime: string;
+  iv: string;
+  key: string;
+  duration: number;
+  size: number;
+};
 export type OutgoingDmTaskRecord = {
   accountPubkey: string;
   localId: string;
@@ -177,6 +186,11 @@ export type OutgoingDmTaskRecord = {
   imageName?: string;
   imageType?: string;
   preparedImage?: PreparedEncryptedImage;
+  mediaType?: "image" | "audio";
+  preparedAudio?: PreparedEncryptedAudio;
+  audioMime?: string;
+  audioDuration?: number;
+  audioSize?: number;
   state: OutgoingDmTaskState;
   uploadedRef?: string;
   outgoingId?: string;
