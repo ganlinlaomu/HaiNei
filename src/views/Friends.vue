@@ -421,7 +421,7 @@ export default defineComponent({
         }
       } catch (e) {
         console.error("Save friend error:", e);
-        ui.addToast("操作失败", 2000, "error");
+        ui.addToast(e instanceof Error ? e.message : "操作失败", 2000, "error");
       } finally {
         saving.value = false;
       }
