@@ -254,4 +254,46 @@ export default defineComponent({
   }
 }
 
+@media (min-width: 768px) {
+  .bottom-nav {
+    top: 0;
+    right: auto;
+    bottom: 0;
+    width: var(--navigation-rail-width);
+    height: 100dvh;
+    padding: 18px 10px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 12px;
+    border-top: 0;
+    border-right: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: 1px 0 8px rgba(0, 0, 0, 0.05);
+    transform: none;
+    -webkit-transform: none;
+  }
+
+  .nav-item {
+    width: 100%;
+    min-height: 52px;
+    flex: 0 0 52px;
+    padding: 10px;
+  }
+
+  .nav-item:hover {
+    transform: translateX(2px);
+  }
+}
+
+@media (min-width: 1200px) {
+  .bottom-nav {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .nav-item {
+    min-height: 56px;
+    flex-basis: 56px;
+  }
+}
+
 </style>

@@ -3,8 +3,10 @@
   --card: #ffffff;
   --primary: #0f172a;
   --accent: #1976d2;
-  --z-bottom-nav: 99999;
+  --z-bottom-nav: 1100;
   --bottom-nav-height: 80px;
+  --navigation-rail-width: 0px;
+  --main-content-max-width: 720px;
   /* Increased padding to ensure load-more button is always above bottom bar */
   --load-more-padding: 40px;
 }
@@ -53,6 +55,46 @@ body > #app {
 @media (min-width: 640px) {
   body > #app {
     padding: 12px;
+  }
+}
+
+@media (min-width: 768px) {
+  :root {
+    --bottom-nav-height: 0px;
+    --navigation-rail-width: 72px;
+    --main-content-max-width: 860px;
+  }
+
+  body {
+    padding-bottom: 0;
+  }
+
+  body > #app {
+    max-width: none;
+    margin: 0;
+    padding: 12px 20px 12px calc(var(--navigation-rail-width) + 20px);
+  }
+
+  .app-root {
+    width: 100%;
+    max-width: var(--main-content-max-width);
+    margin: 0 auto;
+  }
+
+  .app-root.login-route {
+    max-width: none;
+  }
+}
+
+@media (min-width: 1200px) {
+  :root {
+    --navigation-rail-width: 84px;
+    --main-content-max-width: 1000px;
+  }
+
+  body > #app {
+    padding-right: 28px;
+    padding-left: calc(var(--navigation-rail-width) + 28px);
   }
 }
 
@@ -158,5 +200,4 @@ textarea {
     min-height: 100vh;
   }
 }
-
 
