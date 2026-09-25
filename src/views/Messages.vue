@@ -63,17 +63,6 @@
       <p v-if="voiceError" class="voice-error" role="alert">{{ voiceError }}</p>
       <form class="chat-composer" @submit.prevent="submitMessage">
         <input ref="imageInput" class="image-input" type="file" accept="image/*" @change="selectImage" />
-        <div v-if="attachmentMenuOpen && !recording && !recordedAudio" class="attachment-menu">
-          <button type="button" @click="chooseImage">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 5-5 4 4 2-2 5 5"/></svg>
-            图片
-          </button>
-          <button type="button" :disabled="!!selectedImage" @click="startVoiceFromMenu">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
-            语音
-          </button>
-        </div>
-
         <div v-if="recording" class="composer-recording" role="status" aria-live="polite">
           <span class="recording-dot" aria-hidden="true"></span>
           <strong>{{ formatVoiceDuration(recordingElapsed) }}</strong>
@@ -95,8 +84,8 @@
         </div>
 
         <div v-else class="composer-normal">
-          <button class="composer-icon-button attachment-button" type="button" aria-label="添加附件" :aria-expanded="attachmentMenuOpen" :disabled="!accepted || !keys.pkHex" @click="attachmentMenuOpen = !attachmentMenuOpen">+</button>
-          <input v-model="draft" type="text" autocomplete="off" :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'" :disabled="!accepted || !keys.pkHex" @focus="attachmentMenuOpen = false" />
+          <button class="composer-icon-button attachment-button" type="button" aria-label="添加图片" :disabled="!accepted || !keys.pkHex" @click="chooseImage">+</button>
+          <input v-model="draft" type="text" autocomplete="off" :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'" :disabled="!accepted || !keys.pkHex" />
           <button
             v-if="draft.trim() || selectedImage"
             class="composer-icon-button send-button"
@@ -162,7 +151,6 @@ const finishingRecording = ref(false);
 const recordingElapsed = ref(0);
 const recordedAudio = ref<(VoiceRecordingResult & { preview: string }) | null>(null);
 const voiceError = ref("");
-const attachmentMenuOpen = ref(false);
 const imageInput = ref<HTMLInputElement | null>(null);
 const messageList = ref<HTMLElement | null>(null);
 const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
@@ -282,10 +270,8 @@ function selectImage(event: Event) {
   if (!file?.type.startsWith("image/")) return;
   removeSelectedImage();
   selectedImage.value = { file, preview: URL.createObjectURL(file) };
-  attachmentMenuOpen.value = false;
 }
 function chooseImage() {
-  attachmentMenuOpen.value = false;
   imageInput.value?.click();
 }
 function formatVoiceDuration(value: number) {
@@ -308,8 +294,17 @@ function cancelVoiceRecording() {
   recordingElapsed.value = 0;
   active?.cancel();
 }
-function acceptRecordingResult(session: VoiceRecordingSession, result: VoiceRecordingResult | null) {
-  if (!result || recording.value !== session || disposed) return;
+function acceptRecordingResult(
+  session: VoiceRecordingSession,
+  result: VoiceRecordingResult | null,
+  account: string,
+  peer: string,
+) {
+  if (!result
+    || recording.value !== session
+    || disposed
+    || keys.pkHex !== account
+    || peerPubkey.value !== peer) return;
   clearRecordedAudio();
   recordedAudio.value = { ...result, preview: URL.createObjectURL(result.blob) };
 }
@@ -319,7 +314,6 @@ async function startVoiceRecording() {
   voiceError.value = "";
   const accountAtStart = keys.pkHex;
   const peerAtStart = peerPubkey.value;
-  attachmentMenuOpen.value = false;
   try {
     let session: VoiceRecordingSession | undefined;
     session = await createVoiceRecordingSession({
@@ -345,19 +339,17 @@ async function startVoiceRecording() {
     startingRecording.value = false;
   }
 }
-function startVoiceFromMenu() {
-  attachmentMenuOpen.value = false;
-  void startVoiceRecording();
-}
 async function finishVoiceRecording(target?: VoiceRecordingSession) {
   const session = target || recording.value;
   if (!session || recording.value !== session || finishingRecording.value) return;
+  const accountAtFinish = keys.pkHex;
+  const peerAtFinish = peerPubkey.value;
   finishingRecording.value = true;
   stopRecordingTimer();
   voiceError.value = "";
   try {
     const result = await session.finish();
-    acceptRecordingResult(session, result);
+    acceptRecordingResult(session, result, accountAtFinish, peerAtFinish);
   } catch (error) {
     if (recording.value === session) voiceError.value = error instanceof Error ? error.message : "录音处理失败";
   } finally {
@@ -375,7 +367,6 @@ function submitMessage() {
     try {
       directMessages.sendAudio(peerPubkey.value, audio);
       draft.value = "";
-      attachmentMenuOpen.value = false;
       clearRecordedAudio();
     } catch (error) {
       voiceError.value = error instanceof Error ? error.message : "语音发送失败";
@@ -387,7 +378,6 @@ function submitMessage() {
   try {
     directMessages.send(peerPubkey.value, text, image);
     draft.value = "";
-    attachmentMenuOpen.value = false;
     removeSelectedImage();
   } catch {}
 }
@@ -441,7 +431,6 @@ onBeforeUnmount(() => {
 .composer-region{position:relative;z-index:3;width:min(100%,720px);margin:0 auto;padding:4px 12px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(255,255,255,0),#fff 22%)}
 .selected-image{position:relative;width:64px;height:64px;margin:0 0 8px 8px}.selected-image img{width:100%;height:100%;object-fit:cover;border:1px solid #e2e8f0;border-radius:12px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}.voice-error{margin:0 10px 6px;color:#dc2626;font-size:12px}
 .chat-composer{position:relative;width:100%;min-width:0;border:1px solid #d8dee5;border-radius:27px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.11)}.composer-normal,.composer-recording,.composer-preview{display:flex;min-width:0;min-height:52px;align-items:center;gap:8px;padding:5px 7px}.composer-normal input[type=text]{min-width:0;height:42px;flex:1;padding:0 5px;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}.image-input{display:none}.composer-icon-button{display:grid;width:40px;height:40px;flex:0 0 40px;padding:0;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.attachment-button{font-size:28px;font-weight:300;line-height:1}.microphone-button svg,.send-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.send-button{background:#0f1419;color:#fff}.chat-composer button:disabled{opacity:.36}
-.attachment-menu{position:absolute;left:7px;bottom:calc(100% + 8px);z-index:5;display:grid;min-width:126px;padding:6px;border:1px solid #e2e8f0;border-radius:16px;background:#fff;box-shadow:0 10px 28px rgba(15,23,42,.16)}.attachment-menu button{display:flex;min-height:42px;align-items:center;gap:10px;padding:0 12px;border:0;border-radius:10px;background:transparent;color:#0f1419;font-size:14px;text-align:left}.attachment-menu button:active{background:#f1f5f9}.attachment-menu svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .composer-recording{padding-right:14px;padding-left:14px}.recording-dot{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#ef4444;animation:recording-pulse 1.2s ease-in-out infinite}.composer-recording strong{margin-right:auto;font-size:14px;font-variant-numeric:tabular-nums}.composer-recording button{min-width:58px;height:38px;border:0;background:transparent;color:#536471;font-weight:600}.composer-recording .finish-recording{color:#1687e8}.finishing-label{margin-left:auto;color:#536471;font-size:14px}.composer-preview{padding-left:10px}.composer-voice-preview{min-width:0;flex:1}.composer-preview :deep(.voice-message){min-width:0;grid-template-columns:34px minmax(70px,1fr) 36px}.remove-audio{font-size:25px;color:#64748b}
 @keyframes recording-pulse{50%{opacity:.35}}
 @media (min-width:768px){.composer-region{padding-right:16px;padding-bottom:16px;padding-left:16px}.message-list{width:min(100%,720px);margin:0 auto}}
