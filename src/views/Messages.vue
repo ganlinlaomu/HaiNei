@@ -8,14 +8,14 @@
       <strong>{{ displayName }}</strong>
     </header>
 
-    <section ref="messageList" class="message-list" aria-live="polite">
+    <section ref="messageList" class="message-list" aria-live="polite" @scroll.passive="handleMessageScroll">
       <div v-if="!accepted" class="relationship-notice">已不是已接受的好友，无法发送新消息。</div>
       <div v-if="accepted && messages.length === 0" class="empty-chat">开始一段私密对话</div>
-      <template v-for="(message, index) in messages" :key="message.id">
-        <time v-if="showTimestamp(index)" class="message-time">{{ formatMessageTime(message.created_at) }}</time>
+      <template v-for="(message, index) in windowMessages" :key="message.id">
+        <time v-if="showTimestamp(windowStart + index)" class="message-time">{{ formatMessageTime(message.created_at) }}</time>
         <div class="message-line" :class="{ own: isOwn(message) }">
           <span v-if="!isOwn(message)" class="avatar-slot">
-            <ProfileAvatar v-if="showAvatar(index)" :pubkey="peerPubkey" :local-name="localName" :size="28" />
+            <ProfileAvatar v-if="showAvatar(windowStart + index)" :pubkey="peerPubkey" :local-name="localName" :size="28" />
           </span>
           <div class="message-stack">
             <div class="message-bubble" :class="{ 'media-caption-bubble': isMediaCaption(message) }">
@@ -75,6 +75,14 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
+import {
+  initialMessageWindowStart,
+  isNearMessageBottom,
+  prependMessageWindowStart,
+  scrollTopAfterNewMessages,
+  scrollTopAfterPrepend,
+  type MessageScrollMetrics,
+} from "@/utils/messageWindow";
 
 const route = useRoute();
 const router = useRouter();
@@ -89,11 +97,22 @@ const accepted = computed(() => friendships.loadedFor === keys.pkHex && friendsh
 const localName = computed(() => friends.list.find(friend => friend.pubkey === peerPubkey.value)?.name);
 const displayName = computed(() => privateProfileDisplayName(profiles.getProfile(peerPubkey.value)?.nickname, peerPubkey.value, localName.value));
 const messages = computed(() => directMessages.peerMessages(peerPubkey.value));
+const windowStart = ref(initialMessageWindowStart(messages.value.length));
+const windowMessages = computed(() => messages.value.slice(windowStart.value));
 const draft = ref("");
 const selectedImage = ref<{ file: File; preview: string } | null>(null);
 const imageInput = ref<HTMLInputElement | null>(null);
 const messageList = ref<HTMLElement | null>(null);
 const canSend = computed(() => !!keys.pkHex && accepted.value && (!!draft.value.trim() || !!selectedImage.value));
+const INITIAL_MESSAGE_COUNT = 60;
+const OLDER_MESSAGE_BATCH = 40;
+const TOP_LOAD_THRESHOLD = 120;
+const BOTTOM_FOLLOW_THRESHOLD = 120;
+let prependingOlder = false;
+let loadingConversation = false;
+let loadGeneration = 0;
+let restoreOverflowAnchorFrame: number | null = null;
+let disposed = false;
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
 const messageText = (content: string) => directMessagePreview(content) === "[图片]" ? "" : directMessagePreview(content);
@@ -129,12 +148,64 @@ function formatBubbleTime(timestamp: number) {
 }
 function scrollToBottom() { void nextTick(() => { if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight; }); }
 
+function scrollMetrics(element: HTMLElement): MessageScrollMetrics {
+  return { scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight };
+}
+
+function resetMessageWindow() {
+  windowStart.value = initialMessageWindowStart(messages.value.length, INITIAL_MESSAGE_COUNT);
+}
+
+async function prependOlderMessages() {
+  const list = messageList.value;
+  const nextStart = prependMessageWindowStart(windowStart.value, OLDER_MESSAGE_BATCH);
+  if (!list || prependingOlder || nextStart === windowStart.value) return;
+
+  prependingOlder = true;
+  const peerAtStart = peerPubkey.value;
+  const previousScrollTop = list.scrollTop;
+  const previousScrollHeight = list.scrollHeight;
+  list.style.overflowAnchor = "none";
+  windowStart.value = nextStart;
+  await nextTick();
+  if (disposed || peerAtStart !== peerPubkey.value) {
+    list.style.removeProperty("overflow-anchor");
+    prependingOlder = false;
+    return;
+  }
+  list.scrollTop = scrollTopAfterPrepend(previousScrollTop, previousScrollHeight, list.scrollHeight);
+  prependingOlder = false;
+
+  if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
+  restoreOverflowAnchorFrame = requestAnimationFrame(() => {
+    restoreOverflowAnchorFrame = null;
+    list.style.removeProperty("overflow-anchor");
+  });
+}
+
+function handleMessageScroll() {
+  if ((messageList.value?.scrollTop || 0) <= TOP_LOAD_THRESHOLD) void prependOlderMessages();
+}
+
 async function load() {
+  const generation = ++loadGeneration;
+  loadingConversation = true;
+  resetMessageWindow();
   const account = keys.pkHex;
-  if (!account || peerPubkey.value === account) return void router.replace("/conversations");
-  await Promise.all([messageStore.load(account), friendships.load(account), friends.load(account), profiles.load(account)]);
-  await directMessages.markPeerRead(peerPubkey.value);
-  scrollToBottom();
+  if (!account || peerPubkey.value === account) {
+    loadingConversation = false;
+    return void router.replace("/conversations");
+  }
+  try {
+    await Promise.all([messageStore.load(account), friendships.load(account), friends.load(account), profiles.load(account)]);
+    if (generation !== loadGeneration || account !== keys.pkHex) return;
+    resetMessageWindow();
+    await directMessages.markPeerRead(peerPubkey.value);
+    if (generation !== loadGeneration || account !== keys.pkHex) return;
+    scrollToBottom();
+  } finally {
+    if (generation === loadGeneration) loadingConversation = false;
+  }
 }
 function removeSelectedImage() {
   if (selectedImage.value) URL.revokeObjectURL(selectedImage.value.preview);
@@ -155,17 +226,42 @@ function submitMessage() {
     directMessages.send(peerPubkey.value, text, image);
     draft.value = "";
     removeSelectedImage();
-    scrollToBottom();
   } catch {}
 }
 
 onMounted(load);
 watch([() => keys.pkHex, peerPubkey], load);
-watch(() => `${messageStore.inbox.length}:${messageStore.inbox[0]?.id || ""}`, async () => {
-  await directMessages.markPeerRead(peerPubkey.value);
-  scrollToBottom();
+watch(() => messages.value.map(message => message.id).join("\0"), async (nextSignature, previousSignature) => {
+  const nextIds = nextSignature ? nextSignature.split("\0") : [];
+  const previousIds = previousSignature ? previousSignature.split("\0") : [];
+  if (loadingConversation) {
+    resetMessageWindow();
+    return;
+  }
+
+  const list = messageList.value;
+  const previousMetrics = list ? scrollMetrics(list) : undefined;
+  const previousFirstId = previousIds?.[windowStart.value];
+  const preservedStart = previousFirstId ? nextIds.indexOf(previousFirstId) : -1;
+  if (preservedStart >= 0) windowStart.value = preservedStart;
+  else windowStart.value = Math.min(windowStart.value, initialMessageWindowStart(nextIds.length, INITIAL_MESSAGE_COUNT));
+
+  const previousLastId = previousIds?.at(-1);
+  const hasNewTail = !!nextIds.length && (!previousLastId || nextIds.indexOf(previousLastId) < nextIds.length - 1);
+  const markRead = directMessages.markPeerRead(peerPubkey.value);
+  if (list && previousMetrics && hasNewTail && isNearMessageBottom(previousMetrics, BOTTOM_FOLLOW_THRESHOLD)) {
+    await nextTick();
+    list.scrollTop = scrollTopAfterNewMessages(previousMetrics, list.scrollHeight, BOTTOM_FOLLOW_THRESHOLD);
+  }
+  await markRead;
 });
-onBeforeUnmount(removeSelectedImage);
+onBeforeUnmount(() => {
+  disposed = true;
+  loadGeneration += 1;
+  if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
+  messageList.value?.style.removeProperty("overflow-anchor");
+  removeSelectedImage();
+});
 </script>
 
 <style scoped>
