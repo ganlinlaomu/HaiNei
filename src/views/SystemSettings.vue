@@ -1,10 +1,6 @@
 <template>
   <main class="settings-container system-settings-page app-page">
-    <header class="system-header">
-      <button type="button" aria-label="返回我的" @click="router.push('/settings')">‹</button>
-      <h1>设置</h1>
-      <span></span>
-    </header>
+    <SecondaryPageHeader title="设置" back-label="返回我的" />
     <div v-if="settings.syncing" class="sync-status">{{ settings.syncStatusText || "正在同步加密设置…" }}</div>
     <div v-else-if="settings.syncError" class="sync-status sync-warning">{{ settings.syncError }}</div>
     <div v-else-if="settings.lastRelaySyncTimestamp || settings.lastMediaSyncTimestamp" class="sync-status sync-ok">
@@ -216,6 +212,7 @@
   </main>
 </template>
 <script setup lang="ts">
+import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
@@ -553,7 +550,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.system-header{position:sticky;top:0;z-index:10;display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:54px;background:rgba(248,250,252,.96);border-bottom:1px solid #e2e8f0}.system-header button{width:44px;height:44px;border:0;background:transparent;color:#334155;font-size:30px}.system-header h1{margin:0;text-align:center;font-size:17px}.system-content{padding:0 16px}.account-section{border-top:1px solid #e2e8f0;margin-top:8px}
+.system-content{padding:0 16px}.account-section{border-top:1px solid #e2e8f0;margin-top:8px}
 
 .settings-container {
   width: 100%;

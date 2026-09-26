@@ -49,6 +49,9 @@ describe("direct-message navigation and UI contract", () => {
     const saved = readFileSync(join(process.cwd(), "src/views/Saved.vue"), "utf8");
     const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
     expect(settings).toContain("router.push('/settings/system')");
+    for (const source of [system, friends, profile, saved]) {
+      expect(source).toContain("SecondaryPageHeader");
+    }
     expect(settings).toContain('aria-label="复制公钥"');
     expect(settings).toContain("navigator.clipboard.writeText(keyStore.pkHex)");
     expect(settings).toContain('ui.addToast("已复制公钥"');
@@ -178,6 +181,24 @@ describe("direct-message navigation and UI contract", () => {
     expect(home).toContain("await Promise.all([");
     expect(home).toContain("requestAnimationFrame(appendPage)");
     expect(home).not.toContain("setTimeout(() => {\n        const startIndex = displayedMessages.value.length");
+  });
+
+  it("keeps storage migration off first paint and uses bounded app-shell caching", () => {
+    const main = readFileSync(join(process.cwd(), "src/main.ts"), "utf8");
+    const worker = readFileSync(join(process.cwd(), "public/service-worker.js"), "utf8");
+    const mountIndex = main.indexOf('app.mount("#app")');
+    const migrationIndex = main.indexOf("await migrateLegacyLocalStorage()");
+    expect(mountIndex).toBeGreaterThan(-1);
+    expect(migrationIndex).toBeGreaterThan(mountIndex);
+    expect(worker).toContain("url.origin === self.location.origin");
+    expect(worker).toContain("stale-while-revalidate");
+    expect(worker).toContain("event.respondWith(fetch(request))");
+  });
+
+  it("avoids duplicate Home reconcile work for unchanged snapshots", () => {
+    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    expect(home).toContain("lastReconciledSnapshot");
+    expect(home).toContain("snapshot !== lastReconciledSnapshot || reconcilePending");
   });
 
   it("surfaces key action failures through the shared toast store", () => {

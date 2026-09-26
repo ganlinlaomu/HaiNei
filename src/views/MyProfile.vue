@@ -1,9 +1,6 @@
 <template>
   <main class="profile-page app-page">
-    <header class="profile-topbar">
-      <button class="back-button" type="button" aria-label="返回" @click="router.push('/settings')">‹</button>
-      <h1>我的资料</h1>
-    </header>
+    <SecondaryPageHeader title="我的资料" back-label="返回我的" />
 
     <section class="profile-editor">
       <form @submit.prevent="save">
@@ -33,15 +30,14 @@
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { acceptedProfileRecipients, useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { uploadPrivateProfileAvatar } from "@/utils/profileAvatar";
 
-const router = useRouter();
 const keys = useKeyStore();
 const friendships = useFriendshipsStore();
 const profiles = useProfilesStore();
@@ -132,6 +128,6 @@ async function save() {
 
 <style scoped>
 .profile-page{width:100%;margin:0 auto;box-sizing:border-box;padding:8px 14px calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
-.profile-topbar{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:48px}.profile-topbar h1{grid-column:2;margin:0;text-align:center;font-size:18px}.back-button{grid-column:1;width:40px;height:40px;border:0;border-radius:10px;background:transparent;color:#334155;font-size:28px;cursor:pointer}.profile-editor{padding:6px 2px 0}.avatar-area{display:flex;flex-direction:column;align-items:center;margin:8px 0 24px}.avatar-picker{position:relative;display:inline-grid;border-radius:50%;cursor:pointer}.avatar-picker input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.avatar-edit{position:absolute;right:-2px;bottom:1px;display:grid;place-items:center;width:27px;height:27px;border:2px solid #fff;border-radius:50%;background:#2563eb;color:#fff;font-size:14px;pointer-events:none}.avatar-hint{margin-top:8px;max-width:240px;color:#2563eb;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.avatar-area p{margin:5px 0 0;color:#64748b;font-size:12px}.field{display:grid;gap:7px;margin-bottom:15px;color:#334155;font-size:14px}.input{width:100%;box-sizing:border-box}.bio{min-height:104px;resize:vertical;padding:10px}.save-button{width:100%;min-height:46px;margin-top:2px}
+.profile-editor{padding:6px 2px 0}.avatar-area{display:flex;flex-direction:column;align-items:center;margin:8px 0 24px}.avatar-picker{position:relative;display:inline-grid;border-radius:50%;cursor:pointer}.avatar-picker input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.avatar-edit{position:absolute;right:-2px;bottom:1px;display:grid;place-items:center;width:27px;height:27px;border:2px solid #fff;border-radius:50%;background:#2563eb;color:#fff;font-size:14px;pointer-events:none}.avatar-hint{margin-top:8px;max-width:240px;color:#2563eb;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.avatar-area p{margin:5px 0 0;color:#64748b;font-size:12px}.field{display:grid;gap:7px;margin-bottom:15px;color:#334155;font-size:14px}.input{width:100%;box-sizing:border-box}.bio{min-height:104px;resize:vertical;padding:10px}.save-button{width:100%;min-height:46px;margin-top:2px}
 @media (min-width:768px){.profile-editor{max-width:560px;margin:0 auto}}
 </style>

@@ -1,10 +1,6 @@
 <template>
   <div class="friends-container app-page">
-    <header class="friends-header">
-      <button class="back-button" type="button" aria-label="返回我的" @click="router.push('/settings')">‹</button>
-      <h1>好友 / 好友分组</h1>
-      <span></span>
-    </header>
+    <SecondaryPageHeader title="好友 / 好友分组" back-label="返回我的" />
     <div v-if="initialLoading" class="friends-load-state" role="status" aria-live="polite">
       <span class="load-spinner" aria-hidden="true"></span>
       <span>正在加载好友…</span>
@@ -196,6 +192,7 @@ import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { openProfile } from "@/utils/profileNavigation";
 import { useSwipeActions } from "@/composables/useSwipeActions";
+import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 
 export default defineComponent({
   name: "Friends",
