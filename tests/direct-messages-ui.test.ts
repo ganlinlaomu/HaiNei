@@ -50,6 +50,10 @@ describe("direct-message navigation and UI contract", () => {
     const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
     const secondaryHeader = readFileSync(join(process.cwd(), "src/components/SecondaryPageHeader.vue"), "utf8");
     expect(settings).toContain("router.push('/settings/system')");
+    expect(settings).toContain('<section v-else class="settings-card">');
+    expect(settings).toContain("background:#fff;color:#0f1419");
+    expect(settings).toContain("border-top:1px solid #eff1f3;background:#fff");
+    expect(settings).not.toContain('<section v-else class="card settings-card">');
     for (const source of [system, friends, profile, saved]) {
       expect(source).toContain("SecondaryPageHeader");
     }
@@ -69,6 +73,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(system).toContain("高级设置 / Diagnostics");
     expect(system).toContain('<SecondaryPageHeader title="设置" back-label="返回我的" />');
     expect(friends).toContain('<SecondaryPageHeader title="好友 / 好友分组" back-label="返回我的" />');
+    expect(friends).toContain('components: { ProfileAvatar, SecondaryPageHeader }');
     expect(saved).toContain('<SecondaryPageHeader title="已收藏" back-label="返回我的" />');
     expect(profile).toContain('<SecondaryPageHeader title="我的资料" back-label="返回我的" />');
     expect(friends).toMatch(/return \\{[\\s\\S]*router,[\\s\\S]*acceptedFriends/);
