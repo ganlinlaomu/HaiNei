@@ -53,6 +53,10 @@ describe("direct-message navigation and UI contract", () => {
     expect(settings).toContain("navigator.clipboard.writeText(keyStore.pkHex)");
     expect(settings).toContain('ui.addToast("已复制公钥"');
     expect(settings).not.toContain('class="technical-section"');
+    expect(settings).not.toContain("inspectRelays");
+    expect(settings).not.toContain("getCacheStats");
+    expect(settings).not.toContain("enablePushNotifications");
+    expect(settings).not.toContain("startStatusPolling");
     expect(system).toContain("连接 / Relay");
     expect(system).toContain("图片与视频 / Media");
     expect(system).toContain("数据使用 / Data Saver");
@@ -134,6 +138,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(swipe).toContain("Math.abs(dy) > Math.abs(dx)");
     expect(swipe).toContain("event.preventDefault()");
     expect(swipe).toContain("closeOthers(id)");
+    expect(swipe).toContain("function onTouchCancel");
+    expect(swipe).toContain("resetGesture()");
     expect(notifications).toContain('useSwipeActions } from "@/composables/useSwipeActions"');
     expect(notifications).toContain("touch-action: pan-y");
     expect(notifications).not.toContain("reactive<Record<string, number>>");
@@ -145,6 +151,12 @@ describe("direct-message navigation and UI contract", () => {
     const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     expect(friends).toContain('useSwipeActions } from "@/composables/useSwipeActions"');
     expect(friends).toContain('class="friend-swipe-actions"');
+    expect(friends).toContain("await Promise.all([");
+    expect(friends).toContain("正在加载好友…");
+    expect(friends).toContain(">重新加载</button>");
+    expect(friends).toContain("@touchcancel=");
+    expect(friends).not.toContain(".btn-edit");
+    expect(friends).not.toContain(".btn-delete");
     expect(friends).toContain(">添加好友</button>");
     expect(friends).not.toContain('class="more-button"');
     expect(home).toContain("条新动态");
