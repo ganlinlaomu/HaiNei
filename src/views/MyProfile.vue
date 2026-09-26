@@ -131,7 +131,7 @@ async function save() {
       ui.addToast(`资料保存失败：${reason}`, 3_000, "error");
     }
   } finally {
-    if (keys.pkHex === account) saving.value = false;
+    saving.value = false;
   }
 }
 </script>
