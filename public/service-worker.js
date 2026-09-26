@@ -76,9 +76,23 @@ async function applyAppBadge(count) {
   return normalized;
 }
 
-async function incrementAppBadge() {
-  const current = await readStoredBadgeCount();
-  return applyAppBadge(current + 1);
+let badgeUpdateQueue = Promise.resolve();
+
+function queueBadgeSync(count) {
+  badgeUpdateQueue = badgeUpdateQueue
+    .catch(() => undefined)
+    .then(() => applyAppBadge(count));
+  return badgeUpdateQueue;
+}
+
+function queueBadgeIncrement() {
+  badgeUpdateQueue = badgeUpdateQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const current = await readStoredBadgeCount();
+      return applyAppBadge(current + 1);
+    });
+  return badgeUpdateQueue;
 }
 
 self.addEventListener('message', (event) => {
@@ -87,7 +101,7 @@ self.addEventListener('message', (event) => {
     return;
   }
   if (event.data?.type === 'SYNC_APP_BADGE') {
-    event.waitUntil(applyAppBadge(event.data.count));
+    event.waitUntil(queueBadgeSync(event.data.count));
   }
 });
 
@@ -148,7 +162,7 @@ self.addEventListener('push', (event) => {
       badge: '/icon-192.png',
       data: { type: 'message' }
     }),
-    payload?.type === 'message' ? incrementAppBadge() : Promise.resolve()
+    payload?.type === 'message' ? queueBadgeIncrement() : Promise.resolve()
   ]));
 });
 
