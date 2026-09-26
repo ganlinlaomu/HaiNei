@@ -10,24 +10,28 @@
       <span v-else>⟳ 刷新中...</span>
     </div>
     
-    <!-- New messages notification - only show on PC/desktop (non-touch devices) -->
+    <!-- New messages notification -->
     <div 
       v-if="pendingMessages.length > 0" 
       class="new-messages-notification" 
       role="button"
       tabindex="0"
-      :aria-label="`有 ${pendingMessages.length} 条新消息，点击查看`"
+      :aria-label="`有 ${pendingMessages.length} 条新动态，点击查看`"
       @click="showPendingMessages"
       @keyup.enter="showPendingMessages"
       @keyup.space.prevent="showPendingMessages"
     >
       <span class="notification-icon">↓</span>
-      <span class="notification-text">{{ pendingMessages.length }} 条新消息</span>
+      <span class="notification-text">{{ pendingMessages.length }} 条新动态</span>
     </div>
 
 
     <div ref="feedElement" class="feed">
-      <div v-if="displayedMessages.length === 0" class="empty-feed">还没有动态</div>
+      <div v-if="displayedMessages.length === 0" class="empty-feed">
+        <strong>这里还没有动态</strong>
+        <span>添加好友后，他们的动态会显示在这里。</span>
+        <button type="button" @click="router.push('/friends')">添加好友</button>
+      </div>
       <div v-if="topSpacerHeight" class="virtual-spacer" :style="{ height: `${topSpacerHeight}px` }" aria-hidden="true"></div>
       <PostCard
         v-for="m in virtualMessages"
@@ -65,7 +69,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { logger } from "@/utils/logger";
 import { formatRelativeTime } from "@/utils/format";
 import PostCard from "@/components/PostCard.vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { usePullToRefresh } from "@/components/usePullToRefresh";
 import { getLastSeenCreatedAt, setLastSeenCreatedAt, updateLastSeenToNewest } from "@/utils/lastSeen";
 import { extractVideoData as extractVideoDataUtil, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
@@ -75,6 +79,7 @@ import { accountMessageSyncManager } from "@/services/accountMessageSync";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { useNotificationsStore } from "@/stores/notifications";
+import { useUIStore } from "@/stores/ui";
 import { useProfilesStore } from "@/stores/profiles";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
@@ -122,10 +127,12 @@ export default defineComponent({
     const interactions = useInteractionsStore();
     const settings = useSettingsStore();
     const notifications = useNotificationsStore();
+    const ui = useUIStore();
     const profiles = useProfilesStore();
     const feedPreferences = useFeedPreferencesStore();
     const readyForPending = ref(false);
     const route = useRoute();
+    const router = useRouter();
     const realtimeSessionSince = ref(0);
     const notificationJumpDone = ref(false);
     const lastSeenCreatedAt = ref(0); // Track the watermark for filtering pending messages
@@ -660,6 +667,7 @@ async function safeUpdateLocalRefs() {
         }
       } catch (e: any) {
         logger.error("Toggle like failed", e);
+        ui.addToast("操作失败，请稍后重试", 2000, "error");
       }
     }
 
@@ -725,6 +733,7 @@ async function safeUpdateLocalRefs() {
         replyingToAuthor.value[messageId] = "";
       } catch (e: any) {
         logger.error("Add comment failed", e);
+        ui.addToast("评论发送失败，请稍后重试", 2200, "error");
       }
     }
 
@@ -1158,8 +1167,8 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
       hasMore,
       isLoadingMore,
       loadMoreMessages,
-      remainingMessagesCount
-      , virtualMessages, topSpacerHeight, bottomSpacerHeight, feedElement, recordPostHeight, route
+      remainingMessagesCount,
+      virtualMessages, topSpacerHeight, bottomSpacerHeight, feedElement, recordPostHeight, route, router
       
     };
   }
@@ -1167,6 +1176,8 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
 </script>
 
 <style scoped>
+.empty-feed{display:flex;min-height:42vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:#64748b;text-align:center}.empty-feed strong{color:#0f1419;font-size:19px}.empty-feed span{font-size:14px}.empty-feed button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:#0f1419;color:#fff;font-size:14px;font-weight:650}
+
 .home-container {
   position: relative;
   min-height: 100vh;
@@ -1218,6 +1229,16 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
   transition: all 0.2s;
   width: fit-content;
   max-width: calc(100% - 24px);
+}
+
+@media (max-width: 767px) {
+  .new-messages-notification {
+    position: fixed;
+    top: calc(env(safe-area-inset-top) + 12px);
+    left: 50%;
+    margin: 0;
+    z-index: 1200;
+  }
 }
 
 .new-messages-notification:hover {

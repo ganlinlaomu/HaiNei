@@ -30,30 +30,29 @@
           +
         </button>
       </div>
-      <div v-if="acceptedFriends.length === 0" class="small">还没有已确认好友</div>
+      <div v-if="acceptedFriends.length === 0" class="friends-empty">
+        <strong>还没有好友</strong>
+        <span>添加好友后即可互发私信和查看好友动态。</span>
+        <button type="button" @click="startAdd">添加好友</button>
+      </div>
       <div class="list" v-else>
-        <div v-for="f in acceptedFriends" :key="f.pubkey" class="friend-item">
-          <button class="friend-profile avatar-profile" type="button" :aria-label="`查看 ${contactName(f.pubkey)} 的资料`" @click="openFriendProfile(f.pubkey, $event)">
-            <ProfileAvatar :pubkey="f.pubkey" :local-name="localContactName(f.pubkey)" :size="38" />
-          </button>
-          <div class="friend-info">
-            <button class="friend-profile name-profile" type="button" @click="openFriendProfile(f.pubkey, $event)">{{ contactName(f.pubkey) }}</button>
-            <div class="small">
-              <span v-if="f.groups && f.groups.length > 0">
-                {{ f.groups[0] }}
-              </span>
-              <span v-else-if="f.group">{{ f.group }}</span>
-              <span v-else>未分组</span>
-            </div>
+        <div v-for="f in acceptedFriends" :key="f.pubkey" class="friend-swipe" @touchstart="onTouchStart($event, f.pubkey)" @touchmove="onTouchMove($event, f.pubkey)" @touchend="onTouchEnd(f.pubkey)">
+          <div class="friend-swipe-actions">
+            <button class="swipe-action edit" type="button" @click.stop="editFromSwipe(f)">编辑</button>
+            <button class="swipe-action delete" type="button" @click.stop="deleteFromSwipe(f)">删除</button>
           </div>
-          <div class="friend-actions">
-            <button class="message-button" type="button" :aria-label="`给 ${contactName(f.pubkey)} 发私信`" @click="openMessage(f.pubkey)">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>
+          <div class="friend-item" :style="swipeStyle(f.pubkey)">
+            <button class="friend-profile avatar-profile" type="button" :aria-label="`查看 ${contactName(f.pubkey)} 的资料`" @click="openFriendProfile(f.pubkey, $event)">
+              <ProfileAvatar :pubkey="f.pubkey" :local-name="localContactName(f.pubkey)" :size="38" />
             </button>
-            <button class="more-button" type="button" :aria-expanded="openFriendMenu === f.pubkey" :aria-label="`${f.name} 的更多操作`" @click="toggleFriendMenu(f.pubkey)">更多</button>
-            <div v-if="openFriendMenu === f.pubkey" class="friend-menu">
-              <button type="button" @click="startEdit(f); openFriendMenu = ''">编辑资料</button>
-              <button type="button" class="danger" @click="confirmDelete(f); openFriendMenu = ''">删除好友</button>
+            <div class="friend-info">
+              <button class="friend-profile name-profile" type="button" @click="openFriendProfile(f.pubkey, $event)">{{ contactName(f.pubkey) }}</button>
+              <div class="small"><span v-if="f.groups && f.groups.length > 0">{{ f.groups[0] }}</span><span v-else-if="f.group">{{ f.group }}</span><span v-else>未分组</span></div>
+            </div>
+            <div class="friend-actions">
+              <button class="message-button" type="button" :aria-label="`给 ${contactName(f.pubkey)} 发私信`" @click="openMessage(f.pubkey)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>
+              </button>
             </div>
           </div>
         </div>
@@ -82,18 +81,18 @@
       <h3>已发送请求（{{ outgoingRequests.length }}）</h3>
       <div v-if="outgoingRequests.length === 0" class="small">暂无等待确认的请求</div>
       <div v-else class="list">
-        <div v-for="request in outgoingRequests" :key="request.peerPubkey" class="friend-item">
+        <div v-for="request in outgoingRequests" :key="request.peerPubkey" class="friend-swipe" @touchstart="onTouchStart($event, request.peerPubkey)" @touchmove="onTouchMove($event, request.peerPubkey)" @touchend="onTouchEnd(request.peerPubkey)">
+          <div class="friend-swipe-actions">
+            <button class="swipe-action edit" type="button" @click.stop="editPendingFromSwipe(request.peerPubkey)">编辑</button>
+            <button class="swipe-action delete" type="button" @click.stop="withdrawFromSwipe(request.peerPubkey)">撤回</button>
+          </div>
+          <div class="friend-item" :style="swipeStyle(request.peerPubkey)">
           <ProfileAvatar :pubkey="request.peerPubkey" :local-name="localContactName(request.peerPubkey)" :size="38" />
           <div class="friend-info">
             <strong>{{ contactName(request.peerPubkey) }}</strong>
             <div class="small">等待对方接受<span v-if="request.requestedAt"> · {{ requestAge(request.requestedAt) }}</span></div>
           </div>
-          <div class="friend-actions">
-            <button class="more-button" type="button" :aria-expanded="openFriendMenu === request.peerPubkey" :aria-label="`${contactName(request.peerPubkey)} 的请求操作`" @click="toggleFriendMenu(request.peerPubkey)">更多</button>
-            <div v-if="openFriendMenu === request.peerPubkey" class="friend-menu">
-              <button type="button" @click="startPendingEdit(request.peerPubkey); openFriendMenu = ''">编辑备注</button>
-              <button type="button" class="danger" @click="withdrawRequest(request.peerPubkey); openFriendMenu = ''">撤回请求</button>
-            </div>
+          <div class="friend-actions"></div>
           </div>
         </div>
       </div>
@@ -182,6 +181,7 @@ import { formatRelativeTime } from "@/utils/format";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { openProfile } from "@/utils/profileNavigation";
+import { useSwipeActions } from "@/composables/useSwipeActions";
 
 export default defineComponent({
   name: "Friends",
@@ -200,7 +200,7 @@ export default defineComponent({
     const saving = ref(false);
     const editingPending = ref(false);
     const activeSection = ref<"accepted" | "incoming" | "outgoing">("accepted");
-    const openFriendMenu = ref("");
+    const { close: closeSwipe, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
     const showSyncSuccess = ref(false);
     const isFadingOut = ref(false);
     let hideTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -236,9 +236,6 @@ export default defineComponent({
     const contactName = (pubkey: string) => privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localContactName(pubkey));
     const requestAge = (timestamp: number) => formatRelativeTime(timestamp);
 
-    function toggleFriendMenu(pubkey: string) {
-      openFriendMenu.value = openFriendMenu.value === pubkey ? "" : pubkey;
-    }
     function openFriendProfile(pubkey: string, event?: Event) {
       return openProfile(router, keys.pkHex, pubkey, event);
     }
@@ -341,6 +338,9 @@ export default defineComponent({
       };
       showModal.value = true;
     };
+
+    const editFromSwipe = (friend: Friend) => { closeSwipe(friend.pubkey); startEdit(friend); };
+    const deleteFromSwipe = (friend: Friend) => { closeSwipe(friend.pubkey); void confirmDelete(friend); };
 
     const startPendingEdit = (pubkey: string) => {
       const friend = friends.list.find(item => item.pubkey === pubkey) || {
@@ -456,6 +456,9 @@ export default defineComponent({
       }
     };
 
+    const editPendingFromSwipe = (pubkey: string) => { closeSwipe(pubkey); startPendingEdit(pubkey); };
+    const withdrawFromSwipe = (pubkey: string) => { closeSwipe(pubkey); void withdrawRequest(pubkey); };
+
     const withdrawRequest = async (pubkey: string) => {
       if (!confirm("确定撤回这条好友请求吗？")) return;
       try {
@@ -519,8 +522,6 @@ export default defineComponent({
       editingPending,
       formData,
       saving,
-      openFriendMenu,
-      toggleFriendMenu,
       openFriendProfile,
       openMessage,
       showSyncSuccess,
@@ -528,6 +529,14 @@ export default defineComponent({
       startAdd,
       startEdit,
       startPendingEdit,
+      editFromSwipe,
+      deleteFromSwipe,
+      editPendingFromSwipe,
+      withdrawFromSwipe,
+      onTouchStart,
+      onTouchMove,
+      onTouchEnd,
+      swipeStyle,
       closeModal,
       saveForm,
       confirmDelete,
@@ -549,6 +558,8 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.friend-swipe{position:relative;overflow:hidden;touch-action:pan-y}.friend-swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:120px}.swipe-action{width:60px;border:0;color:#fff;font-size:12px;font-weight:650}.swipe-action.edit{background:#536471}.swipe-action.delete{background:#ef4444}.friend-swipe .friend-item{position:relative;z-index:1;background:#fff;transition:transform .2s ease}.friends-empty{display:flex;min-height:28vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:#64748b;text-align:center}.friends-empty strong{color:#0f1419;font-size:18px}.friends-empty span{font-size:14px}.friends-empty button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:#0f1419;color:#fff;font-size:14px;font-weight:650}
+
 .friends-container {
   position: relative;
   /* Add top padding to prevent header from being pushed out of screen */

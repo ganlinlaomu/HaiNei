@@ -112,6 +112,32 @@ describe("direct-message navigation and UI contract", () => {
     expect(notifications).not.toContain("reactive<Record<string, number>>");
   });
 
+  it("keeps UX consistency across friends, Home, and conversation empty states", () => {
+    const friends = readFileSync(join(process.cwd(), "src/views/Friends.vue"), "utf8");
+    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    expect(friends).toContain('useSwipeActions } from "@/composables/useSwipeActions"');
+    expect(friends).toContain('class="friend-swipe-actions"');
+    expect(friends).toContain(">添加好友</button>");
+    expect(friends).not.toContain('class="more-button"');
+    expect(home).toContain("条新动态");
+    expect(home).toContain("这里还没有动态");
+    expect(home).toContain("router.push('/friends')");
+    expect(conversations).toContain("ui.openNewConversation()");
+    expect(conversations).toContain(">发起私信</button>");
+  });
+
+  it("surfaces key action failures through the shared toast store", () => {
+    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const messages = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    expect(home).toContain('ui.addToast("评论发送失败，请稍后重试"');
+    expect(home).toContain('ui.addToast("操作失败，请稍后重试"');
+    expect(messages).toContain("ui.addToast(");
+    expect(conversations).toContain('ui.addToast("隐藏失败，请稍后重试"');
+    expect(conversations).toContain('ui.addToast("删除失败，请稍后重试"');
+  });
+
   it("lists only accepted non-self friends in the new-conversation sheet", () => {
     const source = readFileSync(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
     expect(source).toContain('record.state === "accepted"');
