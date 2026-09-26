@@ -200,8 +200,7 @@ export default defineComponent({
     const saving = ref(false);
     const editingPending = ref(false);
     const activeSection = ref<"accepted" | "incoming" | "outgoing">("accepted");
-    const openFriendMenu = ref("");
-    const { close: closeSwipe, closeOthers: closeOtherSwipes, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
+    const { close: closeSwipe, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
     const showSyncSuccess = ref(false);
     const isFadingOut = ref(false);
     let hideTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -237,9 +236,6 @@ export default defineComponent({
     const contactName = (pubkey: string) => privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localContactName(pubkey));
     const requestAge = (timestamp: number) => formatRelativeTime(timestamp);
 
-    function toggleFriendMenu(pubkey: string) {
-      openFriendMenu.value = openFriendMenu.value === pubkey ? "" : pubkey;
-    }
     function openFriendProfile(pubkey: string, event?: Event) {
       return openProfile(router, keys.pkHex, pubkey, event);
     }
@@ -526,8 +522,6 @@ export default defineComponent({
       editingPending,
       formData,
       saving,
-      openFriendMenu,
-      toggleFriendMenu,
       openFriendProfile,
       openMessage,
       showSyncSuccess,
