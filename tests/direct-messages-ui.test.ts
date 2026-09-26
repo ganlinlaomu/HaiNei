@@ -166,6 +166,22 @@ describe("direct-message navigation and UI contract", () => {
     expect(notifications).not.toContain("reactive<Record<string, number>>");
   });
 
+  it("uses card feed surfaces for Home and flat full-width list surfaces for messaging", () => {
+    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const notifications = readFileSync(join(process.cwd(), "src/views/Notifications.vue"), "utf8");
+    expect(home).toContain(".post-card {");
+    expect(home).toContain("border-radius: 14px");
+    expect(conversations).toContain("background:#fff");
+    expect(conversations).toContain(".conversation-list{display:flex;width:100%");
+    expect(notifications).toContain("background: #fff");
+    expect(notifications).toContain("padding: 0 0 calc(");
+    expect(notifications).toContain("margin: 4px 16px 10px");
+    expect(notifications).toContain("padding: 10px 16px");
+    expect(notifications).toContain("<h1>通知</h1>");
+    expect(notifications.match(/@touchcancel="onTouchCancel\(n\.id\)"/g)).toHaveLength(3);
+  });
+
   it("keeps UX consistency across friends, Home, and conversation empty states", () => {
     const friends = readFileSync(join(process.cwd(), "src/views/Friends.vue"), "utf8");
     const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
