@@ -188,7 +188,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, ref } from "vue";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useFriendsStore } from "@/stores/friends";
 import { useRouter } from "vue-router";
@@ -199,6 +199,7 @@ import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { openProfile } from "@/utils/profileNavigation";
+import { useSwipeActions } from "@/composables/useSwipeActions";
 
 const notifications = useNotificationsStore();
 const friends = useFriendsStore();
@@ -266,31 +267,16 @@ function formatRelativeTime(ts: number) {
 }
 
 /* ---------- 左滑 ---------- */
-const swipe = reactive<Record<string, number>>({});
-const startX = reactive<Record<string, number>>({});
-
-function onTouchStart(e: TouchEvent, id: string) {
-  startX[id] = e.touches[0].clientX;
-}
-function onTouchMove(e: TouchEvent, id: string) {
-  const dx = e.touches[0].clientX - startX[id];
-  swipe[id] = Math.min(0, Math.max(dx, -120));
-}
-function onTouchEnd(id: string) {
-  swipe[id] = swipe[id] < -60 ? -120 : 0;
-}
-function swipeStyle(id: string) {
-  return { transform: `translateX(${swipe[id] || 0}px)` };
-}
+const { close: closeSwipe, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
 
 /* ---------- 操作 ---------- */
 function markRead(n: any) {
   notifications.markAsRead(n.id);
-  swipe[n.id] = 0;
+  closeSwipe(n.id);
 }
 function dismiss(n: any) {
   notifications.dismiss(n.id);
-  swipe[n.id] = 0;
+  closeSwipe(n.id);
 }
 function displayName(pk: string) {
   return privateProfileDisplayName(profiles.getProfile(pk)?.nickname, pk, localName(pk));
@@ -422,6 +408,7 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   position: relative;
   overflow: hidden;
   border-bottom: 1px solid #e5e7eb;
+  touch-action: pan-y;
 }
 .swipe-actions {
   position: absolute;
