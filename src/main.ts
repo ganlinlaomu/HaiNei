@@ -52,6 +52,11 @@ export function registerServiceWorker() {
 }
 
 async function bootstrap() {
+  // Device/session storage must be hydrated before version checks and before
+  // Vue Router runs its auth guard. Otherwise restoreSession() sees an empty
+  // in-memory deviceStorage map and permanently marks the session as restored.
+  await migrateLegacyLocalStorage();
+
   const versionChanged = initVersionTracking();
   if (versionChanged) {
   // Version changed - handle update and reload
@@ -80,18 +85,6 @@ async function bootstrap() {
 
   // 🚀 优先渲染：先 mount，再恢复会话（避免首屏白屏）
   app.mount("#app");
-
-  // Legacy migration and device hydration are storage work; run them after
-  // first paint so returning users never wait on IndexedDB before seeing UI.
-  await new Promise<void>(resolve => {
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
-    else resolve();
-  });
-  try {
-    await migrateLegacyLocalStorage();
-  } catch (e) {
-    console.warn("[main] legacy storage migration failed", e);
-  }
 
   // 异步恢复登录态，不阻塞首屏渲染
   (async () => {
