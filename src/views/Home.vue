@@ -136,14 +136,8 @@ export default defineComponent({
     const realtimeSessionSince = ref(0);
     const notificationJumpDone = ref(false);
     const lastSeenCreatedAt = ref(0); // Track the watermark for filtering pending messages
-    const inboxSnapshot = computed(() => {
-      const first = msgs.inbox[0];
-      const last = msgs.inbox[msgs.inbox.length - 1];
-      return `${msgs.inbox.length}:${first?.id || ""}:${last?.id || ""}`;
-    });
-    const feedPreferenceSnapshot = computed(() =>
-      `${[...feedPreferences.hiddenMessageIds].sort().join(",")}|${[...feedPreferences.mutedPubkeys].sort().join(",")}`
-    );
+    const inboxRevision = computed(() => msgs.inboxRevision);
+    const feedPreferenceRevision = computed(() => feedPreferences.revision);
     const visibleInbox = () => msgs.inbox.filter(message => !isDirectMessageTags(message.tags) && feedPreferences.isVisible(message));
 
     const status = ref("未连接");
@@ -151,8 +145,64 @@ export default defineComponent({
     let homeSyncGeneration = 0;
     const messageSync = accountMessageSyncManager;
 
-    const messagesRef = ref([] as any[]);
-    const displayedMessages = ref([] as any[]);
+    const messagesRef = ref([] as InboxItem[]);
+    const displayedMessages = ref([] as InboxItem[]);
+    let visibleInboxMessageRevision = -1;
+    let visibleInboxPreferenceRevision = -1;
+
+    function insertSortedHomeMessage(current: InboxItem[], item: InboxItem) {
+      let low = 0;
+      let high = current.length;
+      while (low < high) {
+        const mid = (low + high) >> 1;
+        if (compareHomeMessages(item, current[mid]) < 0) high = mid;
+        else low = mid + 1;
+      }
+      return [...current.slice(0, low), item, ...current.slice(low)];
+    }
+
+    function rebuildVisibleInbox() {
+      messagesRef.value = visibleInbox().sort(compareHomeMessages);
+    }
+
+    function refreshVisibleInbox(force = false) {
+      const messageRevision = msgs.inboxRevision;
+      const preferenceRevision = feedPreferences.revision;
+      if (!force
+        && messageRevision === visibleInboxMessageRevision
+        && preferenceRevision === visibleInboxPreferenceRevision) return false;
+
+      const mutation = msgs.lastInboxMutation;
+      const canApplySingleInsert = !force
+        && preferenceRevision === visibleInboxPreferenceRevision
+        && messageRevision === visibleInboxMessageRevision + 1
+        && mutation?.revision === messageRevision
+        && mutation.type === "insert"
+        && !!mutation.itemId;
+
+      if (canApplySingleInsert) {
+        let next = messagesRef.value;
+        if (mutation.evictedId) next = next.filter(message => message.id !== mutation.evictedId);
+        const inserted = msgs.inbox[0]?.id === mutation.itemId
+          ? msgs.inbox[0]
+          : msgs.inbox.find(message => message.id === mutation.itemId);
+        if (inserted
+          && !isDirectMessageTags(inserted.tags)
+          && feedPreferences.isVisible(inserted)
+          && !next.some(message => message.id === inserted.id)) {
+          next = insertSortedHomeMessage(next, inserted);
+        }
+        messagesRef.value = next;
+      } else {
+        // Multiple arrivals, reloads, metadata replacements and preference
+        // changes intentionally fall back to the proven full rebuild path.
+        rebuildVisibleInbox();
+      }
+
+      visibleInboxMessageRevision = messageRevision;
+      visibleInboxPreferenceRevision = preferenceRevision;
+      return true;
+    }
     const feedElement = ref<HTMLElement | null>(null);
     const virtualStart = ref(0);
     const virtualEnd = ref(12);
@@ -285,6 +335,8 @@ export default defineComponent({
       notificationJumpDone.value = false;
       startupSyncing.value = false;
       homeAccountPk = "";
+      visibleInboxMessageRevision = -1;
+      visibleInboxPreferenceRevision = -1;
     }
 
     async function initializeHomeRuntime(accountPk: string) {
@@ -295,7 +347,7 @@ export default defineComponent({
         return false;
       }
 
-      messagesRef.value = visibleInbox().sort(compareHomeMessages);
+      refreshVisibleInbox(true);
       displayedMessages.value = messagesRef.value.slice(0, PAGE_SIZE);
       currentPage.value = 1;
       isInitialLoad.value = false;
@@ -402,8 +454,9 @@ export default defineComponent({
     }
     
     function updateLocalRefs() {
-  // ① 按时间排序 inbox
-  messagesRef.value = visibleInbox().sort(compareHomeMessages);
+  // Keep Home's derived list current without re-filtering/re-sorting the
+  // entire bounded inbox for the common single-message realtime path.
+  refreshVisibleInbox();
 
   if (!readyForPending.value) {
     updateMessageTimeRange();
@@ -461,7 +514,7 @@ export default defineComponent({
 }
 
 function reconcileStartupSnapshot(updateWatermark: boolean) {
-  messagesRef.value = visibleInbox().sort(compareHomeMessages);
+  refreshVisibleInbox();
   const visibleCount = Math.max(PAGE_SIZE, displayedMessages.value.length);
   displayedMessages.value = messagesRef.value.slice(0, visibleCount);
   const visibleIds = new Set(displayedMessages.value.map(message => message.id));
@@ -491,7 +544,7 @@ async function safeUpdateLocalRefs() {
   await new Promise<void>(resolve => {
     const run = () => {
       reconcileScheduled = false;
-      const snapshot = `${inboxSnapshot.value}|${feedPreferenceSnapshot.value}`;
+      const snapshot = `${inboxRevision.value}|${feedPreferenceRevision.value}`;
       if (snapshot !== lastReconciledSnapshot || reconcilePending) {
         lastReconciledSnapshot = snapshot;
         updateLocalRefs();
@@ -1083,7 +1136,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
    
 
    watch(
-  [inboxSnapshot, feedPreferenceSnapshot],
+  [inboxRevision, feedPreferenceRevision],
   () => {
     if (!readyForPending.value) return;
 
