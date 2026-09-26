@@ -93,11 +93,23 @@ describe("direct-message navigation and UI contract", () => {
     expect(source).toContain('class="action delete"');
     expect(source).toContain("directMessages.hideConversation(pubkey)");
     expect(source).toContain("directMessages.deleteConversation(pubkey)");
-    expect(source).toContain("e.preventDefault()");
+    expect(source).toContain('useSwipeActions } from "@/composables/useSwipeActions"');
     expect(source).toContain("touch-action:pan-y");
     expect(source).not.toContain('class="more-button"');
     expect(source).not.toContain('class="conversation-menu"');
     expect(source).not.toContain("toggleMenu(");
+  });
+
+  it("shares swipe gesture handling with notifications", () => {
+    const swipe = readFileSync(join(process.cwd(), "src/composables/useSwipeActions.ts"), "utf8");
+    const notifications = readFileSync(join(process.cwd(), "src/views/Notifications.vue"), "utf8");
+    expect(swipe).toContain("export function useSwipeActions");
+    expect(swipe).toContain("Math.abs(dy) > Math.abs(dx)");
+    expect(swipe).toContain("event.preventDefault()");
+    expect(swipe).toContain("closeOthers(id)");
+    expect(notifications).toContain('useSwipeActions } from "@/composables/useSwipeActions"');
+    expect(notifications).toContain("touch-action: pan-y");
+    expect(notifications).not.toContain("reactive<Record<string, number>>");
   });
 
   it("lists only accepted non-self friends in the new-conversation sheet", () => {
