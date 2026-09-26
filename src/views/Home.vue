@@ -165,12 +165,18 @@ export default defineComponent({
       messagesRef.value = visibleInbox().sort(compareHomeMessages);
     }
 
-    function refreshVisibleInbox(force = false) {
+    function refreshVisibleInbox(force = false): {
+      changed: boolean;
+      mode: "none" | "incremental" | "rebuild";
+      inserted?: InboxItem;
+    } {
       const messageRevision = msgs.inboxRevision;
       const preferenceRevision = feedPreferences.revision;
       if (!force
         && messageRevision === visibleInboxMessageRevision
-        && preferenceRevision === visibleInboxPreferenceRevision) return false;
+        && preferenceRevision === visibleInboxPreferenceRevision) {
+        return { changed: false, mode: "none" };
+      }
 
       const mutation = msgs.lastInboxMutation;
       const canApplySingleInsert = !force
@@ -180,6 +186,7 @@ export default defineComponent({
         && mutation.type === "insert"
         && !!mutation.itemId;
 
+      let insertedVisible: InboxItem | undefined;
       if (canApplySingleInsert) {
         let next = messagesRef.value;
         if (mutation.evictedId) next = next.filter(message => message.id !== mutation.evictedId);
@@ -191,6 +198,7 @@ export default defineComponent({
           && feedPreferences.isVisible(inserted)
           && !next.some(message => message.id === inserted.id)) {
           next = insertSortedHomeMessage(next, inserted);
+          insertedVisible = inserted;
         }
         messagesRef.value = next;
       } else {
@@ -201,7 +209,11 @@ export default defineComponent({
 
       visibleInboxMessageRevision = messageRevision;
       visibleInboxPreferenceRevision = preferenceRevision;
-      return true;
+      return {
+        changed: true,
+        mode: canApplySingleInsert ? "incremental" : "rebuild",
+        inserted: insertedVisible,
+      };
     }
     const feedElement = ref<HTMLElement | null>(null);
     const virtualStart = ref(0);
@@ -456,7 +468,7 @@ export default defineComponent({
     function updateLocalRefs() {
   // Keep Home's derived list current without re-filtering/re-sorting the
   // entire bounded inbox for the common single-message realtime path.
-  refreshVisibleInbox();
+  const refreshResult = refreshVisibleInbox();
 
   if (!readyForPending.value) {
     updateMessageTimeRange();
@@ -473,13 +485,15 @@ export default defineComponent({
 
   const lastSeen = lastSeenCreatedAt.value;
 
-  // ⭐ ② 真正的“新消息”定义：只看时间
-  const newMessages = messagesRef.value.filter(m => {
-  const ts = m.created_at || 0;
-
-  // ⭐ 唯一标准：是否晚于 lastSeen
-  return ts > lastSeen;
-});
+  // ⭐ ② 真正的“新消息”定义：只看时间。常见的单条实时新增
+  // 直接判断这一条；只有 rebuild 才扫描当前 Home 列表。
+  const newMessages = refreshResult.mode === "incremental"
+    ? (refreshResult.inserted && (refreshResult.inserted.created_at || 0) > lastSeen
+      ? [refreshResult.inserted]
+      : [])
+    : refreshResult.mode === "none"
+      ? []
+      : messagesRef.value.filter(m => (m.created_at || 0) > lastSeen);
 
   if (newMessages.length === 0) {
     updateMessageTimeRange();
