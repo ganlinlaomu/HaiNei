@@ -10,6 +10,7 @@ const Profile = () => import("@/views/Profile.vue");
 const Messages = () => import("@/views/Messages.vue");
 const Debug = () => import("@/views/Debug.vue");
 const Saved = () => import("@/views/Saved.vue");
+const SystemSettings = () => import("@/views/SystemSettings.vue");
 import { useKeyStore } from "@/stores/keys";
 import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
 
@@ -67,6 +68,12 @@ const routes: Array<RouteRecordRaw> = [
     path: "/settings",
     name: "Settings",
     component: loadSettingsView,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/settings/system",
+    name: "SystemSettings",
+    component: SystemSettings,
     meta: { requiresAuth: true }
   },
   {

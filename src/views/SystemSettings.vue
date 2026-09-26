@@ -1,19 +1,217 @@
 <template>
-  <main class="settings-container app-page">
-    <section v-if="!hasAccount" class="card">
-      <h2>我的</h2>
-      <p class="small">当前未登录。</p>
-      <button class="btn btn-primary" type="button" @click="router.push('/login')">前往登录</button>
-    </section>
-    <section v-else class="card settings-card">
-      <header class="my-profile-summary">
-        <ProfileAvatar :pubkey="keyStore.pkHex" :local-name="nickname" :size="56" />
-        <span><strong>{{ nickname }}</strong><small>{{ shortPk }}</small></span>
-      </header>
-      <button class="top-level-row" type="button" @click="router.push('/settings/profile')"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><strong>我的资料</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
-      <button class="top-level-row" type="button" @click="router.push('/settings/saved')"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg></span><strong>已收藏</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
-      <button class="top-level-row" type="button" @click="router.push('/friends')"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 15.5a5 5 0 0 1 7 4.5"/></svg></span><strong>好友 / 好友分组</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
-      <button class="top-level-row" type="button" @click="router.push('/settings/system')"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></span><strong>设置</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
+  <main class="settings-container system-settings-page app-page">
+    <header class="system-header">
+      <button type="button" aria-label="返回我的" @click="router.push('/settings')">‹</button>
+      <h1>设置</h1>
+      <span></span>
+    </header>
+    <div v-if="settings.syncing" class="sync-status">{{ settings.syncStatusText || "正在同步加密设置…" }}</div>
+    <div v-else-if="settings.syncError" class="sync-status sync-warning">{{ settings.syncError }}</div>
+    <div v-else-if="settings.lastRelaySyncTimestamp || settings.lastMediaSyncTimestamp" class="sync-status sync-ok">
+      已同步设置：<span v-if="settings.lastRelaySyncTimestamp">Relay {{ formatSyncTimestamp(settings.lastRelaySyncTimestamp) }}</span><span v-if="settings.lastRelaySyncTimestamp && settings.lastMediaSyncTimestamp"> · </span><span v-if="settings.lastMediaSyncTimestamp">Media {{ formatSyncTimestamp(settings.lastMediaSyncTimestamp) }}</span>
+    </div>
+    <section class="system-content">
+      <details class="technical-section" open>
+        <summary class="section-heading">
+          <div>
+            <h3>连接 / Relay</h3>
+            <p>{{ relayList.filter(relay => relay.enabled).length }} 个已启用 · 用户、NIP-65 与 fallback</p>
+          </div>
+        </summary>
+        <p class="section-detail">用户 Relay 优先，NIP-65 次之，默认 Relay 仅用于 fallback。</p>
+
+        <form class="add-form" @submit.prevent="addRelay">
+          <input
+            v-model="newRelay"
+            class="input"
+            inputmode="url"
+            autocapitalize="none"
+            autocomplete="off"
+            placeholder="wss://relay.example.com"
+          />
+          <button class="btn btn-primary" type="submit">添加</button>
+        </form>
+
+        <div class="item-list">
+          <article v-for="relay in relayList" :key="relay.url" class="item-card">
+            <div class="item-header">
+              <div class="item-main">
+                <div class="item-url">{{ relay.url }}</div>
+                <div class="meta-row">
+                  <span class="pill">{{ relaySourceLabel(relay.source) }}</span>
+                  <span class="pill" :class="relayStatusTone(relay)">
+                    {{ relayStatusLabel(relay) }}
+                  </span>
+                  <span v-if="relay.latency" class="pill">{{ relay.latency }}ms</span>
+                </div>
+              </div>
+              <button
+                v-if="!isBuiltinRelay(relay)"
+                class="text-button danger"
+                type="button"
+                @click="removeRelay(relay)"
+              >
+                删除
+              </button>
+            </div>
+
+            <div class="control-row">
+              <label><input type="checkbox" :checked="relay.enabled" @change="toggleRelay(relay, 'enabled', $event)" />启用</label>
+              <label><input type="checkbox" :checked="relay.read" @change="toggleRelay(relay, 'read', $event)" />读取</label>
+              <label><input type="checkbox" :checked="relay.write" @change="toggleRelay(relay, 'write', $event)" />写入</label>
+              <button class="text-button" type="button" @click="reconnect(relay.url)">重连</button>
+            </div>
+          </article>
+        </div>
+      </details>
+
+      <details class="technical-section">
+        <summary class="section-heading">
+          <div>
+            <h3>图片与视频 / Media</h3>
+            <p>{{ mediaList.filter(server => server.enabled).length }} 个已启用 · Primary 与 fallback</p>
+          </div>
+        </summary>
+        <p class="section-detail">按 Primary、其他用户服务器、默认 fallback 的顺序上传。媒体服务器仅支持 HTTPS；localhost 可用于本地调试。</p>
+
+        <form class="media-add-form" @submit.prevent="addMediaServer">
+          <select v-model="newMediaType" class="input compact-input">
+            <option value="blossom">Blossom</option>
+            <option value="imgbed">ImgBed</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input
+            v-model="newMediaUrl"
+            class="input"
+            inputmode="url"
+            autocapitalize="none"
+            autocomplete="off"
+            placeholder="https://media.example.com"
+          />
+          <input
+            v-model="newMediaToken"
+            class="input"
+            type="password"
+            autocomplete="off"
+            placeholder="Token（可选）"
+          />
+          <button class="btn btn-primary" type="submit">添加</button>
+        </form>
+
+        <div class="item-list">
+          <article v-for="server in mediaList" :key="server.id" class="item-card">
+            <div class="item-header">
+              <div class="item-main">
+                <div class="item-url">{{ server.url }}</div>
+                <div class="meta-row">
+                  <span class="pill">{{ mediaTypeLabel(server.type) }}</span>
+                  <span class="pill">{{ server.source === "user" ? "用户" : "默认" }}</span>
+                  <span v-if="primaryMediaId === server.id" class="pill primary">Primary</span>
+                  <span v-else-if="server.source === 'default'" class="pill">Fallback</span>
+                </div>
+              </div>
+              <button
+                v-if="!isBuiltinMedia(server)"
+                class="text-button danger"
+                type="button"
+                @click="removeMediaServer(server)"
+              >
+                删除
+              </button>
+            </div>
+
+            <div class="health-grid">
+              <span>最近成功：{{ formatTimestamp(server.lastSuccessAt) }}</span>
+              <span>最近失败：{{ formatTimestamp(server.lastFailureAt) }}</span>
+            </div>
+
+            <div class="control-row">
+              <label><input type="checkbox" :checked="server.enabled" @change="toggleMediaServer(server, $event)" />启用</label>
+              <button
+                v-if="server.source === 'user' && server.enabled && primaryMediaId !== server.id"
+                class="text-button"
+                type="button"
+                @click="settings.setPrimaryMediaServer(server.id)"
+              >
+                设为 Primary
+              </button>
+            </div>
+          </article>
+        </div>
+      </details>
+
+      <details class="technical-section">
+        <summary class="section-heading">
+          <div><h3>数据使用 / Data Saver</h3><p>{{ settings.dataSaver ? "节省流量" : "标准" }}</p></div>
+        </summary>
+        <div class="data-mode" role="radiogroup" aria-label="数据使用模式">
+          <label><input type="radio" :checked="!settings.dataSaver" @change="settings.setDataSaver(false)" /> 标准</label>
+          <label><input type="radio" :checked="settings.dataSaver" @change="settings.setDataSaver(true)" /> 节省流量</label>
+        </div>
+        <p class="section-detail">节省流量模式会缩短图片预加载距离，并避免不必要的视频预加载。</p>
+      </details>
+
+      <details class="technical-section">
+        <summary class="section-heading">
+          <div><h3>后台推送 / Web Push</h3><p>{{ pushStatusText }}</p></div>
+        </summary>
+        <p class="section-detail">推送仅用于私信，固定显示“你有新的私信消息”，不会包含好友名称、消息内容或图片信息。</p>
+        <div class="account-row">
+          <span class="small">{{ pushSupported ? "需要你主动授权浏览器通知权限" : "当前浏览器不支持 Web Push" }}</span>
+          <button class="btn btn-secondary" type="button" :disabled="pushBusy || !pushSupported" @click="togglePush">
+            {{ pushBusy ? "处理中…" : pushEnabled ? "关闭推送" : "开启推送" }}
+          </button>
+        </div>
+      </details>
+
+      <details class="technical-section">
+        <summary class="section-heading">
+          <div><h3>存储 / Cache</h3><p>{{ cacheStats.count }} 个图片文件 · {{ formatSize(cacheStats.size) }}</p></div>
+        </summary>
+        <div class="cache-info">
+          <div class="small">
+            <div>图片缓存：{{ cacheStats.count }} 个文件</div>
+            <div>缓存大小：{{ formatSize(cacheStats.size) }}</div>
+            <div v-if="cacheStats.oldestTimestamp">最早缓存：{{ new Date(cacheStats.oldestTimestamp).toLocaleDateString() }}</div>
+          </div>
+          <div class="button-row">
+            <button class="btn btn-secondary" type="button" :disabled="loadingCache" @click="refreshCacheStats(true)">
+              {{ loadingCache ? "加载中…" : "刷新统计" }}
+            </button>
+            <button class="btn btn-warning" type="button" :disabled="clearingCache" @click="clearCache">
+              {{ clearingCache ? "清理中…" : "清空缓存" }}
+            </button>
+          </div>
+        </div>
+      </details>
+
+      <details class="technical-section">
+        <summary class="section-heading"><div><h3>高级设置 / Diagnostics</h3><p>Relay、NIP-17 与同步日志</p></div></summary>
+        <div class="account-row">
+          <span class="small">查看 Relay、NIP-17 与消息同步的本地实时日志</span>
+          <div class="button-row">
+            <button class="btn btn-secondary" type="button" :disabled="retryingQueue" @click="retryFailedQueue">
+              {{ retryingQueue ? "重试中…" : "重试发送" }}
+            </button>
+            <button class="btn btn-secondary" type="button" @click="router.push('/debug')">系统诊断</button>
+          </div>
+        </div>
+      </details>
+
+      <section class="account-section">
+        <div class="top-level-row">
+          <span class="row-main">
+            <span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg></span>
+            <strong>账户</strong>
+          </span>
+          <span class="row-chevron" aria-hidden="true">›</span>
+        </div>
+        <div class="top-level-content account-row">
+          <span class="small">当前账户：{{ shortPk }}</span>
+          <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
+        </div>
+      </section>
+
     </section>
   </main>
 </template>
@@ -355,6 +553,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.system-header{position:sticky;top:0;z-index:10;display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:54px;background:rgba(248,250,252,.96);border-bottom:1px solid #e2e8f0}.system-header button{width:44px;height:44px;border:0;background:transparent;color:#334155;font-size:30px}.system-header h1{margin:0;text-align:center;font-size:17px}.system-content{padding:0 16px}.account-section{border-top:1px solid #e2e8f0;margin-top:8px}
+
 .settings-container {
   width: 100%;
   margin: 0 auto;

@@ -1,7 +1,7 @@
 <template>
   <main class="saved-page app-page">
     <header class="saved-header">
-      <button type="button" aria-label="返回" @click="router.back()">‹</button>
+      <button type="button" aria-label="返回" @click="router.push('/settings')">‹</button>
       <h1>已收藏</h1>
       <span></span>
     </header>

@@ -1,5 +1,10 @@
 <template>
   <div class="friends-container app-page">
+    <header class="friends-header">
+      <button type="button" aria-label="返回我的" @click="router.push('/settings')">‹</button>
+      <h1>好友 / 好友分组</h1>
+      <span></span>
+    </header>
     <!-- Sync Status Bar -->
     <div v-if="friends.syncing" class="sync-status syncing">
       <span class="sync-icon">⟳</span> 同步中...
@@ -558,6 +563,8 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.friends-header{position:sticky;top:0;z-index:10;display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:54px;background:rgba(248,250,252,.96);border-bottom:1px solid #e2e8f0}.friends-header button{width:44px;height:44px;border:0;background:transparent;color:#334155;font-size:30px}.friends-header h1{margin:0;text-align:center;font-size:17px}
+
 .friend-swipe{position:relative;overflow:hidden;touch-action:pan-y}.friend-swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:120px}.swipe-action{width:60px;border:0;color:#fff;font-size:12px;font-weight:650}.swipe-action.edit{background:#536471}.swipe-action.delete{background:#ef4444}.friend-swipe .friend-item{position:relative;z-index:1;background:#fff;transition:transform .2s ease}.friends-empty{display:flex;min-height:28vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:#64748b;text-align:center}.friends-empty strong{color:#0f1419;font-size:18px}.friends-empty span{font-size:14px}.friends-empty button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:#0f1419;color:#fff;font-size:14px;font-weight:650}
 
 .friends-container {

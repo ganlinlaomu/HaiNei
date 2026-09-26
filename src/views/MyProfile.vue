@@ -1,7 +1,7 @@
 <template>
   <main class="profile-page app-page">
     <header class="profile-topbar">
-      <button class="back-button" type="button" aria-label="返回" @click="router.back()">‹</button>
+      <button class="back-button" type="button" aria-label="返回" @click="router.push('/settings')">‹</button>
       <h1>我的资料</h1>
     </header>
 
