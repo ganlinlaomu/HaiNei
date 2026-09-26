@@ -5,8 +5,17 @@
       <h1>好友 / 好友分组</h1>
       <span></span>
     </header>
+    <div v-if="initialLoading" class="friends-load-state" role="status" aria-live="polite">
+      <span class="load-spinner" aria-hidden="true"></span>
+      <span>正在加载好友…</span>
+    </div>
+    <div v-else-if="initialLoadError" class="friends-load-state load-error" role="alert">
+      <span>{{ initialLoadError }}</span>
+      <button type="button" @click="loadFriendsPage">重新加载</button>
+    </div>
+
     <!-- Sync Status Bar -->
-    <div v-if="friends.syncing" class="sync-status syncing">
+    <div v-if="!initialLoading && !initialLoadError && friends.syncing" class="sync-status syncing">
       <span class="sync-icon">⟳</span> 同步中...
     </div>
     <div v-else-if="friends.syncError" class="sync-status error">
@@ -24,8 +33,8 @@
 
     <!-- Friend List -->
     <div v-show="activeSection === 'accepted'" class="card">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <h3 style="margin: 0;">好友（{{ acceptedFriends.length }}）</h3>
+      <div class="friends-list-heading">
+        <h3>好友（{{ acceptedFriends.length }}）</h3>
         <button 
           class="btn-icon btn-add" 
           @click="startAdd"
@@ -41,7 +50,7 @@
         <button type="button" @click="startAdd">添加好友</button>
       </div>
       <div class="list" v-else>
-        <div v-for="f in acceptedFriends" :key="f.pubkey" class="friend-swipe" @touchstart="onTouchStart($event, f.pubkey)" @touchmove="onTouchMove($event, f.pubkey)" @touchend="onTouchEnd(f.pubkey)">
+        <div v-for="f in acceptedFriends" :key="f.pubkey" class="friend-swipe" @touchstart="onTouchStart($event, f.pubkey)" @touchmove="onTouchMove($event, f.pubkey)" @touchend="onTouchEnd(f.pubkey)" @touchcancel="onTouchCancel(f.pubkey)">
           <div class="friend-swipe-actions">
             <button class="swipe-action edit" type="button" @click.stop="editFromSwipe(f)">编辑</button>
             <button class="swipe-action delete" type="button" @click.stop="deleteFromSwipe(f)">删除</button>
@@ -86,7 +95,7 @@
       <h3>已发送请求（{{ outgoingRequests.length }}）</h3>
       <div v-if="outgoingRequests.length === 0" class="small">暂无等待确认的请求</div>
       <div v-else class="list">
-        <div v-for="request in outgoingRequests" :key="request.peerPubkey" class="friend-swipe" @touchstart="onTouchStart($event, request.peerPubkey)" @touchmove="onTouchMove($event, request.peerPubkey)" @touchend="onTouchEnd(request.peerPubkey)">
+        <div v-for="request in outgoingRequests" :key="request.peerPubkey" class="friend-swipe" @touchstart="onTouchStart($event, request.peerPubkey)" @touchmove="onTouchMove($event, request.peerPubkey)" @touchend="onTouchEnd(request.peerPubkey)" @touchcancel="onTouchCancel(request.peerPubkey)">
           <div class="friend-swipe-actions">
             <button class="swipe-action edit" type="button" @click.stop="editPendingFromSwipe(request.peerPubkey)">编辑</button>
             <button class="swipe-action delete" type="button" @click.stop="withdrawFromSwipe(request.peerPubkey)">撤回</button>
@@ -205,7 +214,9 @@ export default defineComponent({
     const saving = ref(false);
     const editingPending = ref(false);
     const activeSection = ref<"accepted" | "incoming" | "outgoing">("accepted");
-    const { close: closeSwipe, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
+    const { close: closeSwipe, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
+    const initialLoading = ref(true);
+    const initialLoadError = ref("");
     const showSyncSuccess = ref(false);
     const isFadingOut = ref(false);
     let hideTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -288,11 +299,23 @@ export default defineComponent({
       }
     });
 
-    onMounted(async () => {
-      await friends.load();
-      await friendships.load();
-      await profiles.load();
-    });
+    async function loadFriendsPage() {
+      initialLoadError.value = "";
+      initialLoading.value = true;
+      try {
+        await Promise.all([
+          friends.load(),
+          friendships.load(),
+          profiles.load()
+        ]);
+      } catch (error) {
+        initialLoadError.value = error instanceof Error ? error.message : "好友加载失败，请稍后重试";
+      } finally {
+        initialLoading.value = false;
+      }
+    }
+
+    onMounted(() => { void loadFriendsPage(); });
     watch(() => route.query.section, section => {
       if (section === "incoming") activeSection.value = "incoming";
       else if (section === "outgoing") activeSection.value = "outgoing";
@@ -514,6 +537,7 @@ export default defineComponent({
     };
 
     return {
+      initialLoading, initialLoadError, loadFriendsPage, onTouchCancel,
       friends,
       router,
       acceptedFriends,
@@ -746,30 +770,6 @@ export default defineComponent({
   box-shadow: 0 2px 6px rgba(25, 118, 210, 0.3);
 }
 
-.btn-edit {
-  color: #3b82f6;
-  border: 1px solid #3b82f6;
-}
-
-.btn-edit:hover {
-  background: #3b82f6;
-  color: white;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
-}
-
-.btn-delete {
-  color: #ef4444;
-  border: 1px solid #ef4444;
-}
-
-.btn-delete:hover {
-  background: #ef4444;
-  color: white;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.3);
-}
-
 /* Modal */
 .modal-overlay {
   position: fixed;
@@ -847,6 +847,15 @@ export default defineComponent({
   font-size: 12px;
   color: #64748b;
 }
+
+.friends-list-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.friends-list-heading h3{margin:0}
+.friends-load-state{display:flex;min-height:120px;align-items:center;justify-content:center;gap:10px;padding:24px;color:#64748b;font-size:14px;text-align:center}
+.friends-load-state.load-error{flex-direction:column;color:#b91c1c}
+.friends-load-state button{min-height:38px;padding:0 15px;border:1px solid #cbd5e1;border-radius:999px;background:#fff;color:#0f1419;font:inherit;font-weight:600}
+.load-spinner{width:18px;height:18px;border:2px solid #cbd5e1;border-top-color:#2563eb;border-radius:50%;animation:friends-spin .7s linear infinite}
+@keyframes friends-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.load-spinner{animation:none}}
 
 .card {
   background: #fff;
