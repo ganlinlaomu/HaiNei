@@ -105,6 +105,7 @@ const videoUrlPatterns = getVideoUrlRemovalPatterns();
 
 // Constants for scroll and layout calculations
 const SCROLL_SAFE_OFFSET = 20; // Extra padding to ensure elements are fully visible
+const AUTO_LOAD_MORE_THRESHOLD = 420;
 const SCROLL_CONTAINER_SELECTOR = 'body > #app'; // Main scrollable container
 
 function bottomNavigationHeight() {
@@ -295,16 +296,23 @@ export default defineComponent({
       });
     }
 
+    function handleHomeScroll() {
+      scheduleVirtualWindowUpdate();
+      if (!scrollContainer || isLoadingMore.value || !hasMore.value) return;
+      const distanceToBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
+      if (distanceToBottom <= AUTO_LOAD_MORE_THRESHOLD) loadMoreMessages();
+    }
+
     function attachVirtualScroll() {
       detachVirtualScroll();
       scrollContainer = document.querySelector(SCROLL_CONTAINER_SELECTOR) as HTMLElement | null;
       virtualScrollActive = !!scrollContainer;
-      scrollContainer?.addEventListener("scroll", scheduleVirtualWindowUpdate, { passive: true });
+      scrollContainer?.addEventListener("scroll", handleHomeScroll, { passive: true });
       scheduleVirtualWindowUpdate();
     }
     function detachVirtualScroll() {
       virtualScrollActive = false;
-      scrollContainer?.removeEventListener("scroll", scheduleVirtualWindowUpdate);
+      scrollContainer?.removeEventListener("scroll", handleHomeScroll);
       scrollContainer = null;
       if (virtualFrame !== null) cancelAnimationFrame(virtualFrame);
       virtualFrame = null;
