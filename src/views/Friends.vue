@@ -196,6 +196,7 @@ import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 
 export default defineComponent({
   name: "Friends",
+  components: { ProfileAvatar, SecondaryPageHeader },
   setup() {
     const friends = useFriendsStore();
     const friendships = useFriendshipsStore();
