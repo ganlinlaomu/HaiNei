@@ -30,7 +30,6 @@
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useFriendshipsStore } from "@/stores/friendships";
@@ -39,7 +38,6 @@ import { acceptedProfileRecipients, useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { uploadPrivateProfileAvatar } from "@/utils/profileAvatar";
 
-const router = useRouter();
 const keys = useKeyStore();
 const friendships = useFriendshipsStore();
 const profiles = useProfilesStore();
