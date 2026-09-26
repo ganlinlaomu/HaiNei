@@ -85,6 +85,21 @@ describe("direct-message navigation and UI contract", () => {
     expect(source).toContain("开始一段新的私密对话。");
   });
 
+  it("uses swipe actions instead of a more menu for conversation hide/delete", () => {
+    const source = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    expect(source).toContain('@touchstart="onTouchStart($event, conversation.peerPubkey)"');
+    expect(source).toContain('class="swipe-actions"');
+    expect(source).toContain('class="action hide"');
+    expect(source).toContain('class="action delete"');
+    expect(source).toContain("directMessages.hideConversation(pubkey)");
+    expect(source).toContain("directMessages.deleteConversation(pubkey)");
+    expect(source).toContain("e.preventDefault()");
+    expect(source).toContain("touch-action:pan-y");
+    expect(source).not.toContain('class="more-button"');
+    expect(source).not.toContain('class="conversation-menu"');
+    expect(source).not.toContain("toggleMenu(");
+  });
+
   it("lists only accepted non-self friends in the new-conversation sheet", () => {
     const source = readFileSync(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
     expect(source).toContain('record.state === "accepted"');
