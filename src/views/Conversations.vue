@@ -24,6 +24,7 @@
         @touchstart="onTouchStart($event, conversation.peerPubkey)"
         @touchmove="onTouchMove($event, conversation.peerPubkey)"
         @touchend="onTouchEnd(conversation.peerPubkey)"
+        @touchcancel="onTouchCancel(conversation.peerPubkey)"
       >
         <div class="swipe-actions">
           <button class="action hide" type="button" @click.stop="hideConversation(conversation.peerPubkey)">隐藏</button>
@@ -81,7 +82,7 @@ const friends = useFriendsStore();
 const profiles = useProfilesStore();
 const ui = useUIStore();
 const searchQuery = ref("");
-const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
+const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
 const conversations = computed(() => buildDirectConversationSummaries(
   directMessages.conversationItems(),
   keys.pkHex,
