@@ -72,20 +72,26 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((response) => {
-        if (response && response.status === 200) {
-          const copy = response.clone();
-          caches.open(ASSETS_CACHE).then((cache) => {
-            cache.put(request, copy);
-          });
-        }
-        return response;
-      });
-    })
-  );
+  // Same-origin build assets use stale-while-revalidate: return cached bytes
+  // immediately, then refresh in the background for the next navigation.
+  if (url.origin === self.location.origin) {
+    event.respondWith(
+      caches.open(ASSETS_CACHE).then(async (cache) => {
+        const cached = await cache.match(request);
+        const network = fetch(request).then((response) => {
+          if (response?.ok && response.type === 'basic') {
+            event.waitUntil(cache.put(request, response.clone()));
+          }
+          return response;
+        }).catch(() => cached);
+        return cached || network;
+      })
+    );
+    return;
+  }
+
+  // Do not persist third-party/media responses in the app-shell cache.
+  event.respondWith(fetch(request));
 });
 
 self.addEventListener('push', (event) => {
