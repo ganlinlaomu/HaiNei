@@ -41,6 +41,7 @@
             @touchstart="onTouchStart($event, n.id)"
             @touchmove="onTouchMove($event, n.id)"
             @touchend="onTouchEnd(n.id)"
+        @touchcancel="onTouchCancel(n.id)"
           >
             <div class="swipe-actions">
               <button class="action read" @click.stop="markRead(n)">已读</button>
@@ -267,7 +268,7 @@ function formatRelativeTime(ts: number) {
 }
 
 /* ---------- 左滑 ---------- */
-const { close: closeSwipe, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
+const { close: closeSwipe, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
 
 /* ---------- 操作 ---------- */
 function markRead(n: any) {
