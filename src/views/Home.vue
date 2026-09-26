@@ -1231,6 +1231,16 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
   max-width: calc(100% - 24px);
 }
 
+@media (max-width: 767px) {
+  .new-messages-notification {
+    position: fixed;
+    top: calc(env(safe-area-inset-top) + 12px);
+    left: 50%;
+    margin: 0;
+    z-index: 1200;
+  }
+}
+
 .new-messages-notification:hover {
   transform: translateX(-50%) scale(1.02);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
