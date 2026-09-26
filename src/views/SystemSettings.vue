@@ -1,10 +1,6 @@
 <template>
   <main class="settings-container system-settings-page app-page">
-    <header class="system-header">
-      <button type="button" aria-label="返回我的" @click="router.push('/settings')">‹</button>
-      <h1>设置</h1>
-      <span></span>
-    </header>
+    <SecondaryPageHeader title="设置" back-label="返回我的" />
     <div v-if="settings.syncing" class="sync-status">{{ settings.syncStatusText || "正在同步加密设置…" }}</div>
     <div v-else-if="settings.syncError" class="sync-status sync-warning">{{ settings.syncError }}</div>
     <div v-else-if="settings.lastRelaySyncTimestamp || settings.lastMediaSyncTimestamp" class="sync-status sync-ok">
@@ -216,6 +212,7 @@
   </main>
 </template>
 <script setup lang="ts">
+import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
