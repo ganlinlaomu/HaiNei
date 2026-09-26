@@ -29,10 +29,10 @@ export type VoiceRecordingSession = {
 };
 
 const AUDIO_MIME_CANDIDATES = [
-  "audio/mp4;codecs=mp4a.40.2",
-  "audio/mp4",
   "audio/webm;codecs=opus",
   "audio/webm",
+  "audio/mp4;codecs=mp4a.40.2",
+  "audio/mp4",
   "audio/ogg;codecs=opus",
 ];
 
@@ -70,6 +70,7 @@ export async function createVoiceRecordingSession(options: {
       event,
       ...(reason ? { reason } : {}),
       recorderState: recorder?.state || "unavailable",
+      recorderMime: recorder?.mimeType || "",
       streamActive: stream.active,
       tracks: tracks.map(track => ({ readyState: track.readyState, muted: track.muted })),
     });
@@ -83,15 +84,21 @@ export async function createVoiceRecordingSession(options: {
     throw new Error("未检测到可用的麦克风");
   }
 
-  // Safari is most reliable when it chooses its own native container/codec.
-  // Only try an explicit supported type if the default constructor itself fails.
-  try {
-    recorder = new Recorder(stream);
-  } catch {
-    const fallbackMime = selectVoiceRecordingMime(Recorder);
+  const preferredMime = selectVoiceRecordingMime(Recorder);
+  if (preferredMime) {
     try {
-      if (!fallbackMime) throw new Error("unsupported");
-      recorder = new Recorder(stream, { mimeType: fallbackMime });
+      recorder = new Recorder(stream, { mimeType: preferredMime });
+    } catch {
+      try {
+        recorder = new Recorder(stream);
+      } catch {
+        stopTracks("recorder-construction-failed");
+        throw new Error("当前浏览器无法开始录音");
+      }
+    }
+  } else {
+    try {
+      recorder = new Recorder(stream);
     } catch {
       stopTracks("recorder-construction-failed");
       throw new Error("当前浏览器无法开始录音");

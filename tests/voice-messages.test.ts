@@ -44,6 +44,7 @@ class FakeRecorder extends EventTarget {
   static supported = new Set(["audio/mp4", "audio/webm;codecs=opus"]);
   static emitStop = true;
   static emitData = true;
+  static rejectExplicitMime = false;
   static stopCalls = 0;
   static startArguments: Array<number | undefined> = [];
   static constructorOptions: Array<MediaRecorderOptions | undefined> = [];
@@ -54,6 +55,7 @@ class FakeRecorder extends EventTarget {
   constructor(public stream: MediaStream, options?: MediaRecorderOptions) {
     super();
     FakeRecorder.constructorOptions.push(options);
+    if (FakeRecorder.rejectExplicitMime && options?.mimeType) throw new Error("explicit MIME rejected");
     FakeRecorder.instances.push(this);
     if (options?.mimeType) this.mimeType = options.mimeType;
   }
@@ -116,6 +118,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   FakeRecorder.emitStop = true;
   FakeRecorder.emitData = true;
+  FakeRecorder.rejectExplicitMime = false;
   FakeRecorder.stopCalls = 0;
   FakeRecorder.startArguments = [];
   FakeRecorder.constructorOptions = [];
@@ -124,15 +127,15 @@ afterEach(() => {
 });
 
 describe("voice recording lifecycle", () => {
-  it("chooses a supported Safari/Chromium MIME without hardcoding one format", () => {
-    expect(selectVoiceRecordingMime(FakeRecorder as unknown as typeof MediaRecorder)).toBe("audio/mp4");
+  it("prefers Opus WebM when both WebM and MP4 are supported", () => {
+    expect(selectVoiceRecordingMime(FakeRecorder as unknown as typeof MediaRecorder)).toBe("audio/webm;codecs=opus");
     FakeRecorder.supported = new Set(["audio/webm;codecs=opus"]);
     expect(selectVoiceRecordingMime(FakeRecorder as unknown as typeof MediaRecorder)).toBe("audio/webm;codecs=opus");
     expect(selectVoiceRecordingMime({})).toBe("");
     FakeRecorder.supported = new Set(["audio/mp4", "audio/webm;codecs=opus"]);
   });
 
-  it("starts one continuous native recording without a timeslice or forced MIME", async () => {
+  it("starts one continuous recording with the preferred MIME and no timeslice", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const harness = recorderHarness();
@@ -142,8 +145,24 @@ describe("voice recording lifecycle", () => {
     });
     expect(harness.getUserMedia).toHaveBeenCalledWith({ audio: true });
     expect(FakeRecorder.startArguments).toEqual([undefined]);
-    expect(FakeRecorder.constructorOptions).toEqual([undefined]);
+    expect(FakeRecorder.constructorOptions).toEqual([{ mimeType: "audio/webm;codecs=opus" }]);
+    expect(session.mime).toBe("audio/webm;codecs=opus");
     expect(session.isActive()).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(console.info).toHaveBeenCalledWith("[voice-recorder]", expect.objectContaining({
+      event: "start", recorderMime: "audio/webm;codecs=opus",
+    }));
+  });
+
+  it("falls back to the browser default constructor when the preferred MIME constructor fails", async () => {
+    FakeRecorder.rejectExplicitMime = true;
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    expect(FakeRecorder.constructorOptions).toEqual([{ mimeType: "audio/webm;codecs=opus" }, undefined]);
+    expect(session.mime).toBe("audio/mp4");
   });
 
   it("stays active beyond 4, 10, and 30 seconds without internal recorder restarts", async () => {
@@ -177,7 +196,7 @@ describe("voice recording lifecycle", () => {
     expect(harness.track.stop).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(10);
     const result = await finishing;
-    expect(result).toMatchObject({ mime: "audio/mp4", duration: 3 });
+    expect(result).toMatchObject({ mime: "audio/webm;codecs=opus", duration: 3 });
     expect(result!.size).toBeGreaterThan(0);
     expect(await result!.blob.text()).toBe("continuous-safari-recording");
     expect(harness.track.stop).toHaveBeenCalledOnce();
@@ -200,7 +219,7 @@ describe("voice recording lifecycle", () => {
     const second = session.finish();
     expect(first).toBe(second);
     await vi.advanceTimersByTimeAsync(30);
-    await expect(first).resolves.toMatchObject({ mime: "audio/mp4" });
+    await expect(first).resolves.toMatchObject({ mime: "audio/webm;codecs=opus" });
     expect(FakeRecorder.stopCalls).toBe(1);
     expect(harness.track.stop).toHaveBeenCalledOnce();
   });
@@ -264,7 +283,7 @@ describe("voice recording lifecycle", () => {
     harness.track.end();
     expect(session.isActive()).toBe(false);
     await vi.advanceTimersByTimeAsync(20);
-    await expect(session.finished).resolves.toMatchObject({ mime: "audio/mp4" });
+    await expect(session.finished).resolves.toMatchObject({ mime: "audio/webm;codecs=opus" });
     expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 
@@ -306,7 +325,7 @@ describe("voice recording lifecycle", () => {
     expect(session.isActive()).toBe(false);
     expect(FakeRecorder.stopCalls).toBe(1);
     await vi.advanceTimersByTimeAsync(20);
-    await expect(session.finished).resolves.toMatchObject({ mime: "audio/mp4" });
+    await expect(session.finished).resolves.toMatchObject({ mime: "audio/webm;codecs=opus" });
     expect(harness.track.stop).toHaveBeenCalledOnce();
   });
 
