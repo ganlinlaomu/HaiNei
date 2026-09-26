@@ -22,7 +22,9 @@
           <span>简介</span>
           <textarea v-model="bio" class="input bio" maxlength="500" rows="4"></textarea>
         </label>
-        <button class="btn btn-primary save-button" type="submit">保存</button>
+        <button class="btn btn-primary save-button" type="submit" :disabled="saving">
+          {{ saving ? "保存中…" : "保存" }}
+        </button>
       </form>
     </section>
   </main>
@@ -46,6 +48,7 @@ const nickname = ref("");
 const bio = ref("");
 const avatarFile = ref<File | null>(null);
 const draftLoadedFor = ref("");
+const saving = ref(false);
 
 function populateDraft() {
   const account = keys.pkHex;
@@ -74,60 +77,67 @@ function selectAvatar(event: Event) {
 
 async function save() {
   const account = keys.pkHex;
-  if (!account) return;
-  const previous = profiles.getProfile(account);
-  const updatedAt = Math.max(Date.now(), (previous?.updatedAt || 0) + 1);
-  const local = await profiles.saveOwnProfile({
-    nickname: nickname.value,
-    bio: bio.value,
-    avatar: previous?.avatar
-  }, updatedAt);
-  ui.addToast("资料已保存，正在私密同步", 2_000, "success");
+  if (!account || saving.value) return;
+
+  saving.value = true;
+  const nicknameAtSave = nickname.value;
+  const bioAtSave = bio.value;
   const selected = avatarFile.value;
-  void (async () => {
+
+  try {
+    const previous = profiles.getProfile(account);
+    const updatedAt = Math.max(Date.now(), (previous?.updatedAt || 0) + 1);
+    const local = await profiles.saveOwnProfile({
+      nickname: nicknameAtSave,
+      bio: bioAtSave,
+      avatar: previous?.avatar
+    }, updatedAt);
+    ui.addToast("资料已保存，正在私密同步", 2_000, "success");
+
     let finalProfile = local;
     let avatarError: unknown;
-    try {
-      if (selected) {
-        try {
-          const avatar = await uploadPrivateProfileAvatar(selected, {
-            accountPubkey: account,
-            signEvent: keys.signEvent.bind(keys)
-          });
-          if (keys.pkHex !== account) return;
-          finalProfile = await profiles.saveOwnProfile({
-            nickname: nickname.value,
-            bio: bio.value,
-            avatar
-          }, Math.max(Date.now(), local.updatedAt + 1));
-          avatarFile.value = null;
-        } catch (error) {
-          avatarError = error;
-        }
-      }
-      if (keys.pkHex !== account) return;
-      const accepted = acceptedProfileRecipients(friendships.records);
-      await profiles.sendProfile(finalProfile, accepted);
-      if (keys.pkHex === account) {
-        if (avatarError) {
-          const reason = avatarError instanceof Error ? avatarError.message : "头像上传失败";
-          ui.addToast(`昵称和简介已同步，头像未更新：${reason}`, 3_000, "error");
-        } else {
-          ui.addToast("资料已同步", 2_000, "success");
-        }
-      }
-    } catch (error) {
-      if (keys.pkHex === account) {
-        const reason = error instanceof Error ? error.message : "同步失败";
-        ui.addToast(`资料已保存在本机：${reason}`, 3_000, "error");
+    if (selected) {
+      try {
+        const avatar = await uploadPrivateProfileAvatar(selected, {
+          accountPubkey: account,
+          signEvent: keys.signEvent.bind(keys)
+        });
+        if (keys.pkHex !== account) return;
+        finalProfile = await profiles.saveOwnProfile({
+          nickname: nicknameAtSave,
+          bio: bioAtSave,
+          avatar
+        }, Math.max(Date.now(), local.updatedAt + 1));
+        if (avatarFile.value === selected) avatarFile.value = null;
+      } catch (error) {
+        avatarError = error;
       }
     }
-  })();
+
+    if (keys.pkHex !== account) return;
+    const accepted = acceptedProfileRecipients(friendships.records);
+    await profiles.sendProfile(finalProfile, accepted);
+    if (keys.pkHex === account) {
+      if (avatarError) {
+        const reason = avatarError instanceof Error ? avatarError.message : "头像上传失败";
+        ui.addToast(`昵称和简介已同步，头像未更新：${reason}`, 3_000, "error");
+      } else {
+        ui.addToast("资料已同步", 2_000, "success");
+      }
+    }
+  } catch (error) {
+    if (keys.pkHex === account) {
+      const reason = error instanceof Error ? error.message : "同步失败";
+      ui.addToast(`资料保存失败：${reason}`, 3_000, "error");
+    }
+  } finally {
+    if (keys.pkHex === account) saving.value = false;
+  }
 }
 </script>
 
 <style scoped>
 .profile-page{width:100%;margin:0 auto;box-sizing:border-box;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
-.profile-editor{padding:8px 16px 0}.avatar-area{display:flex;flex-direction:column;align-items:center;margin:8px 0 24px}.avatar-picker{position:relative;display:inline-grid;border-radius:50%;cursor:pointer}.avatar-picker input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.avatar-edit{position:absolute;right:-2px;bottom:1px;display:grid;place-items:center;width:27px;height:27px;border:2px solid #fff;border-radius:50%;background:#2563eb;color:#fff;font-size:14px;pointer-events:none}.avatar-hint{margin-top:8px;max-width:240px;color:#2563eb;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.avatar-area p{margin:5px 0 0;color:#64748b;font-size:12px}.field{display:grid;gap:7px;margin-bottom:15px;color:#334155;font-size:14px}.input{width:100%;box-sizing:border-box}.bio{min-height:104px;resize:vertical;padding:10px}.save-button{width:100%;min-height:46px;margin-top:2px}
+.profile-editor{padding:8px 16px 0}.avatar-area{display:flex;flex-direction:column;align-items:center;margin:8px 0 24px}.avatar-picker{position:relative;display:inline-grid;border-radius:50%;cursor:pointer}.avatar-picker input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.avatar-edit{position:absolute;right:-2px;bottom:1px;display:grid;place-items:center;width:27px;height:27px;border:2px solid #fff;border-radius:50%;background:#2563eb;color:#fff;font-size:14px;pointer-events:none}.avatar-hint{margin-top:8px;max-width:240px;color:#2563eb;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.avatar-area p{margin:5px 0 0;color:#64748b;font-size:12px}.field{display:grid;gap:7px;margin-bottom:15px;color:#334155;font-size:14px}.input{width:100%;box-sizing:border-box}.bio{min-height:104px;resize:vertical;padding:10px}.save-button{width:100%;min-height:46px;margin-top:2px}.save-button:disabled{opacity:.58;cursor:default}
 @media (min-width:768px){.profile-editor{max-width:560px;margin:0 auto}}
 </style>
