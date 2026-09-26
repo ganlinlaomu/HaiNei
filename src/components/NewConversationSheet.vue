@@ -26,21 +26,22 @@
               <span>{{ loadError }}</span>
               <button type="button" @click="load">重新加载</button>
             </div>
-            <button
-              v-else
-              v-for="friend in filteredFriends"
-              :key="friend.pubkey"
-              class="friend-row"
-              type="button"
-              @click="selectFriend(friend.pubkey)"
-            >
-              <ProfileAvatar :pubkey="friend.pubkey" :local-name="friend.localName" :size="44" />
-              <span class="friend-copy">
-                <strong>{{ friend.displayName }}</strong>
-                <small v-if="friend.note">{{ friend.note }}</small>
-              </span>
-              <svg class="row-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
-            </button>
+            <template v-else>
+              <button
+                v-for="friend in filteredFriends"
+                :key="friend.pubkey"
+                class="friend-row"
+                type="button"
+                @click="selectFriend(friend.pubkey)"
+              >
+                <ProfileAvatar :pubkey="friend.pubkey" :local-name="friend.localName" :size="44" />
+                <span class="friend-copy">
+                  <strong>{{ friend.displayName }}</strong>
+                  <small v-if="friend.note">{{ friend.note }}</small>
+                </span>
+                <svg class="row-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+              </button>
+            </template>
             <div v-if="!loading && !loadError && filteredFriends.length === 0" class="empty-friends">
               {{ query.trim() ? '未找到匹配的好友' : '暂无已接受的好友' }}
             </div>
