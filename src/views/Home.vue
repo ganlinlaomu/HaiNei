@@ -16,7 +16,7 @@
       class="new-messages-notification" 
       role="button"
       tabindex="0"
-      :aria-label="`有 ${pendingMessages.length} 条新消息，点击查看`"
+      :aria-label="`有 ${pendingMessages.length} 条新动态，点击查看`"
       @click="showPendingMessages"
       @keyup.enter="showPendingMessages"
       @keyup.space.prevent="showPendingMessages"
@@ -1167,8 +1167,8 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
       hasMore,
       isLoadingMore,
       loadMoreMessages,
-      remainingMessagesCount
-      , virtualMessages, topSpacerHeight, bottomSpacerHeight, feedElement, recordPostHeight, route
+      remainingMessagesCount,
+      virtualMessages, topSpacerHeight, bottomSpacerHeight, feedElement, recordPostHeight, route, router
       
     };
   }
