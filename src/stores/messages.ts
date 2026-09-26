@@ -38,6 +38,13 @@ export type InboxItem = {
   };
 };
 
+export type InboxMutation = {
+  revision: number;
+  type: "replace" | "insert" | "update" | "reset";
+  itemId?: string;
+  evictedId?: string;
+};
+
 export type OutboxItem = {
   id: string;
   created_at: number;
@@ -81,9 +88,16 @@ export const useMessagesStore = defineStore("messages", {
   state: () => ({
     inbox: [] as InboxItem[],
     outbox: [] as OutboxItem[],
-    loadedFor: "" as string
+    loadedFor: "" as string,
+    inboxRevision: 0,
+    lastInboxMutation: null as InboxMutation | null
   }),
   actions: {
+    recordInboxMutation(type: InboxMutation["type"], itemId?: string, evictedId?: string) {
+      this.inboxRevision += 1;
+      this.lastInboxMutation = { revision: this.inboxRevision, type, itemId, evictedId };
+    },
+
     async load(pk?: string) {
       const ks = useKeyStore();
       const targetPk = pk ?? ks.pkHex;
@@ -145,6 +159,7 @@ export const useMessagesStore = defineStore("messages", {
         rootId: record.rootId,
         tags: record.tags || []
       })).sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
+      this.recordInboxMutation("replace");
       const outgoing = await outgoingQueueRepository.list(targetPk);
       if (this.loadedFor !== targetPk) return;
       this.outbox = outgoing.filter(item => item.state === "sent").map(item => {
@@ -187,16 +202,20 @@ export const useMessagesStore = defineStore("messages", {
             ...existing,
             _localMeta: item._localMeta
           };
+          this.recordInboxMutation("update", item.id);
           this.scheduleInboxSave();
         }
         // All other cases: keep existing as-is
         return;
       }
       
-      // Add new message
+      // Add new message. Home can consume the common single-insert case
+      // incrementally, while storage/sync behavior remains unchanged.
       this.inbox.unshift(item);
+      const evictedId = this.inbox.length > 1000 ? this.inbox[1000]?.id : undefined;
       // keep bounded history
       if (this.inbox.length > 1000) this.inbox.splice(1000);
+      this.recordInboxMutation("insert", item.id, evictedId);
       this.scheduleInboxSave();
       notifyCanonicalMessageAdded(this.loadedFor, item);
     },
@@ -216,6 +235,7 @@ export const useMessagesStore = defineStore("messages", {
       this.inbox = [];
       this.outbox = [];
       this.loadedFor = "";
+      this.recordInboxMutation("reset");
       if (removeFromStorage) {
         try { if (ik) deviceStorage.removeItem(ik); } catch {}
         try { if (ok) deviceStorage.removeItem(ok); } catch {}
