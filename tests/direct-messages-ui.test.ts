@@ -48,6 +48,7 @@ describe("direct-message navigation and UI contract", () => {
     const profile = readFileSync(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
     const saved = readFileSync(join(process.cwd(), "src/views/Saved.vue"), "utf8");
     const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
+    const secondaryHeader = readFileSync(join(process.cwd(), "src/components/SecondaryPageHeader.vue"), "utf8");
     expect(settings).toContain("router.push('/settings/system')");
     for (const source of [system, friends, profile, saved]) {
       expect(source).toContain("SecondaryPageHeader");
@@ -66,12 +67,22 @@ describe("direct-message navigation and UI contract", () => {
     expect(system).toContain("后台推送 / Web Push");
     expect(system).toContain("存储 / Cache");
     expect(system).toContain("高级设置 / Diagnostics");
-    expect(system).toContain("router.push('/settings')");
-    expect(friends).toContain("好友 / 好友分组</h1>");
-    expect(friends).toContain("router.push('/settings')");
+    expect(system).toContain('<SecondaryPageHeader title="设置" back-label="返回我的" />');
+    expect(friends).toContain('<SecondaryPageHeader title="好友 / 好友分组" back-label="返回我的" />');
+    expect(saved).toContain('<SecondaryPageHeader title="已收藏" back-label="返回我的" />');
+    expect(profile).toContain('<SecondaryPageHeader title="我的资料" back-label="返回" variant="compact" />');
     expect(friends).toMatch(/return \\{[\\s\\S]*router,[\\s\\S]*acceptedFriends/);
-    expect(profile).toContain("router.push('/settings')");
-    expect(saved).toContain("router.push('/settings')");
+    expect(secondaryHeader).toContain('backTo: "/settings"');
+    expect(secondaryHeader).toContain('<span class="back-glyph" aria-hidden="true">‹</span>');
+    expect(secondaryHeader).not.toContain("<svg");
+    expect(secondaryHeader).not.toContain("backdrop-filter");
+    expect(secondaryHeader).toContain("grid-template-columns:44px 1fr 44px");
+    expect(secondaryHeader).toContain("min-height:54px");
+    expect(secondaryHeader).toContain("font-size:30px");
+    expect(secondaryHeader).toContain(".secondary-page-header.compact{position:static");
+    expect(secondaryHeader).toContain("min-height:48px");
+    expect(secondaryHeader).toContain("width:40px;height:40px");
+    expect(secondaryHeader).toContain("font-size:28px");
     expect(router).toContain('path: "/settings/system"');
   });
 
