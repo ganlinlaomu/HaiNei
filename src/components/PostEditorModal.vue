@@ -944,6 +944,13 @@ export default defineComponent({
 
       if (recips.length === 0) { error.value = "未指定收件人"; sending.value = false; return; }
 
+      const groupsMeta = allFriends.value
+        ? [{ name: "全部好友", count: recipientsCount.value }]
+        : selectedGroups.value.map(g => ({
+            name: g,
+            count: countByGroup.value[g] || 0
+          }));
+
       try {
         // Build content with uploaded images appended
         let fullContent = content.value;
@@ -1002,14 +1009,6 @@ export default defineComponent({
           };
           fullContent += `${VIDEO_METADATA_PREFIX}${JSON.stringify(videoData)}${VIDEO_METADATA_SUFFIX}\n`;
         }
-        
-        // Calculate group metadata before publishing
-        const groupsMeta = allFriends.value
-          ? [{ name: "全部好友", count: recipientsCount.value }]
-          : selectedGroups.value.map(g => ({
-              name: g,
-              count: countByGroup.value[g] || 0
-            }));
         
         // Publish the message to relays
         const { message } = await posts.sendDirectMessage(recips, fullContent);
