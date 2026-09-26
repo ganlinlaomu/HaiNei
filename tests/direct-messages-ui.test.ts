@@ -50,6 +50,10 @@ describe("direct-message navigation and UI contract", () => {
     const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
     const secondaryHeader = readFileSync(join(process.cwd(), "src/components/SecondaryPageHeader.vue"), "utf8");
     expect(settings).toContain("router.push('/settings/system')");
+    expect(settings).toContain('<section v-else class="settings-card">');
+    expect(settings).toContain("background:#fff;color:#0f1419");
+    expect(settings).toContain("border-top:1px solid #eff1f3;background:#fff");
+    expect(settings).not.toContain('<section v-else class="card settings-card">');
     for (const source of [system, friends, profile, saved]) {
       expect(source).toContain("SecondaryPageHeader");
     }
