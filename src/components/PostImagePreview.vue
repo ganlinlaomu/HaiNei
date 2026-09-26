@@ -366,8 +366,6 @@ export default defineComponent({
     }
 
     function resetImages() {
-      visibilityObserver?.disconnect();
-      visibilityObserver = null;
       loadGeneration.value += 1;
       closeViewer();
       viewerImageUrls.value = [];
@@ -424,6 +422,8 @@ export default defineComponent({
     });
 
     onBeforeUnmount(() => {
+      visibilityObserver?.disconnect();
+      visibilityObserver = null;
       loadGeneration.value += 1;
       if (scrollFrame) cancelAnimationFrame(scrollFrame);
       if (tapTimer) clearTimeout(tapTimer);
