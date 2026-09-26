@@ -220,13 +220,17 @@ describe("direct-message navigation and UI contract", () => {
     expect(home).not.toContain("setTimeout(() => {\n        const startIndex = displayedMessages.value.length");
   });
 
-  it("keeps storage migration off first paint and uses bounded app-shell caching", () => {
+  it("hydrates device session before version checks and router auth restore", () => {
     const main = readFileSync(join(process.cwd(), "src/main.ts"), "utf8");
     const worker = readFileSync(join(process.cwd(), "public/service-worker.js"), "utf8");
-    const mountIndex = main.indexOf('app.mount("#app")');
     const migrationIndex = main.indexOf("await migrateLegacyLocalStorage()");
-    expect(mountIndex).toBeGreaterThan(-1);
-    expect(migrationIndex).toBeGreaterThan(mountIndex);
+    const versionIndex = main.indexOf("const versionChanged = initVersionTracking()");
+    const routerIndex = main.indexOf("app.use(router)");
+    const mountIndex = main.indexOf('app.mount("#app")');
+    expect(migrationIndex).toBeGreaterThan(-1);
+    expect(versionIndex).toBeGreaterThan(migrationIndex);
+    expect(routerIndex).toBeGreaterThan(versionIndex);
+    expect(mountIndex).toBeGreaterThan(routerIndex);
     expect(worker).toContain("url.origin === self.location.origin");
     expect(worker).toContain("stale-while-revalidate");
     expect(worker).toContain("event.respondWith(fetch(request))");
