@@ -48,6 +48,7 @@ describe("direct-message navigation and UI contract", () => {
     const profile = readFileSync(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
     const saved = readFileSync(join(process.cwd(), "src/views/Saved.vue"), "utf8");
     const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
+    const secondaryHeader = readFileSync(join(process.cwd(), "src/components/SecondaryPageHeader.vue"), "utf8");
     expect(settings).toContain("router.push('/settings/system')");
     for (const source of [system, friends, profile, saved]) {
       expect(source).toContain("SecondaryPageHeader");
@@ -66,12 +67,27 @@ describe("direct-message navigation and UI contract", () => {
     expect(system).toContain("后台推送 / Web Push");
     expect(system).toContain("存储 / Cache");
     expect(system).toContain("高级设置 / Diagnostics");
-    expect(system).toContain("router.push('/settings')");
-    expect(friends).toContain("好友 / 好友分组</h1>");
-    expect(friends).toContain("router.push('/settings')");
+    expect(system).toContain('<SecondaryPageHeader title="设置" back-label="返回我的" />');
+    expect(friends).toContain('<SecondaryPageHeader title="好友 / 好友分组" back-label="返回我的" />');
+    expect(saved).toContain('<SecondaryPageHeader title="已收藏" back-label="返回我的" />');
+    expect(profile).toContain('<SecondaryPageHeader title="我的资料" back-label="返回我的" />');
     expect(friends).toMatch(/return \\{[\\s\\S]*router,[\\s\\S]*acceptedFriends/);
-    expect(profile).toContain("router.push('/settings')");
-    expect(saved).toContain("router.push('/settings')");
+    expect(secondaryHeader).toContain('backTo: "/settings"');
+    expect(secondaryHeader).toContain('backLabel: "返回我的"');
+    expect(secondaryHeader).not.toContain("variant?:");
+    expect(secondaryHeader).not.toContain(".compact{");
+    expect(secondaryHeader).toContain('<span class="back-glyph" aria-hidden="true">‹</span>');
+    expect(secondaryHeader).not.toContain("<svg");
+    expect(secondaryHeader).not.toContain("backdrop-filter");
+    expect(secondaryHeader).toContain("grid-template-columns:44px 1fr 44px");
+    expect(secondaryHeader).toContain("min-height:54px");
+    expect(secondaryHeader).toContain("font-size:30px");
+    expect(secondaryHeader).toContain("position:sticky;top:0");
+    expect(profile).toContain(".profile-page{width:100%;margin:0 auto;box-sizing:border-box;padding:0 0 ");
+    expect(saved).toContain(".saved-page{width:100%;margin:0 auto;padding:0 0 ");
+    expect(profile).toContain(".profile-editor{padding:8px 16px 0}");
+    expect(saved).toContain(".saved-list{display:grid;gap:12px;padding:0 10px}");
+    expect(friends).not.toContain(".friends-header{");
     expect(router).toContain('path: "/settings/system"');
   });
 
@@ -148,6 +164,22 @@ describe("direct-message navigation and UI contract", () => {
     expect(notifications).toContain('useSwipeActions } from "@/composables/useSwipeActions"');
     expect(notifications).toContain("touch-action: pan-y");
     expect(notifications).not.toContain("reactive<Record<string, number>>");
+  });
+
+  it("uses card feed surfaces for Home and flat full-width list surfaces for messaging", () => {
+    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const notifications = readFileSync(join(process.cwd(), "src/views/Notifications.vue"), "utf8");
+    expect(home).toContain(".post-card {");
+    expect(home).toContain("border-radius: 14px");
+    expect(conversations).toContain("background:#fff");
+    expect(conversations).toContain(".conversation-list{display:flex;width:100%");
+    expect(notifications).toContain("background: #fff");
+    expect(notifications).toContain("padding: 0 0 calc(");
+    expect(notifications).toContain("margin: 4px 16px 10px");
+    expect(notifications).toContain("padding: 10px 16px");
+    expect(notifications).toContain("<h1>通知</h1>");
+    expect(notifications.match(/@touchcancel="onTouchCancel\(n\.id\)"/g)).toHaveLength(3);
   });
 
   it("keeps UX consistency across friends, Home, and conversation empty states", () => {
