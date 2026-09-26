@@ -1,10 +1,6 @@
 <template>
   <main class="saved-page app-page">
-    <header class="saved-header">
-      <button type="button" aria-label="返回" @click="router.push('/settings')">‹</button>
-      <h1>已收藏</h1>
-      <span></span>
-    </header>
+    <SecondaryPageHeader title="已收藏" back-label="返回我的" />
     <p class="privacy-note">收藏仅保存在当前设备和账号中</p>
     <section v-if="savedPosts.length" class="saved-list">
       <PostCard v-for="post in savedPosts" :key="post.id" :message="post" />
@@ -17,6 +13,7 @@
 import { computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import PostCard from "@/components/PostCard.vue";
+import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useBookmarksStore } from "@/stores/bookmarks";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore } from "@/stores/messages";
