@@ -476,6 +476,7 @@ function reconcileStartupSnapshot(updateWatermark: boolean) {
 // --------------------
 let reconcileScheduled = false;
 let reconcilePending = false;
+let lastReconciledSnapshot = "";
 
 async function safeUpdateLocalRefs() {
   if (route.path !== "/") {
@@ -490,7 +491,11 @@ async function safeUpdateLocalRefs() {
   await new Promise<void>(resolve => {
     const run = () => {
       reconcileScheduled = false;
-      updateLocalRefs();
+      const snapshot = `${inboxSnapshot.value}|${feedPreferenceSnapshot.value}`;
+      if (snapshot !== lastReconciledSnapshot || reconcilePending) {
+        lastReconciledSnapshot = snapshot;
+        updateLocalRefs();
+      }
       const shouldRunAgain = reconcilePending;
       reconcilePending = false;
       resolve();
