@@ -1,6 +1,6 @@
 <template>
   <header class="secondary-page-header">
-    <button type="button" :aria-label="backLabel" @click="router.push(backTo)">
+    <button type="button" :aria-label="backLabel" @click="goBack">
       <span class="back-glyph" aria-hidden="true">‹</span>
     </button>
     <h1>{{ title }}</h1>
@@ -11,16 +11,22 @@
 <script setup lang="ts">
 import { useRouter } from "vue-router";
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   title: string;
   backTo?: string;
   backLabel?: string;
+  backMode?: "push" | "history";
 }>(), {
   backTo: "/settings",
-  backLabel: "返回我的"
+  backLabel: "返回我的",
+  backMode: "push"
 });
-
 const router = useRouter();
+
+function goBack() {
+  if (props.backMode === "history") router.back();
+  else router.push(props.backTo || "/settings");
+}
 </script>
 
 <style scoped>
