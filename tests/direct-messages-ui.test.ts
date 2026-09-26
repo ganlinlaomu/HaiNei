@@ -331,6 +331,16 @@ describe("direct-message navigation and UI contract", () => {
     expect(conversations).toContain("`/messages/${pubkey}`");
   });
 
+  it("keeps the latest private message visible when the composer receives focus", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    expect(chat).toContain('@focus="handleComposerFocus"');
+    expect(chat).toContain('@blur="handleComposerBlur"');
+    expect(chat).toContain('window.visualViewport?.addEventListener("resize", handleVisualViewportResize)');
+    expect(chat).toContain('window.visualViewport?.removeEventListener("resize", handleVisualViewportResize)');
+    expect(chat).toContain("requestAnimationFrame(setMessageListToBottom)");
+    expect(chat).toContain("if (composerFocused) setMessageListToBottom()");
+  });
+
   it("keeps the compact DM composer above the safe-area bottom", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain("calc(28px + env(safe-area-inset-bottom))");
