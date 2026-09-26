@@ -55,7 +55,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, reactive, ref } from "vue";
+import { computed, onActivated, onDeactivated, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import NewConversationSheet from "@/components/NewConversationSheet.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
@@ -69,6 +69,7 @@ import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { formatRelativeTime } from "@/utils/format";
 import { loadAccountStoresOnce } from "@/utils/bottomTabActivation";
+import { useSwipeActions } from "@/composables/useSwipeActions";
 
 const router = useRouter();
 const keys = useKeyStore();
@@ -79,13 +80,7 @@ const friends = useFriendsStore();
 const profiles = useProfilesStore();
 const ui = useUIStore();
 const searchQuery = ref("");
-const SWIPE_ACTION_WIDTH = 120;
-const SWIPE_OPEN_THRESHOLD = 60;
-const swipe = reactive<Record<string, number>>({});
-const startX = reactive<Record<string, number>>({});
-const startY = reactive<Record<string, number>>({});
-const swipingPeer = ref("");
-const horizontalGesture = ref(false);
+const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
 const conversations = computed(() => buildDirectConversationSummaries(
   directMessages.conversationItems(),
   keys.pkHex,
@@ -116,55 +111,20 @@ async function load() {
   if (!account) return;
   await loadAccountStoresOnce(account, [messages, friendships, friends, profiles]);
 }
-function closeOtherSwipes(pubkey = "") {
-  for (const key of Object.keys(swipe)) {
-    if (key !== pubkey && swipe[key]) swipe[key] = 0;
-  }
-}
 function openConversation(pubkey: string) {
-  if (swipe[pubkey]) {
-    swipe[pubkey] = 0;
+  if (isSwipeOpen(pubkey)) {
+    closeSwipe(pubkey);
     return;
   }
   closeOtherSwipes();
   void router.push(`/messages/${pubkey}`);
 }
-function onTouchStart(e: TouchEvent, pubkey: string) {
-  const touch = e.touches[0];
-  startX[pubkey] = touch.clientX;
-  startY[pubkey] = touch.clientY;
-  swipingPeer.value = pubkey;
-  horizontalGesture.value = false;
-  closeOtherSwipes(pubkey);
-}
-function onTouchMove(e: TouchEvent, pubkey: string) {
-  if (swipingPeer.value !== pubkey) return;
-  const touch = e.touches[0];
-  const dx = touch.clientX - startX[pubkey];
-  const dy = touch.clientY - startY[pubkey];
-  if (!horizontalGesture.value) {
-    if (Math.abs(dy) > Math.abs(dx)) return;
-    if (Math.abs(dx) < 6) return;
-    horizontalGesture.value = true;
-  }
-  if (horizontalGesture.value && e.cancelable) e.preventDefault();
-  swipe[pubkey] = Math.min(0, Math.max(dx, -SWIPE_ACTION_WIDTH));
-}
-function onTouchEnd(pubkey: string) {
-  if (swipingPeer.value !== pubkey) return;
-  swipe[pubkey] = swipe[pubkey] < -SWIPE_OPEN_THRESHOLD ? -SWIPE_ACTION_WIDTH : 0;
-  swipingPeer.value = "";
-  horizontalGesture.value = false;
-}
-function swipeStyle(pubkey: string) {
-  return { transform: `translateX(${swipe[pubkey] || 0}px)` };
-}
 async function hideConversation(pubkey: string) {
-  swipe[pubkey] = 0;
+  closeSwipe(pubkey);
   await directMessages.hideConversation(pubkey);
 }
 async function deleteConversation(pubkey: string) {
-  swipe[pubkey] = 0;
+  closeSwipe(pubkey);
   if (!window.confirm("仅删除当前设备/当前账号中的聊天记录，无法撤回对方或 Relay 上的消息。")) return;
   await directMessages.deleteConversation(pubkey);
 }
