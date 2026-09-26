@@ -236,10 +236,22 @@ describe("direct-message navigation and UI contract", () => {
     expect(worker).toContain("event.respondWith(fetch(request))");
   });
 
-  it("avoids duplicate Home reconcile work for unchanged snapshots", () => {
+  it("uses revisions and a safe single-insert fast path for Home reconciliation", () => {
     const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const messages = readFileSync(join(process.cwd(), "src/stores/messages.ts"), "utf8");
+    const preferences = readFileSync(join(process.cwd(), "src/stores/feedPreferences.ts"), "utf8");
     expect(home).toContain("lastReconciledSnapshot");
-    expect(home).toContain("snapshot !== lastReconciledSnapshot || reconcilePending");
+    expect(home).toContain("msgs.inboxRevision");
+    expect(home).toContain("feedPreferences.revision");
+    expect(home).toContain("canApplySingleInsert");
+    expect(home).toContain('mutation.type === "insert"');
+    expect(home).toContain('mode: canApplySingleInsert ? "incremental" : "rebuild"');
+    expect(home).toContain('refreshResult.mode === "incremental"');
+    expect(home).toContain("rebuildVisibleInbox()");
+    expect(home).not.toContain("[...feedPreferences.hiddenMessageIds].sort()");
+    expect(messages).toContain('type: "replace" | "insert" | "update" | "reset"');
+    expect(messages).toContain('this.recordInboxMutation("insert", item.id, evictedId)');
+    expect(preferences).toContain("revision: 0");
   });
 
   it("surfaces key action failures through the shared toast store", () => {
