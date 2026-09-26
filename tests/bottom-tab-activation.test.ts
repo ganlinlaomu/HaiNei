@@ -45,14 +45,14 @@ describe("bottom-tab activation loading", () => {
 
   it("wires activations to deduped loads, stale cache checks, and idle chunk preload", () => {
     const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
-    const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
+    const systemSettings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
     const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
     const routes = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
 
     expect(conversations).toContain("loadAccountStoresOnce(account, [messages, friendships, friends, profiles])");
-    expect(settings).toContain("isAccountResourceStale(");
-    expect(settings).toContain("scheduleCacheStatsRefresh();");
-    expect(settings).toContain('@click="refreshCacheStats(true)"');
+    expect(systemSettings).toContain("isAccountResourceStale(");
+    expect(systemSettings).toContain("scheduleCacheStatsRefresh();");
+    expect(systemSettings).toContain('@click="refreshCacheStats(true)"');
     expect(app).toContain("void preloadBottomTabViews()");
     expect(routes).toContain("component: loadConversationsView");
     expect(routes).toContain("component: loadNotificationsView");
