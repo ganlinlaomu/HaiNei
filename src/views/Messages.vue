@@ -116,6 +116,7 @@ import { useDirectMessagesStore } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
+import { useUIStore } from "@/stores/ui";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import {
@@ -131,6 +132,7 @@ import { createVoiceRecordingSession, type VoiceRecordingResult, type VoiceRecor
 const route = useRoute();
 const router = useRouter();
 const keys = useKeyStore();
+const ui = useUIStore();
 const messageStore = useMessagesStore();
 const directMessages = useDirectMessagesStore();
 const friendships = useFriendshipsStore();
@@ -385,6 +387,7 @@ function submitMessage() {
       clearRecordedAudio();
     } catch (error) {
       voiceError.value = error instanceof Error ? error.message : "语音发送失败";
+      ui.addToast(voiceError.value, 2200, "error");
     }
     return;
   }
@@ -394,7 +397,9 @@ function submitMessage() {
     directMessages.send(peerPubkey.value, text, image);
     draft.value = "";
     removeSelectedImage();
-  } catch {}
+  } catch (error) {
+    ui.addToast(error instanceof Error ? error.message : "发送失败，请稍后重试", 2200, "error");
+  }
 }
 
 onMounted(load);
