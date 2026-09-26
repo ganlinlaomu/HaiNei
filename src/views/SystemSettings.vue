@@ -550,7 +550,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.system-header{position:sticky;top:0;z-index:10;display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:54px;background:rgba(248,250,252,.96);border-bottom:1px solid #e2e8f0}.system-header button{width:44px;height:44px;border:0;background:transparent;color:#334155;font-size:30px}.system-header h1{margin:0;text-align:center;font-size:17px}.system-content{padding:0 16px}.account-section{border-top:1px solid #e2e8f0;margin-top:8px}
+.system-content{padding:0 16px}.account-section{border-top:1px solid #e2e8f0;margin-top:8px}
 
 .settings-container {
   width: 100%;
