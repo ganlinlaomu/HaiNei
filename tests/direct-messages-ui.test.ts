@@ -41,6 +41,26 @@ describe("direct-message navigation and UI contract", () => {
     expect(settings).toContain("router.push('/friends')");
   });
 
+  it("shows profile save progress and prevents duplicate submissions", () => {
+    const profile = readFileSync(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
+    expect(profile).toContain('const saving = ref(false)');
+    expect(profile).toContain(':disabled="saving"');
+    expect(profile).toContain('saving ? "保存中…" : "保存"');
+    expect(profile).toContain('if (!account || saving.value) return');
+    expect(profile).toContain("saving.value = true");
+    expect(profile).toContain("saving.value = false");
+  });
+
+  it("uses the shared secondary header on friend profiles while preserving history-back behavior", () => {
+    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const secondaryHeader = readFileSync(join(process.cwd(), "src/components/SecondaryPageHeader.vue"), "utf8");
+    expect(profile).toContain('<SecondaryPageHeader title="个人资料" back-label="返回上一页" back-mode="history" />');
+    expect(profile).not.toContain('class="profile-topbar"');
+    expect(profile).not.toContain('class="back-button"');
+    expect(secondaryHeader).toContain('backMode?: "push" | "history"');
+    expect(secondaryHeader).toContain('if (props.backMode === "history") router.back()');
+  });
+
   it("uses My as a navigation hub with dedicated settings and consistent back navigation", () => {
     const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     const system = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
@@ -213,7 +233,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(conversations).toContain(">发起私信</button>");
   });
 
-  it("prioritizes near-viewport encrypted images and removes artificial Home pagination delay", () => {
+  it("prioritizes near-viewport encrypted images and auto-loads Home pages near the bottom with a button fallback", () => {
     const imagePreview = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
     const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
     expect(imagePreview).toContain("IntersectionObserver");
@@ -222,6 +242,11 @@ describe("direct-message navigation and UI contract", () => {
     expect(imagePreview).toContain("priority - b.priority");
     expect(home).toContain("await Promise.all([");
     expect(home).toContain("requestAnimationFrame(appendPage)");
+    expect(home).toContain("AUTO_LOAD_MORE_THRESHOLD");
+    expect(home).toContain('addEventListener("scroll", handleHomeScroll');
+    expect(home).toContain("distanceToBottom <= AUTO_LOAD_MORE_THRESHOLD");
+    expect(home).toContain("loadMoreMessages()");
+    expect(home).toContain('class="load-more-btn"');
     expect(home).not.toContain("setTimeout(() => {\n        const startIndex = displayedMessages.value.length");
   });
 
