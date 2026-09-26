@@ -11,7 +11,6 @@
 
 <script setup lang="ts">
 import { computed, watch } from "vue";
-import { useRouter } from "vue-router";
 import PostCard from "@/components/PostCard.vue";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useBookmarksStore } from "@/stores/bookmarks";
@@ -19,7 +18,6 @@ import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore } from "@/stores/messages";
 import type { InboxItem } from "@/stores/messages";
 
-const router = useRouter();
 const keys = useKeyStore();
 const bookmarks = useBookmarksStore();
 const messages = useMessagesStore();
