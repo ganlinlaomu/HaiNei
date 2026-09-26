@@ -1,6 +1,6 @@
 <template>
   <main class="profile-page app-page">
-    <SecondaryPageHeader title="我的资料" back-label="返回我的" />
+    <SecondaryPageHeader title="我的资料" back-label="返回" variant="compact" />
 
     <section class="profile-editor">
       <form @submit.prevent="save">
