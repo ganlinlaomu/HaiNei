@@ -59,6 +59,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(system).toContain("router.push('/settings')");
     expect(friends).toContain("好友 / 好友分组</h1>");
     expect(friends).toContain("router.push('/settings')");
+    expect(friends).toMatch(/return \\{[\\s\\S]*router,[\\s\\S]*acceptedFriends/);
     expect(profile).toContain("router.push('/settings')");
     expect(saved).toContain("router.push('/settings')");
     expect(router).toContain('path: "/settings/system"');
