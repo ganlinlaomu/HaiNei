@@ -1,9 +1,6 @@
 <template>
   <main class="profile-page app-page">
-    <header class="profile-topbar">
-      <button class="back-button" type="button" aria-label="返回" @click="router.push('/settings')">‹</button>
-      <h1>我的资料</h1>
-    </header>
+    <SecondaryPageHeader title="我的资料" back-label="返回我的" />
 
     <section class="profile-editor">
       <form @submit.prevent="save">
@@ -35,6 +32,7 @@
 import { onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { acceptedProfileRecipients, useProfilesStore } from "@/stores/profiles";
