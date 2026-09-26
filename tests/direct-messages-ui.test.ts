@@ -82,6 +82,12 @@ describe("direct-message navigation and UI contract", () => {
     expect(secondaryHeader).toContain("grid-template-columns:44px 1fr 44px");
     expect(secondaryHeader).toContain("min-height:54px");
     expect(secondaryHeader).toContain("font-size:30px");
+    expect(secondaryHeader).toContain("position:sticky;top:0");
+    expect(profile).toContain(".profile-page{width:100%;margin:0 auto;box-sizing:border-box;padding:0 0 ");
+    expect(saved).toContain(".saved-page{width:100%;margin:0 auto;padding:0 0 ");
+    expect(profile).toContain(".profile-editor{padding:8px 16px 0}");
+    expect(saved).toContain(".saved-list{display:grid;gap:12px;padding:0 10px}");
+    expect(friends).not.toContain(".friends-header{");
     expect(router).toContain('path: "/settings/system"');
   });
 
