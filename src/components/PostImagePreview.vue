@@ -56,7 +56,7 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ImageViewer from "@/components/ImageViewer.vue";
 import { useKeyStore } from "@/stores/keys";
 import { useSettingsStore } from "@/stores/settings";
@@ -86,22 +86,32 @@ interface ImageItem {
 
 const MAX_DECRYPT_CONCURRENCY = 3;
 let activeDecrypts = 0;
-const decryptQueue: Array<() => void> = [];
+type DecryptPriority = 0 | 1 | 2;
+type DecryptJob = { priority: DecryptPriority; order: number; run: () => void };
+const decryptQueue: DecryptJob[] = [];
+let decryptOrder = 0;
 const inFlightDecrypts = new Map<string, Promise<Blob>>();
 const decryptControllers = new Map<string, AbortController>();
 
 function drainDecryptQueue() {
-  while (activeDecrypts < MAX_DECRYPT_CONCURRENCY && decryptQueue.length) decryptQueue.shift()?.();
+  while (activeDecrypts < MAX_DECRYPT_CONCURRENCY && decryptQueue.length) {
+    decryptQueue.sort((a, b) => a.priority - b.priority || a.order - b.order);
+    decryptQueue.shift()?.run();
+  }
 }
 
-function withDecryptSlot<T>(task: () => Promise<T>): Promise<T> {
+function withDecryptSlot<T>(task: () => Promise<T>, priority: DecryptPriority): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    decryptQueue.push(() => {
-      activeDecrypts += 1;
-      task().then(resolve, reject).finally(() => {
-        activeDecrypts -= 1;
-        drainDecryptQueue();
-      });
+    decryptQueue.push({
+      priority,
+      order: decryptOrder++,
+      run: () => {
+        activeDecrypts += 1;
+        task().then(resolve, reject).finally(() => {
+          activeDecrypts -= 1;
+          drainDecryptQueue();
+        });
+      }
     });
     drainDecryptQueue();
   });
@@ -114,7 +124,7 @@ function cancelAccountDecrypts(account: string) {
   }
 }
 
-function getDecryptedBlob(account: string, encryptedRef: string): Promise<Blob> {
+function getDecryptedBlob(account: string, encryptedRef: string, priority: DecryptPriority = 1): Promise<Blob> {
   const taskKey = `${account}:${encryptedRef}`;
   const existing = inFlightDecrypts.get(taskKey);
   if (existing) return existing;
@@ -141,7 +151,7 @@ function getDecryptedBlob(account: string, encryptedRef: string): Promise<Blob> 
     const blob = new Blob([decrypted], { type: metadata.mime });
     await storeImageInCache(account, encryptedRef, blob, metadata.mime);
     return blob;
-  }).finally(() => {
+  }, priority).finally(() => {
     inFlightDecrypts.delete(taskKey);
     decryptControllers.delete(taskKey);
   });
@@ -166,6 +176,8 @@ export default defineComponent({
     const images = ref<ImageItem[]>([]);
     const objectUrls = new Set<string>();
     const carousel = ref<HTMLElement | null>(null);
+    const rootVisible = ref(false);
+    let visibilityObserver: IntersectionObserver | null = null;
     const activeIndex = ref(0);
     const loadGeneration = ref(0);
     const itemLoadPromises = new WeakMap<ImageItem, Promise<void>>();
@@ -186,17 +198,17 @@ export default defineComponent({
       objectUrls.clear();
     }
 
-    function loadImage(idx: number): Promise<void> {
+    function loadImage(idx: number, priority: DecryptPriority = rootVisible.value ? 0 : 2): Promise<void> {
       const item = images.value[idx];
       if (!item || item.status === "loaded") return Promise.resolve();
       const existing = itemLoadPromises.get(item);
       if (existing) return existing;
-      const task = performLoadImage(item, idx).finally(() => itemLoadPromises.delete(item));
+      const task = performLoadImage(item, idx, priority).finally(() => itemLoadPromises.delete(item));
       itemLoadPromises.set(item, task);
       return task;
     }
 
-    async function performLoadImage(item: ImageItem, idx: number) {
+    async function performLoadImage(item: ImageItem, idx: number, priority: DecryptPriority) {
       const generation = loadGeneration.value;
       item.status = "loading";
 
@@ -211,7 +223,7 @@ export default defineComponent({
         return;
       }
       try {
-        const blob = await getDecryptedBlob(accountAtStart, item.sourceUrl);
+        const blob = await getDecryptedBlob(accountAtStart, item.sourceUrl, priority);
         if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
         const objectUrl = URL.createObjectURL(blob);
         objectUrls.add(objectUrl);
@@ -248,7 +260,7 @@ export default defineComponent({
       if (!accountAtStart) { item.originalStatus = "error"; return; }
       item.originalStatus = "loading";
       try {
-        const blob = await getDecryptedBlob(accountAtStart, item.originalSourceUrl);
+        const blob = await getDecryptedBlob(accountAtStart, item.originalSourceUrl, 2);
         if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
         const objectUrl = URL.createObjectURL(blob);
         objectUrls.add(objectUrl);
@@ -304,7 +316,7 @@ export default defineComponent({
     }
 
     function loadAround(index: number) {
-      adjacentSlideIndexes(index, images.value.length).forEach(itemIndex => void loadImage(itemIndex));
+      adjacentSlideIndexes(index, images.value.length).forEach(itemIndex => void loadImage(itemIndex, itemIndex === index ? 0 : 1));
     }
 
     let scrollFrame = 0;
@@ -354,6 +366,8 @@ export default defineComponent({
     }
 
     function resetImages() {
+      visibilityObserver?.disconnect();
+      visibilityObserver = null;
       loadGeneration.value += 1;
       closeViewer();
       viewerImageUrls.value = [];
@@ -380,7 +394,9 @@ export default defineComponent({
           height: metadata?.preview?.height || metadata?.height,
         };
       });
-      nextTick(() => loadAround(0));
+      nextTick(() => {
+        if (rootVisible.value) loadAround(0);
+      });
     }
 
     watch([() => props.content, () => props.showAll], resetImages, { immediate: true });
@@ -388,7 +404,24 @@ export default defineComponent({
       if (previousAccount && account !== previousAccount) cancelAccountDecrypts(previousAccount);
       resetImages();
     });
-    watch(activeIndex, loadAround);
+    watch(activeIndex, index => {
+      if (rootVisible.value) loadAround(index);
+    });
+
+    onMounted(() => {
+      const element = carousel.value?.closest(".post-image-preview");
+      if (!element || typeof IntersectionObserver === "undefined") {
+        rootVisible.value = true;
+        loadAround(activeIndex.value);
+        return;
+      }
+      visibilityObserver = new IntersectionObserver(entries => {
+        const visible = entries.some(entry => entry.isIntersecting);
+        rootVisible.value = visible;
+        if (visible) loadAround(activeIndex.value);
+      }, { rootMargin: "500px 0px" });
+      visibilityObserver.observe(element);
+    });
 
     onBeforeUnmount(() => {
       loadGeneration.value += 1;
