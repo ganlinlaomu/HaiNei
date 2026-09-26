@@ -8,7 +8,7 @@
     <section v-else class="card settings-card">
       <header class="my-profile-summary">
         <ProfileAvatar :pubkey="keyStore.pkHex" :local-name="nickname" :size="56" />
-        <span><strong>{{ nickname }}</strong><small>{{ shortPk }}</small></span>
+        <span><strong>{{ nickname }}</strong><span class="pubkey-row"><small>{{ shortPk }}</small><button class="copy-pubkey" type="button" aria-label="复制公钥" title="复制公钥" @click="copyPubkey"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button></span></span>
       </header>
       <button class="top-level-row" type="button" @click="router.push('/settings/profile')"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><strong>我的资料</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @click="router.push('/settings/saved')"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg></span><strong>已收藏</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
@@ -86,6 +86,17 @@ let cacheStatsUpdatedAt = 0;
 let cacheRefresh: { account: string; promise: Promise<void> } | null = null;
 let cancelScheduledCacheRefresh: (() => void) | null = null;
 const CACHE_STATS_MAX_AGE_MS = 5 * 60_000;
+
+
+async function copyPubkey() {
+  if (!keyStore.pkHex) return;
+  try {
+    await navigator.clipboard.writeText(keyStore.pkHex);
+    ui.addToast("已复制公钥", 1_800, "success");
+  } catch {
+    ui.addToast("复制失败，请稍后重试", 2_000, "error");
+  }
+}
 
 function relaySourceLabel(source: RelaySource) {
   return source === "user" ? "用户" : source === "nip65" ? "NIP-65" : "默认";
@@ -399,6 +410,7 @@ onBeforeUnmount(() => {
   color: #64748b;
   font-size: .78rem;
 }
+.pubkey-row{display:flex;align-items:center;gap:5px}.copy-pubkey{display:grid;width:28px;height:28px;padding:5px;border:0;border-radius:7px;background:transparent;color:#64748b;place-items:center;cursor:pointer}.copy-pubkey:active{background:#eef2f6}.copy-pubkey svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 
 h2,
 h3,

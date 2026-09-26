@@ -49,6 +49,9 @@ describe("direct-message navigation and UI contract", () => {
     const saved = readFileSync(join(process.cwd(), "src/views/Saved.vue"), "utf8");
     const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
     expect(settings).toContain("router.push('/settings/system')");
+    expect(settings).toContain('aria-label="复制公钥"');
+    expect(settings).toContain("navigator.clipboard.writeText(keyStore.pkHex)");
+    expect(settings).toContain('ui.addToast("已复制公钥"');
     expect(settings).not.toContain('class="technical-section"');
     expect(system).toContain("连接 / Relay");
     expect(system).toContain("图片与视频 / Media");
@@ -59,6 +62,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(system).toContain("router.push('/settings')");
     expect(friends).toContain("好友 / 好友分组</h1>");
     expect(friends).toContain("router.push('/settings')");
+    expect(friends).toMatch(/return \\{[\\s\\S]*router,[\\s\\S]*acceptedFriends/);
     expect(profile).toContain("router.push('/settings')");
     expect(saved).toContain("router.push('/settings')");
     expect(router).toContain('path: "/settings/system"');
