@@ -440,12 +440,34 @@ describe("privacy-preserving push and badge", () => {
     expect(source).not.toMatch(/sender|pubkey|private-message content|post content/);
   });
 
+  it("increments a persisted app badge immediately for background message pushes", () => {
+    const source = readFileSync(new URL("../public/service-worker.js", import.meta.url), "utf8");
+    expect(source).toContain("RUNTIME_STATE_CACHE");
+    expect(source).toContain("BADGE_STATE_URL");
+    expect(source).toContain("queueBadgeIncrement()");
+    expect(source).toContain("payload?.type === 'message'");
+    expect(source).toContain("setAppBadge?.(normalized)");
+    expect(source).toContain("clearAppBadge?.()");
+    expect(source).toContain("event.data?.type === 'SYNC_APP_BADGE'");
+    expect(source).toContain("queueBadgeSync(event.data.count)");
+  });
+
   it("sets and clears the app badge from unread count", async () => {
-    const target = { setAppBadge: vi.fn(), clearAppBadge: vi.fn() } as any;
+    const postMessage = vi.fn();
+    const target = {
+      setAppBadge: vi.fn(),
+      clearAppBadge: vi.fn(),
+      serviceWorker: {
+        controller: { postMessage },
+        ready: Promise.resolve({ active: { postMessage } }),
+      },
+    } as any;
     await syncAppBadge(3, target);
     await syncAppBadge(0, target);
     expect(target.setAppBadge).toHaveBeenCalledWith(3);
     expect(target.clearAppBadge).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenNthCalledWith(1, { type: "SYNC_APP_BADGE", count: 3 });
+    expect(postMessage).toHaveBeenNthCalledWith(2, { type: "SYNC_APP_BADGE", count: 0 });
     expect(accountBadgeCount(OTHER, ACCOUNT, 3)).toBe(0);
     expect(accountBadgeCount(ACCOUNT, ACCOUNT, 3)).toBe(3);
     expect(accountBadgeCount(ACCOUNT, ACCOUNT, 3, ACCOUNT, 2)).toBe(5);
