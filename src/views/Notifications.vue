@@ -1,7 +1,7 @@
 <template>
   <div class="notifications-page app-page">
     <header class="page-header">
-      <h2>通知</h2>
+      <h1>通知</h1>
       <button
         v-if="notifications.unreadCount > 0"
         class="mark-read"
@@ -41,7 +41,7 @@
             @touchstart="onTouchStart($event, n.id)"
             @touchmove="onTouchMove($event, n.id)"
             @touchend="onTouchEnd(n.id)"
-        @touchcancel="onTouchCancel(n.id)"
+            @touchcancel="onTouchCancel(n.id)"
           >
             <div class="swipe-actions">
               <button class="action read" @click.stop="markRead(n)">已读</button>
@@ -94,6 +94,7 @@
             @touchstart="onTouchStart($event, n.id)"
             @touchmove="onTouchMove($event, n.id)"
             @touchend="onTouchEnd(n.id)"
+            @touchcancel="onTouchCancel(n.id)"
           >
             <div class="swipe-actions">
               <button class="action read" @click.stop="markRead(n)">已读</button>
@@ -145,6 +146,7 @@
             @touchstart="onTouchStart($event, n.id)"
             @touchmove="onTouchMove($event, n.id)"
             @touchend="onTouchEnd(n.id)"
+            @touchcancel="onTouchCancel(n.id)"
           >
             <div class="swipe-actions">
               <button class="action read" @click.stop="markRead(n)">已读</button>
@@ -352,22 +354,36 @@ function summarizeNotificationText(text: string, maxLength = 40) {
 </script>
 
 <style scoped>
-/* === 保持原排版 === */
 .notifications-page {
-  padding: 12px;
-  padding-bottom: calc(20px + var(--bottom-nav-height) + env(safe-area-inset-bottom));
+  width: 100%;
+  min-height: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding: 0 0 calc(20px + var(--bottom-nav-height) + env(safe-area-inset-bottom));
+  background: #fff;
+  color: #0f1419;
 }
 .page-header {
+  position: sticky;
+  top: 0;
+  z-index: 4;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  min-height: 54px;
+  padding: 0 16px;
+  background: rgba(255,255,255,.97);
+}
+.page-header h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 750;
 }
 .notification-tabs {
   display: flex;
   gap: 6px;
   overflow-x: auto;
-  margin: 0 -2px 10px;
+  margin: 4px 16px 10px;
   padding: 2px;
   scrollbar-width: none;
 }
@@ -398,7 +414,7 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   font-size: 12px;
   font-weight: 600;
   color: #64748b;
-  margin: 14px 4px 6px;
+  margin: 14px 16px 6px;
 }
 .notification-list {
   list-style: none;
@@ -433,7 +449,7 @@ function summarizeNotificationText(text: string, maxLength = 40) {
 .notification-item {
   display: flex;
   gap: 10px;
-  padding: 10px;
+  padding: 10px 16px;
   background: #fff;
   position: relative;
   transition: transform 0.2s ease;
