@@ -7,6 +7,8 @@ const BUILD_ID = "2026-09-24T05:06:03.314Z"; // Replaced by scripts/update-sw-ve
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
 const HTML_CACHE = `${CACHE_PREFIX}-html-${VERSION}-${BUILD_ID}`;
+const RUNTIME_STATE_CACHE = `${CACHE_PREFIX}-runtime-state`;
+const BADGE_STATE_URL = new URL('/__hainei_badge_state__', self.location.origin).href;
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', VERSION, BUILD_ID);
@@ -30,7 +32,8 @@ self.addEventListener('activate', (event) => {
           .filter((key) =>
             key.startsWith(CACHE_PREFIX) && 
             key !== ASSETS_CACHE &&
-            key !== HTML_CACHE
+            key !== HTML_CACHE &&
+            key !== RUNTIME_STATE_CACHE
           )
           .map((key) => {
             console.log('[SW] Deleting old static cache:', key);
@@ -41,9 +44,50 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+async function readStoredBadgeCount() {
+  try {
+    const cache = await caches.open(RUNTIME_STATE_CACHE);
+    const response = await cache.match(BADGE_STATE_URL);
+    if (!response) return 0;
+    const count = Number(await response.text());
+    return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function writeStoredBadgeCount(count) {
+  const normalized = Math.max(0, Math.floor(Number(count) || 0));
+  try {
+    const cache = await caches.open(RUNTIME_STATE_CACHE);
+    await cache.put(BADGE_STATE_URL, new Response(String(normalized), {
+      headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }
+    }));
+  } catch {}
+  return normalized;
+}
+
+async function applyAppBadge(count) {
+  const normalized = await writeStoredBadgeCount(count);
+  try {
+    if (normalized > 0) await self.navigator?.setAppBadge?.(normalized);
+    else await self.navigator?.clearAppBadge?.();
+  } catch {}
+  return normalized;
+}
+
+async function incrementAppBadge() {
+  const current = await readStoredBadgeCount();
+  return applyAppBadge(current + 1);
+}
+
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') {
     self.skipWaiting();
+    return;
+  }
+  if (event.data?.type === 'SYNC_APP_BADGE') {
+    event.waitUntil(applyAppBadge(event.data.count));
   }
 });
 
@@ -95,13 +139,17 @@ self.addEventListener('fetch', (event) => {
 });
 
 self.addEventListener('push', (event) => {
-  try { JSON.parse(event.data?.text() || '{}'); } catch {}
-  event.waitUntil(self.registration.showNotification('HaiNei', {
-    body: '你有新的私信消息',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    data: { type: 'message' }
-  }));
+  let payload = {};
+  try { payload = JSON.parse(event.data?.text() || '{}'); } catch {}
+  event.waitUntil(Promise.all([
+    self.registration.showNotification('HaiNei', {
+      body: '你有新的私信消息',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      data: { type: 'message' }
+    }),
+    payload?.type === 'message' ? incrementAppBadge() : Promise.resolve()
+  ]));
 });
 
 self.addEventListener('notificationclick', (event) => {
