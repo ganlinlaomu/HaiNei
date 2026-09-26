@@ -136,7 +136,11 @@ export default defineComponent({
     const realtimeSessionSince = ref(0);
     const notificationJumpDone = ref(false);
     const lastSeenCreatedAt = ref(0); // Track the watermark for filtering pending messages
-    const inboxSnapshot = computed(() => `${msgs.inbox.length}:${msgs.inbox[0]?.id || ""}`);
+    const inboxSnapshot = computed(() => {
+      const first = msgs.inbox[0];
+      const last = msgs.inbox[msgs.inbox.length - 1];
+      return `${msgs.inbox.length}:${first?.id || ""}:${last?.id || ""}`;
+    });
     const feedPreferenceSnapshot = computed(() =>
       `${[...feedPreferences.hiddenMessageIds].sort().join(",")}|${[...feedPreferences.mutedPubkeys].sort().join(",")}`
     );
@@ -503,19 +507,20 @@ async function safeUpdateLocalRefs() {
       isLoadingMore.value = true;
       logger.info(`加载更多消息，当前页: ${currentPage.value}`);
       
-      // 使用 setTimeout 模拟异步加载，避免阻塞主线程
-      setTimeout(() => {
+      const appendPage = () => {
         const startIndex = displayedMessages.value.length;
         const endIndex = Math.min(startIndex + PAGE_SIZE, messagesRef.value.length);
         const newMessages = messagesRef.value.slice(startIndex, endIndex);
-        
+
         displayedMessages.value = [...displayedMessages.value, ...newMessages];
         currentPage.value++;
         isLoadingMore.value = false;
         updateMessageTimeRange();
-        
+
         logger.info(`加载了 ${newMessages.length} 条消息，总共显示 ${displayedMessages.value.length} 条`);
-      }, 100);
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(appendPage);
+      else appendPage();
     }
     const {
        container,
@@ -911,9 +916,11 @@ async function safeUpdateLocalRefs() {
           if (!initialized) return;
         }
         try {
-          await friends.load(accountPk);
-          await friendships.load(accountPk);
-          await profiles.load(accountPk);
+          await Promise.all([
+            friends.load(accountPk),
+            friendships.load(accountPk),
+            profiles.load(accountPk)
+          ]);
         } catch (error) {
           logger.warn("[message-sync] friend list unavailable; continuing receive sync", {
             account: accountPk.slice(0, 12),

@@ -189,12 +189,15 @@ export function buildDirectConversationSummaries(
   options: { friendshipRecords?: FriendshipRecord[]; preferencesByPeer?: Record<string, ConversationPreference | undefined> } = {},
 ) {
   const latestByPeer = new Map<string, InboxItem>();
+  const friendshipByPeer = options.friendshipRecords
+    ? new Map(options.friendshipRecords.map(record => [record.peerPubkey.toLowerCase(), record]))
+    : undefined;
   for (const item of items) {
     if (!isDirectMessageTags(item.tags)) continue;
     const peer = directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, accountPubkey);
     if (!peer || options.preferencesByPeer?.[peer]?.hidden) continue;
-    const friendship = options.friendshipRecords?.find(record => record.peerPubkey === peer);
-    if (options.friendshipRecords && !isAuthorizedDirectMessage(item, accountPubkey, friendship)) continue;
+    const friendship = friendshipByPeer?.get(peer);
+    if (friendshipByPeer && !isAuthorizedDirectMessage(item, accountPubkey, friendship)) continue;
     if (!afterDeletion(item, options.preferencesByPeer?.[peer])) continue;
     const current = latestByPeer.get(peer);
     if (!current || item.created_at > current.created_at || (item.created_at === current.created_at && item.id.localeCompare(current.id) > 0)) {

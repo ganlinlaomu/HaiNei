@@ -89,7 +89,8 @@ const conversations = computed(() => buildDirectConversationSummaries(
   directMessages.unreadByConversation,
   { friendshipRecords: friendships.records, preferencesByPeer: directMessages.preferencesByPeer },
 ));
-const localName = (pubkey: string) => friends.list.find(friend => friend.pubkey === pubkey)?.name;
+const friendByPubkey = computed(() => new Map(friends.list.map(friend => [friend.pubkey, friend])));
+const localName = (pubkey: string) => friendByPubkey.value.get(pubkey)?.name;
 const displayName = (pubkey: string) => privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey));
 const preview = (message: InboxItem) => {
   if (message.outgoing?.state === "uploading") return "[图片] · 上传中…";
@@ -101,7 +102,7 @@ const filteredConversations = computed(() => {
   const needle = searchQuery.value.trim().toLocaleLowerCase();
   if (!needle) return conversations.value;
   return conversations.value.filter(conversation => {
-    const friend = friends.list.find(item => item.pubkey === conversation.peerPubkey);
+    const friend = friendByPubkey.value.get(conversation.peerPubkey);
     const profileName = profiles.getProfile(conversation.peerPubkey)?.nickname || "";
     return [displayName(conversation.peerPubkey), friend?.name, friend?.note, profileName]
       .some(value => value?.toLocaleLowerCase().includes(needle));

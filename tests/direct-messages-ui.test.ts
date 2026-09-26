@@ -112,6 +112,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(source).toContain("全部");
     expect(source).toContain('type="search"');
     expect(source).toContain("filteredConversations");
+    expect(source).toContain("friendByPubkey");
+    expect(source).toContain("new Map(friends.list.map");
     expect(source).toContain("暂无私信");
     expect(source).toContain("开始一段新的私密对话。");
   });
@@ -164,6 +166,18 @@ describe("direct-message navigation and UI contract", () => {
     expect(home).toContain("router.push('/friends')");
     expect(conversations).toContain("ui.openNewConversation()");
     expect(conversations).toContain(">发起私信</button>");
+  });
+
+  it("prioritizes near-viewport encrypted images and removes artificial Home pagination delay", () => {
+    const imagePreview = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
+    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    expect(imagePreview).toContain("IntersectionObserver");
+    expect(imagePreview).toContain('rootMargin: "500px 0px"');
+    expect(imagePreview).toContain("DecryptPriority");
+    expect(imagePreview).toContain("priority - b.priority");
+    expect(home).toContain("await Promise.all([");
+    expect(home).toContain("requestAnimationFrame(appendPage)");
+    expect(home).not.toContain("setTimeout(() => {\n        const startIndex = displayedMessages.value.length");
   });
 
   it("surfaces key action failures through the shared toast store", () => {
@@ -232,6 +246,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>');
     expect(chat).not.toContain('@click="router.back()">‹</button>');
     expect(store).toContain("uploadEncryptedCommentImage");
+    expect(store).toContain("friendshipByPeer");
+    expect(store).toContain("new Map(options.friendshipRecords.map");
     expect(chat).toContain("PostImagePreview");
     expect(conversations).toContain("`/messages/${pubkey}`");
   });
