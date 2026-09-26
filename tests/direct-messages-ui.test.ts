@@ -76,7 +76,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(friends).toContain('components: { ProfileAvatar, SecondaryPageHeader }');
     expect(saved).toContain('<SecondaryPageHeader title="已收藏" back-label="返回我的" />');
     expect(profile).toContain('<SecondaryPageHeader title="我的资料" back-label="返回我的" />');
-    expect(friends).toMatch(/return \\{[\\s\\S]*router,[\\s\\S]*acceptedFriends/);
+    expect(friends).toMatch(/return \{[\s\S]*router,[\s\S]*acceptedFriends/);
     expect(secondaryHeader).toContain('backTo: "/settings"');
     expect(secondaryHeader).toContain('backLabel: "返回我的"');
     expect(secondaryHeader).not.toContain("variant?:");
