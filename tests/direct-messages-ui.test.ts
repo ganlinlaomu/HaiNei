@@ -41,6 +41,29 @@ describe("direct-message navigation and UI contract", () => {
     expect(settings).toContain("router.push('/friends')");
   });
 
+  it("uses My as a navigation hub with dedicated settings and consistent back navigation", () => {
+    const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
+    const system = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    const friends = readFileSync(join(process.cwd(), "src/views/Friends.vue"), "utf8");
+    const profile = readFileSync(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
+    const saved = readFileSync(join(process.cwd(), "src/views/Saved.vue"), "utf8");
+    const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
+    expect(settings).toContain("router.push('/settings/system')");
+    expect(settings).not.toContain('class="technical-section"');
+    expect(system).toContain("连接 / Relay");
+    expect(system).toContain("图片与视频 / Media");
+    expect(system).toContain("数据使用 / Data Saver");
+    expect(system).toContain("后台推送 / Web Push");
+    expect(system).toContain("存储 / Cache");
+    expect(system).toContain("高级设置 / Diagnostics");
+    expect(system).toContain("router.push('/settings')");
+    expect(friends).toContain("好友 / 好友分组</h1>");
+    expect(friends).toContain("router.push('/settings')");
+    expect(profile).toContain("router.push('/settings')");
+    expect(saved).toContain("router.push('/settings')");
+    expect(router).toContain('path: "/settings/system"');
+  });
+
   it("uses the existing composer behind a route-aware floating button", () => {
     const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
     expect(app.match(/class="compose-fab"/g)).toHaveLength(1);
