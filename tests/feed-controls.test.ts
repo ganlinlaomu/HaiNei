@@ -38,6 +38,22 @@ beforeEach(async () => {
 });
 
 describe("feed controls", () => {
+  it("increments a local revision for every loaded or changed feed preference", async () => {
+    const store = useFeedPreferencesStore();
+    const initialRevision = store.revision;
+    await store.load(ACCOUNT);
+    expect(store.revision).toBeGreaterThan(initialRevision);
+    const loadedRevision = store.revision;
+    await store.hide("post-r");
+    expect(store.revision).toBeGreaterThan(loadedRevision);
+    const hiddenRevision = store.revision;
+    await store.mute(FRIEND);
+    expect(store.revision).toBeGreaterThan(hiddenRevision);
+    const mutedRevision = store.revision;
+    await store.unmute(FRIEND);
+    expect(store.revision).toBeGreaterThan(mutedRevision);
+  });
+
   it("hides an own post before sending its private tombstone", async () => {
     const store = useFeedPreferencesStore();
     await store.load(ACCOUNT);

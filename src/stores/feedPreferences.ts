@@ -15,6 +15,7 @@ export const useFeedPreferencesStore = defineStore("feedPreferences", {
     hiddenMessageIds: new Set<string>(), mutedPubkeys: new Set<string>(), loadedFor: "",
     hiddenPreferences: [] as Array<{ id: string; updatedAt: number; deleted: boolean }>,
     mutedPreferences: [] as Array<{ pubkey: string; updatedAt: number; deleted: boolean }>,
+    revision: 0,
   }),
   getters: {
     isHidden: state => (messageId: string) => state.hiddenMessageIds.has(messageId),
@@ -43,6 +44,7 @@ export const useFeedPreferencesStore = defineStore("feedPreferences", {
         .map(item => ({ pubkey: item.pubkey.toLowerCase(), updatedAt: Number((item as any).updatedAt || 0), deleted: !!item.deleted }));
       this.hiddenMessageIds = new Set(this.hiddenPreferences.filter(item => !item.deleted).map(item => item.id));
       this.mutedPubkeys = new Set(this.mutedPreferences.filter(item => !item.deleted).map(item => item.pubkey));
+      this.revision += 1;
     },
     reset() {
       this.hiddenMessageIds = new Set();
@@ -50,6 +52,7 @@ export const useFeedPreferencesStore = defineStore("feedPreferences", {
       this.hiddenPreferences = [];
       this.mutedPreferences = [];
       this.loadedFor = "";
+      this.revision += 1;
     },
     async persist() {
       if (!this.loadedFor) return;
@@ -67,6 +70,7 @@ export const useFeedPreferencesStore = defineStore("feedPreferences", {
       this.hiddenPreferences = [...this.hiddenPreferences.filter(item => item.id !== messageId), { id: messageId, updatedAt: now, deleted: false }];
       this.hiddenMessageIds.add(messageId);
       this.hiddenMessageIds = new Set(this.hiddenMessageIds);
+      this.revision += 1;
       await this.persist();
     },
     async mute(pubkey: string) {
@@ -74,6 +78,7 @@ export const useFeedPreferencesStore = defineStore("feedPreferences", {
       this.mutedPreferences = [...this.mutedPreferences.filter(item => item.pubkey !== peer), { pubkey: peer, updatedAt: Date.now(), deleted: false }];
       this.mutedPubkeys.add(peer);
       this.mutedPubkeys = new Set(this.mutedPubkeys);
+      this.revision += 1;
       await this.persist();
     },
     async unmute(pubkey: string) {
@@ -81,6 +86,7 @@ export const useFeedPreferencesStore = defineStore("feedPreferences", {
       this.mutedPreferences = [...this.mutedPreferences.filter(item => item.pubkey !== peer), { pubkey: peer, updatedAt: Date.now(), deleted: true }];
       this.mutedPubkeys.delete(peer);
       this.mutedPubkeys = new Set(this.mutedPubkeys);
+      this.revision += 1;
       await this.persist();
     },
     async tombstoneOwn(message: { id: string; pubkey: string; recipientPubkeys?: string[] }) {

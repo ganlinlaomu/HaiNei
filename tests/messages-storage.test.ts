@@ -44,8 +44,26 @@ describe("Home Dexie restoration", () => {
     const messages = useMessagesStore();
     await messages.load(ACCOUNT);
     expect(messages.inbox).toEqual([expect.objectContaining({ id: "home-1", content: "hello" })]);
+    expect(messages.lastInboxMutation).toMatchObject({ type: "replace", revision: messages.inboxRevision });
+    const loadedRevision = messages.inboxRevision;
     messages.addInbox({ id: "memory", pubkey: OTHER, created_at: 13, content: "ui only" });
+    expect(messages.inboxRevision).toBe(loadedRevision + 1);
+    expect(messages.lastInboxMutation).toMatchObject({ type: "insert", itemId: "memory", revision: messages.inboxRevision });
     expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("marks metadata replacement separately so Home falls back to a full rebuild", async () => {
+    const messages = useMessagesStore();
+    await messages.load(ACCOUNT);
+    messages.addInbox({ id: "own", pubkey: ACCOUNT, created_at: 20, content: "hello" });
+    const insertedRevision = messages.inboxRevision;
+    messages.addInbox({
+      id: "own", pubkey: ACCOUNT, created_at: 20, content: "hello",
+      _localMeta: { groupCount: 1, groups: [{ name: "好友", count: 1 }] }
+    });
+    expect(messages.inboxRevision).toBe(insertedRevision + 1);
+    expect(messages.lastInboxMutation).toMatchObject({ type: "update", itemId: "own" });
+    expect(messages.inbox[0]._localMeta?.groupCount).toBe(1);
   });
 
   it("does not restore private controls as Home items", async () => {
