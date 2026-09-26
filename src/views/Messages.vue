@@ -85,7 +85,15 @@
 
         <div v-else class="composer-normal">
           <button class="composer-icon-button attachment-button" type="button" aria-label="添加图片" :disabled="!accepted || !keys.pkHex" @click="chooseImage">+</button>
-          <input v-model="draft" type="text" autocomplete="off" :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'" :disabled="!accepted || !keys.pkHex" />
+          <input
+            v-model="draft"
+            type="text"
+            autocomplete="off"
+            :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'"
+            :disabled="!accepted || !keys.pkHex"
+            @focus="handleComposerFocus"
+            @blur="handleComposerBlur"
+          />
           <button
             v-if="draft.trim() || selectedImage"
             class="composer-icon-button send-button"
@@ -167,6 +175,8 @@ let restoreOverflowAnchorFrame: number | null = null;
 let disposed = false;
 let recordingTimer: number | null = null;
 let recordingHealthUnsubscribe: (() => void) | null = null;
+let composerFocused = false;
+let composerFocusSettleTimer: number | null = null;
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
 const messageText = (content: string) => ["[图片]", "[语音]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
@@ -202,7 +212,36 @@ function formatMessageTime(timestamp: number) {
 function formatBubbleTime(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
-function scrollToBottom() { void nextTick(() => { if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight; }); }
+function setMessageListToBottom() {
+  const list = messageList.value;
+  if (list) list.scrollTop = list.scrollHeight;
+}
+function scrollToBottom() {
+  void nextTick(setMessageListToBottom);
+}
+function handleComposerFocus() {
+  composerFocused = true;
+  scrollToBottom();
+
+  // iOS changes the visual viewport while the keyboard animates in. Re-apply
+  // the bottom anchor once immediately and once after the animation as a
+  // fallback for builds where VisualViewport resize is delayed or omitted.
+  requestAnimationFrame(setMessageListToBottom);
+  if (composerFocusSettleTimer !== null) window.clearTimeout(composerFocusSettleTimer);
+  composerFocusSettleTimer = window.setTimeout(() => {
+    composerFocusSettleTimer = null;
+    if (composerFocused) setMessageListToBottom();
+  }, 320);
+}
+function handleComposerBlur() {
+  composerFocused = false;
+  if (composerFocusSettleTimer !== null) window.clearTimeout(composerFocusSettleTimer);
+  composerFocusSettleTimer = null;
+}
+function handleVisualViewportResize() {
+  if (!composerFocused) return;
+  requestAnimationFrame(setMessageListToBottom);
+}
 
 function scrollMetrics(element: HTMLElement): MessageScrollMetrics {
   return { scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight };
@@ -402,7 +441,10 @@ function submitMessage() {
   }
 }
 
-onMounted(load);
+onMounted(() => {
+  window.visualViewport?.addEventListener("resize", handleVisualViewportResize);
+  void load();
+});
 watch([() => keys.pkHex, peerPubkey], () => {
   cancelVoiceRecording();
   clearRecordedAudio();
@@ -434,6 +476,8 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
 });
 onBeforeUnmount(() => {
   disposed = true;
+  window.visualViewport?.removeEventListener("resize", handleVisualViewportResize);
+  handleComposerBlur();
   loadGeneration += 1;
   if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
   messageList.value?.style.removeProperty("overflow-anchor");
