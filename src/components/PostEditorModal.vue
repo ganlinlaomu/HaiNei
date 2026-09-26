@@ -27,6 +27,7 @@
             class="editor-textarea"
             placeholder="分享此刻…"
             rows="8"
+            :disabled="!!pendingPostRetry"
             @paste="onPaste"
           ></textarea>
 
@@ -35,10 +36,10 @@
             <div class="upload-controls">
               <label
                 class="upload-btn"
-                :class="{ disabled: !uploadEnabled || uploadingAny }"
-                :title="uploadEnabled ? (uploadingAny ? '上传中…' : '添加照片或视频') : '请先在设置中配置媒体服务'"
+                :class="{ disabled: !uploadEnabled || uploadingAny || !!pendingPostRetry }"
+                :title="pendingPostRetry ? '当前有待重试贴文，请先重试或关闭后重新编辑' : (uploadEnabled ? (uploadingAny ? '上传中…' : '添加照片或视频') : '请先在设置中配置媒体服务')"
               >
-                <input type="file" accept="image/*,video/*" multiple @change="onFilesSelected" :disabled="!uploadEnabled || uploadingAny" />
+                <input type="file" accept="image/*,video/*" multiple @change="onFilesSelected" :disabled="!uploadEnabled || uploadingAny || !!pendingPostRetry" />
                 添加照片或视频
               </label>
               <div v-if="!uploadEnabled" class="upload-config-hint small">请先在设置中配置图片与视频服务</div>
@@ -118,7 +119,7 @@
             </div>
           </div>
 
-          <button class="visibility-row" type="button" :aria-expanded="visibilityOpen" @click="visibilityOpen = !visibilityOpen">
+          <button class="visibility-row" type="button" :aria-expanded="visibilityOpen" :disabled="!!pendingPostRetry" @click="visibilityOpen = !visibilityOpen">
             <span>可见范围</span>
             <span class="visibility-value">{{ visibilitySummary }} <span aria-hidden="true">›</span></span>
           </button>
@@ -164,8 +165,8 @@
           <div class="action-buttons">
             <button class="discard-btn" type="button" @click="discardDraft">丢弃草稿</button>
             <button class="save-draft-btn" type="button" @click="onClose">保存草稿</button>
-            <button class="send-btn" :disabled="sending || uploadingAny || !canSend" @click="onSend">
-              {{ sending ? "发送中..." : "发送" }}
+            <button class="send-btn" :disabled="sending || uploadingAny || (!canSend && !pendingPostRetry)" @click="onSend">
+              {{ sending ? "发送中..." : pendingPostRetry ? "重新发送" : "发送" }}
             </button>
           </div>
 
@@ -246,6 +247,7 @@ export default defineComponent({
     const content = ref("");
     const sending = ref(false);
     const error = ref<string | null>(null);
+    const pendingPostRetry = ref<{ outgoingId: string; groupsMeta: Array<{ name: string; count: number }> } | null>(null);
     const textarea = ref<HTMLTextAreaElement | null>(null);
     const overlay = ref<HTMLElement | null>(null);
     const editorCard = ref<HTMLElement | null>(null);
@@ -709,6 +711,7 @@ export default defineComponent({
       releasePostEditorMediaUrls(uploads.value, videoPreview.value);
       content.value = "";
       error.value = null;
+      pendingPostRetry.value = null;
       allFriends.value = true;
       selectedGroups.value = [];
       visibilityOpen.value = false;
@@ -894,17 +897,59 @@ export default defineComponent({
     async function onSend() {
       // Use pkHex check for consistency with onMounted and reliability
       if (!keys.pkHex) { error.value = "请先登录"; return; }
-      if (!canSend.value) { error.value = "请输入内容"; return; }
+      if (!pendingPostRetry.value && !canSend.value) { error.value = "请输入内容"; return; }
       if (uploadingAny.value) { error.value = "请等待媒体上传完成"; return; }
       const accountAtSend = keys.pkHex;
       sending.value = true;
       error.value = null;
+
+      if (pendingPostRetry.value) {
+        const retry = pendingPostRetry.value;
+        try {
+          const { message } = await posts.retryDirectMessage(retry.outgoingId);
+          msgs.addInbox({
+            id: message.id,
+            pubkey: accountAtSend,
+            created_at: message.createdAt,
+            content: message.plaintext || "",
+            protocol: message.protocol,
+            transportKind: message.transportKind,
+            transportEventId: message.transportEventId,
+            rumorId: message.rumorId,
+            recipientPubkeys: message.recipientPubkeys,
+            conversationId: message.conversationId,
+            _localMeta: {
+              groupCount: retry.groupsMeta.length,
+              groups: retry.groupsMeta
+            }
+          });
+          pendingPostRetry.value = null;
+          ui.addToast("发送成功", 1200, "success");
+          clearPersistentDraft(accountAtSend);
+          onClose();
+          setTimeout(()=>{ router.push('/'); }, 220);
+        } catch (e:any) {
+          console.error("post retry error", e);
+          error.value = e && e.message ? e.message : "发送失败";
+          ui.addToast("重新发送失败", 2000, "error");
+        } finally {
+          sending.value = false;
+        }
+        return;
+      }
 
       let recips = recipients.value.slice();
       if (keys.pkHex && !recips.includes(keys.pkHex)) recips.push(keys.pkHex);
       recips = Array.from(new Set(recips.filter(Boolean)));
 
       if (recips.length === 0) { error.value = "未指定收件人"; sending.value = false; return; }
+
+      const groupsMeta = allFriends.value
+        ? [{ name: "全部好友", count: recipientsCount.value }]
+        : selectedGroups.value.map(g => ({
+            name: g,
+            count: countByGroup.value[g] || 0
+          }));
 
       try {
         // Build content with uploaded images appended
@@ -965,14 +1010,6 @@ export default defineComponent({
           fullContent += `${VIDEO_METADATA_PREFIX}${JSON.stringify(videoData)}${VIDEO_METADATA_SUFFIX}\n`;
         }
         
-        // Calculate group metadata before publishing
-        const groupsMeta = allFriends.value
-          ? [{ name: "全部好友", count: recipientsCount.value }]
-          : selectedGroups.value.map(g => ({
-              name: g,
-              count: countByGroup.value[g] || 0
-            }));
-        
         // Publish the message to relays
         const { message } = await posts.sendDirectMessage(recips, fullContent);
 
@@ -1005,15 +1042,18 @@ export default defineComponent({
         setTimeout(()=>{ router.push('/'); }, 220);
       } catch (e:any) {
         console.error("publish error", e);
+        if (e?.outgoingId) {
+          pendingPostRetry.value = { outgoingId: String(e.outgoingId), groupsMeta };
+        }
         error.value = e && e.message ? e.message : "发送失败";
-        ui.addToast("发送失败", 2000, "error");
+        ui.addToast(e?.outgoingId ? "发送未完成，可重新发送" : "发送失败", 2200, "error");
       } finally {
         sending.value = false;
       }
     }
 
     return {
-      visible, content, sending, allFriends, selectedGroups, groups, countByGroup,
+      visible, content, sending, pendingPostRetry, allFriends, selectedGroups, groups, countByGroup,
       canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, discardDraft, toggleAll, toggleGroup,
       recipientsCount, selectedSet, gLabel, acceptedFriends, uploads, uploadEnabled, uploadingAny,
       visibilityOpen, visibilitySummary,

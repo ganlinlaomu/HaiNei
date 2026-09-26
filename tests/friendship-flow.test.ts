@@ -29,7 +29,10 @@ vi.mock("@/nostr/relays", () => ({
   DEFAULT_RELAYS: ["wss://bootstrap.test", "wss://shared.test"],
   getRelaysFromStorage: mocks.getRelaysFromStorage
 }));
-vi.mock("@/nostr/messaging/service", () => ({ sendDirectMessage: mocks.send }));
+vi.mock("@/nostr/messaging/service", () => ({
+  sendDirectMessage: mocks.send,
+  publishQueuedOutgoing: vi.fn()
+}));
 vi.mock("@/repositories/friendshipRepository", () => ({
   friendshipRepository: { list: mocks.list, put: mocks.put, delete: mocks.delete }
 }));
