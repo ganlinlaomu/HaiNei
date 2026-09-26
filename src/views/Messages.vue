@@ -55,6 +55,17 @@
       </template>
     </section>
 
+    <button
+      v-if="showJumpToLatest"
+      class="jump-to-latest"
+      type="button"
+      :aria-label="pendingTailCount > 0 ? `回到最新消息，${pendingTailCount} 条新消息` : '回到最新消息'"
+      @click="jumpToLatest"
+    >
+      <span aria-hidden="true">↓</span>
+      <strong v-if="pendingTailCount > 0">{{ pendingTailCount }} 条新消息</strong>
+    </button>
+
     <div class="composer-region">
       <div v-if="selectedImage" class="selected-image">
         <img :src="selectedImage.preview" alt="待发送图片" />
@@ -163,6 +174,8 @@ const recordedAudio = ref<(VoiceRecordingResult & { preview: string }) | null>(n
 const voiceError = ref("");
 const imageInput = ref<HTMLInputElement | null>(null);
 const messageList = ref<HTMLElement | null>(null);
+const showJumpToLatest = ref(false);
+const pendingTailCount = ref(0);
 const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
 const INITIAL_MESSAGE_COUNT = 60;
 const OLDER_MESSAGE_BATCH = 40;
@@ -215,6 +228,8 @@ function formatBubbleTime(timestamp: number) {
 function setMessageListToBottom() {
   const list = messageList.value;
   if (list) list.scrollTop = list.scrollHeight;
+  showJumpToLatest.value = false;
+  pendingTailCount.value = 0;
 }
 function scrollToBottom() {
   void nextTick(setMessageListToBottom);
@@ -279,12 +294,28 @@ async function prependOlderMessages() {
 }
 
 function handleMessageScroll() {
-  if ((messageList.value?.scrollTop || 0) <= TOP_LOAD_THRESHOLD) void prependOlderMessages();
+  const list = messageList.value;
+  if (!list) return;
+  if (list.scrollTop <= TOP_LOAD_THRESHOLD) void prependOlderMessages();
+
+  const metrics = scrollMetrics(list);
+  if (isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD)) {
+    showJumpToLatest.value = false;
+    pendingTailCount.value = 0;
+  } else if (list.scrollHeight > list.clientHeight + BOTTOM_FOLLOW_THRESHOLD) {
+    showJumpToLatest.value = true;
+  }
+}
+
+function jumpToLatest() {
+  scrollToBottom();
 }
 
 async function load() {
   const generation = ++loadGeneration;
   loadingConversation = true;
+  showJumpToLatest.value = false;
+  pendingTailCount.value = 0;
   resetMessageWindow();
   const account = keys.pkHex;
   if (!account || peerPubkey.value === account) {
@@ -466,11 +497,20 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
   else windowStart.value = Math.min(windowStart.value, initialMessageWindowStart(nextIds.length, INITIAL_MESSAGE_COUNT));
 
   const previousLastId = previousIds?.at(-1);
-  const hasNewTail = !!nextIds.length && (!previousLastId || nextIds.indexOf(previousLastId) < nextIds.length - 1);
+  const previousLastIndex = previousLastId ? nextIds.indexOf(previousLastId) : -1;
+  const hasNewTail = !!nextIds.length && (!previousLastId || previousLastIndex < nextIds.length - 1);
+  const newTailCount = hasNewTail
+    ? Math.max(1, previousLastIndex >= 0 ? nextIds.length - previousLastIndex - 1 : nextIds.length - previousIds.length)
+    : 0;
   const markRead = directMessages.markPeerRead(peerPubkey.value);
   if (list && previousMetrics && hasNewTail && isNearMessageBottom(previousMetrics, BOTTOM_FOLLOW_THRESHOLD)) {
     await nextTick();
     list.scrollTop = scrollTopAfterNewMessages(previousMetrics, list.scrollHeight, BOTTOM_FOLLOW_THRESHOLD);
+    showJumpToLatest.value = false;
+    pendingTailCount.value = 0;
+  } else if (hasNewTail) {
+    showJumpToLatest.value = true;
+    pendingTailCount.value += newTailCount;
   }
   await markRead;
 });
@@ -492,6 +532,7 @@ onBeforeUnmount(() => {
 .chat-header{display:grid;grid-template-columns:38px 34px minmax(0,1fr);align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}.chat-header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}
 .message-list{min-height:0;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:9px;font-weight:400;line-height:1.3;opacity:.85}.message-status.failed,.caption-meta.failed{color:#dc2626}.message-status button,.caption-meta button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}.caption-meta{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;color:#718096;font-size:9px;line-height:1.3;white-space:nowrap}
 .audio-bubble{padding:9px 10px}
+.jump-to-latest{position:absolute;right:18px;bottom:calc(94px + env(safe-area-inset-bottom));z-index:4;display:flex;min-width:42px;height:42px;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid #d8dee5;border-radius:999px;background:#fff;color:#0f1419;box-shadow:0 5px 18px rgba(15,23,42,.16);font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent}.jump-to-latest:active{background:#f7f9f9;transform:scale(.97)}.jump-to-latest>span{font-size:20px;line-height:1}.jump-to-latest strong{font-size:12px;font-weight:650;white-space:nowrap}
 .composer-region{position:relative;z-index:3;width:min(100%,720px);margin:0 auto;padding:4px 0 calc(28px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(255,255,255,0),#fff 22%)}
 .selected-image{position:relative;width:64px;height:64px;margin:0 0 8px 24px}.selected-image img{width:100%;height:100%;object-fit:cover;border:1px solid #e2e8f0;border-radius:12px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}.voice-error{margin:0 24px 6px;color:#dc2626;font-size:12px}
 .chat-composer{position:relative;width:calc(100% - 32px);min-width:0;margin:0 auto;border:1px solid #d8dee5;border-radius:28px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.11)}.composer-normal,.composer-recording,.composer-preview{display:flex;box-sizing:border-box;min-width:0;height:54px;min-height:54px;align-items:center;gap:8px;padding:4px 6px}.composer-normal input[type=text]{min-width:0;height:40px;flex:1;padding:0 5px;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}.image-input{display:none}.composer-icon-button{display:grid;width:40px;height:40px;flex:0 0 40px;padding:0;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.attachment-button{font-size:28px;font-weight:300;line-height:1}.microphone-button svg,.send-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.send-button{background:#0f1419;color:#fff}.chat-composer button:disabled{opacity:.36}

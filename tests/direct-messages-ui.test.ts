@@ -279,6 +279,17 @@ describe("direct-message navigation and UI contract", () => {
     expect(source).not.toContain("sendDirectMessage");
   });
 
+  it("shows loading, failure, and retry states while opening a new conversation", () => {
+    const source = readFileSync(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
+    expect(source).toContain("正在加载好友…");
+    expect(source).toContain("好友加载失败");
+    expect(source).toContain(">重新加载</button>");
+    expect(source).toContain("const loadError = ref");
+    expect(source).toContain('loadError.value = ""');
+    expect(source).toContain("catch (error)");
+    expect(source).toContain('@click="load"');
+  });
+
   it("allows only accepted, non-self peers to start private messages", () => {
     const accepted = (pubkey: string) => pubkey === FRIEND;
     expect(canStartDirectMessage(ACCOUNT, FRIEND, accepted)).toBe(true);
@@ -339,6 +350,18 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('window.visualViewport?.removeEventListener("resize", handleVisualViewportResize)');
     expect(chat).toContain("requestAnimationFrame(setMessageListToBottom)");
     expect(chat).toContain("if (composerFocused) setMessageListToBottom()");
+  });
+
+  it("offers a jump-to-latest control without changing DM read or sync semantics", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    expect(chat).toContain('class="jump-to-latest"');
+    expect(chat).toContain("pendingTailCount");
+    expect(chat).toContain("showJumpToLatest");
+    expect(chat).toContain("function jumpToLatest()");
+    expect(chat).toContain("isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD)");
+    expect(chat).toContain("pendingTailCount.value += newTailCount");
+    expect(chat).toContain("showJumpToLatest.value = false");
+    expect(chat).toContain("pendingTailCount.value = 0");
   });
 
   it("keeps the compact DM composer above the safe-area bottom", () => {
