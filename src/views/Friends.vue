@@ -212,6 +212,7 @@ import { useSwipeActions } from "@/composables/useSwipeActions";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import QrScannerSheet from "@/components/QrScannerSheet.vue";
 import { parseNostrProfileQrValue } from "@/utils/nostrQr";
+import { friendGroupTags, UNGROUPED_FRIEND_LABEL } from "@/utils/friendAudience";
 
 export default defineComponent({
   name: "Friends",
@@ -252,17 +253,19 @@ export default defineComponent({
       originalPubkey: "" // for edit mode
     });
 
-    // Get all existing groups from friends list
+    // Only groups that still belong to a visible accepted/outgoing relationship.
     const existingGroups = computed(() => {
+      const visiblePeers = new Set(friendships.records
+        .filter(record => record.state === "accepted" || record.state === "outgoing_pending")
+        .map(record => record.peerPubkey));
       const groupSet = new Set<string>();
       for (const friend of friends.list) {
-        if (friend.groups && friend.groups.length > 0) {
-          friend.groups.forEach(g => groupSet.add(g));
-        } else if (friend.group) {
-          groupSet.add(friend.group);
+        if (!visiblePeers.has(friend.pubkey)) continue;
+        for (const group of friendGroupTags(friend)) {
+          if (group !== UNGROUPED_FRIEND_LABEL) groupSet.add(group);
         }
       }
-      return Array.from(groupSet).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+      return Array.from(groupSet).sort((a, b) => a.localeCompare(b, "zh-CN"));
     });
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
     const incomingRequests = computed(() => friendships.getIncomingRequests());
