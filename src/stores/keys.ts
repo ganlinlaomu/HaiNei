@@ -532,7 +532,7 @@ export const useKeyStore = defineStore("keys", {
           return;
         }
 
-        if (storedMethod === "nip07" || storedMethod === "nip46" || storedMethod === "google") {
+        if (storedMethod === "nip07" || storedMethod === "nip46") {
           debugLog("account", "session_restore_failed", {
             pubkeyPrefix: pk,
             loginMethod: storedMethod,
