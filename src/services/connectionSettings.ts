@@ -59,7 +59,8 @@ export const DEVICE_ID_STORAGE_KEY = "hainei_device_id";
 export const ACTIVE_RELAY_CONFIGS_KEY = "hainei_active_relay_configs";
 
 export const DEFAULT_RELAY_URLS = [
-  "wss://nostr.dzo-hadar.ts.net"
+  "wss://nostr.dzo-hadar.ts.net",
+  "wss://relay.mostr.pub"
 ] as const;
 
 export const DEFAULT_MEDIA_SERVERS: ReadonlyArray<Pick<MediaServer, "id" | "type" | "url">> = [
@@ -139,9 +140,21 @@ export function normalizeMediaUrl(input: string): string {
 }
 
 function ensureDefaultRelayCandidates(items: RelayConfig[]): RelayConfig[] {
-  const next = dedupeRelays(items);
+  const next = dedupeRelays(items).map(item => ({ ...item }));
   for (const fallback of defaultRelayConfigs()) {
-    if (!next.some(item => item.url === fallback.url)) next.push(fallback);
+    const index = next.findIndex(item => item.url === fallback.url);
+    if (index < 0) {
+      next.push(fallback);
+      continue;
+    }
+    next[index] = {
+      ...next[index],
+      enabled: true,
+      deleted: false,
+      read: true,
+      write: true,
+      source: "default"
+    };
   }
   return next;
 }
@@ -362,7 +375,7 @@ export function migrateConnectionSettings(
   }
 
   return {
-    relays: dedupeRelays(migratedRelays),
+    relays: ensureDefaultRelayCandidates(migratedRelays),
     mediaServers: dedupeMedia(migratedMedia)
   };
 }
@@ -396,10 +409,12 @@ export function rankRelayConfigs(items: RelayConfig[], now = Date.now()): RelayC
 export function selectRelayConfigs(items: RelayConfig[], max = 5, now = Date.now()): RelayConfig[] {
   const ranked = rankRelayConfigs(ensureRelayModes(items), now);
   if (ranked.length <= max) return ranked;
-  const selected = ranked.slice(0, max);
-  const fallback = ranked.find(item => item.source === "default");
-  if (fallback && !selected.some(item => item.url === fallback.url)) selected[max - 1] = fallback;
-  return selected;
+  const systemRelays = ranked.filter(item =>
+    item.source === "default" && (DEFAULT_RELAY_URLS as readonly string[]).includes(item.url)
+  );
+  const userCapacity = Math.max(0, max - systemRelays.length);
+  const selected = ranked.filter(item => !systemRelays.some(system => system.url === item.url)).slice(0, userCapacity);
+  return [...selected, ...systemRelays].slice(0, max);
 }
 
 export function rankMediaServers(items: MediaServer[], now = Date.now()): MediaServer[] {
