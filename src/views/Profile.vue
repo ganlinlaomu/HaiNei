@@ -22,9 +22,22 @@
           <strong>{{ localNote }}</strong>
         </div>
         <div class="friend-state">已接受的好友</div>
-        <button v-if="canMessage" class="message-button" type="button" @click="router.push(`/messages/${ownerPubkey}`)">私信</button>
+        <div class="profile-actions">
+          <button v-if="canMessage" class="message-button" type="button" @click="router.push(`/messages/${ownerPubkey}`)">私信</button>
+          <button class="secondary-action" type="button" aria-label="复制用户公钥" @click="copyPubkey">复制公钥</button>
+          <button class="secondary-action" type="button" aria-label="打开用户二维码" @click="showQr = true">二维码</button>
+        </div>
         <button v-if="feedPreferences.isMuted(ownerPubkey)" class="unmute-button" type="button" @click="feedPreferences.unmute(ownerPubkey)">恢复显示此人的动态</button>
       </section>
+
+      <MyQrCodeSheet
+        :open="showQr"
+        :pubkey="ownerPubkey"
+        :nickname="ownerName"
+        dialog-label="用户二维码"
+        hint="扫描二维码即可识别此用户"
+        @close="showQr = false"
+      />
 
       <section class="profile-posts" aria-label="用户动态">
         <h3>动态</h3>
@@ -42,15 +55,18 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import PostCard from "@/components/PostCard.vue";
+import MyQrCodeSheet from "@/components/MyQrCodeSheet.vue";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useProfilesStore } from "@/stores/profiles";
 import { useMessagesStore } from "@/stores/messages";
+import { useUIStore } from "@/stores/ui";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { canViewPrivateProfile } from "@/utils/profileNavigation";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
+import { pubkeyToNpub } from "@/utils/nostrQr";
 
 const route = useRoute();
 const router = useRouter();
@@ -60,7 +76,9 @@ const friendships = useFriendshipsStore();
 const profiles = useProfilesStore();
 const messages = useMessagesStore();
 const feedPreferences = useFeedPreferencesStore();
+const ui = useUIStore();
 const ready = ref(false);
+const showQr = ref(false);
 let loadGeneration = 0;
 const ownerPubkey = computed(() => String(route.params.pubkey || "").trim().toLowerCase());
 const canView = computed(() => canViewPrivateProfile(
@@ -81,6 +99,16 @@ const localNote = computed(() => {
 const canMessage = computed(() => ownerPubkey.value !== keys.pkHex
   && friendships.loadedFor === keys.pkHex
   && friendships.isAccepted(ownerPubkey.value));
+async function copyPubkey() {
+  if (!ownerPubkey.value) return;
+  try {
+    await navigator.clipboard.writeText(pubkeyToNpub(ownerPubkey.value));
+    ui.addToast("已复制 npub 公钥", 1_800, "success");
+  } catch {
+    ui.addToast("复制失败，请稍后重试", 2_000, "error");
+  }
+}
+
 const ownerPosts = computed(() => canView.value && messages.loadedFor === keys.pkHex
   ? messages.inbox.filter(message =>
       message.pubkey.toLowerCase() === ownerPubkey.value
@@ -107,6 +135,6 @@ watch([() => keys.pkHex, ownerPubkey], load);
 
 <style scoped>
 .profile-view{width:100%;margin:0 auto;box-sizing:border-box;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
-.profile-content{display:flex;flex-direction:column;align-items:center;padding:18px}.profile-content h2{margin:14px 0 8px;font-size:23px;color:#172033}.bio{width:100%;max-width:420px;margin:0;padding:14px 0 20px;color:#475569;line-height:1.65;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere}.bio.empty{color:#94a3b8}.profile-meta{width:100%;max-width:420px;display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid #e2e8f0;color:#64748b;font-size:14px}.profile-meta strong{color:#334155}.friend-state{margin-top:10px;padding:6px 10px;border-radius:999px;background:#ecfdf5;color:#047857;font-size:12px}.message-button{min-width:112px;min-height:42px;margin-top:14px;padding:0 18px;border:0;border-radius:999px;background:#1687e8;color:#fff;font-weight:700;cursor:pointer}.unmute-button{margin-top:14px;min-height:42px;padding:0 14px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;color:#334155}.profile-posts{width:100%;box-sizing:border-box;padding:4px 10px 0}.profile-posts h3{margin:6px 4px 12px;padding-top:14px;border-top:1px solid #e8edf3;color:#172033;font-size:17px}.post-list{display:grid;gap:12px}.empty-posts{margin:0;padding:40px 16px 56px;color:#94a3b8;text-align:center;font-size:14px}.unavailable{padding:64px 16px;text-align:center}.unavailable h2{margin:0 0 8px;font-size:20px}.unavailable p{margin:0;color:#64748b;font-size:14px}
+.profile-content{display:flex;flex-direction:column;align-items:center;padding:18px}.profile-content h2{margin:14px 0 8px;font-size:23px;color:#172033}.bio{width:100%;max-width:420px;margin:0;padding:14px 0 20px;color:#475569;line-height:1.65;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere}.bio.empty{color:#94a3b8}.profile-meta{width:100%;max-width:420px;display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid #e2e8f0;color:#64748b;font-size:14px}.profile-meta strong{color:#334155}.friend-state{margin-top:10px;padding:6px 10px;border-radius:999px;background:#ecfdf5;color:#047857;font-size:12px}.profile-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:14px}.profile-actions button{min-height:42px;padding:0 16px;border-radius:999px;font-weight:700;cursor:pointer}.message-button{min-width:112px;border:0;background:#1687e8;color:#fff}.secondary-action{border:1px solid #cbd5e1;background:#fff;color:#334155}.unmute-button{margin-top:14px;min-height:42px;padding:0 14px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;color:#334155}.profile-posts{width:100%;box-sizing:border-box;padding:4px 10px 0}.profile-posts h3{margin:6px 4px 12px;padding-top:14px;border-top:1px solid #e8edf3;color:#172033;font-size:17px}.post-list{display:grid;gap:12px}.empty-posts{margin:0;padding:40px 16px 56px;color:#94a3b8;text-align:center;font-size:14px}.unavailable{padding:64px 16px;text-align:center}.unavailable h2{margin:0 0 8px;font-size:20px}.unavailable p{margin:0;color:#64748b;font-size:14px}
 @media (min-width:768px){.unavailable{max-width:640px;margin-left:auto;margin-right:auto}}
 </style>
