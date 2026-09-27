@@ -26,7 +26,7 @@ on:
       - ".github/workflows/android.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-apk-${{ github.workflow }}-${{ github.ref }}
@@ -109,3 +109,18 @@ jobs:
           path: artifacts/HaiNei-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish rolling GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="android-latest"
+          RELEASE_TITLE="HaiNei Android Latest"
+          RELEASE_NOTES="Latest installable HaiNei debug APK from main. Commit: ${GITHUB_SHA}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" artifacts/HaiNei-debug.apk --clobber
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes "$RELEASE_NOTES" --latest
+          else
+            gh release create "$RELEASE_TAG" artifacts/HaiNei-debug.apk               --target "$GITHUB_SHA"               --title "$RELEASE_TITLE"               --notes "$RELEASE_NOTES"               --latest
+          fi
