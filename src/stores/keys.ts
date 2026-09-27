@@ -82,10 +82,6 @@ export const useKeyStore = defineStore("keys", {
     async loadAccountStores(pk: string) {
       if (this.pkHex && this.pkHex !== pk) clearAccountScopedCaches(this.pkHex);
       const account = pk.slice(0, 8);
-      // Start bootstrap Relay handshakes while the encrypted Worker snapshot is
-      // being authenticated and fetched. This opens sockets only; subscriptions
-      // remain owned by their existing sync managers.
-      warmReadRelaysForSession(this);
       if (this.supportsNip44) {
         try {
           await fetchAndMaterializeAccountState(this);
@@ -100,6 +96,9 @@ export const useKeyStore = defineStore("keys", {
       } catch (e) {
         console.error(`[account] settings load failed account=${account}`, e);
       }
+      // Warm only after this account's settings have been materialized, otherwise
+      // an account switch can briefly reconnect using the previous account's Relay mirror.
+      warmReadRelaysForSession(this);
       const accountLoads: Array<[string, () => unknown | Promise<unknown>]> = [
         ["friends", () => useFriendsStore().load(pk)],
         ["friendships", () => useFriendshipsStore().load(pk)],
