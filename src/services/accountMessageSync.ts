@@ -5,7 +5,7 @@ import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/n
 import { MessageSyncManager } from "@/nostr/messaging/sync";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
-import { isAuthorizedDirectMessage } from "@/stores/directMessages";
+import { isAuthorizedCanonicalDirectMessage } from "@/stores/directMessages";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
@@ -52,17 +52,11 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
           const peer = message.senderPubkey === account
             ? message.recipientPubkeys.find(pubkey => pubkey !== account) || ""
             : message.senderPubkey;
-          return !!peer && isAuthorizedDirectMessage({
-            id: message.id,
-            pubkey: message.senderPubkey,
-            recipientPubkeys: message.recipientPubkeys,
-            created_at: message.createdAt,
-            content: message.plaintext || "",
-            conversationId: message.conversationId,
-            protocol: message.protocol,
-            transportKind: message.transportKind,
-            tags: message.tags,
-          }, account, friendships.getRecord(peer));
+          return !!peer && isAuthorizedCanonicalDirectMessage(
+            message,
+            account,
+            friendships.getRecord(peer),
+          );
         }
         return message.senderPubkey === account
           ? message.recipientPubkeys.filter(pubkey => pubkey !== account).every(pubkey => friendships.isAccepted(pubkey))
