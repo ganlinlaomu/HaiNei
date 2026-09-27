@@ -127,6 +127,18 @@ describe("direct-message navigation and UI contract", () => {
     expect(friends).toContain("const ok = await friends.remove(friend.pubkey)");
   });
 
+  it("keeps post audiences tied to live accepted-friend groups", () => {
+    const editor = readFileSync(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
+    const friends = readFileSync(join(process.cwd(), "src/views/Friends.vue"), "utf8");
+    expect(editor).toContain("audienceRecipients(");
+    expect(editor).toContain("audienceGroupsMeta(");
+    expect(editor).toContain("normalizeSelectedAudienceGroups(");
+    expect(editor).toContain("watch(groups, availableGroups =>");
+    expect(editor).toContain("const recipientsCount = computed(() => recipients.value.length)");
+    expect(friends).toContain('record.state === "accepted" || record.state === "outgoing_pending"');
+    expect(friends).toContain("friendGroupTags(friend)");
+  });
+
   it("uses the existing composer behind a route-aware floating button", () => {
     const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
     expect(app.match(/class="compose-fab"/g)).toHaveLength(1);
