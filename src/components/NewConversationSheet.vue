@@ -59,6 +59,7 @@ import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
+import { useUIStore } from "@/stores/ui";
 
 const props = defineProps<{ visible: boolean }>();
 const emit = defineEmits<{ close: []; select: [pubkey: string] }>();
@@ -66,6 +67,7 @@ const keys = useKeyStore();
 const friends = useFriendsStore();
 const friendships = useFriendshipsStore();
 const profiles = useProfilesStore();
+const ui = useUIStore();
 const query = ref("");
 const loading = ref(false);
 const loadError = ref("");
@@ -116,6 +118,11 @@ async function load() {
 }
 
 function selectFriend(pubkey: string) {
+  if (!friendships.isAccepted(pubkey)) {
+    ui.addToast("好友关系已变更，请重新选择", 2000, "info");
+    void load();
+    return;
+  }
   emit("close");
   emit("select", pubkey);
 }
