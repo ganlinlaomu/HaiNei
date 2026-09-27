@@ -25,7 +25,7 @@ import { debugLog } from "@/utils/debugLog";
 import { clearAccountScopedCaches } from "@/services/nostrCache";
 import { cancelOutgoingWorkForAccount } from "@/nostr/messaging/service";
 import { ACCOUNT_STATE_NAMESPACES, fetchAndMaterializeAccountState, syncAccountStateNamespace } from "@/services/accountStateSync";
-import { deviceStorage } from "@/services/deviceStorage";
+import { deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/deviceStorage";
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { startAccountMessageSync, stopAccountMessageSync } from "@/services/accountMessageSync";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -38,15 +38,6 @@ import {
 
 let restoreSessionFlight: Promise<void> | null = null;
 
-function toHex(u8: Uint8Array) {
-  return Array.from(u8).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-function genRandomSkHex(): string {
-  const arr = crypto.getRandomValues(new Uint8Array(32));
-  return toHex(arr);
-}
-function safeGeneratePrivateKey(): string {
-  try { return toHex(nostr.generateSecretKey()); } catch { return genRandomSkHex(); }
 }
 async function safeGetPublicKey(skHex: string): Promise<string> {
   return nostr.getPublicKey(nostr.utils.hexToBytes(skHex));
@@ -83,14 +74,6 @@ export const useKeyStore = defineStore("keys", {
     isLoggedIn(): boolean {
       return !!this.pkHex && !!this.loginMethod;
     },
-    /**
-     * Check if the current login method supports NIP-04 encryption/decryption
-     */
-    supportsNip04(): boolean {
-      if (!this.isLoggedIn) return false;
-      
-      return this.loginMethod === "private-key" && !!this.skHex;
-    },
     supportsNip44(): boolean {
       if (!this.isLoggedIn) return false;
       return this.loginMethod === "private-key" && !!this.skHex;
@@ -118,51 +101,24 @@ export const useKeyStore = defineStore("keys", {
       } catch (e) {
         console.error(`[account] settings load failed account=${account}`, e);
       }
-      try {
-        await useFriendsStore().load(pk);
-      } catch (e) {
-        console.error(`[account] friends load failed account=${account}`, e);
-      }
-      try {
-        await useFriendshipsStore().load(pk);
-      } catch (e) {
-        console.error(`[account] friendships load failed account=${account}`, e);
-      }
-      try {
-        await useProfilesStore().load(pk);
-      } catch (e) {
-        console.error(`[account] profiles load failed account=${account}`, e);
-      }
-      try {
-        await useFeedPreferencesStore().load(pk);
-      } catch (e) {
-        console.error(`[account] feed preferences load failed account=${account}`, e);
-      }
-      try {
-        await useBookmarksStore().load(pk);
-      } catch (e) {
-        console.error(`[account] bookmarks load failed account=${account}`, e);
-      }
-      try {
-        await useMessagesStore().load(pk);
-      } catch (e) {
-        console.error(`[account] messages load failed account=${account}`, e);
-      }
-      try {
-        await useDirectMessagesStore().refresh(pk);
-      } catch (e) {
-        console.error(`[account] direct messages load failed account=${account}`, e);
-      }
-      try {
-        await useInteractionsStore().load(pk);
-      } catch (e) {
-        console.error(`[account] interactions load failed account=${account}`, e);
-      }
-      try {
-        await useNotificationsStore().load(pk);
-      } catch (e) {
-        console.error(`[account] notifications load failed account=${account}`, e);
-      }
+      const accountLoads: Array<[string, () => Promise<unknown>]> = [
+        ["friends", () => useFriendsStore().load(pk)],
+        ["friendships", () => useFriendshipsStore().load(pk)],
+        ["profiles", () => useProfilesStore().load(pk)],
+        ["feed preferences", () => useFeedPreferencesStore().load(pk)],
+        ["bookmarks", () => useBookmarksStore().load(pk)],
+        ["messages", () => useMessagesStore().load(pk)],
+        ["direct messages", () => useDirectMessagesStore().refresh(pk)],
+        ["interactions", () => useInteractionsStore().load(pk)],
+        ["notifications", () => useNotificationsStore().load(pk)],
+      ];
+      await Promise.all(accountLoads.map(async ([label, load]) => {
+        try {
+          await load();
+        } catch (e) {
+          console.error(`[account] ${label} load failed account=${account}`, e);
+        }
+      }));
       // Account-level UI is ready from IndexedDB/D1 now. Relay history repair
       // continues in the session service and checkpoints only after reconciliation.
       void startAccountMessageSync(this)
@@ -238,25 +194,35 @@ export const useKeyStore = defineStore("keys", {
       this.accounts = listDeviceAccounts();
     },
 
-    persistActiveSession() {
-      if (!this.pkHex || !this.loginMethod) return;
-      deviceStorage.setItem("pkHex", this.pkHex);
-      deviceStorage.setItem("loginMethod", this.loginMethod);
-      deviceStorage.setItem("loginTimestamp", String(this.loginTimestamp));
-      deviceStorage.setItem("isEncrypted", this.isEncrypted ? "true" : "false");
+    async clearPersistedSession() {
+      await Promise.all(
+        ["skHex", "pkHex", "loginMethod", "loginTimestamp", "isEncrypted", "bunkerInput", "bunkerClientSecretKey"]
+          .map(key => removeDeviceValue(key))
+      );
     },
 
-    rememberCurrentAccount() {
+    async persistActiveSession() {
+      if (!this.pkHex || !this.loginMethod || !this.isEncrypted) return;
+      await Promise.all([
+        putDeviceValue("pkHex", this.pkHex),
+        putDeviceValue("loginMethod", this.loginMethod),
+        putDeviceValue("loginTimestamp", String(this.loginTimestamp)),
+        putDeviceValue("isEncrypted", "true"),
+        removeDeviceValue("skHex"),
+      ]);
+    },
+
+    async rememberCurrentAccount() {
       if (!this.pkHex || !this.loginMethod) return;
-      this.accounts = rememberDeviceAccount({
+      this.accounts = await rememberDeviceAccount({
         pubkey: this.pkHex,
         authType: this.loginMethod,
-        hasEncryptedKey: this.loginMethod === "private-key" && hasEncryptedKey(this.pkHex),
+        hasEncryptedKey: hasEncryptedKey(this.pkHex),
         lastUsedAt: Date.now(),
       });
     },
 
-    clearActiveSession() {
+    async clearActiveSession() {
       const currentPk = this.pkHex;
       if (currentPk) this.resetAccountStores(currentPk);
       this.skHex = "";
@@ -265,9 +231,7 @@ export const useKeyStore = defineStore("keys", {
       this.loginTimestamp = 0;
       this.isEncrypted = false;
       this.isUnlocked = false;
-      for (const key of ["skHex", "pkHex", "loginMethod", "loginTimestamp", "isEncrypted", "bunkerInput", "bunkerClientSecretKey"]) {
-        deviceStorage.removeItem(key);
-      }
+      await this.clearPersistedSession();
     },
 
     async selectRememberedAccount(pubkey: string) {
@@ -283,52 +247,18 @@ export const useKeyStore = defineStore("keys", {
       this.loginTimestamp = Math.floor(Date.now() / 1000);
       this.isEncrypted = true;
       this.isUnlocked = false;
-      this.persistActiveSession();
+      await this.persistActiveSession();
       return "unlock" as const;
     },
 
-    removeAccountFromDevice(pubkey: string) {
+    async removeAccountFromDevice(pubkey: string) {
       const normalized = pubkey.toLowerCase();
-      removeEncryptedKey(normalized);
-      this.accounts = forgetDeviceAccount(normalized);
-      if (this.pkHex === normalized) this.clearActiveSession();
+      await removeEncryptedKey(normalized);
+      this.accounts = await forgetDeviceAccount(normalized);
+      if (this.pkHex === normalized) await this.clearActiveSession();
     },
 
-    /**
-     * Unified NIP-04 decryption that works with all login methods
-     * @param senderPubHex - The public key of the sender
-     * @param ciphertext - The encrypted content
-     * @returns Promise<string> - The decrypted plaintext
-     */
-    async nip04Decrypt(senderPubHex: string, ciphertext: string): Promise<string> {
-      if (!this.pkHex || !this.loginMethod) {
-        throw new Error("未登录，无法解密消息");
-      }
 
-      if (this.loginMethod === "private-key") {
-        if (!this.skHex) throw new Error("私钥登录但未找到私钥");
-        return nostr.nip04.decrypt(this.skHex, senderPubHex, ciphertext);
-      }
-      throw new Error("当前登录方式不支持 NIP-04");
-    },
-
-    /**
-     * Unified NIP-04 encryption that works with all login methods
-     * @param recipientPubHex - The public key of the recipient
-     * @param plaintext - The plaintext to encrypt
-     * @returns Promise<string> - The encrypted ciphertext
-     */
-    async nip04Encrypt(recipientPubHex: string, plaintext: string): Promise<string> {
-      if (!this.pkHex || !this.loginMethod) {
-        throw new Error("未登录，无法加密消息");
-      }
-
-      if (this.loginMethod === "private-key") {
-        if (!this.skHex) throw new Error("私钥登录但未找到私钥");
-        return nostr.nip04.encrypt(this.skHex, recipientPubHex, plaintext);
-      }
-      throw new Error("当前登录方式不支持 NIP-04");
-    },
 
     async nip44Decrypt(senderPubHex: string, ciphertext: string): Promise<string> {
       if (!this.pkHex || !this.loginMethod) throw new Error("未登录，无法解密消息");
@@ -369,14 +299,18 @@ export const useKeyStore = defineStore("keys", {
     async loginWithSk(sk: string) {
       const previousPubkey = this.pkHex;
       if (previousPubkey) this.resetAccountStores(previousPubkey);
+      await this.clearPersistedSession();
+
       this.skHex = sk;
       this.loginMethod = "private-key";
       this.loginTimestamp = Math.floor(Date.now() / 1000);
       this.isEncrypted = false;
       try {
-        const pk = await safeGetPublicKey(sk);
-        this.pkHex = pk;
+        this.pkHex = await safeGetPublicKey(sk);
         this.isUnlocked = true;
+        await this.rememberCurrentAccount();
+        await this.loadAccountStores(this.pkHex);
+        logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
       } catch (e) {
         this.skHex = "";
         this.pkHex = "";
@@ -385,11 +319,6 @@ export const useKeyStore = defineStore("keys", {
         this.isUnlocked = false;
         throw e;
       }
-      deviceStorage.setItem("skHex", this.skHex);
-      this.persistActiveSession();
-      this.rememberCurrentAccount();
-      await this.loadAccountStores(this.pkHex);
-      logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
     },
 
     /**
@@ -429,7 +358,7 @@ export const useKeyStore = defineStore("keys", {
         // If password provided, encrypt and store
         if (password && password.trim()) {
           const encrypted = await encryptPrivateKey(skHex, password);
-          storeEncryptedKey(pk, encrypted);
+          await storeEncryptedKey(pk, encrypted);
           if (previousPubkey) this.resetAccountStores(previousPubkey);
           
           this.skHex = skHex;
@@ -439,9 +368,8 @@ export const useKeyStore = defineStore("keys", {
           this.isUnlocked = true;
           this.loginTimestamp = Math.floor(Date.now() / 1000);
 
-          deviceStorage.removeItem("skHex");
-          this.persistActiveSession();
-          this.rememberCurrentAccount();
+          await this.persistActiveSession();
+          await this.rememberCurrentAccount();
         } else {
           // No password, use regular login
           await this.loginWithSk(skHex);
@@ -493,8 +421,8 @@ export const useKeyStore = defineStore("keys", {
         this.skHex = skHex;
         this.isUnlocked = true;
         this.loginTimestamp = Math.floor(Date.now() / 1000);
-        this.persistActiveSession();
-        this.rememberCurrentAccount();
+        await this.persistActiveSession();
+        await this.rememberCurrentAccount();
 
         await this.loadAccountStores(this.pkHex);
       } catch (e: any) {
@@ -503,10 +431,6 @@ export const useKeyStore = defineStore("keys", {
       }
     },
 
-    async generateTemp() {
-      const sk = safeGeneratePrivateKey();
-      await this.loginWithSk(sk);
-    },
     
     restoreSession() {
       if (this.isRestored) return Promise.resolve();
@@ -538,14 +462,14 @@ export const useKeyStore = defineStore("keys", {
             loginMethod: storedMethod,
             reason: "stale_auth_type"
           }, "warn");
-          this.clearActiveSession();
+          await this.clearActiveSession();
           this.isRestored = true;
           return;
         }
 
         const method = storedMethod === "sk" ? "private-key" : storedMethod;
         if (method !== "private-key") {
-          this.clearActiveSession();
+          await this.clearActiveSession();
           this.isRestored = true;
           return;
         }
@@ -558,8 +482,8 @@ export const useKeyStore = defineStore("keys", {
           if (!hasEncryptedKey(this.pkHex)) throw new Error("未找到加密的私钥");
           this.isEncrypted = true;
           this.isUnlocked = false;
-          this.persistActiveSession();
-          this.rememberCurrentAccount();
+          await this.persistActiveSession();
+          await this.rememberCurrentAccount();
           this.isRestored = true;
           return;
         }
@@ -569,8 +493,8 @@ export const useKeyStore = defineStore("keys", {
         this.skHex = sk;
         this.isEncrypted = false;
         this.isUnlocked = true;
-        this.persistActiveSession();
-        this.rememberCurrentAccount();
+        await this.clearPersistedSession();
+        await this.rememberCurrentAccount();
         await this.loadAccountStores(this.pkHex);
         this.isRestored = true;
         debugLog("account", "session_restore_success", { pubkeyPrefix: this.pkHex, loginMethod: method }, "info");
@@ -581,38 +505,14 @@ export const useKeyStore = defineStore("keys", {
           loginMethod: this.loginMethod,
           reason: error instanceof Error ? error.name : "restore_failed"
         }, "error");
-        this.clearActiveSession();
+        await this.clearActiveSession();
         this.isRestored = true;
       } finally {
         this.isRestoring = false;
       }
     },
-    /**
-     * register(options?)
-     * - Creates a new keypair (or uses provided skHex) and logs in the user.
-     * - This function exists because some parts of the UI call ks.register(...).
-     * - If you need server-side registration or additional metadata storage, extend this method.
-     */
-    async register(skHex?: string) {
-      // If caller provided a specific skHex, try to use it, otherwise generate a fresh one.
-      const sk = skHex && typeof skHex === "string" && skHex.trim() ? skHex.trim() : safeGeneratePrivateKey();
-      await this.loginWithSk(sk);
-      // Mark as registered locally (useful if UI expects a flag)
-      try {
-        const regsRaw = deviceStorage.getItem("nostr_registered_accounts") || "[]";
-        const regs = JSON.parse(regsRaw);
-        if (!Array.isArray(regs)) regs.length = 0;
-        if (!regs.includes(this.pkHex)) {
-          regs.push(this.pkHex);
-          deviceStorage.setItem("nostr_registered_accounts", JSON.stringify(regs));
-        }
-      } catch {
-        // ignore storage errors
-      }
-      return { skHex: this.skHex, pkHex: this.pkHex };
-    },
 
-    logout() {
+    async logout() {
       const currentPk = this.pkHex;
       const currentMethod = this.loginMethod;
       debugLog("account", "account_logout", {
@@ -620,7 +520,7 @@ export const useKeyStore = defineStore("keys", {
         loginMethod: currentMethod
       }, "info");
 
-      this.clearActiveSession();
+      await this.clearActiveSession();
       this.refreshAccounts();
       // navigate to login
       try {
