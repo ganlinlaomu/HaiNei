@@ -4,6 +4,8 @@ import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
+import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { isAuthorizedDirectMessage } from "@/stores/directMessages";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
@@ -45,9 +47,27 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
     onMessage: createHomeMessageHandler({
       accountPubkey: account,
       currentAccount: () => activeKeys?.pkHex || "",
-      isAcceptedMessage: message => message.senderPubkey === account
-        ? message.recipientPubkeys.filter(pubkey => pubkey !== account).every(pubkey => friendships.isAccepted(pubkey))
-        : friendships.isAccepted(message.senderPubkey),
+      isAcceptedMessage: message => {
+        if (isDirectMessageTags(message.tags)) {
+          const peer = message.senderPubkey === account
+            ? message.recipientPubkeys.find(pubkey => pubkey !== account) || ""
+            : message.senderPubkey;
+          return !!peer && isAuthorizedDirectMessage({
+            id: message.id,
+            pubkey: message.senderPubkey,
+            recipientPubkeys: message.recipientPubkeys,
+            created_at: message.createdAt,
+            content: message.plaintext || "",
+            conversationId: message.conversationId,
+            protocol: message.protocol,
+            transportKind: message.transportKind,
+            tags: message.tags,
+          }, account, friendships.getRecord(peer));
+        }
+        return message.senderPubkey === account
+          ? message.recipientPubkeys.filter(pubkey => pubkey !== account).every(pubkey => friendships.isAccepted(pubkey))
+          : friendships.isAccepted(message.senderPubkey);
+      },
       processFriendshipMessage: message => friendships.processFriendshipMessage(message),
       processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
       processFeedControlMessage: message => feedPreferences.processTombstone(
