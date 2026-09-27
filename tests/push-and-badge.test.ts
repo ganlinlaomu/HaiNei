@@ -484,6 +484,23 @@ describe("privacy-preserving push and badge", () => {
     expect(accountBadgeCount(OTHER, ACCOUNT, 3)).toBe(0);
     expect(accountBadgeCount(ACCOUNT, ACCOUNT, 3)).toBe(3);
     expect(accountBadgeCount(ACCOUNT, ACCOUNT, 3, ACCOUNT, 2)).toBe(5);
+    expect(accountBadgeCount(ACCOUNT, OTHER, 9, ACCOUNT, 2)).toBe(2);
+    expect(accountBadgeCount(ACCOUNT, ACCOUNT, 3, OTHER, 9)).toBe(3);
+  });
+
+  it("clears foreground DM unread before read-state persistence can delay the icon badge", () => {
+    const source = readFileSync(new URL("../src/stores/directMessages.ts", import.meta.url), "utf8");
+    const methodStart = source.indexOf("async markPeerRead(peerPubkey: string)");
+    const methodEnd = source.indexOf("async hideConversation(peerPubkey: string)", methodStart);
+    const method = source.slice(methodStart, methodEnd);
+    const memoryClear = method.indexOf("this.unreadByConversation = { ...this.unreadByConversation");
+    const badgeSync = method.indexOf("void syncAppBadge(accountBadgeCount(");
+    const persistence = method.indexOf("await metaRepository.put(");
+    expect(methodStart).toBeGreaterThan(-1);
+    expect(memoryClear).toBeGreaterThan(-1);
+    expect(badgeSync).toBeGreaterThan(memoryClear);
+    expect(persistence).toBeGreaterThan(badgeSync);
+    expect(method).toContain('console.warn("[dm] read-state persistence failed"');
   });
 
   it("keeps push opt-in state isolated across account switches", () => {
