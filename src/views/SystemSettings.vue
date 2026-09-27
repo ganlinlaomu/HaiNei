@@ -194,14 +194,14 @@
         </div>
       </details>
 
-      <section class="account-section">
-        <div class="top-level-row">
+      <details class="account-section top-level-group">
+        <summary class="top-level-row">
           <span class="row-main">
             <span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg></span>
             <strong>账户</strong>
           </span>
           <span class="row-chevron" aria-hidden="true">›</span>
-        </div>
+        </summary>
         <div class="top-level-content account-panel">
           <span class="small">当前账户：{{ shortPk }}</span>
           <div class="account-actions">
@@ -210,7 +210,7 @@
             <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
           </div>
         </div>
-      </section>
+      </details>
 
     </section>
   </main>
@@ -568,7 +568,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.system-content{padding:0 16px}.account-section{border-top:1px solid #e2e8f0;margin-top:8px}
+.system-content{padding:0 16px}.account-section{border-top:1px solid #e2e8f0;margin-top:8px}.account-section>summary{list-style:none}.account-section>summary::-webkit-details-marker{display:none}
 
 .settings-container {
   width: 100%;

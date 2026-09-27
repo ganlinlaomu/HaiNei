@@ -254,6 +254,54 @@ describe("message sync session", () => {
     manager.stop();
   });
 
+  it("repairs startup catch-up when a relay connects for the first time after startup", async () => {
+    const repo = new SyncedMessageRepository(database());
+    let relayObserver: ((event: any) => void) | undefined;
+    let subscriptionIndex = 0;
+    const subscribeFake = (_relays: string[], filters: any[]) => {
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      const index = subscriptionIndex++;
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name !== "eose" || filters.every(filter => filter.until === undefined)) return;
+          queueMicrotask(() => {
+            if (index >= 2) {
+              handlers.event?.forEach(handler => handler({ canonical: message("late-first-connect", 50), id: "wrap-late", created_at: 50 }, "wss://slow"));
+            }
+            callback("wss://slow");
+          });
+        },
+        unsub() {},
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: listener => { relayObserver = listener; return () => { relayObserver = undefined; }; },
+      resumeRelays: vi.fn(),
+      decode: async (event: any) => event.canonical,
+      catchupTimeoutMs: 1,
+      now: () => 2_000_000,
+    });
+
+    await manager.start({
+      accountPubkey: ACCOUNT_A,
+      relays: ["wss://slow"],
+      authors: [PEER, ACCOUNT_A],
+      decodeContext: { accountPubkey: ACCOUNT_A },
+    });
+    expect(await repo.get(ACCOUNT_A, "late-first-connect")).toBeUndefined();
+
+    relayObserver?.({ url: "wss://slow", connected: true, reconnected: false, at: 2_000_010 });
+    for (let attempt = 0; attempt < 20 && !(await repo.get(ACCOUNT_A, "late-first-connect")); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
+    expect(await repo.get(ACCOUNT_A, "late-first-connect")).toBeTruthy();
+    manager.stop();
+  });
+
   it("reconnects active read relays before foreground catch-up without duplicating realtime", async () => {
     const repo = new SyncedMessageRepository(database());
     const subscriptions: Array<{ relays: string[]; filters: any[]; handlers: Record<string, Array<(...args: any[]) => void>> }> = [];

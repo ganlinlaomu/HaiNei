@@ -95,6 +95,9 @@ export class MessageSyncManager {
     );
 
     await this.setStatus("connecting", sessionId);
+    // Reset exhausted retry state and start connecting the exact Relay set selected
+    // for this account before subscriptions/catch-up are created.
+    this.resumeRelays(options.relays);
     const purged = await this.repository.purgeUnsupportedMessages(accountPubkey);
     if (purged > 0) logger.info(`[message-sync] removed ${purged} unsupported cached messages`);
     const localMessages = (await this.repository.list(accountPubkey))
@@ -169,10 +172,14 @@ export class MessageSyncManager {
       if (event.connected) this.connectedRelays.add(event.url);
       else this.connectedRelays.delete(event.url);
       if (!event.connected && this.connectedRelays.size === 0) void this.setStatus("offline", sessionId);
-      if (event.connected && event.reconnected) {
+      if (event.connected) {
         void this.repository.updateSyncState(accountPubkey, { lastRealtimeConnectedAt: event.at });
         void retryOutgoingQueue(accountPubkey);
-        void this.resume("reconnect", event.url);
+        // A first connection can arrive after the startup catch-up timeout
+        // (catch-up: 8s, connection-open timeout: 10s). Always queue a bounded
+        // repair on successful connection; runCatchup coalesces it if startup
+        // history repair is still running.
+        void this.resume(event.reconnected ? "reconnect" : "resume", event.url);
       }
     });
     this.installForegroundHandlers();
