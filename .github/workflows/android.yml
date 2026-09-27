@@ -64,7 +64,14 @@ jobs:
         run: npm run build
 
       - name: Install Capacitor 8 build tooling
-        run: npm install --no-save --package-lock=false @capacitor/core@8 @capacitor/cli@8 @capacitor/android@8
+        run: |
+          mkdir -p .capacitor-ci
+          printf '{"private":true}' > .capacitor-ci/package.json
+          npm install --prefix .capacitor-ci --package-lock=false @capacitor/core@8 @capacitor/cli@8 @capacitor/android@8
+          mkdir -p node_modules/@capacitor
+          ln -sfn "$PWD/.capacitor-ci/node_modules/@capacitor/core" node_modules/@capacitor/core
+          ln -sfn "$PWD/.capacitor-ci/node_modules/@capacitor/cli" node_modules/@capacitor/cli
+          ln -sfn "$PWD/.capacitor-ci/node_modules/@capacitor/android" node_modules/@capacitor/android
 
       - name: Install Android SDK 36
         run: |
@@ -73,8 +80,8 @@ jobs:
 
       - name: Generate Android project
         run: |
-          npx cap add android
-          npx cap sync android
+          ./.capacitor-ci/node_modules/.bin/cap add android
+          ./.capacitor-ci/node_modules/.bin/cap sync android
 
       - name: Build debug APK
         run: |
