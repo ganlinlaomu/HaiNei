@@ -158,12 +158,13 @@ describe("Relay configuration", () => {
   });
 
   it("restores a locally disabled System Relay during migration and merge", () => {
+    const systemUrl = DEFAULT_RELAY_URLS[0];
     const migrated = migrateConnectionSettings({
-      relays: [relay("wss://relay.damus.io", "default", { enabled: false, read: false, write: false, updatedAt: 50 })]
+      relays: [relay(systemUrl, "default", { enabled: false, read: false, write: false, updatedAt: 50 })]
     }, { deviceId: "device-a", now: NOW });
-    const remoteBuiltin = relay("wss://relay.damus.io", "default", { enabled: false, updatedAt: 100 });
+    const remoteBuiltin = relay(systemUrl, "default", { enabled: false, updatedAt: 100 });
     const merged = mergeRelayConfigs(migrated.relays, [remoteBuiltin]);
-    expect(merged.find(item => item.url === "wss://relay.damus.io")).toMatchObject({
+    expect(merged.find(item => item.url === systemUrl)).toMatchObject({
       source: "default", enabled: true, read: true, write: true, deleted: false
     });
   });
@@ -266,7 +267,6 @@ describe("per-item settings sync", () => {
     expect(mergeRelayConfigs([local], [remote]).map(item => item.url).sort()).toEqual([
       "wss://local.example",
       "wss://nostr.dzo-hadar.ts.net",
-      "wss://relay.damus.io",
       "wss://remote.example"
     ]);
   });
