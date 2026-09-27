@@ -45,6 +45,20 @@ describe("Nostr QR friend discovery", () => {
     expect(scanner).toContain('document.visibilityState === "hidden"');
   });
 
+  it("exposes copy-public-key and QR actions on accepted friend profiles", () => {
+    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const qr = readFileSync(join(process.cwd(), "src/components/MyQrCodeSheet.vue"), "utf8");
+    expect(profile).toContain('aria-label="复制用户公钥"');
+    expect(profile).toContain('aria-label="打开用户二维码"');
+    expect(profile).toContain("pubkeyToNpub(ownerPubkey.value)");
+    expect(profile).toContain('ui.addToast("已复制 npub 公钥"');
+    expect(profile).toContain("<MyQrCodeSheet");
+    expect(profile).toContain('dialog-label="用户二维码"');
+    expect(profile).toContain('hint="扫描二维码即可识别此用户"');
+    expect(qr).toContain(':aria-label="dialogLabel"');
+    expect(qr).toContain("{{ hint }}");
+  });
+
   it("exposes QR sharing from My and scanning from the existing friend request flow", () => {
     const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     const myProfile = readFileSync(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
