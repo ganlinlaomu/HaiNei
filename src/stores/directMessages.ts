@@ -156,12 +156,33 @@ function afterCursor(item: InboxItem, createdAt?: number, messageId?: string) {
   return isMessageAfter({ id: item.id, createdAt: item.created_at }, cursor(createdAt, messageId));
 }
 
-export function isAuthorizedDirectMessage(item: InboxItem, accountPubkey: string, friendship?: FriendshipRecord) {
+export function isAuthorizedDirectMessage(
+  item: Pick<InboxItem, "pubkey" | "created_at">,
+  accountPubkey: string,
+  friendship?: FriendshipRecord,
+) {
   if (item.pubkey === accountPubkey) return true;
   const windows = friendship?.acceptedWindows || [];
-  if (!windows.length) return friendship?.state === "accepted";
+  if (!windows.length) {
+    if (!friendship?.acceptedAt) return friendship?.state === "accepted";
+    const endedAt = friendship.state === "accepted" ? undefined : friendship.lastControlAt;
+    return item.created_at >= friendship.acceptedAt
+      && (endedAt === undefined || item.created_at <= endedAt);
+  }
   return windows.some(window => item.created_at >= window.acceptedAt
     && (window.endedAt === undefined || item.created_at <= window.endedAt));
+}
+
+export function isAuthorizedCanonicalDirectMessage(
+  message: { senderPubkey: string; createdAt: number },
+  accountPubkey: string,
+  friendship?: FriendshipRecord,
+) {
+  return isAuthorizedDirectMessage(
+    { pubkey: message.senderPubkey, created_at: message.createdAt },
+    accountPubkey,
+    friendship,
+  );
 }
 
 function afterDeletion(item: InboxItem, preference?: ConversationPreference) {
@@ -775,6 +796,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
             task = (await this.patchTask(localId, { state: "sending", lastError: undefined })) || task;
           }
           if (useKeyStore().pkHex !== account) throw new Error("账号已切换");
+          if (!friendships.isAccepted(task.peerPubkey)) throw new Error("好友关系已变更");
           const keys = useKeyStore();
           registerOutgoingPushSigner(account, keys.signEvent.bind(keys));
           const content = taskContent(task);

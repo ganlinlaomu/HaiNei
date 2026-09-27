@@ -84,6 +84,7 @@ import { useProfilesStore } from "@/stores/profiles";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { isAuthorizedCanonicalDirectMessage } from "@/stores/directMessages";
 import { buildHeightPrefix, resolveVirtualRange, updateHeightPrefix } from "@/utils/virtualFeed";
 
 
@@ -1044,11 +1045,23 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
           onMessage: createHomeMessageHandler({
             accountPubkey: accountAtStart,
             currentAccount: () => keys.pkHex,
-            isAcceptedMessage: message => message.senderPubkey === accountAtStart
-              ? message.recipientPubkeys
-                  .filter(pubkey => pubkey !== accountAtStart)
-                  .every(pubkey => friendships.isAccepted(pubkey))
-              : friendships.isAccepted(message.senderPubkey),
+            isAcceptedMessage: message => {
+              if (isDirectMessageTags(message.tags)) {
+                const peer = message.senderPubkey === accountAtStart
+                  ? message.recipientPubkeys.find(pubkey => pubkey !== accountAtStart) || ""
+                  : message.senderPubkey;
+                return !!peer && isAuthorizedCanonicalDirectMessage(
+                  message,
+                  accountAtStart,
+                  friendships.getRecord(peer),
+                );
+              }
+              return message.senderPubkey === accountAtStart
+                ? message.recipientPubkeys
+                    .filter(pubkey => pubkey !== accountAtStart)
+                    .every(pubkey => friendships.isAccepted(pubkey))
+                : friendships.isAccepted(message.senderPubkey);
+            },
             processFriendshipMessage: message => friendships.processFriendshipMessage(message),
             processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
             processFeedControlMessage: message => feedPreferences.processTombstone(

@@ -189,6 +189,35 @@ describe("optimistic outgoing DM tasks", () => {
     expect(direct.peerMessages(PEER)).toHaveLength(1);
   });
 
+  it("does not publish media if friendship ends while upload is in progress", async () => {
+    let finishUpload!: (value: any) => void;
+    mocks.upload.mockImplementation(() => new Promise(resolve => { finishUpload = resolve; }));
+    mocks.send.mockResolvedValue(canonical("should-not-send"));
+    const { direct } = seed();
+    const friendships = useFriendshipsStore();
+
+    direct.send(PEER, "", new File(["image"], "photo.jpg", { type: "image/jpeg" }));
+    await vi.waitFor(() => expect(mocks.upload).toHaveBeenCalledOnce());
+
+    friendships.records[0] = {
+      ...friendships.records[0],
+      state: "removed",
+      lastControlAt: 20,
+      acceptedWindows: [{
+        acceptedAt: 1,
+        acceptedEventId: "accepted",
+        endedAt: 20,
+        endedEventId: "removed",
+      }],
+    };
+    finishUpload({ ref: "blossom+aesgcm:uploaded-after-remove" });
+
+    await vi.waitFor(() => expect(direct.outgoingTasks[0].state).toBe("send_failed"));
+    expect(direct.outgoingTasks[0].lastError).toContain("好友关系已变更");
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
   it("keeps encrypted voice uploading until NIP-17 publish succeeds", async () => {
     const preparedAudio = {
       encryptedBytes: bytes("cipher"), encryptedName: "voice.encrypted", mime: "audio/mp4",
