@@ -402,6 +402,10 @@ export const useSettingsStore = defineStore("settings", {
     updateRelay(url: string, patch: Partial<Pick<RelayConfig, "read" | "write" | "enabled">>) {
       const relay = this.settings.relays.find(item => item.url === url && !item.deleted);
       if (!relay) return false;
+      if (relay.source === "default" || (DEFAULT_RELAY_URLS as readonly string[]).includes(relay.url)) {
+        this._setValidationError("系统 Relay 固定保持启用并允许读取/写入。");
+        return false;
+      }
       const next = this.settings.relays.map(item =>
         item.url === url && !item.deleted ? { ...item, ...patch } : item
       );

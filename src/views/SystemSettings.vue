@@ -14,7 +14,7 @@
             <p>{{ relayList.filter(relay => relay.enabled).length }} 个已启用 · 用户、NIP-65 与 fallback</p>
           </div>
         </summary>
-        <p class="section-detail">用户 Relay 优先，NIP-65 次之，默认 Relay 仅用于 fallback。</p>
+        <p class="section-detail">HaiNei System Relay 固定保持读取/写入，确保用户之间至少有共同投递点；自定义 Relay 作为额外冗余。</p>
 
         <form class="add-form" @submit.prevent="addRelay">
           <input
@@ -34,7 +34,7 @@
               <div class="item-main">
                 <div class="item-url">{{ relay.url }}</div>
                 <div class="meta-row">
-                  <span class="pill">{{ relaySourceLabel(relay.source) }}</span>
+                  <span class="pill">{{ isBuiltinRelay(relay) ? "System" : relaySourceLabel(relay.source) }}</span>
                   <span class="pill" :class="relayStatusTone(relay)">
                     {{ relayStatusLabel(relay) }}
                   </span>
@@ -56,9 +56,12 @@
             <div v-if="relay.lastConnectedAt" class="relay-last-seen">最近连接：{{ formatTimestamp(relay.lastConnectedAt) }}</div>
 
             <div class="control-row">
-              <label><input type="checkbox" :checked="relay.enabled" @change="toggleRelay(relay, 'enabled', $event)" />启用</label>
-              <label><input type="checkbox" :checked="relay.read" @change="toggleRelay(relay, 'read', $event)" />读取</label>
-              <label><input type="checkbox" :checked="relay.write" @change="toggleRelay(relay, 'write', $event)" />写入</label>
+              <template v-if="!isBuiltinRelay(relay)">
+                <label><input type="checkbox" :checked="relay.enabled" @change="toggleRelay(relay, 'enabled', $event)" />启用</label>
+                <label><input type="checkbox" :checked="relay.read" @change="toggleRelay(relay, 'read', $event)" />读取</label>
+                <label><input type="checkbox" :checked="relay.write" @change="toggleRelay(relay, 'write', $event)" />写入</label>
+              </template>
+              <span v-else class="system-relay-lock">系统固定 · Read / Write</span>
               <button class="text-button" type="button" @click="reconnect(relay.url)">重连</button>
             </div>
           </article>
@@ -883,6 +886,7 @@ h3 {
 }
 
 .relay-last-seen{margin-top:8px;color:#64748b;font-size:.7rem}
+.system-relay-lock{color:#64748b;font-size:.76rem;font-weight:600}
 .meta-row {
   margin-top: 7px;
   display: flex;

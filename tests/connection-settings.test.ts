@@ -7,6 +7,7 @@ import {
   normalizeMediaUrl,
   rankMediaServers,
   rankRelayConfigs,
+  selectRelayConfigs,
   relayConfigsFromNip65,
   runMediaFailover,
   ACTIVE_RELAY_CONFIGS_KEY,
@@ -51,7 +52,8 @@ function media(id: string, source: MediaServer["source"], patch: Partial<MediaSe
 describe("Relay configuration", () => {
   it("uses the current built-in Relay and media fallbacks", () => {
     expect(DEFAULT_RELAY_URLS).toEqual([
-      "wss://nostr.dzo-hadar.ts.net"
+      "wss://nostr.dzo-hadar.ts.net",
+      "wss://relay.mostr.pub"
     ]);
     expect(DEFAULT_MEDIA_SERVERS).toEqual([
       expect.objectContaining({ url: "https://blossom-imgbed.noster.workers.dev" })
@@ -75,6 +77,26 @@ describe("Relay configuration", () => {
     expect(migrated.mediaServers.some(item => item.url === "https://blossom-imgbed.noster.workers.dev")).toBe(true);
   });
 
+  it("restores every system Relay as enabled read/write during migration and selection", () => {
+    const migrated = migrateConnectionSettings({
+      relays: DEFAULT_RELAY_URLS.map(url => relay(url, "default", {
+        enabled: false, read: false, write: false, deleted: true
+      }))
+    }, { deviceId: "device-a", now: NOW });
+    for (const url of DEFAULT_RELAY_URLS) {
+      expect(migrated.relays.find(item => item.url === url)).toMatchObject({
+        source: "default", enabled: true, read: true, write: true, deleted: false
+      });
+    }
+
+    const selected = selectRelayConfigs([
+      ...Array.from({ length: 5 }, (_, index) => relay(`wss://user-${index}.example`, "user")),
+      ...migrated.relays
+    ], 5, NOW);
+    expect(selected.map(item => item.url)).toEqual(expect.arrayContaining([...DEFAULT_RELAY_URLS]));
+    expect(selected).toHaveLength(5);
+  });
+
   it("always ranks user Relay above NIP-65 and defaults", () => {
     const ranked = rankRelayConfigs([
       relay("wss://default.example", "default", { latency: 1 }),
@@ -94,6 +116,19 @@ describe("Relay configuration", () => {
     );
     expect(rankRelayConfigs(merged).map(item => item.source)).toEqual(["user", "nip65"]);
     expect(merged.find(item => item.url === "wss://user.example")?.write).toBe(true);
+  });
+
+  it("does not let NIP-65 reclassify a HaiNei system Relay", () => {
+    const system = migrateConnectionSettings({}, { deviceId: "device-a", now: NOW }).relays;
+    const merged = relayConfigsFromNip65(
+      [["r", DEFAULT_RELAY_URLS[0], "read"]],
+      { createdAt: 100, eventId: "event-system" },
+      "a".repeat(64),
+      system
+    );
+    expect(merged.find(item => item.url === DEFAULT_RELAY_URLS[0])).toMatchObject({
+      source: "default", enabled: true, read: true, write: true
+    });
   });
 
   it("retains failed Relay configuration and only lowers health rank within its source", () => {
@@ -227,6 +262,8 @@ describe("per-item settings sync", () => {
     const remote = relay("wss://remote.example", "user", { updatedAt: 20 });
     expect(mergeRelayConfigs([local], [remote]).map(item => item.url).sort()).toEqual([
       "wss://local.example",
+      "wss://nostr.dzo-hadar.ts.net",
+      "wss://relay.mostr.pub",
       "wss://remote.example"
     ]);
   });
