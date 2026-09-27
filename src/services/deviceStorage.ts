@@ -18,15 +18,10 @@ export const deviceStorage = {
     return values.get(key) ?? null;
   },
   setItem(key: string, value: string) {
-    const serialized = String(value);
-    values.set(key, serialized);
-    if (import.meta.env.MODE === "test") legacyBrowserStorageForMigration()?.setItem(key, serialized);
-    if (typeof indexedDB !== "undefined") void db.deviceKeyValues.put({ key, value: serialized, updatedAt: Date.now() });
+    void putDeviceValue(key, String(value));
   },
   removeItem(key: string) {
-    values.delete(key);
-    if (import.meta.env.MODE === "test") legacyBrowserStorageForMigration()?.removeItem(key);
-    if (typeof indexedDB !== "undefined") void db.deviceKeyValues.delete(key);
+    void removeDeviceValue(key);
   },
   key: (index: number) => import.meta.env.MODE === "test"
     ? legacyBrowserStorageForMigration()?.key(index) ?? null
@@ -35,8 +30,20 @@ export const deviceStorage = {
 };
 
 export async function putDeviceValue(key: string, value: string) {
-  await db.deviceKeyValues.put({ key, value, updatedAt: Date.now() });
-  values.set(key, value);
+  const serialized = String(value);
+  values.set(key, serialized);
+  if (import.meta.env.MODE === "test") legacyBrowserStorageForMigration()?.setItem(key, serialized);
+  if (typeof indexedDB !== "undefined") {
+    await db.deviceKeyValues.put({ key, value: serialized, updatedAt: Date.now() });
+  }
+}
+
+export async function removeDeviceValue(key: string) {
+  values.delete(key);
+  if (import.meta.env.MODE === "test") legacyBrowserStorageForMigration()?.removeItem(key);
+  if (typeof indexedDB !== "undefined") {
+    await db.deviceKeyValues.delete(key);
+  }
 }
 
 export async function getDeviceValue(key: string) {
