@@ -15,6 +15,8 @@ import { uploadEncryptedCommentImage } from "@/utils/commentImage";
 import { prepareEncryptedDmAudio, uploadPreparedEncryptedDmAudio } from "@/utils/encryptedDmAudio";
 import { serializePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
+import { useNotificationsStore } from "@/stores/notifications";
+import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { registerDirectMessageStateOwner } from "@/services/directMessageStateEvents";
 
 type MessageCursor = { lastReadCreatedAt: number; lastReadMessageId: string };
@@ -519,14 +521,32 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const latestIncoming = items.filter(item => item.pubkey !== account).at(-1);
       if (!latestIncoming?.conversationId) return;
       const read = { lastReadCreatedAt: latestIncoming.created_at, lastReadMessageId: latestIncoming.id };
-      await metaRepository.put(account, readKey(latestIncoming.conversationId), read);
-      if (typeof syncedMessageRepository.markRead === "function" && typeof indexedDB !== "undefined") {
-        await syncedMessageRepository.markRead(account, latestIncoming.conversationId);
-      }
-      scheduleAccountStateSync(useKeyStore(), "read_state");
-      if (useKeyStore().pkHex !== account) return;
+
+      // Foreground read state owns the icon badge. Update memory immediately so
+      // a previously delivered Push badge cannot linger while IndexedDB/D1 work
+      // is still pending.
       this.readCursors = { ...this.readCursors, [latestIncoming.conversationId]: read };
       this.unreadByConversation = { ...this.unreadByConversation, [latestIncoming.conversationId]: 0 };
+      if (typeof navigator !== "undefined") {
+        const notifications = useNotificationsStore();
+        void syncAppBadge(accountBadgeCount(
+          account,
+          notifications.loadedFor,
+          notifications.unreadCount,
+          this.loadedFor,
+          this.unreadCount,
+        )).catch(() => undefined);
+      }
+
+      try {
+        await metaRepository.put(account, readKey(latestIncoming.conversationId), read);
+        if (typeof syncedMessageRepository.markRead === "function" && typeof indexedDB !== "undefined") {
+          await syncedMessageRepository.markRead(account, latestIncoming.conversationId);
+        }
+        scheduleAccountStateSync(useKeyStore(), "read_state");
+      } catch (error) {
+        console.warn("[dm] read-state persistence failed", error instanceof Error ? error.message : "unknown error");
+      }
     },
     async hideConversation(peerPubkey: string) {
       const peer = peerPubkey.toLowerCase();
