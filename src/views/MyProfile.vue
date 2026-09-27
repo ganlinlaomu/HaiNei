@@ -12,6 +12,7 @@
           </label>
           <span class="avatar-hint">{{ avatarFile ? avatarFile.name : "点击头像更换" }}</span>
           <p>仅自己和已接受的好友可见</p>
+          <button class="my-qr-button" type="button" @click="showMyQr = true">我的二维码</button>
         </div>
 
         <label class="field">
@@ -27,12 +28,14 @@
         </button>
       </form>
     </section>
+    <MyQrCodeSheet :open="showMyQr" :pubkey="keys.pkHex" :nickname="nickname" @close="showMyQr = false" />
   </main>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import MyQrCodeSheet from "@/components/MyQrCodeSheet.vue";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
@@ -49,6 +52,7 @@ const bio = ref("");
 const avatarFile = ref<File | null>(null);
 const draftLoadedFor = ref("");
 const saving = ref(false);
+const showMyQr = ref(false);
 
 function populateDraft() {
   const account = keys.pkHex;
@@ -138,6 +142,6 @@ async function save() {
 
 <style scoped>
 .profile-page{width:100%;margin:0 auto;box-sizing:border-box;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
-.profile-editor{padding:8px 16px 0}.avatar-area{display:flex;flex-direction:column;align-items:center;margin:8px 0 24px}.avatar-picker{position:relative;display:inline-grid;border-radius:50%;cursor:pointer}.avatar-picker input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.avatar-edit{position:absolute;right:-2px;bottom:1px;display:grid;place-items:center;width:27px;height:27px;border:2px solid #fff;border-radius:50%;background:#2563eb;color:#fff;font-size:14px;pointer-events:none}.avatar-hint{margin-top:8px;max-width:240px;color:#2563eb;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.avatar-area p{margin:5px 0 0;color:#64748b;font-size:12px}.field{display:grid;gap:7px;margin-bottom:15px;color:#334155;font-size:14px}.input{width:100%;box-sizing:border-box}.bio{min-height:104px;resize:vertical;padding:10px}.save-button{width:100%;min-height:46px;margin-top:2px}.save-button:disabled{opacity:.58;cursor:default}
+.profile-editor{padding:8px 16px 0}.avatar-area{display:flex;flex-direction:column;align-items:center;margin:8px 0 24px}.avatar-picker{position:relative;display:inline-grid;border-radius:50%;cursor:pointer}.avatar-picker input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}.avatar-edit{position:absolute;right:-2px;bottom:1px;display:grid;place-items:center;width:27px;height:27px;border:2px solid #fff;border-radius:50%;background:#2563eb;color:#fff;font-size:14px;pointer-events:none}.avatar-hint{margin-top:8px;max-width:240px;color:#2563eb;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.avatar-area p{margin:5px 0 0;color:#64748b;font-size:12px}.my-qr-button{min-height:36px;margin-top:10px;padding:0 14px;border:1px solid #cbd5e1;border-radius:999px;background:#fff;color:#334155;font-size:13px;font-weight:650}.field{display:grid;gap:7px;margin-bottom:15px;color:#334155;font-size:14px}.input{width:100%;box-sizing:border-box}.bio{min-height:104px;resize:vertical;padding:10px}.save-button{width:100%;min-height:46px;margin-top:2px}.save-button:disabled{opacity:.58;cursor:default}
 @media (min-width:768px){.profile-editor{max-width:560px;margin:0 auto}}
 </style>

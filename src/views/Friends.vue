@@ -116,23 +116,28 @@
         <form @submit.prevent="saveForm">
           <div v-if="!editingPending" class="form-group">
             <label>好友公钥 <span class="required">*</span></label>
-            <input 
-              v-model="formData.pubkey" 
-              class="input" 
-              placeholder="hex key 或 npub key"
-              :disabled="editMode"
-              :class="{ 'input-disabled': editMode }"
-            />
-            <div class="small" style="margin-top: 4px;">支持 64 位 hex 格式或 npub 格式</div>
+            <div class="pubkey-input-row">
+              <input 
+                v-model="formData.pubkey" 
+                class="input" 
+                placeholder="hex key 或 npub key"
+                :disabled="editMode"
+                :class="{ 'input-disabled': editMode }"
+              />
+              <button v-if="!editMode" class="scan-qr-button" type="button" @click="showScanner = true">
+                扫码
+              </button>
+            </div>
+            <div class="small" style="margin-top: 4px;">支持 64 位 hex、npub，或扫描对方二维码</div>
           </div>
 
           <div class="form-group">
-            <label>昵称 <span class="required">*</span></label>
+            <label>昵称 <span v-if="editMode" class="required">*</span><span v-else class="optional">（可选）</span></label>
             <input 
               v-model="formData.name" 
               class="input" 
-              placeholder="好友昵称"
-              required
+              :placeholder="editMode ? '好友昵称' : '可选，接受好友后可自动显示对方昵称'"
+              :required="editMode"
             />
           </div>
 
@@ -175,6 +180,7 @@
         </form>
       </div>
     </div>
+    <QrScannerSheet :open="showScanner" @close="showScanner = false" @scanned="handleScannedQr" />
   </div>
 </template>
 
@@ -193,10 +199,12 @@ import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { openProfile } from "@/utils/profileNavigation";
 import { useSwipeActions } from "@/composables/useSwipeActions";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
+import QrScannerSheet from "@/components/QrScannerSheet.vue";
+import { parseNostrProfileQrValue } from "@/utils/nostrQr";
 
 export default defineComponent({
   name: "Friends",
-  components: { ProfileAvatar, SecondaryPageHeader },
+  components: { ProfileAvatar, SecondaryPageHeader, QrScannerSheet },
   setup() {
     const friends = useFriendsStore();
     const friendships = useFriendshipsStore();
@@ -208,6 +216,7 @@ export default defineComponent({
     const profiles = useProfilesStore();
 
     const showModal = ref(false);
+    const showScanner = ref(false);
     const editMode = ref(false);
     const saving = ref(false);
     const editingPending = ref(false);
@@ -318,7 +327,10 @@ export default defineComponent({
       if (section === "incoming") activeSection.value = "incoming";
       else if (section === "outgoing") activeSection.value = "outgoing";
     }, { immediate: true });
-    watch(showModal, visible => ui.setBlockingOverlay("friends-editor", visible));
+    watch(showModal, visible => {
+      ui.setBlockingOverlay("friends-editor", visible);
+      if (!visible) showScanner.value = false;
+    });
 
     onBeforeUnmount(() => {
       ui.setBlockingOverlay("friends-editor", false);
@@ -333,6 +345,45 @@ export default defineComponent({
       }
     });
 
+    const handleScannedQr = (rawValue: string) => {
+      const hexKey = parseNostrProfileQrValue(rawValue);
+      showScanner.value = false;
+
+      if (!hexKey) {
+        ui.addToast("二维码不是有效的 Nostr 公钥", 2_400, "error");
+        return;
+      }
+      if (hexKey === keys.pkHex.toLowerCase()) {
+        ui.addToast("这是你自己的二维码", 2_000, "info");
+        return;
+      }
+
+      const state = friendships.getState(hexKey);
+      if (state === "accepted") {
+        ui.addToast("你们已经是好友", 1_800, "info");
+        showModal.value = false;
+        void router.push(`/profile/${hexKey}`);
+        return;
+      }
+      if (state === "incoming_pending") {
+        ui.addToast("对方正在等待你的确认", 2_200, "info");
+        showModal.value = false;
+        activeSection.value = "incoming";
+        return;
+      }
+
+      formData.value.pubkey = hexKey;
+      const localName = friends.list.find(friend => friend.pubkey === hexKey)?.name?.trim();
+      const profileName = profiles.getProfile(hexKey)?.nickname?.trim();
+      if (!formData.value.name.trim()) formData.value.name = localName || profileName || "";
+
+      if (state === "outgoing_pending") {
+        ui.addToast("好友请求已经发送，正在等待对方接受", 2_200, "info");
+      } else {
+        ui.addToast("已识别好友公钥", 1_500, "success");
+      }
+    };
+
     const startAdd = () => {
       if (!keys.isLoggedIn) {
         ui.addToast("请先登录", 2000, "error");
@@ -340,6 +391,7 @@ export default defineComponent({
       }
       editMode.value = false;
       editingPending.value = false;
+      showScanner.value = false;
       formData.value = {
         pubkey: "",
         name: "",
@@ -394,7 +446,7 @@ export default defineComponent({
       }
 
       const nameVal = formData.value.name.trim();
-      if (!nameVal) {
+      if (editMode.value && !nameVal) {
         ui.addToast("昵称为必填项", 2000, "error");
         return;
       }
@@ -434,14 +486,37 @@ export default defineComponent({
             return;
           }
 
+          if (hexKey === keys.pkHex.toLowerCase()) {
+            ui.addToast("不能添加自己为好友", 2000, "error");
+            return;
+          }
+          const currentState = friendships.getState(hexKey);
+          if (currentState === "accepted") {
+            ui.addToast("你们已经是好友", 1800, "info");
+            return;
+          }
+          if (currentState === "outgoing_pending") {
+            ui.addToast("好友请求已经发送，正在等待对方接受", 2200, "info");
+            return;
+          }
+          if (currentState === "incoming_pending") {
+            ui.addToast("对方正在等待你的确认", 2200, "info");
+            closeModal();
+            activeSection.value = "incoming";
+            return;
+          }
+
           const groupInput = formData.value.groupsInput.trim();
           const group = groupInput.length > 0 ? groupInput : undefined;
+          const savedName = nameVal
+            || profiles.getProfile(hexKey)?.nickname?.trim()
+            || `${hexKey.slice(0, 8)}…`;
 
           await friendships.sendRequest(hexKey);
           await friends.load();
           const existing = friends.list.find(friend => friend.pubkey === hexKey);
-          if (existing) friends.update(hexKey, { name: nameVal, groups: group ? [group] : undefined, group });
-          else friends.add({ pubkey: hexKey, name: nameVal, groups: group ? [group] : undefined, group });
+          if (existing) friends.update(hexKey, { name: savedName, groups: group ? [group] : undefined, group });
+          else friends.add({ pubkey: hexKey, name: savedName, groups: group ? [group] : undefined, group });
           ui.addToast("好友请求已发送，等待对方接受", 2400, "success");
           closeModal();
         }
@@ -546,6 +621,8 @@ export default defineComponent({
       localContactName,
       requestAge,
       showModal,
+      showScanner,
+      handleScannedQr,
       editMode,
       editingPending,
       formData,
@@ -586,6 +663,7 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.pubkey-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.scan-qr-button{min-width:64px;border:1px solid #1687e8;border-radius:9px;background:#fff;color:#1687e8;font-weight:700}.optional{color:#94a3b8;font-size:12px;font-weight:400}
 .friend-swipe{position:relative;overflow:hidden;touch-action:pan-y}.friend-swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:120px}.swipe-action{width:60px;border:0;color:#fff;font-size:12px;font-weight:650}.swipe-action.edit{background:#536471}.swipe-action.delete{background:#ef4444}.friend-swipe .friend-item{position:relative;z-index:1;background:#fff;transition:transform .2s ease}.friends-empty{display:flex;min-height:28vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:#64748b;text-align:center}.friends-empty strong{color:#0f1419;font-size:18px}.friends-empty span{font-size:14px}.friends-empty button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:#0f1419;color:#fff;font-size:14px;font-weight:650}
 
 .friends-container {
