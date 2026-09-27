@@ -155,15 +155,19 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('push', (event) => {
   let payload = {};
   try { payload = JSON.parse(event.data?.text() || '{}'); } catch {}
-  event.waitUntil(Promise.all([
-    self.registration.showNotification('HaiNei', {
-      body: '你有新的私信消息',
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
-      data: { type: 'message' }
-    }),
-    payload?.type === 'message' ? queueBadgeIncrement() : Promise.resolve()
-  ]));
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const hasVisibleClient = windows.some(client => client.visibilityState === 'visible');
+    await Promise.all([
+      self.registration.showNotification('HaiNei', {
+        body: '你有新的私信消息',
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        data: { type: 'message' }
+      }),
+      payload?.type === 'message' && !hasVisibleClient ? queueBadgeIncrement() : Promise.resolve()
+    ]);
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {
