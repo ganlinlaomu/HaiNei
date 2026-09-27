@@ -100,7 +100,7 @@ export const useKeyStore = defineStore("keys", {
       } catch (e) {
         console.error(`[account] settings load failed account=${account}`, e);
       }
-      const accountLoads: Array<[string, () => Promise<unknown>]> = [
+      const accountLoads: Array<[string, () => unknown | Promise<unknown>]> = [
         ["friends", () => useFriendsStore().load(pk)],
         ["friendships", () => useFriendshipsStore().load(pk)],
         ["profiles", () => useProfilesStore().load(pk)],
