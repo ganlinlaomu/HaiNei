@@ -38,6 +38,8 @@
                   <span class="pill" :class="relayStatusTone(relay)">
                     {{ relayStatusLabel(relay) }}
                   </span>
+                  <span v-if="relay.read" class="pill">Read</span>
+                  <span v-if="relay.write" class="pill">Write</span>
                   <span v-if="relay.latency" class="pill">{{ relay.latency }}ms</span>
                 </div>
               </div>
@@ -50,6 +52,8 @@
                 删除
               </button>
             </div>
+
+            <div v-if="relay.lastConnectedAt" class="relay-last-seen">最近连接：{{ formatTimestamp(relay.lastConnectedAt) }}</div>
 
             <div class="control-row">
               <label><input type="checkbox" :checked="relay.enabled" @change="toggleRelay(relay, 'enabled', $event)" />启用</label>
@@ -149,14 +153,15 @@
 
       <details class="technical-section">
         <summary class="section-heading">
-          <div><h3>后台推送 / Web Push</h3><p>{{ pushStatusText }}</p></div>
+          <div><h3>后台推送 / {{ isNativeApp ? "Android Push" : "Web Push" }}</h3><p>{{ pushStatusText }}</p></div>
         </summary>
         <p class="section-detail">推送仅用于私信，固定显示“你有新的私信消息”，不会包含好友名称、消息内容或图片信息。</p>
         <div class="account-row">
-          <span class="small">{{ pushSupported ? "需要你主动授权浏览器通知权限" : "当前浏览器不支持 Web Push" }}</span>
-          <button class="btn btn-secondary" type="button" :disabled="pushBusy || !pushSupported" @click="togglePush">
+          <span class="small">{{ pushHelpText }}</span>
+          <button v-if="!isNativeApp" class="btn btn-secondary" type="button" :disabled="pushBusy || !pushSupported" @click="togglePush">
             {{ pushBusy ? "处理中…" : pushEnabled ? "关闭推送" : "开启推送" }}
           </button>
+          <span v-else class="pill pending">原生 Push 待启用</span>
         </div>
       </details>
 
@@ -181,8 +186,14 @@
         </div>
       </details>
 
-      <details class="technical-section">
-        <summary class="section-heading"><div><h3>高级设置 / Diagnostics</h3><p>Relay、NIP-17 与同步日志</p></div></summary>
+      <details class="technical-section diagnostics-section">
+        <summary class="section-heading"><div><h3>高级设置 / Diagnostics</h3><p>{{ diagnosticsSummary }}</p></div></summary>
+        <div class="diagnostics-grid">
+          <span><strong>{{ connectedRelayCount }}/{{ enabledRelayCount }}</strong><small>Relay 已连接</small></span>
+          <span><strong>{{ syncStatusLabel }}</strong><small>消息同步</small></span>
+          <span><strong>{{ lastCatchupLabel }}</strong><small>最近补拉</small></span>
+          <span><strong>{{ diagnostics.pendingOutgoing }}</strong><small>待发送</small></span>
+        </div>
         <div class="account-row">
           <span class="small">查看 Relay、NIP-17 与消息同步的本地实时日志</span>
           <div class="button-row">
@@ -194,16 +205,19 @@
         </div>
       </details>
 
-      <details class="account-section top-level-group">
-        <summary class="top-level-row">
-          <span class="row-main">
-            <span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg></span>
-            <strong>账户</strong>
-          </span>
-          <span class="row-chevron" aria-hidden="true">›</span>
+      <details class="technical-section account-section identity-section">
+        <summary class="section-heading account-heading">
+          <div class="account-heading-main">
+            <span class="account-heading-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>
+            </span>
+            <div>
+              <h3>账户</h3>
+              <p>{{ nickname }} · {{ shortPk }} · {{ accountProtectionText }}</p>
+            </div>
+          </div>
         </summary>
-        <div class="top-level-content account-panel">
-          <span class="small">当前账户：{{ shortPk }}</span>
+        <div class="account-panel">
           <div class="account-actions">
             <button class="btn btn-secondary" type="button" @click="switchAccount">切换账号</button>
             <button class="btn btn-secondary" type="button" @click="addAccount">添加账号</button>
@@ -219,7 +233,6 @@
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import {
   inspectRelays,
   onRelayConnectionState,
@@ -232,6 +245,8 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
 import { clearAllCache, getCacheStats } from "@/utils/imageCache";
 import { registerOutgoingPushSigner, retryFailedOutgoing } from "@/nostr/messaging/service";
+import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import {
   disablePushNotifications,
   enablePushNotifications,
@@ -253,7 +268,6 @@ const settings = useSettingsStore();
 const ui = useUIStore();
 const router = useRouter();
 
-const hasAccount = computed(() => !!keyStore.pkHex);
 const nickname = computed(() => profiles.getProfile(keyStore.pkHex)?.nickname?.trim() || "未设置昵称");
 const shortPk = computed(() => keyStore.pkHex ? `${keyStore.pkHex.slice(0, 8)}...${keyStore.pkHex.slice(-6)}` : "");
 const relayList = computed(() => settings.relayList);
@@ -273,10 +287,43 @@ const clearingCache = ref(false);
 const pushBusy = ref(false);
 const retryingQueue = ref(false);
 const pushEnabled = ref(false);
-const pushSupported = supportsPushNotifications();
-const pushStatusText = computed(() => !pushSupported
-  ? "不支持"
-  : pushEnabled.value ? "已开启 · 通用隐私通知" : "未开启");
+const isNativeApp = (() => {
+  const capacitor = (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
+  return capacitor?.isNativePlatform?.() === true;
+})();
+const pushSupported = !isNativeApp && supportsPushNotifications();
+const pushStatusText = computed(() => isNativeApp
+  ? "原生通知将在下一阶段启用"
+  : !pushSupported
+    ? "不支持"
+    : pushEnabled.value ? "已开启 · 通用隐私通知" : "未开启");
+const pushHelpText = computed(() => isNativeApp
+  ? "Android APK 已禁用 PWA Service Worker；后续将接入原生 Push 与 Badge。"
+  : pushSupported ? "需要你主动授权浏览器通知权限" : "当前浏览器不支持 Web Push");
+const accountProtectionText = computed(() => keyStore.isEncrypted ? "本机加密保存" : "仅当前会话");
+const enabledRelayCount = computed(() => relayList.value.filter(relay => relay.enabled).length);
+const connectedRelayCount = computed(() => relayList.value.filter(relay => relay.enabled && statuses[relay.url]?.state === "connected").length);
+const diagnostics = reactive({
+  syncStatus: "idle",
+  lastCatchupCompletedAt: 0,
+  pendingOutgoing: 0,
+});
+function syncStatusText(status: string) {
+  if (status === "idle") return "Idle";
+  if (status === "connecting") return "连接中";
+  if (status === "catching-up") return "补拉中";
+  if (status === "live") return "Live";
+  if (status === "offline") return "离线";
+  if (status === "error") return "错误";
+  return status;
+}
+const syncStatusLabel = computed(() => syncStatusText(diagnostics.syncStatus));
+const lastCatchupLabel = computed(() => diagnostics.lastCatchupCompletedAt
+  ? formatRelativeTimestamp(diagnostics.lastCatchupCompletedAt)
+  : "—");
+const diagnosticsSummary = computed(() =>
+  `Relay ${connectedRelayCount.value}/${enabledRelayCount.value} · ${syncStatusLabel.value} · 待发送 ${diagnostics.pendingOutgoing}`
+);
 let statusInterval: ReturnType<typeof setInterval> | null = null;
 let statusUnsubscribe: (() => void) | null = null;
 let cacheRequestId = 0;
@@ -327,6 +374,38 @@ function formatTimestamp(timestamp?: number) {
 
 function formatSyncTimestamp(timestamp?: number) {
   return timestamp ? new Date(timestamp * 1000).toLocaleString() : "—";
+}
+
+function formatRelativeTimestamp(timestamp?: number) {
+  if (!timestamp) return "—";
+  const ms = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000;
+  const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (seconds < 60) return `${seconds}s 前`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m 前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h 前`;
+  return new Date(ms).toLocaleDateString();
+}
+
+async function refreshDiagnostics() {
+  const account = keyStore.pkHex;
+  if (!account) {
+    Object.assign(diagnostics, { syncStatus: "idle", lastCatchupCompletedAt: 0, pendingOutgoing: 0 });
+    return;
+  }
+  try {
+    const [syncState, pending] = await Promise.all([
+      syncedMessageRepository.getSyncState(account),
+      outgoingQueueRepository.listRetryable(account, true),
+    ]);
+    if (keyStore.pkHex !== account) return;
+    diagnostics.syncStatus = syncState.status || "idle";
+    diagnostics.lastCatchupCompletedAt = syncState.lastCatchupCompletedAt || 0;
+    diagnostics.pendingOutgoing = pending.length;
+  } catch {
+    if (keyStore.pkHex === account) diagnostics.syncStatus = "error";
+  }
 }
 
 function showValidationError(fallback: string) {
@@ -395,7 +474,11 @@ function refreshStatuses() {
 
 function startStatusPolling() {
   refreshStatuses();
-  if (!statusInterval) statusInterval = setInterval(refreshStatuses, 5_000);
+  void refreshDiagnostics();
+  if (!statusInterval) statusInterval = setInterval(() => {
+    refreshStatuses();
+    void refreshDiagnostics();
+  }, 5_000);
   if (!statusUnsubscribe) {
     statusUnsubscribe = onRelayConnectionState(() => {
       // onClose schedules retry immediately after emitting; next task observes
@@ -542,6 +625,7 @@ watch(() => keyStore.pkHex, async pk => {
     cacheStatsUpdatedAt = 0;
     for (const url of Object.keys(statuses)) delete statuses[url];
     pushEnabled.value = false;
+    Object.assign(diagnostics, { syncStatus: "idle", lastCatchupCompletedAt: 0, pendingOutgoing: 0 });
     return;
   }
   if (cacheStatsAccount !== pk) Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
@@ -549,6 +633,7 @@ watch(() => keyStore.pkHex, async pk => {
   if (settings.loadedFor !== pk) await settings.load(pk);
   if (keyStore.pkHex !== pk || settings.loadedFor !== pk) return;
   scheduleCacheStatsRefresh();
+  void refreshDiagnostics();
 }, { immediate: true });
 
 onMounted(startStatusPolling);
@@ -568,7 +653,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.system-content{padding:0 16px}.account-section{border-top:1px solid #e2e8f0;margin-top:8px}.account-section>summary{list-style:none}.account-section>summary::-webkit-details-marker{display:none}
+.system-content{padding:0 16px}.account-section{margin-top:8px}
 
 .settings-container {
   width: 100%;
@@ -655,9 +740,19 @@ h3 {
 .top-level-group[open] > .top-level-row .row-chevron { transform: rotate(90deg); }
 .top-level-content { padding: 4px 16px 16px; border-top: 1px solid #eef2f6; }
 .top-level-content.account-row { min-height: 64px; }
-.account-panel{display:grid;gap:12px;padding:14px 16px 16px}
+.account-heading-main{display:flex;min-width:0;align-items:center;gap:12px}
+.identity-section{margin-top:18px;border-top:2px solid #e2e8f0}
+.account-heading-icon{display:grid;width:24px;height:24px;flex:0 0 24px;place-items:center;color:#475569}
+.account-heading-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.account-heading-main>div{min-width:0}
+.account-heading-main p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.account-panel{padding:0 0 16px 36px}
 .account-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .account-actions .btn-danger{grid-column:1/-1}
+.diagnostics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0 0 14px}
+.diagnostics-grid>span{display:grid;gap:3px;padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc}
+.diagnostics-grid strong{color:#1e293b;font-size:.82rem}
+.diagnostics-grid small{color:#64748b;font-size:.68rem}
 .technical-settings { padding-top: 0; }
 
 .technical-section {
@@ -787,6 +882,7 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.relay-last-seen{margin-top:8px;color:#64748b;font-size:.7rem}
 .meta-row {
   margin-top: 7px;
   display: flex;
@@ -923,6 +1019,14 @@ h3 {
   .account-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .diagnostics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-panel {
+    padding-left: 0;
   }
 }
 

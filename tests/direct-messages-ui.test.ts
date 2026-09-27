@@ -89,7 +89,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(system).toContain("连接 / Relay");
     expect(system).toContain("图片与视频 / Media");
     expect(system).toContain("数据使用 / Data Saver");
-    expect(system).toContain("后台推送 / Web Push");
+    expect(system).toContain('后台推送 / {{ isNativeApp ? "Android Push" : "Web Push" }}');
     expect(system).toContain("存储 / Cache");
     expect(system).toContain("高级设置 / Diagnostics");
     expect(system).toContain('<SecondaryPageHeader title="设置" back-label="返回我的" />');

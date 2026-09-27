@@ -5,11 +5,14 @@ import { describe, expect, it } from "vitest";
 describe("account actions in Settings", () => {
   it("keeps switch, add and logout together in the Account section", () => {
     const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
-    expect(settings).toContain('<details class="account-section top-level-group">');
-    expect(settings).toContain('<summary class="top-level-row">');
+    expect(settings).toContain('<details class="technical-section account-section identity-section">');
+    expect(settings).toContain('<summary class="section-heading account-heading">');
+    expect(settings).toContain('class="account-heading-icon"');
+    expect(settings).not.toContain('<details class="account-section top-level-group">');
     expect(settings).toContain(">切换账号</button>");
     expect(settings).toContain(">添加账号</button>");
     expect(settings).toContain(">退出登录</button>");
+    expect(settings).toContain("<p>{{ nickname }} · {{ shortPk }} · {{ accountProtectionText }}</p>");
     expect(settings).toContain('goToAccountLogin("switch")');
     expect(settings).toContain('goToAccountLogin("add")');
     expect(settings).toContain('redirect: "/settings/system"');
