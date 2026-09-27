@@ -29,6 +29,8 @@ export function accountBadgeCount(
   directLoadedFor = accountPubkey,
   directUnreadCount = 0,
 ) {
-  if (!accountPubkey || accountPubkey !== loadedFor) return 0;
-  return unreadCount + (accountPubkey === directLoadedFor ? directUnreadCount : 0);
+  if (!accountPubkey) return 0;
+  const activityUnread = accountPubkey === loadedFor ? Math.max(0, unreadCount) : 0;
+  const directUnread = accountPubkey === directLoadedFor ? Math.max(0, directUnreadCount) : 0;
+  return activityUnread + directUnread;
 }
