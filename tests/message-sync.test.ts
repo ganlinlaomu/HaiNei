@@ -366,6 +366,52 @@ describe("message sync session", () => {
     Reflect.deleteProperty(globalThis, "window");
   });
 
+  it("backfills only a newly added relay from the existing watermark instead of replaying all history", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const nowMs = 1_800_000_000_000;
+    const highWatermark = Math.floor(nowMs / 1000) - 60;
+    await repo.insertMessageIfAbsent(ACCOUNT_A, message("existing", highWatermark), nowMs);
+    await repo.updateSyncState(ACCOUNT_A, {
+      historyBackfillStartedAt: nowMs - 10_000,
+      historyBackfillCompletedAt: nowMs - 5_000,
+      historyBackfillRelaySignature: "wss://a",
+    });
+
+    const subscriptions: Array<{ relays: string[]; filters: any[] }> = [];
+    const subscribeFake = (relays: string[], filters: any[]) => {
+      subscriptions.push({ relays: [...relays], filters });
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          if (name === "eose" && filters.some(filter => filter.until !== undefined)) {
+            queueMicrotask(() => relays.forEach(relay => callback(relay)));
+          }
+        },
+        unsub() {},
+      };
+    };
+
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: vi.fn(),
+      now: () => nowMs,
+    });
+    await manager.start({
+      accountPubkey: ACCOUNT_A,
+      relays: ["wss://a", "wss://b"],
+      authors: [PEER, ACCOUNT_A],
+      decodeContext: { accountPubkey: ACCOUNT_A },
+    });
+
+    const catchups = subscriptions.filter(item => item.filters.some(filter => filter.until !== undefined));
+    expect(catchups).toHaveLength(1);
+    expect(catchups[0].relays).toEqual(["wss://b"]);
+    expect(catchups[0].filters[0].since).toBeGreaterThan(0);
+    expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillRelaySignature).toBe("wss://a|wss://b");
+    manager.stop();
+  });
+
   it("subscribes before history, merges the race, and catch-ups again after reconnect", async () => {
     const repo = new SyncedMessageRepository(database());
     const subscriptions: Array<Record<string, Array<(...args: any[]) => void>>> = [];
