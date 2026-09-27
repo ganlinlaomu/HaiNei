@@ -38,7 +38,6 @@ import {
 
 let restoreSessionFlight: Promise<void> | null = null;
 
-}
 async function safeGetPublicKey(skHex: string): Promise<string> {
   return nostr.getPublicKey(nostr.utils.hexToBytes(skHex));
 }
