@@ -138,7 +138,10 @@ export class MessageSyncManager {
     }
     if (!isCurrent()) return;
 
-    const state = await this.repository.getSyncState(accountPubkey);
+    let state = await this.repository.getSyncState(accountPubkey);
+    if (!state.historyBackfillCompletedAt && !state.historyBackfillStartedAt && localMessages.length === 0) {
+      state = await this.repository.updateSyncState(accountPubkey, { historyBackfillStartedAt: this.now() });
+    }
     const nowSeconds = Math.floor(this.now() / 1000);
     // Realtime only needs to bridge the startup race. The separate bounded
     // catch-up below owns full history repair; keeping that work out of the
@@ -221,7 +224,7 @@ export class MessageSyncManager {
           || undefined;
         const freshHistoryRepair = !relayUrl
           && !state.historyBackfillCompletedAt
-          && !localHighWatermark;
+          && !!state.historyBackfillStartedAt;
         const relays = relayUrl
           ? [relayUrl]
           : state.historyBackfillCompletedAt && newlyAddedRelays.length
@@ -229,7 +232,9 @@ export class MessageSyncManager {
             : options.relays;
         const since = freshHistoryRepair
           ? 0
-          : calculateCatchupSince(localHighWatermark, nowSeconds);
+          : localHighWatermark
+            ? calculateCatchupSince(localHighWatermark, nowSeconds)
+            : nowSeconds;
         const filters = buildMessageSubscriptions(options.accountPubkey, options.authors, since, nowSeconds)
           .map(filter => ({ ...filter, limit: 500 }));
         logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} session=${sessionId} phase=${activeSource} since=${since} until=${nowSeconds}`);
@@ -256,10 +261,15 @@ export class MessageSyncManager {
           && result.exhaustedHistory
           && !result.hitMaxBatches
           && !result.incomplete;
-        const completedRelaySetUpdate = !relayUrl
-          && !freshHistoryRepair
+        const completedRelaySetUpdate = !freshHistoryRepair
           && result.allRelaysCompleted
           && !result.incomplete;
+        const completedRelaySignature = relayUrl
+          ? [...new Set([...previousRelaySet, relayUrl])]
+              .filter(url => options.relays.includes(url))
+              .sort()
+              .join("|")
+          : currentRelaySignature;
         await this.repository.updateSyncState(options.accountPubkey, {
           lastSuccessfulSyncAt: completedAt,
           lastCatchupCompletedAt: completedAt,
@@ -269,7 +279,7 @@ export class MessageSyncManager {
                 historyBackfillRelaySignature: currentRelaySignature
               }
             : completedRelaySetUpdate
-              ? { historyBackfillRelaySignature: currentRelaySignature }
+              ? { historyBackfillRelaySignature: completedRelaySignature }
               : {})
         });
         for (const completedRelay of result.completedRelays) {
