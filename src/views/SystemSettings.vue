@@ -202,9 +202,13 @@
           </span>
           <span class="row-chevron" aria-hidden="true">›</span>
         </div>
-        <div class="top-level-content account-row">
+        <div class="top-level-content account-panel">
           <span class="small">当前账户：{{ shortPk }}</span>
-          <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
+          <div class="account-actions">
+            <button class="btn btn-secondary" type="button" @click="switchAccount">切换账号</button>
+            <button class="btn btn-secondary" type="button" @click="addAccount">添加账号</button>
+            <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
+          </div>
         </div>
       </section>
 
@@ -475,8 +479,22 @@ function formatSize(bytes: number) {
   return `${(bytes / 1024 ** index).toFixed(2)} ${units[index]}`;
 }
 
-function doLogout() {
-  keyStore.logout();
+async function goToAccountLogin(mode: "switch" | "add") {
+  await keyStore.clearActiveSession();
+  keyStore.refreshAccounts();
+  await router.push({ path: "/login", query: { mode, redirect: "/settings/system" } });
+}
+
+function switchAccount() {
+  void goToAccountLogin("switch");
+}
+
+function addAccount() {
+  void goToAccountLogin("add");
+}
+
+async function doLogout() {
+  await keyStore.logout();
   location.href = "/#/login";
 }
 
@@ -637,6 +655,9 @@ h3 {
 .top-level-group[open] > .top-level-row .row-chevron { transform: rotate(90deg); }
 .top-level-content { padding: 4px 16px 16px; border-top: 1px solid #eef2f6; }
 .top-level-content.account-row { min-height: 64px; }
+.account-panel{display:grid;gap:12px;padding:14px 16px 16px}
+.account-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.account-actions .btn-danger{grid-column:1/-1}
 .technical-settings { padding-top: 0; }
 
 .technical-section {
