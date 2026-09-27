@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 describe("account actions in Settings", () => {
   it("keeps switch, add and logout together in the Account section", () => {
     const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    expect(settings).toContain('<details class="account-section top-level-group">');
+    expect(settings).toContain('<summary class="top-level-row">');
     expect(settings).toContain(">切换账号</button>");
     expect(settings).toContain(">添加账号</button>");
     expect(settings).toContain(">退出登录</button>");
