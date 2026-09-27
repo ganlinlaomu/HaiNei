@@ -149,6 +149,22 @@ describe("friend IndexedDB clone boundaries", () => {
     });
   });
 
+  it("persists a deletion tombstone before removing friend metadata from the visible list", async () => {
+    const friends = useFriendsStore();
+    friends.loadedFor = ACCOUNT;
+    friends.list = [{ pubkey: PEER, name: "朋友", groups: ["家人"], updatedAt: 100 }];
+    await friendRepository.put(ACCOUNT, friends.list[0]);
+
+    await expect(friends.remove(PEER)).resolves.toBe(true);
+
+    expect(friends.list).toEqual([]);
+    expect(await db.accountFriends.get([ACCOUNT, PEER])).toMatchObject({
+      pubkey: PEER,
+      deleted: true,
+    });
+    expect(mocks.scheduleAccountStateSync).toHaveBeenCalledWith(mocks.key, "friend_metadata");
+  });
+
   it("schedules the D1 friend metadata snapshot only after IndexedDB persistence", async () => {
     const order: string[] = [];
     const originalPut = friendRepository.put.bind(friendRepository);
