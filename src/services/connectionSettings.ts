@@ -60,7 +60,7 @@ export const ACTIVE_RELAY_CONFIGS_KEY = "hainei_active_relay_configs";
 
 export const DEFAULT_RELAY_URLS = [
   "wss://nostr.dzo-hadar.ts.net",
-  "wss://relay.mostr.pub"
+  "wss://relay.damus.io"
 ] as const;
 
 export const DEFAULT_MEDIA_SERVERS: ReadonlyArray<Pick<MediaServer, "id" | "type" | "url">> = [
@@ -71,7 +71,7 @@ export const DEFAULT_MEDIA_SERVERS: ReadonlyArray<Pick<MediaServer, "id" | "type
   }
 ];
 
-const RETIRED_DEFAULT_RELAY_URLS = new Set([""]);
+const RETIRED_DEFAULT_RELAY_URLS = new Set(["", "wss://relay.damus.io"]);
 const RETIRED_DEFAULT_MEDIA = new Set([
   "",
   ""

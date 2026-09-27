@@ -53,7 +53,7 @@ describe("Relay configuration", () => {
   it("uses the current built-in Relay and media fallbacks", () => {
     expect(DEFAULT_RELAY_URLS).toEqual([
       "wss://nostr.dzo-hadar.ts.net",
-      "wss://relay.mostr.pub"
+      "wss://relay.damus.io"
     ]);
     expect(DEFAULT_MEDIA_SERVERS).toEqual([
       expect.objectContaining({ url: "https://blossom-imgbed.noster.workers.dev" })
@@ -72,7 +72,9 @@ describe("Relay configuration", () => {
     }, { deviceId: "device-a", now: NOW });
     expect(migrated.relays.some(item => item.url === "wss://relay.0xchat.com" && item.source === "default")).toBe(false);
     expect(migrated.relays.some(item => item.url === "wss://relay.0xchat.com" && item.source === "user")).toBe(true);
+    expect(migrated.relays.some(item => item.url === "wss://relay.mostr.pub" && item.source === "default")).toBe(false);
     expect(migrated.relays.some(item => item.url === "wss://nostr.dzo-hadar.ts.net" && item.source === "default")).toBe(true);
+    expect(migrated.relays.some(item => item.url === "wss://relay.damus.io" && item.source === "default")).toBe(true);
     expect(migrated.mediaServers.some(item => item.url === "https://blossom.lostr.space")).toBe(true);
     expect(migrated.mediaServers.some(item => item.url === "https://blossom-imgbed.noster.workers.dev")).toBe(true);
   });
@@ -156,13 +158,15 @@ describe("Relay configuration", () => {
     expect(legacy.every(item => item.source === "user" && item.enabled)).toBe(true);
   });
 
-  it("preserves a locally disabled built-in Relay during migration and merge", () => {
+  it("restores a locally disabled System Relay during migration and merge", () => {
     const migrated = migrateConnectionSettings({
-      relays: [relay("wss://relay.damus.io", "default", { enabled: false, updatedAt: 50 })]
+      relays: [relay("wss://relay.damus.io", "default", { enabled: false, read: false, write: false, updatedAt: 50 })]
     }, { deviceId: "device-a", now: NOW });
-    const remoteBuiltin = relay("wss://relay.damus.io", "default", { enabled: true, updatedAt: 0 });
+    const remoteBuiltin = relay("wss://relay.damus.io", "default", { enabled: false, updatedAt: 100 });
     const merged = mergeRelayConfigs(migrated.relays, [remoteBuiltin]);
-    expect(merged.find(item => item.url === "wss://relay.damus.io")?.enabled).toBe(false);
+    expect(merged.find(item => item.url === "wss://relay.damus.io")).toMatchObject({
+      source: "default", enabled: true, read: true, write: true, deleted: false
+    });
   });
 });
 
@@ -263,7 +267,7 @@ describe("per-item settings sync", () => {
     expect(mergeRelayConfigs([local], [remote]).map(item => item.url).sort()).toEqual([
       "wss://local.example",
       "wss://nostr.dzo-hadar.ts.net",
-      "wss://relay.mostr.pub",
+      "wss://relay.damus.io",
       "wss://remote.example"
     ]);
   });
