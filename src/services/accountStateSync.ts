@@ -181,16 +181,28 @@ export async function fetchAndMaterializeAccountState(keys: AccountStateKeys, na
   }
   const response = await authenticatedPost(keys, "/api/account-state/get", { namespaces });
   const restored: AccountStateNamespace[] = [];
+  let settingsNeedRewrite = false;
   for (const snapshot of (response?.snapshots || []) as RemoteSnapshot[]) {
     try {
       const envelope = await decryptSnapshot(keys, snapshot);
       const local = await accountStateRepository.get(account, snapshot.namespace);
-      const data = local ? mergeNamespaceData(snapshot.namespace, local.data, envelope.data) : envelope.data;
+      const merged = local ? mergeNamespaceData(snapshot.namespace, local.data, envelope.data) : envelope.data;
+      const data = snapshot.namespace === "settings"
+        ? migrateConnectionSettings(merged, { deviceId: "account-state" })
+        : merged;
+      if (snapshot.namespace === "settings" && JSON.stringify(data) !== JSON.stringify(envelope.data)) {
+        settingsNeedRewrite = true;
+      }
       await materializeAccountState(account, snapshot.namespace, data, snapshot.version);
       restored.push(snapshot.namespace);
     } catch (error) {
       console.warn("[account-state] ignored unreadable namespace", snapshot.namespace, error instanceof Error ? error.message : "unknown");
     }
+  }
+  if (settingsNeedRewrite) {
+    await syncAccountStateNamespace(keys, "settings").catch(error => {
+      console.warn("[account-state] settings cleanup sync failed", error instanceof Error ? error.message : "unknown");
+    });
   }
   return { available: true, restored };
 }
