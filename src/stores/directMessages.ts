@@ -163,7 +163,12 @@ export function isAuthorizedDirectMessage(
 ) {
   if (item.pubkey === accountPubkey) return true;
   const windows = friendship?.acceptedWindows || [];
-  if (!windows.length) return friendship?.state === "accepted";
+  if (!windows.length) {
+    if (!friendship?.acceptedAt) return friendship?.state === "accepted";
+    const endedAt = friendship.state === "accepted" ? undefined : friendship.lastControlAt;
+    return item.created_at >= friendship.acceptedAt
+      && (endedAt === undefined || item.created_at <= endedAt);
+  }
   return windows.some(window => item.created_at >= window.acceptedAt
     && (window.endedAt === undefined || item.created_at <= window.endedAt));
 }
