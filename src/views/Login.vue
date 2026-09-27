@@ -44,20 +44,40 @@
           <div v-for="account in ks.accounts" :key="account.pubkey" class="account-option">
             <button type="button" class="account-select" :disabled="loading" @click="selectAccount(account.pubkey)">
               <strong>{{ shortPubkey(account.pubkey) }}</strong>
-              <small>{{ account.authType === "google" ? "Google" : account.hasEncryptedKey ? "私钥 · 已加密保存" : "私钥" }}</small>
+              <small>{{ account.hasEncryptedKey ? "私钥 · 已加密保存" : "私钥" }}</small>
             </button>
             <button type="button" class="remove-account" :disabled="loading" @click="removeAccount(account.pubkey)">从设备移除</button>
           </div>
         </div>
 
-        <button class="btn btn-primary google-login" type="button" :disabled="loading" @click="loginWithGoogle">
-          {{ loading ? "正在连接…" : "使用 Google 登录" }}
-        </button>
-        <button class="btn btn-secondary" type="button" :disabled="loading" @click="showPrivateLogin = !showPrivateLogin">
+        <button class="btn btn-primary" type="button" :disabled="loading" @click="openPrivateLogin">
           使用私钥登录
         </button>
+        <button class="btn btn-secondary" type="button" :disabled="loading" @click="startRegistration">
+          还没有账号？注册
+        </button>
 
-        <form v-if="showPrivateLogin" class="private-login" @submit.prevent="doLoginNsec">
+        <section v-if="showRegister" class="private-login registration-panel">
+          <p class="registration-title">保存你的私钥</p>
+          <p class="password-note">这是你的 Nostr 账号凭证。海内不会上传或替你找回，请先安全保存。</p>
+          <textarea class="input registration-key" :value="generatedNsec" readonly rows="4" spellcheck="false"></textarea>
+          <div class="key-actions">
+            <button class="paste-button" type="button" :disabled="loading" @click="copyGeneratedNsec">
+              {{ copiedNsec ? "已复制" : "复制私钥" }}
+            </button>
+          </div>
+          <label class="registration-confirm">
+            <input v-model="registrationConfirmed" type="checkbox" :disabled="loading" />
+            <span>我已安全保存这份私钥</span>
+          </label>
+          <button class="btn btn-primary login-button" type="button"
+            :disabled="loading || !registrationConfirmed" @click="finishRegistration">
+            {{ loading ? "正在创建…" : "进入海内" }}
+          </button>
+          <button class="btn btn-text" type="button" :disabled="loading" @click="cancelRegistration">取消</button>
+        </section>
+
+        <form v-if="showPrivateLogin && !showRegister" class="private-login" @submit.prevent="doLoginNsec">
           <div class="field-group">
             <label class="field-label" for="private-key">私钥</label>
             <div class="private-key-field">
@@ -107,12 +127,12 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { nip19 } from "nostr-tools";
+import { generateSecretKey, nip19 } from "nostr-tools";
 import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { logger } from "@/utils/logger";
 
-type LoginMethod = "google" | "private-key" | "unlock" | "switch";
+type LoginMethod = "private-key" | "unlock" | "switch" | "register";
 
 const ks = useKeyStore();
 const route = useRoute();
@@ -129,6 +149,10 @@ const confirmPassword = ref("");
 const unlockPassword = ref("");
 const unlockInProgress = ref(false);
 const showPrivateLogin = ref(false);
+const showRegister = ref(false);
+const generatedNsec = ref("");
+const registrationConfirmed = ref(false);
+const copiedNsec = ref(false);
 
 const nsecInputEl = ref<HTMLInputElement | null>(null);
 const unlockPasswordEl = ref<HTMLInputElement | null>(null);
@@ -188,8 +212,12 @@ function clearSensitiveInputs() {
   nsecPassword.value = "";
   confirmPassword.value = "";
   unlockPassword.value = "";
+  generatedNsec.value = "";
+  registrationConfirmed.value = false;
+  copiedNsec.value = false;
   showPrivateKey.value = false;
   saveEncrypted.value = false;
+  showRegister.value = false;
 }
 
 function errorType(error: unknown) {
@@ -278,23 +306,6 @@ async function doLoginNsec() {
   }
 }
 
-async function loginWithGoogle() {
-  if (loading.value) return;
-  errorMessage.value = "";
-  loading.value = true;
-  loginStatus.value = "正在连接 Google…";
-  try {
-    await ks.loginWithGoogle();
-    await finishLogin();
-  } catch (error) {
-    logLoginFailure("google", "authorization", error);
-    errorMessage.value = error instanceof Error ? error.message : "Google 登录失败，请重试。";
-  } finally {
-    loading.value = false;
-    loginStatus.value = "";
-  }
-}
-
 async function selectAccount(pubkey: string) {
   if (loading.value) return;
   errorMessage.value = "";
@@ -336,6 +347,55 @@ async function doUnlock() {
   } finally {
     loading.value = false;
     unlockInProgress.value = false;
+    loginStatus.value = "";
+  }
+}
+
+function openPrivateLogin() {
+  showRegister.value = false;
+  showPrivateLogin.value = !showPrivateLogin.value;
+}
+
+function startRegistration() {
+  if (loading.value) return;
+  errorMessage.value = "";
+  showPrivateLogin.value = false;
+  showRegister.value = true;
+  registrationConfirmed.value = false;
+  copiedNsec.value = false;
+  generatedNsec.value = nip19.nsecEncode(generateSecretKey());
+}
+
+async function copyGeneratedNsec() {
+  if (!generatedNsec.value) return;
+  try {
+    await navigator.clipboard.writeText(generatedNsec.value);
+    copiedNsec.value = true;
+  } catch {
+    errorMessage.value = "无法自动复制，请长按私钥手动复制。";
+  }
+}
+
+function cancelRegistration() {
+  generatedNsec.value = "";
+  registrationConfirmed.value = false;
+  copiedNsec.value = false;
+  showRegister.value = false;
+}
+
+async function finishRegistration() {
+  if (loading.value || !generatedNsec.value || !registrationConfirmed.value) return;
+  loading.value = true;
+  errorMessage.value = "";
+  loginStatus.value = "正在创建账号…";
+  try {
+    await ks.loginWithNsec(generatedNsec.value);
+    await finishLogin();
+  } catch (error) {
+    logLoginFailure("register", "create-account", error);
+    errorMessage.value = "创建账号失败，请重试。";
+  } finally {
+    loading.value = false;
     loginStatus.value = "";
   }
 }
@@ -413,8 +473,12 @@ function switchAccount() {
 .account-select strong { overflow:hidden; font: .82rem ui-monospace,SFMono-Regular,Menlo,monospace; text-overflow:ellipsis; white-space:nowrap; }
 .account-select small { color:#748095; font-size:.72rem; }
 .remove-account { align-self:stretch; padding:0 10px; border:0; border-left:1px solid #293445; background:transparent; color:#a87878; font-size:.72rem; cursor:pointer; }
-.google-login { margin-top: 2px; }
 .private-login { margin-top:4px; padding-top:18px; border-top:1px solid #252e3c; }
+.registration-panel { display:grid; gap:14px; }
+.registration-title { margin:0; color:#cbd2dd; font-size:1rem; font-weight:600; }
+.registration-key { min-height:104px; resize:none; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }
+.registration-confirm { display:flex; gap:10px; align-items:flex-start; color:#aab2c0; font-size:.82rem; line-height:1.45; }
+.registration-confirm input { margin-top:3px; }
 
 .field-group {
   margin-bottom: 18px;

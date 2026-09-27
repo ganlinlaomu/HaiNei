@@ -2,7 +2,7 @@ import { deviceStorage } from "@/services/deviceStorage";
 
 const ACCOUNT_REGISTRY_KEY = "hainei_device_accounts";
 
-export type AccountAuthType = "google" | "private-key";
+export type AccountAuthType = "private-key";
 
 export interface DeviceAccount {
   pubkey: string;
@@ -16,7 +16,7 @@ function validAccount(value: unknown): value is DeviceAccount {
   const account = value as Partial<DeviceAccount>;
   return typeof account.pubkey === "string"
     && /^[0-9a-f]{64}$/i.test(account.pubkey)
-    && (account.authType === "google" || account.authType === "private-key")
+    && account.authType === "private-key"
     && typeof account.hasEncryptedKey === "boolean"
     && Number.isFinite(account.lastUsedAt);
 }
