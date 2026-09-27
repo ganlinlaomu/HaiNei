@@ -29,6 +29,7 @@ import { deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/dev
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { startAccountMessageSync, stopAccountMessageSync } from "@/services/accountMessageSync";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import { ensureDefaultPushNotifications } from "@/services/pushNotifications";
 import {
   forgetDeviceAccount,
   listDeviceAccounts,
@@ -117,6 +118,10 @@ export const useKeyStore = defineStore("keys", {
           console.error(`[account] ${label} load failed account=${account}`, e);
         }
       }));
+      if (this.supportsNip44 && this.pkHex === pk) {
+        void ensureDefaultPushNotifications(pk, event => this.signEvent(event))
+          .catch(e => console.warn(`[account] default push restore unavailable account=${account}`, e));
+      }
       // Account-level UI is ready from IndexedDB/D1 now. Relay history repair
       // continues in the session service and checkpoints only after reconciliation.
       void startAccountMessageSync(this)
