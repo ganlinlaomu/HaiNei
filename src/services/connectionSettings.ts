@@ -463,8 +463,10 @@ function mergeItems<T extends SyncMetadata>(
 }
 
 export function mergeRelayConfigs(local: RelayConfig[], remote: RelayConfig[], metadata?: SyncEventMetadata): RelayConfig[] {
-  return mergeItems(local, remote, item => item.url, metadata)
-    .filter(item => item.source !== "default" || !RETIRED_DEFAULT_RELAY_URLS.has(item.url));
+  return ensureDefaultRelayCandidates(
+    mergeItems(local, remote, item => item.url, metadata)
+      .filter(item => item.source !== "default" || !RETIRED_DEFAULT_RELAY_URLS.has(item.url))
+  );
 }
 
 export function mergeMediaServers(local: MediaServer[], remote: MediaServer[], metadata?: SyncEventMetadata): MediaServer[] {
@@ -497,7 +499,7 @@ export function relayConfigsFromNip65(
   const next = [...current];
   for (const [url, access] of parsed) {
     const existing = next.find(item => item.url === url);
-    if (existing?.source === "user") continue;
+    if ((DEFAULT_RELAY_URLS as readonly string[]).includes(url) || existing?.source === "user") continue;
     const incoming: RelayConfig = {
       ...(existing || {} as RelayConfig),
       url,
