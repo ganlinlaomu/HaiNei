@@ -308,14 +308,16 @@ const diagnostics = reactive({
   lastCatchupCompletedAt: 0,
   pendingOutgoing: 0,
 });
-const syncStatusLabel = computed(() => ({
-  idle: "Idle",
-  connecting: "连接中",
-  "catching-up": "补拉中",
-  live: "Live",
-  offline: "离线",
-  error: "错误",
-}[diagnostics.syncStatus] || diagnostics.syncStatus));
+function syncStatusText(status: string) {
+  if (status === "idle") return "Idle";
+  if (status === "connecting") return "连接中";
+  if (status === "catching-up") return "补拉中";
+  if (status === "live") return "Live";
+  if (status === "offline") return "离线";
+  if (status === "error") return "错误";
+  return status;
+}
+const syncStatusLabel = computed(() => syncStatusText(diagnostics.syncStatus));
 const lastCatchupLabel = computed(() => diagnostics.lastCatchupCompletedAt
   ? formatRelativeTimestamp(diagnostics.lastCatchupCompletedAt)
   : "—");
@@ -1017,6 +1019,14 @@ h3 {
   .account-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .diagnostics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-panel {
+    padding-left: 0;
   }
 }
 
