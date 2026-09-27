@@ -91,8 +91,8 @@
             <div class="small">请求添加你为好友</div>
           </div>
           <div class="friend-actions">
-            <button class="btn request-accept" @click="acceptRequest(request.peerPubkey)">接受</button>
-            <button class="btn btn-cancel" @click="rejectRequest(request.peerPubkey)">拒绝</button>
+            <button class="btn request-accept" type="button" :disabled="relationshipBusy.has(request.peerPubkey)" @click="acceptRequest(request.peerPubkey)">接受</button>
+            <button class="btn btn-cancel" type="button" :disabled="relationshipBusy.has(request.peerPubkey)" @click="rejectRequest(request.peerPubkey)">拒绝</button>
           </div>
         </div>
       </div>
@@ -196,7 +196,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, ref, onMounted, onBeforeUnmount, watch, computed } from "vue";
+import { defineComponent, ref, reactive, onMounted, onBeforeUnmount, watch, computed } from "vue";
 import { useFriendsStore, Friend } from "@/stores/friends";
 import { useUIStore } from "@/stores/ui";
 import { useKeyStore } from "@/stores/keys";
@@ -230,6 +230,7 @@ export default defineComponent({
     const showScanner = ref(false);
     const editMode = ref(false);
     const saving = ref(false);
+    const relationshipBusy = reactive(new Set<string>());
     const editingPending = ref(false);
     const activeSection = ref<"accepted" | "incoming" | "outgoing">("accepted");
     const { close: closeSwipe, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
@@ -337,6 +338,7 @@ export default defineComponent({
     watch(() => route.query.section, section => {
       if (section === "incoming") activeSection.value = "incoming";
       else if (section === "outgoing") activeSection.value = "outgoing";
+      else activeSection.value = "accepted";
     }, { immediate: true });
     watch(showModal, visible => {
       ui.setBlockingOverlay("friends-editor", visible);
@@ -540,10 +542,12 @@ export default defineComponent({
             || `${hexKey.slice(0, 8)}…`;
 
           await friendships.sendRequest(hexKey);
-          await friends.load();
-          const existing = friends.list.find(friend => friend.pubkey === hexKey);
-          if (existing) friends.update(hexKey, { name: savedName, groups: group ? [group] : undefined, group });
-          else friends.add({ pubkey: hexKey, name: savedName, groups: group ? [group] : undefined, group });
+          const metadataSaved = await friends.upsertMetadata(hexKey, {
+            name: savedName,
+            groups: group ? [group] : undefined,
+            group
+          });
+          if (!metadataSaved) throw new Error("好友请求已发送，但备注保存失败");
           ui.addToast("好友请求已发送，等待对方接受", 2400, "success");
           closeModal();
         }
@@ -556,15 +560,23 @@ export default defineComponent({
     };
 
     const confirmDelete = async (friend: Friend) => {
-      if (confirm(`确定要删除好友 "${friend.name}" 吗？`)) {
+      if (relationshipBusy.has(friend.pubkey) || !confirm(`确定要删除好友 "${friend.name}" 吗？`)) return;
+      relationshipBusy.add(friend.pubkey);
+      try {
         await friendships.removeFriend(friend.pubkey);
-        const ok = friends.remove(friend.pubkey);
+        const ok = await friends.remove(friend.pubkey);
         if (ok) ui.addToast("已删除", 1500, "info");
-        else ui.addToast("删除失败", 1500, "error");
+        else ui.addToast("好友关系已删除", 1500, "info");
+      } catch (error) {
+        ui.addToast(error instanceof Error ? error.message : "删除失败，请稍后重试", 2400, "error");
+      } finally {
+        relationshipBusy.delete(friend.pubkey);
       }
     };
 
     const acceptRequest = async (pubkey: string) => {
+      if (relationshipBusy.has(pubkey)) return;
+      relationshipBusy.add(pubkey);
       try {
         await friendships.acceptRequest(pubkey);
         notifications.resolveFriendRequests(pubkey);
@@ -572,16 +584,22 @@ export default defineComponent({
       } catch (error) {
         console.error("Accept friend request error:", error);
         ui.addToast(error instanceof Error ? error.message : "接受失败，请稍后重试", 2600, "error");
+      } finally {
+        relationshipBusy.delete(pubkey);
       }
     };
 
     const rejectRequest = async (pubkey: string) => {
+      if (relationshipBusy.has(pubkey)) return;
+      relationshipBusy.add(pubkey);
       try {
         await friendships.rejectRequest(pubkey);
         notifications.resolveFriendRequests(pubkey);
         ui.addToast("已拒绝好友请求", 1500, "info");
-      } catch {
-        ui.addToast("拒绝失败，请稍后重试", 2000, "error");
+      } catch (error) {
+        ui.addToast(error instanceof Error ? error.message : "拒绝失败，请稍后重试", 2200, "error");
+      } finally {
+        relationshipBusy.delete(pubkey);
       }
     };
 
@@ -589,12 +607,15 @@ export default defineComponent({
     const withdrawFromSwipe = (pubkey: string) => { closeSwipe(pubkey); void withdrawRequest(pubkey); };
 
     const withdrawRequest = async (pubkey: string) => {
-      if (!confirm("确定撤回这条好友请求吗？")) return;
+      if (relationshipBusy.has(pubkey) || !confirm("确定撤回这条好友请求吗？")) return;
+      relationshipBusy.add(pubkey);
       try {
         await friendships.cancelRequest(pubkey);
         ui.addToast("好友请求已撤回", 1500, "info");
-      } catch {
-        ui.addToast("撤回失败，请稍后重试", 2000, "error");
+      } catch (error) {
+        ui.addToast(error instanceof Error ? error.message : "撤回失败，请稍后重试", 2200, "error");
+      } finally {
+        relationshipBusy.delete(pubkey);
       }
     };
 
@@ -641,6 +662,7 @@ export default defineComponent({
       initialLoading, initialLoadError, loadFriendsPage, onTouchCancel,
       friends,
       router,
+      relationshipBusy,
       acceptedFriends,
       incomingRequests,
       outgoingRequests,
