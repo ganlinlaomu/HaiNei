@@ -90,6 +90,8 @@ export type RelaySyncStateRecord = {
 export type MessageSyncStateRecord = {
   accountPubkey: string;
   lastSuccessfulSyncAt?: number;
+  /** Marks that this device has started its one-time initial history repair. */
+  historyBackfillStartedAt?: number;
   /** Marks completion of the bounded, one-time history repair for this device. */
   historyBackfillCompletedAt?: number;
   historyBackfillRelaySignature?: string;
