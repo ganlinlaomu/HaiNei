@@ -117,6 +117,16 @@ describe("direct-message navigation and UI contract", () => {
     expect(router).toContain('path: "/settings/system"');
   });
 
+  it("guards friend relationship actions against duplicate taps and restores the default tab", () => {
+    const friends = readFileSync(join(process.cwd(), "src/views/Friends.vue"), "utf8");
+    expect(friends).toContain('relationshipBusy = reactive(new Set<string>())');
+    expect(friends).toContain(':disabled="relationshipBusy.has(request.peerPubkey)"');
+    expect(friends).toContain('if (relationshipBusy.has(pubkey)) return');
+    expect(friends).toContain('else activeSection.value = "accepted"');
+    expect(friends).toContain("await friends.upsertMetadata(hexKey");
+    expect(friends).toContain("const ok = await friends.remove(friend.pubkey)");
+  });
+
   it("uses the existing composer behind a route-aware floating button", () => {
     const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
     expect(app.match(/class="compose-fab"/g)).toHaveLength(1);

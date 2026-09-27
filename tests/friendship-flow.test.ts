@@ -222,6 +222,66 @@ describe("friendship state and message authorization", () => {
     expect(mocks.requestCurrentProfile).toHaveBeenCalledWith(PEER);
   });
 
+  it("deduplicates repeated acceptance and blocks a conflicting relationship action while publish is in flight", async () => {
+    let finishSend!: (value: any) => void;
+    mocks.send.mockImplementationOnce(() => new Promise(resolve => { finishSend = resolve; }));
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{
+      accountPubkey: ACCOUNT, peerPubkey: PEER, state: "incoming_pending",
+      requestEventId: "request", updatedAt: 1,
+    }];
+
+    const first = friendships.acceptRequest(PEER);
+    const duplicate = friendships.acceptRequest(PEER);
+    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(1));
+    await expect(friendships.rejectRequest(PEER)).rejects.toThrow("好友关系操作处理中");
+
+    finishSend({
+      message: {
+        id: "accept-event",
+        senderPubkey: ACCOUNT,
+        recipientPubkeys: [PEER],
+        createdAt: 100,
+        protocol: "nip17",
+        transportKind: 1059,
+        tags: friendshipTags("accept"),
+      },
+      events: [],
+      relayResults: [],
+    });
+    await expect(Promise.all([first, duplicate])).resolves.toHaveLength(2);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(friendships.getState(PEER)).toBe("accepted");
+  });
+
+  it("rejects stale relationship actions instead of reporting false success", async () => {
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "accepted", updatedAt: 1 }];
+
+    await expect(friendships.rejectRequest(PEER)).rejects.toThrow("好友请求已失效");
+    await expect(friendships.cancelRequest(PEER)).rejects.toThrow("好友请求已失效");
+
+    friendships.records[0].state = "removed";
+    await expect(friendships.removeFriend(PEER)).rejects.toThrow("好友关系已失效");
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("prevents duplicate or contradictory outgoing requests from store callers", async () => {
+    const friendships = useFriendshipsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "outgoing_pending", updatedAt: 1 }];
+    await expect(friendships.sendRequest(PEER)).rejects.toThrow("好友请求已经发送");
+
+    friendships.records[0].state = "incoming_pending";
+    await expect(friendships.sendRequest(PEER)).rejects.toThrow("对方正在等待你的确认");
+
+    friendships.records[0].state = "accepted";
+    await expect(friendships.sendRequest(PEER)).rejects.toThrow("你们已经是好友");
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
   it("binds new accept controls to the pending request id", async () => {
     const friendships = useFriendshipsStore();
     friendships.loadedFor = ACCOUNT;

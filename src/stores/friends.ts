@@ -108,13 +108,16 @@ export const useFriendsStore = defineStore("friends", {
       void this.save();
       return true;
     },
-    remove(pubkey: string) {
+    async remove(pubkey: string) {
       const peer = pubkey.toLowerCase();
       const existing = this.list.find(friend => friend.pubkey === peer);
       if (!existing) return false;
-      this.list = this.list.filter(friend => friend.pubkey !== peer);
-      this.version++;
-      void this.persist([{ ...existing, pubkey: peer, deleted: true, updatedAt: Date.now() }]);
+      const tombstone = { ...existing, pubkey: peer, deleted: true, updatedAt: Date.now() };
+      await this.persist([tombstone]);
+      if (this.loadedFor && this.list.some(friend => friend.pubkey === peer)) {
+        this.list = this.list.filter(friend => friend.pubkey !== peer);
+        this.version++;
+      }
       return true;
     },
     update(pubkey: string, patch: Partial<Friend>) {
