@@ -31,14 +31,25 @@
     <div v-show="activeSection === 'accepted'" class="card">
       <div class="friends-list-heading">
         <h3>好友（{{ acceptedFriends.length }}）</h3>
-        <button 
-          class="btn-icon btn-add" 
-          @click="startAdd"
-          title="添加好友"
-          aria-label="添加好友"
-        >
-          +
-        </button>
+        <div class="friend-heading-actions">
+          <button
+            class="btn-icon btn-scan"
+            type="button"
+            @click="startScan"
+            title="扫描二维码添加好友"
+            aria-label="扫描二维码添加好友"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4M8 8h3v3H8zM14 8h2v2h-2zM8 14h2v2H8zM13 13h3v3h-3z"/></svg>
+          </button>
+          <button 
+            class="btn-icon btn-add" 
+            @click="startAdd"
+            title="添加好友"
+            aria-label="添加好友"
+          >
+            +
+          </button>
+        </div>
       </div>
       <div v-if="acceptedFriends.length === 0" class="friends-empty">
         <strong>还没有好友</strong>
@@ -384,6 +395,23 @@ export default defineComponent({
       }
     };
 
+    const startScan = () => {
+      if (!keys.isLoggedIn) {
+        ui.addToast("请先登录", 2000, "error");
+        return;
+      }
+      editMode.value = false;
+      editingPending.value = false;
+      formData.value = {
+        pubkey: "",
+        name: "",
+        groupsInput: "",
+        originalPubkey: ""
+      };
+      showModal.value = true;
+      showScanner.value = true;
+    };
+
     const startAdd = () => {
       if (!keys.isLoggedIn) {
         ui.addToast("请先登录", 2000, "error");
@@ -632,6 +660,7 @@ export default defineComponent({
       showSyncSuccess,
       isFadingOut,
       startAdd,
+      startScan,
       startEdit,
       startPendingEdit,
       editFromSwipe,
@@ -922,7 +951,7 @@ export default defineComponent({
   color: #64748b;
 }
 
-.friends-list-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.friends-list-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.friend-heading-actions{display:flex;align-items:center;gap:8px}.btn-scan{width:40px;height:32px;border:1px solid #1976d2;background:#fff;color:#1976d2}.btn-scan svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .friends-list-heading h3{margin:0}
 .friends-load-state{display:flex;min-height:120px;align-items:center;justify-content:center;gap:10px;padding:24px;color:#64748b;font-size:14px;text-align:center}
 .friends-load-state.load-error{flex-direction:column;color:#b91c1c}
