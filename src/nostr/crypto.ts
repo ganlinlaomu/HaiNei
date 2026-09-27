@@ -1,6 +1,4 @@
 // 统一的对称加密 / 解密工具
-import { nip04 } from "nostr-tools";
-
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -54,21 +52,4 @@ export async function symDecryptPackage(symHex: string, pkg: { iv: string; ct: s
   const key = await importAesKeyFromHex(symHex);
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
   return dec.decode(plain);
-}
-
-/**
- * envelopeEncryptSym(authorSkHex, recipientPubHex, symHex)
- * - 返回 Promise<string>（nip04.encrypt 返回值）
- */
-export async function envelopeEncryptSym(authorSkHex: string, recipientPubHex: string, symHex: string) {
-  // nip04.encrypt returns Promise<string>
-  return await nip04.encrypt(authorSkHex, recipientPubHex, symHex);
-}
-
-/**
- * envelopeDecryptSym(recipientSkHex, senderPubHex, enc)
- * - wrapper around nip04.decrypt
- */
-export async function envelopeDecryptSym(recipientSkHex: string, senderPubHex: string, enc: string) {
-  return await nip04.decrypt(recipientSkHex, senderPubHex, enc);
 }
