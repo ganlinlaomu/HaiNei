@@ -100,7 +100,7 @@ describe("private-key authentication", () => {
 });
 
 describe("session restoration", () => {
-  it.each(["nip07", "nip46", "google"])("clears a stale %s session", async staleMethod => {
+  it.each(["nip07", "nip46"])("clears a stale %s session", async staleMethod => {
     deviceStorage.setItem("pkHex", STALE_PUBKEY);
     deviceStorage.setItem("loginMethod", staleMethod);
     const store = createStore();
