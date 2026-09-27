@@ -212,13 +212,17 @@ describe("settings session isolation", () => {
     expect(store.settings.mediaServers[0].failureCount).toBeUndefined();
   });
 
-  it("prevents disabling the last readable or writable relay", () => {
+  it("keeps every system Relay permanently enabled for read and write", () => {
     const store = activate(A);
-    const url = DEFAULT_RELAY_URLS[0];
-    expect(store.updateRelay(url, { read: false })).toBe(false);
-    expect(store.validationError).toContain("读取 Relay");
-    expect(store.updateRelay(url, { write: false })).toBe(false);
-    expect(store.validationError).toContain("写入 Relay");
+    for (const url of DEFAULT_RELAY_URLS) {
+      expect(store.updateRelay(url, { enabled: false })).toBe(false);
+      expect(store.validationError).toContain("系统 Relay");
+      expect(store.updateRelay(url, { read: false })).toBe(false);
+      expect(store.updateRelay(url, { write: false })).toBe(false);
+      expect(store.relayList.find(item => item.url === url)).toMatchObject({
+        source: "default", enabled: true, read: true, write: true
+      });
+    }
   });
 
   it("prevents disabling the last enabled media server", () => {
