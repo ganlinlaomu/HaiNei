@@ -13,6 +13,8 @@ import { notifyDirectMessageAuthorizationChanged } from "@/services/directMessag
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
 
+const activeFriendshipControls = new Map<string, { action: FriendshipAction; promise: Promise<any> }>();
+
 function friendshipControlRelays() {
   return [...new Set([...getRelaysFromStorage("write"), ...DEFAULT_RELAYS])];
 }
@@ -148,22 +150,39 @@ export const useFriendshipsStore = defineStore("friendships", {
       if (peer === account) throw new Error("不能添加自己为好友");
       if (!keys.supportsNip44) throw new Error("当前登录方式暂不支持加密好友请求");
       if (!peer) throw new Error("无法发送好友关系消息");
-      if (this.loadedFor !== account) await this.load(account);
-      const previousControlAt = this.getRecord(peer)?.lastControlAt || 0;
-      const timestamp = Math.max(Math.floor(Date.now() / 1000), previousControlAt + 1);
-      const result = await sendDirectMessage({
-        recipientPubkeys: [peer],
-        content: JSON.stringify({ type: `friend_${action}`, from: account, timestamp, ...(requestId ? { requestId } : {}) }),
-        tags: friendshipTags(action),
-        relays: friendshipControlRelays(),
-        context: { senderPubkey: account, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
+      const flightKey = `${account}:${peer}`;
+      const existingFlight = activeFriendshipControls.get(flightKey);
+      if (existingFlight) {
+        if (existingFlight.action === action) return existingFlight.promise;
+        throw new Error("好友关系操作处理中");
+      }
+      const promise = (async () => {
+        if (this.loadedFor !== account) await this.load(account);
+        const previousControlAt = this.getRecord(peer)?.lastControlAt || 0;
+        const timestamp = Math.max(Math.floor(Date.now() / 1000), previousControlAt + 1);
+        const result = await sendDirectMessage({
+          recipientPubkeys: [peer],
+          content: JSON.stringify({ type: `friend_${action}`, from: account, timestamp, ...(requestId ? { requestId } : {}) }),
+          tags: friendshipTags(action),
+          relays: friendshipControlRelays(),
+          context: { senderPubkey: account, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
+        });
+        if (keys.pkHex !== account || this.loadedFor !== account) throw new Error("账号已切换");
+        const applied = await this.applyControl(peer, { action, timestamp, eventId: result.message.id, requestId, selfMessage: true });
+        return { result, applied };
+      })().finally(() => {
+        if (activeFriendshipControls.get(flightKey)?.promise === promise) activeFriendshipControls.delete(flightKey);
       });
-      if (keys.pkHex !== account || this.loadedFor !== account) throw new Error("账号已切换");
-      const applied = await this.applyControl(peer, { action, timestamp, eventId: result.message.id, requestId, selfMessage: true });
-      return { result, applied };
+      activeFriendshipControls.set(flightKey, { action, promise });
+      return promise;
     },
     async sendRequest(peerPubkey: string) {
-      return (await this.sendControl(peerPubkey, "request")).result;
+      const peer = normalized(peerPubkey);
+      const state = this.getState(peer);
+      if (state === "accepted") throw new Error("你们已经是好友");
+      if (state === "outgoing_pending") throw new Error("好友请求已经发送");
+      if (state === "incoming_pending") throw new Error("对方正在等待你的确认");
+      return (await this.sendControl(peer, "request")).result;
     },
     async acceptRequest(peerPubkey: string) {
       const peer = normalized(peerPubkey);
@@ -185,16 +204,16 @@ export const useFriendshipsStore = defineStore("friendships", {
     },
     async rejectRequest(peerPubkey: string) {
       const current = this.getRecord(peerPubkey);
-      if (current?.state !== "incoming_pending") return;
+      if (current?.state !== "incoming_pending") throw new Error("好友请求已失效");
       await this.sendControl(peerPubkey, "reject", current.requestEventId);
     },
     async cancelRequest(peerPubkey: string) {
       const current = this.getRecord(peerPubkey);
-      if (current?.state !== "outgoing_pending") return;
+      if (current?.state !== "outgoing_pending") throw new Error("好友请求已失效");
       await this.sendControl(peerPubkey, "cancel", current.requestEventId);
     },
     async removeFriend(peerPubkey: string) {
-      if (this.getState(peerPubkey) !== "accepted") return;
+      if (this.getState(peerPubkey) !== "accepted") throw new Error("好友关系已失效");
       await this.sendControl(peerPubkey, "remove");
     },
     async processFriendshipMessage(message: CanonicalMessage) {
