@@ -11,19 +11,29 @@
       <p>仅自己和已接受的好友可查看私密资料。</p>
     </section>
 
-    <section v-else class="profile-content">
-      <ProfileAvatar :pubkey="ownerPubkey" :size="88" />
-      <h2>{{ ownerName }}</h2>
-      <p v-if="profile?.bio" class="bio">{{ profile.bio }}</p>
-      <p v-else class="bio empty">暂无简介</p>
-      <div v-if="localNote" class="profile-meta">
-        <span>你的备注</span>
-        <strong>{{ localNote }}</strong>
-      </div>
-      <div class="friend-state">已接受的好友</div>
-      <button v-if="canMessage" class="message-button" type="button" @click="router.push(`/messages/${ownerPubkey}`)">私信</button>
-      <button v-if="feedPreferences.isMuted(ownerPubkey)" class="unmute-button" type="button" @click="feedPreferences.unmute(ownerPubkey)">恢复显示此人的动态</button>
-    </section>
+    <template v-else>
+      <section class="profile-content">
+        <ProfileAvatar :pubkey="ownerPubkey" :size="88" />
+        <h2>{{ ownerName }}</h2>
+        <p v-if="profile?.bio" class="bio">{{ profile.bio }}</p>
+        <p v-else class="bio empty">暂无简介</p>
+        <div v-if="localNote" class="profile-meta">
+          <span>你的备注</span>
+          <strong>{{ localNote }}</strong>
+        </div>
+        <div class="friend-state">已接受的好友</div>
+        <button v-if="canMessage" class="message-button" type="button" @click="router.push(`/messages/${ownerPubkey}`)">私信</button>
+        <button v-if="feedPreferences.isMuted(ownerPubkey)" class="unmute-button" type="button" @click="feedPreferences.unmute(ownerPubkey)">恢复显示此人的动态</button>
+      </section>
+
+      <section class="profile-posts" aria-label="用户动态">
+        <h3>动态</h3>
+        <div v-if="ownerPosts.length" class="post-list">
+          <PostCard v-for="post in ownerPosts" :key="post.id" :message="post" />
+        </div>
+        <p v-else class="empty-posts">暂无动态</p>
+      </section>
+    </template>
   </main>
 </template>
 
@@ -31,11 +41,14 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import PostCard from "@/components/PostCard.vue";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useProfilesStore } from "@/stores/profiles";
+import { useMessagesStore } from "@/stores/messages";
+import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { canViewPrivateProfile } from "@/utils/profileNavigation";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 
@@ -45,6 +58,7 @@ const keys = useKeyStore();
 const friends = useFriendsStore();
 const friendships = useFriendshipsStore();
 const profiles = useProfilesStore();
+const messages = useMessagesStore();
 const feedPreferences = useFeedPreferencesStore();
 const ready = ref(false);
 let loadGeneration = 0;
@@ -67,6 +81,12 @@ const localNote = computed(() => {
 const canMessage = computed(() => ownerPubkey.value !== keys.pkHex
   && friendships.loadedFor === keys.pkHex
   && friendships.isAccepted(ownerPubkey.value));
+const ownerPosts = computed(() => canView.value && messages.loadedFor === keys.pkHex
+  ? messages.inbox.filter(message =>
+      message.pubkey.toLowerCase() === ownerPubkey.value
+      && !isDirectMessageTags(message.tags)
+      && !feedPreferences.isHidden(message.id))
+  : []);
 
 async function load() {
   const generation = ++loadGeneration;
@@ -77,7 +97,7 @@ async function load() {
     await router.replace("/settings/profile");
     return;
   }
-  await Promise.all([friends.load(account), friendships.load(account), profiles.load(account), feedPreferences.load(account)]);
+  await Promise.all([friends.load(account), friendships.load(account), profiles.load(account), messages.load(account), feedPreferences.load(account)]);
   if (generation === loadGeneration && keys.pkHex === account) ready.value = true;
 }
 
@@ -87,6 +107,6 @@ watch([() => keys.pkHex, ownerPubkey], load);
 
 <style scoped>
 .profile-view{width:100%;margin:0 auto;box-sizing:border-box;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
-.profile-content{display:flex;flex-direction:column;align-items:center;padding:18px}.profile-content h2{margin:14px 0 8px;font-size:23px;color:#172033}.bio{width:100%;max-width:420px;margin:0;padding:14px 0 20px;color:#475569;line-height:1.65;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere}.bio.empty{color:#94a3b8}.profile-meta{width:100%;max-width:420px;display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid #e2e8f0;color:#64748b;font-size:14px}.profile-meta strong{color:#334155}.friend-state{margin-top:10px;padding:6px 10px;border-radius:999px;background:#ecfdf5;color:#047857;font-size:12px}.message-button{min-width:112px;min-height:42px;margin-top:14px;padding:0 18px;border:0;border-radius:999px;background:#1687e8;color:#fff;font-weight:700;cursor:pointer}.unmute-button{margin-top:14px;min-height:42px;padding:0 14px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;color:#334155}.unavailable{padding:64px 16px;text-align:center}.unavailable h2{margin:0 0 8px;font-size:20px}.unavailable p{margin:0;color:#64748b;font-size:14px}
+.profile-content{display:flex;flex-direction:column;align-items:center;padding:18px}.profile-content h2{margin:14px 0 8px;font-size:23px;color:#172033}.bio{width:100%;max-width:420px;margin:0;padding:14px 0 20px;color:#475569;line-height:1.65;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere}.bio.empty{color:#94a3b8}.profile-meta{width:100%;max-width:420px;display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid #e2e8f0;color:#64748b;font-size:14px}.profile-meta strong{color:#334155}.friend-state{margin-top:10px;padding:6px 10px;border-radius:999px;background:#ecfdf5;color:#047857;font-size:12px}.message-button{min-width:112px;min-height:42px;margin-top:14px;padding:0 18px;border:0;border-radius:999px;background:#1687e8;color:#fff;font-weight:700;cursor:pointer}.unmute-button{margin-top:14px;min-height:42px;padding:0 14px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;color:#334155}.profile-posts{width:100%;box-sizing:border-box;padding:4px 10px 0}.profile-posts h3{margin:6px 4px 12px;padding-top:14px;border-top:1px solid #e8edf3;color:#172033;font-size:17px}.post-list{display:grid;gap:12px}.empty-posts{margin:0;padding:40px 16px 56px;color:#94a3b8;text-align:center;font-size:14px}.unavailable{padding:64px 16px;text-align:center}.unavailable h2{margin:0 0 8px;font-size:20px}.unavailable p{margin:0;color:#64748b;font-size:14px}
 @media (min-width:768px){.unavailable{max-width:640px;margin-left:auto;margin-right:auto}}
 </style>
