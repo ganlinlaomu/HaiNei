@@ -31,7 +31,12 @@ vi.mock("@/repositories/outgoingDmTaskRepository", () => ({
   outgoingDmTaskRepository: { list: vi.fn(async () => []), get: vi.fn(), put: vi.fn(), update: vi.fn() },
 }));
 
-import { buildDirectConversationSummaries, useDirectMessagesStore } from "@/stores/directMessages";
+import {
+  buildDirectConversationSummaries,
+  isAuthorizedCanonicalDirectMessage,
+  isAuthorizedDirectMessage,
+  useDirectMessagesStore
+} from "@/stores/directMessages";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useMessagesStore } from "@/stores/messages";
 import { notifyDirectMessageAuthorizationChanged } from "@/services/directMessageStateEvents";
@@ -112,6 +117,39 @@ describe("direct-message authorization and conversation lifecycle", () => {
 
     await vi.waitFor(() => expect(context.direct.unreadCount).toBe(2));
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("preserves historical DMs inside ended acceptance windows while blocking later messages", () => {
+    const removed = relationship("removed", 10);
+    expect(isAuthorizedDirectMessage(dm("historical", 5), ACCOUNT, removed)).toBe(true);
+    expect(isAuthorizedDirectMessage(dm("after-remove", 20), ACCOUNT, removed)).toBe(false);
+    expect(isAuthorizedCanonicalDirectMessage(
+      { senderPubkey: PEER, createdAt: 5 },
+      ACCOUNT,
+      removed,
+    )).toBe(true);
+    expect(isAuthorizedCanonicalDirectMessage(
+      { senderPubkey: PEER, createdAt: 20 },
+      ACCOUNT,
+      removed,
+    )).toBe(false);
+  });
+
+  it("uses acceptedAt/lastControlAt as a safe legacy authorization window when acceptedWindows is absent", () => {
+    const legacyRemoved: FriendshipRecord = {
+      accountPubkey: ACCOUNT,
+      peerPubkey: PEER,
+      state: "removed",
+      acceptedAt: 3,
+      acceptedEventId: "accepted-old",
+      lastControlAt: 10,
+      lastControlEventId: "removed-old",
+      lastAction: "remove",
+      updatedAt: 10,
+    };
+    expect(isAuthorizedDirectMessage(dm("before-accept", 2), ACCOUNT, legacyRemoved)).toBe(false);
+    expect(isAuthorizedDirectMessage(dm("during", 5), ACCOUNT, legacyRemoved)).toBe(true);
+    expect(isAuthorizedDirectMessage(dm("after", 11), ACCOUNT, legacyRemoved)).toBe(false);
   });
 
   it("shows and counts accepted incoming DMs but excludes nonaccepted new DMs", async () => {
