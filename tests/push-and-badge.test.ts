@@ -444,12 +444,25 @@ describe("privacy-preserving push and badge", () => {
     const source = readFileSync(new URL("../public/service-worker.js", import.meta.url), "utf8");
     expect(source).toContain("RUNTIME_STATE_CACHE");
     expect(source).toContain("BADGE_STATE_URL");
-    expect(source).toContain("queueBadgeIncrement()");
+    expect(source).toContain("queueBadgeIncrementWhenBackground()");
     expect(source).toContain("payload?.type === 'message'");
+    expect(source).toContain("client.visibilityState === 'visible'");
+    expect(source).toContain("return readStoredBadgeCount()");
     expect(source).toContain("setAppBadge?.(normalized)");
     expect(source).toContain("clearAppBadge?.()");
     expect(source).toContain("event.data?.type === 'SYNC_APP_BADGE'");
     expect(source).toContain("queueBadgeSync(event.data.count)");
+  });
+
+  it("keeps foreground badge ownership in App instead of navigation chrome", () => {
+    const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
+    const header = readFileSync(new URL("../src/components/HeaderBar.vue", import.meta.url), "utf8");
+    expect(app).toContain("accountBadgeCount(");
+    expect(app).toContain("syncAppBadge(");
+    expect(app).toContain("directMessages.unreadCount");
+    expect(app).toContain("notifications.unreadCount");
+    expect(header).not.toContain("syncAppBadge(");
+    expect(header).not.toContain("accountBadgeCount(");
   });
 
   it("sets and clears the app badge from unread count", async () => {

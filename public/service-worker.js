@@ -85,10 +85,12 @@ function queueBadgeSync(count) {
   return badgeUpdateQueue;
 }
 
-function queueBadgeIncrement() {
+function queueBadgeIncrementWhenBackground() {
   badgeUpdateQueue = badgeUpdateQueue
     .catch(() => undefined)
     .then(async () => {
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      if (windows.some(client => client.visibilityState === 'visible')) return readStoredBadgeCount();
       const current = await readStoredBadgeCount();
       return applyAppBadge(current + 1);
     });
@@ -155,15 +157,17 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('push', (event) => {
   let payload = {};
   try { payload = JSON.parse(event.data?.text() || '{}'); } catch {}
-  event.waitUntil(Promise.all([
-    self.registration.showNotification('HaiNei', {
-      body: '你有新的私信消息',
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
-      data: { type: 'message' }
-    }),
-    payload?.type === 'message' ? queueBadgeIncrement() : Promise.resolve()
-  ]));
+  event.waitUntil((async () => {
+    await Promise.all([
+      self.registration.showNotification('HaiNei', {
+        body: '你有新的私信消息',
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        data: { type: 'message' }
+      }),
+      payload?.type === 'message' ? queueBadgeIncrementWhenBackground() : Promise.resolve()
+    ]);
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {

@@ -359,6 +359,15 @@ describe("direct-message navigation and UI contract", () => {
     expect(isDirectMessageTags(first.tags)).toBe(true);
   });
 
+  it("keeps app-icon badge synchronization alive while the bottom navigation is hidden in a chat", () => {
+    const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
+    const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
+    expect(app).toContain("syncAppBadge(");
+    expect(app).toContain("directMessages.unreadCount");
+    expect(router).toContain('path: "/messages/:pubkey"');
+    expect(router).toContain("hideBottomNav: true");
+  });
+
   it("keeps DM unread and activity unread as separate navigation badges", () => {
     const source = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
     expect(source).toContain("directMessages.unreadCount");

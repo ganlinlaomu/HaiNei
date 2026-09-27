@@ -60,6 +60,9 @@ import { loadPostEditor, preloadPostEditor } from "@/components/postEditorLoader
 import { useKeyStore } from "@/stores/keys";
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { preloadBottomTabViews } from "@/router/lazyViews";
+import { useNotificationsStore } from "@/stores/notifications";
+import { useDirectMessagesStore } from "@/stores/directMessages";
+import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
 
@@ -69,6 +72,8 @@ export default defineComponent({
     const route = useRoute();
     const ui = useUIStore();
     const keys = useKeyStore();
+    const notifications = useNotificationsStore();
+    const directMessages = useDirectMessagesStore();
     const postEditorReady = ref(false);
     const postEditorLoadError = ref(false);
     const hideAppChrome = computed(() => route.meta.hideHeader === true);
@@ -132,6 +137,22 @@ export default defineComponent({
       if (isConversationsRoute.value) ui.openNewConversation();
       else ui.openPostEditor();
     }
+
+    watch(
+      () => [
+        keys.pkHex,
+        notifications.loadedFor,
+        notifications.unreadCount,
+        directMessages.loadedFor,
+        directMessages.unreadCount,
+      ] as const,
+      ([account, loadedFor, unreadCount, directLoadedFor, directUnread]) => {
+        void syncAppBadge(
+          accountBadgeCount(account, loadedFor, unreadCount, directLoadedFor, directUnread),
+        ).catch(() => undefined);
+      },
+      { immediate: true }
+    );
 
     watch(
       hideAppChrome,
