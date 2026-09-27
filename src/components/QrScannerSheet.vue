@@ -59,30 +59,29 @@ function stopScanner() {
 }
 
 async function startScanner() {
-  const current = ++generation;
+  stopScanner();
+  const run = ++generation;
   handled = false;
   cameraError.value = "";
-  stopScanner();
-  const active = ++generation;
   try {
     const mod = await import("@zxing/browser");
-    if (!props.open || active !== generation || !videoEl.value) return;
+    if (!props.open || run !== generation || !videoEl.value) return;
     reader = new mod.BrowserQRCodeReader();
     const localControls = await reader.decodeFromVideoDevice(
       undefined,
       videoEl.value,
       (result: any, _error: unknown, callbackControls: any) => {
-        if (callbackControls) controls = callbackControls;
-        if (result && !handled) complete(result.getText());
+        if (callbackControls && run === generation) controls = callbackControls;
+        if (result && !handled && run === generation) complete(result.getText());
       }
     );
-    if (!props.open || active !== generation) {
+    if (!props.open || run !== generation) {
       localControls?.stop?.();
       return;
     }
     controls = localControls;
-  } catch (error) {
-    if (current > generation || !props.open) return;
+  } catch {
+    if (run !== generation || !props.open) return;
     cameraError.value = "无法打开相机。请允许相机权限，或从相册选择二维码。";
   }
 }
