@@ -427,6 +427,19 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("width:min(100%,720px)");
   });
 
+  it("revalidates friendship before new DM navigation and uses history-aware DM authorization in both sync owners", () => {
+    const sheet = readFileSync(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
+    const accountSync = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
+    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+
+    expect(sheet).toContain("if (!friendships.isAccepted(pubkey))");
+    expect(sheet).toContain("好友关系已变更，请重新选择");
+    expect(accountSync).toContain("isAuthorizedCanonicalDirectMessage(");
+    expect(home).toContain("isAuthorizedCanonicalDirectMessage(");
+    expect(store).toContain('if (!friendships.isAccepted(task.peerPubkey)) throw new Error("好友关系已变更")');
+  });
+
   it("uses per-message optimistic status without blocking the composer", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain("上传中…");
