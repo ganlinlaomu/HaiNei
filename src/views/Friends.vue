@@ -491,8 +491,7 @@ export default defineComponent({
             groups: group ? [group] : undefined,
             group: group
           };
-          const ok = friends.update(formData.value.originalPubkey, patch)
-            || (editingPending.value && friends.add({ pubkey: formData.value.originalPubkey, ...patch }));
+          const ok = await friends.upsertMetadata(formData.value.originalPubkey, patch);
 
           if (ok) {
             ui.addToast("好友信息已更新", 2000, "success");
@@ -570,8 +569,9 @@ export default defineComponent({
         await friendships.acceptRequest(pubkey);
         notifications.resolveFriendRequests(pubkey);
         ui.addToast("已接受好友请求", 1800, "success");
-      } catch {
-        ui.addToast("接受失败，请稍后重试", 2000, "error");
+      } catch (error) {
+        console.error("Accept friend request error:", error);
+        ui.addToast(error instanceof Error ? error.message : "接受失败，请稍后重试", 2600, "error");
       }
     };
 
