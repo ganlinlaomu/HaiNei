@@ -110,7 +110,7 @@
             <p v-if="!saveEncrypted" class="password-note muted">当前为仅此次登录：私钥只保留在内存中，关闭或重启应用后需要重新输入。</p>
             <div v-if="saveEncrypted" id="local-password-fields" class="password-fields">
               <label class="field-label" for="local-password">本地保护密码</label>
-              <input id="local-password" v-model="nsecPassword" class="input" type="password" autocomplete="new-password" placeholder="输入密码" :disabled="loading" />
+              <input id="local-password" v-model="nsecPassword" class="input" type="password" autocomplete="new-password" placeholder="至少 8 位" :disabled="loading" />
               <label class="field-label" for="confirm-password">确认密码</label>
               <input id="confirm-password" v-model="confirmPassword" class="input" type="password" autocomplete="new-password" placeholder="再次输入密码" :disabled="loading" />
               <p class="password-note">下次选择此账号后，只需输入这个密码解锁。</p>
@@ -303,8 +303,8 @@ async function doLoginNsec() {
     errorMessage.value = "私钥格式不正确\n请输入 nsec1... 或 64 位十六进制私钥。";
     return;
   }
-  if (saveEncrypted.value && !nsecPassword.value) {
-    errorMessage.value = "请输入本地保护密码";
+  if (saveEncrypted.value && nsecPassword.value.length < 8) {
+    errorMessage.value = "本地保护密码至少需要 8 位";
     return;
   }
   if (saveEncrypted.value && nsecPassword.value !== confirmPassword.value) {
