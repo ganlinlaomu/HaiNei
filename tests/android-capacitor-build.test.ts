@@ -19,8 +19,8 @@ describe("Android Capacitor build", () => {
     expect(workflow).toContain('java-version: "21"');
     expect(workflow).toContain("@capacitor/core@8");
     expect(workflow).toContain("@capacitor/android@8");
-    expect(workflow).toContain('sdkmanager "platforms;android-36" "build-tools;36.0.0"');
-    expect(workflow).toContain("npx cap add android");
+    expect(workflow).toContain('"platform-tools" "platforms;android-36" "build-tools;36.0.0"');
+    expect(workflow).toContain("./.capacitor-ci/node_modules/.bin/cap add android");
     expect(workflow).toContain("./gradlew assembleDebug --no-daemon");
     expect(workflow).toContain("HaiNei-debug.apk");
     expect(workflow).toContain("actions/upload-artifact@v4");
