@@ -12,6 +12,13 @@ import { migrateLegacyLocalStorage } from "@/services/legacyLocalStorageMigratio
 let serviceWorkerRegistration: Promise<ServiceWorkerRegistration> | null = null;
 let serviceWorkerLoadListenerAttached = false;
 
+function isNativeContainer() {
+  const capacitor = (window as Window & {
+    Capacitor?: { isNativePlatform?: () => boolean };
+  }).Capacitor;
+  return capacitor?.isNativePlatform?.() === true;
+}
+
 function registerServiceWorkerNow() {
   if (serviceWorkerRegistration) return serviceWorkerRegistration;
 
@@ -36,6 +43,9 @@ function registerServiceWorkerNow() {
 }
 
 export function registerServiceWorker() {
+  // Capacitor packages the app assets with the APK; running the PWA service
+  // worker there can create a second cache/update lifecycle and stale bundles.
+  if (isNativeContainer()) return;
   if (!("serviceWorker" in navigator)) return;
 
   if (document.readyState === "complete") {

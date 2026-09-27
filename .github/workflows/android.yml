@@ -1,0 +1,111 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/**"
+      - "public/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - "capacitor.config.json"
+      - ".github/workflows/android.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "public/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - "capacitor.config.json"
+      - ".github/workflows/android.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug-apk:
+    name: Build installable debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Use Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Build HaiNei web app
+        run: npm run build
+
+      - name: Install Capacitor 8 build tooling
+        run: |
+          mkdir -p .capacitor-ci
+          printf '{"private":true}' > .capacitor-ci/package.json
+          npm install --prefix .capacitor-ci --package-lock=false @capacitor/core@8 @capacitor/cli@8 @capacitor/android@8
+          mkdir -p node_modules/@capacitor
+          ln -sfn "$PWD/.capacitor-ci/node_modules/@capacitor/core" node_modules/@capacitor/core
+          ln -sfn "$PWD/.capacitor-ci/node_modules/@capacitor/cli" node_modules/@capacitor/cli
+          ln -sfn "$PWD/.capacitor-ci/node_modules/@capacitor/android" node_modules/@capacitor/android
+
+      - name: Install Android SDK 36
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -path "*/bin/sdkmanager" | sort -V | tail -1)"
+          fi
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Generate Android project
+        run: |
+          ./.capacitor-ci/node_modules/.bin/cap add android
+          ./.capacitor-ci/node_modules/.bin/cap sync android
+
+      - name: Build debug APK
+        run: |
+          chmod +x android/gradlew
+          cd android
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Prepare APK artifact
+        run: |
+          mkdir -p artifacts
+          cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/HaiNei-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HaiNei-debug-apk
+          path: artifacts/HaiNei-debug.apk
+          if-no-files-found: error
+          retention-days: 30

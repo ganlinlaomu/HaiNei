@@ -1,0 +1,8 @@
+{
+  "appId": "cafe.aso.hainei",
+  "appName": "海内",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false
+  }
+}
