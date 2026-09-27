@@ -39,7 +39,7 @@
       </form>
 
       <section v-else class="login-form">
-        <div v-if="ks.accounts.length" class="account-picker">
+        <div v-if="!addingAccount && ks.accounts.length" class="account-picker">
           <p class="picker-title">此设备上的账号</p>
           <div v-for="account in ks.accounts" :key="account.pubkey" class="account-option">
             <button type="button" class="account-select" :disabled="loading" @click="selectAccount(account.pubkey)">
@@ -50,11 +50,12 @@
           </div>
         </div>
 
+        <p v-if="addingAccount" class="picker-title account-mode-title">添加其他账号</p>
         <button class="btn btn-primary" type="button" :disabled="loading" @click="openPrivateLogin">
           使用私钥登录
         </button>
         <button class="btn btn-secondary" type="button" :disabled="loading" @click="startRegistration">
-          还没有账号？注册
+          {{ addingAccount ? "创建新账号" : "还没有账号？注册" }}
         </button>
 
         <section v-if="showRegister" class="private-login registration-panel">
@@ -170,6 +171,7 @@ const nsecInputEl = ref<HTMLInputElement | null>(null);
 const unlockPasswordEl = ref<HTMLInputElement | null>(null);
 
 const needsUnlock = computed(() => !!ks.pkHex && ks.isEncrypted && !ks.isUnlocked);
+const addingAccount = computed(() => route.query.mode === "add");
 const pageMode = computed<"restoring" | "unlock" | "login">(() => {
   if (ks.isRestoring) return "restoring";
   if (needsUnlock.value || unlockInProgress.value) return "unlock";
@@ -211,6 +213,11 @@ function shortPubkey(pubkey: string) {
 
 onMounted(async () => {
   ks.refreshAccounts();
+
+  if (addingAccount.value) {
+    showPrivateLogin.value = false;
+    showRegister.value = false;
+  }
 
   if (pageMode.value === "unlock") {
     await nextTick();
@@ -510,6 +517,7 @@ async function switchAccount() {
 .login-form { display: grid; gap: 12px; }
 .account-picker { display: grid; gap: 8px; margin-bottom: 10px; }
 .picker-title { margin: 0 0 2px; color: #8d99aa; font-size: .78rem; }
+.account-mode-title{margin-top:2px;margin-bottom:0;text-align:center}
 .account-option { display: grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; border:1px solid #293445; border-radius:12px; overflow:hidden; }
 .account-select { display:grid; min-width:0; gap:4px; padding:11px 12px; border:0; background:transparent; color:#d8dee9; text-align:left; cursor:pointer; }
 .account-select strong { overflow:hidden; font: .82rem ui-monospace,SFMono-Regular,Menlo,monospace; text-overflow:ellipsis; white-space:nowrap; }
