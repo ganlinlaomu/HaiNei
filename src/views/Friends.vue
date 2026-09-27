@@ -200,7 +200,7 @@ import { openProfile } from "@/utils/profileNavigation";
 import { useSwipeActions } from "@/composables/useSwipeActions";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import QrScannerSheet from "@/components/QrScannerSheet.vue";
-import { parseNostrProfileQrValue, shortNpub } from "@/utils/nostrQr";
+import { parseNostrProfileQrValue } from "@/utils/nostrQr";
 
 export default defineComponent({
   name: "Friends",
@@ -508,10 +508,9 @@ export default defineComponent({
 
           const groupInput = formData.value.groupsInput.trim();
           const group = groupInput.length > 0 ? groupInput : undefined;
-          const fallbackName = profiles.getProfile(hexKey)?.nickname?.trim()
-            || shortNpub(hexKey)
+          const savedName = nameVal
+            || profiles.getProfile(hexKey)?.nickname?.trim()
             || `${hexKey.slice(0, 8)}…`;
-          const savedName = nameVal || fallbackName;
 
           await friendships.sendRequest(hexKey);
           await friends.load();
