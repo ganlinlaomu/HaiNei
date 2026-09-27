@@ -26,6 +26,14 @@ describe("Android Capacitor build", () => {
     expect(workflow).toContain("actions/upload-artifact@v4");
   });
 
+  it("injects the HaiNei Worker URL into Android builds and refuses broken APKs", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/android.yml"), "utf8");
+    expect(workflow).toContain("VITE_HAINEI_WORKER_URL: ${{ vars.VITE_HAINEI_WORKER_URL }}");
+    expect(workflow).toContain("Verify HaiNei Worker URL");
+    expect(workflow).toContain('if [ -z "$VITE_HAINEI_WORKER_URL" ]');
+    expect(workflow).toContain("VITE_HAINEI_WORKER_URL must use https://");
+  });
+
   it("does not run the PWA service worker inside the native Capacitor container", () => {
     const source = readFileSync(join(process.cwd(), "src/main.ts"), "utf8");
     expect(source).toContain("function isNativeContainer()");

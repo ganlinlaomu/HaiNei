@@ -40,6 +40,7 @@ jobs:
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      VITE_HAINEI_WORKER_URL: ${{ vars.VITE_HAINEI_WORKER_URL }}
 
     steps:
       - name: Checkout
@@ -62,6 +63,20 @@ jobs:
 
       - name: Install web dependencies
         run: npm ci
+
+      - name: Verify HaiNei Worker URL
+        run: |
+          if [ -z "$VITE_HAINEI_WORKER_URL" ]; then
+            echo "::error::Repository variable VITE_HAINEI_WORKER_URL is required for Android builds"
+            exit 1
+          fi
+          case "$VITE_HAINEI_WORKER_URL" in
+            https://*) ;;
+            *)
+              echo "::error::VITE_HAINEI_WORKER_URL must use https://"
+              exit 1
+              ;;
+          esac
 
       - name: Build HaiNei web app
         run: npm run build
