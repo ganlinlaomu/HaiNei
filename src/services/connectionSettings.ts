@@ -59,7 +59,8 @@ export const DEVICE_ID_STORAGE_KEY = "hainei_device_id";
 export const ACTIVE_RELAY_CONFIGS_KEY = "hainei_active_relay_configs";
 
 export const DEFAULT_RELAY_URLS = [
-  "wss://nostr.dzo-hadar.ts.net"
+  "wss://nostr.dzo-hadar.ts.net",
+  "wss://relay.gulugulu.moe"
 ] as const;
 
 export const DEFAULT_MEDIA_SERVERS: ReadonlyArray<Pick<MediaServer, "id" | "type" | "url">> = [
