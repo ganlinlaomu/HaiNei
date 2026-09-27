@@ -1,4 +1,4 @@
-import { deviceStorage } from "@/services/deviceStorage";
+import { deviceStorage, putDeviceValue } from "@/services/deviceStorage";
 
 const ACCOUNT_REGISTRY_KEY = "hainei_device_accounts";
 
@@ -34,18 +34,18 @@ export function listDeviceAccounts(): DeviceAccount[] {
   }
 }
 
-export function rememberDeviceAccount(account: DeviceAccount): DeviceAccount[] {
+export async function rememberDeviceAccount(account: DeviceAccount): Promise<DeviceAccount[]> {
   const normalized = { ...account, pubkey: account.pubkey.toLowerCase() };
   const accounts = listDeviceAccounts().filter(item => item.pubkey !== normalized.pubkey);
   accounts.push(normalized);
   accounts.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
-  deviceStorage.setItem(ACCOUNT_REGISTRY_KEY, JSON.stringify(accounts));
+  await putDeviceValue(ACCOUNT_REGISTRY_KEY, JSON.stringify(accounts));
   return accounts;
 }
 
-export function forgetDeviceAccount(pubkey: string): DeviceAccount[] {
+export async function forgetDeviceAccount(pubkey: string): Promise<DeviceAccount[]> {
   const normalized = pubkey.toLowerCase();
   const accounts = listDeviceAccounts().filter(account => account.pubkey !== normalized);
-  deviceStorage.setItem(ACCOUNT_REGISTRY_KEY, JSON.stringify(accounts));
+  await putDeviceValue(ACCOUNT_REGISTRY_KEY, JSON.stringify(accounts));
   return accounts;
 }
