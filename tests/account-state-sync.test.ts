@@ -104,6 +104,38 @@ describe("encrypted account-state materialization", () => {
     expect((await db.accountStateMirrors.get([ACCOUNT, "settings"]))?.data).toEqual(stored.settings);
   });
 
+  it("keeps newer local friend metadata when a stale D1 snapshot is restored", async () => {
+    await db.accountFriends.put({
+      accountPubkey: ACCOUNT,
+      pubkey: PEER,
+      name: "本机新备注",
+      groups: ["家人"],
+      updatedAt: 200,
+    });
+
+    await materializeAccountState(ACCOUNT, "friend_metadata", [{
+      accountPubkey: ACCOUNT,
+      pubkey: PEER,
+      name: "D1旧备注",
+      groups: ["旧分组"],
+      updatedAt: 100,
+    }], 7);
+
+    expect(await db.accountFriends.get([ACCOUNT, PEER])).toMatchObject({
+      name: "本机新备注",
+      groups: ["家人"],
+      updatedAt: 200,
+    });
+    expect((await db.accountStateMirrors.get([ACCOUNT, "friend_metadata"]))?.data).toEqual([
+      expect.objectContaining({
+        pubkey: PEER,
+        name: "本机新备注",
+        groups: ["家人"],
+        updatedAt: 200,
+      })
+    ]);
+  });
+
   it("restores own profile, bookmarks, and cross-device DM read cursor with account isolation", async () => {
     await materializeAccountState(ACCOUNT, "own_profile", { ownerPubkey: ACCOUNT, nickname: "海内", updatedAt: 5 }, 1);
     await materializeAccountState(ACCOUNT, "bookmarks", [{ accountPubkey: ACCOUNT, messageId: "post-1", createdAt: 5, updatedAt: 5 }], 1);

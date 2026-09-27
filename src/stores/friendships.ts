@@ -177,7 +177,7 @@ export const useFriendshipsStore = defineStore("friendships", {
         else friends.loadedFor = this.loadedFor;
       }
       if (!friends.list.some(item => item.pubkey === peer)) {
-        friends.list.push({ pubkey: peer, name: `${peer.slice(0, 8)}…` });
+        await friends.ensureMetadata({ pubkey: peer, name: `${peer.slice(0, 8)}…` });
       }
       const profiles = useProfilesStore();
       void Promise.allSettled([profiles.sendCurrentProfileTo(peer), profiles.requestCurrentProfile(peer)]);

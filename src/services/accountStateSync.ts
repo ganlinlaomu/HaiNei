@@ -150,14 +150,20 @@ async function encryptEnvelope(keys: AccountStateKeys, namespace: AccountStateNa
 }
 
 export async function materializeAccountState(account: string, namespace: AccountStateNamespace, data: any, version: number) {
-  const materializedData = namespace === "settings"
+  let materializedData = namespace === "settings"
     ? migrateConnectionSettings(data, { deviceId: "account-state" })
     : data;
   if (namespace === "friendships") {
     const existing = await db.accountFriendships.where("accountPubkey").equals(account).toArray();
     await db.accountFriendships.bulkPut(mergeFriendshipSnapshots(existing, materializedData || []).map(record => ({ ...record, accountPubkey: account })));
   } else if (namespace === "friend_metadata") {
-    await db.accountFriends.bulkPut((materializedData || []).map((record: any) => ({ ...record, accountPubkey: account })));
+    const existing = await db.accountFriends.where("accountPubkey").equals(account).toArray();
+    materializedData = mergeByKey(
+      existing,
+      materializedData || [],
+      (record: any) => record.pubkey
+    ).map((record: any) => ({ ...record, accountPubkey: account }));
+    if (materializedData.length) await db.accountFriends.bulkPut(materializedData);
   } else if (namespace === "own_profile" && materializedData?.ownerPubkey === account) {
     await db.accountProfiles.put({ ...materializedData, accountPubkey: account });
   } else if (namespace === "settings") {

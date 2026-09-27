@@ -67,6 +67,40 @@ export const useFriendsStore = defineStore("friends", {
     save() {
       return this.persist(this.list);
     },
+    async ensureMetadata(friend: Friend) {
+      const peer = friend.pubkey.toLowerCase();
+      if (!peer || !friend.name?.trim()) return false;
+      if (this.list.some(item => item.pubkey === peer)) return true;
+      const next = normalized({ ...friend, pubkey: peer, updatedAt: Date.now() });
+      this.list.push(next);
+      this.version++;
+      await this.persist([next as DBFriend]);
+      return true;
+    },
+    async upsertMetadata(pubkey: string, patch: Partial<Friend>) {
+      const peer = pubkey.toLowerCase();
+      const name = patch.name?.trim();
+      if (!peer || !name) return false;
+      const existing = this.list.find(item => item.pubkey === peer);
+      if (existing) {
+        Object.assign(existing, patch, { name, updatedAt: Date.now() });
+        this.version++;
+        await this.persist([existing as DBFriend]);
+        return true;
+      }
+      const next = normalized({
+        pubkey: peer,
+        name,
+        groups: patch.groups,
+        group: patch.group,
+        note: patch.note,
+        updatedAt: Date.now()
+      });
+      this.list.push(next);
+      this.version++;
+      await this.persist([next as DBFriend]);
+      return true;
+    },
     add(friend: Friend) {
       if (!friend.pubkey || !friend.name?.trim() || this.list.some(item => item.pubkey === friend.pubkey.toLowerCase())) return false;
       this.list.push(normalized({ ...friend, updatedAt: Date.now() }));

@@ -212,8 +212,10 @@ describe("friendship state and message authorization", () => {
     friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "incoming_pending", updatedAt: 1 }];
     friends.loadedFor = ACCOUNT;
     friends.list = [];
+    const ensureMetadata = vi.spyOn(friends, "ensureMetadata");
     await friendships.acceptRequest(PEER);
     expect(friendships.getState(PEER)).toBe("accepted");
+    expect(ensureMetadata).toHaveBeenCalledWith({ pubkey: PEER, name: `${PEER.slice(0, 8)}…` });
     expect(friends.list).toEqual([expect.objectContaining({ pubkey: PEER, name: `${PEER.slice(0, 8)}…` })]);
     expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ tags: friendshipTags("accept") }));
     expect(mocks.sendCurrentProfileTo).toHaveBeenCalledWith(PEER);
