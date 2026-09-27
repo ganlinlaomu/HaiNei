@@ -90,7 +90,8 @@ describe("encrypted account-state materialization", () => {
       mediaServers: [],
     });
     expect(restored.relays.some((relay: any) => relay.url === "wss://relay.mostr.pub")).toBe(false);
-    expect(restored.relays.some((relay: any) => relay.url === "wss://relay.damus.io" && relay.source === "default")).toBe(true);
+    expect(restored.relays.some((relay: any) => relay.url === "wss://relay.damus.io")).toBe(false);
+    expect(restored.relays.some((relay: any) => relay.url === "wss://nostr.dzo-hadar.ts.net" && relay.source === "default")).toBe(true);
 
     await materializeAccountState(ACCOUNT, "settings", {
       relays: [{ url: "wss://relay.mostr.pub", read: true, write: true, enabled: true, source: "default", addedAt: 0, updatedAt: 0 }],
@@ -98,7 +99,8 @@ describe("encrypted account-state materialization", () => {
     }, 7);
     const stored = JSON.parse(deviceStorage.getItem(`nostr_settings_${ACCOUNT}`) || "{}");
     expect(stored.settings.relays.some((relay: any) => relay.url === "wss://relay.mostr.pub")).toBe(false);
-    expect(stored.settings.relays.some((relay: any) => relay.url === "wss://relay.damus.io")).toBe(true);
+    expect(stored.settings.relays.some((relay: any) => relay.url === "wss://relay.damus.io")).toBe(false);
+    expect(stored.settings.relays.some((relay: any) => relay.url === "wss://nostr.dzo-hadar.ts.net")).toBe(true);
     expect((await db.accountStateMirrors.get([ACCOUNT, "settings"]))?.data).toEqual(stored.settings);
   });
 
