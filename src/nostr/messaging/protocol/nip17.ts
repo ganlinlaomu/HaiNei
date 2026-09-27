@@ -51,8 +51,22 @@ function decodeFailed(event: NostrEvent, account: string, stage: string, reason:
   return null;
 }
 
-function errorKind(error: unknown): string {
-  return error instanceof Error ? error.name || "Error" : "unknown_error";
+function decryptErrorKind(error: unknown): string {
+  if (!(error instanceof Error)) return "nip44_decrypt_failed";
+  const message = error.message.toLowerCase();
+  if (error.name === "RangeError" || message.includes("payload") || message.includes("length")) {
+    return "nip44_invalid_payload";
+  }
+  if (message.includes("version")) return "nip44_invalid_version";
+  return "nip44_decrypt_failed";
+}
+
+function unexpectedErrorKind(error: unknown): string {
+  if (!(error instanceof Error)) return "unknown_error";
+  if (error.name === "SyntaxError") return "syntax_error";
+  if (error.name === "TypeError") return "type_error";
+  if (error.name === "RangeError") return "range_error";
+  return "unexpected_error";
 }
 
 export const nip17Adapter: MessageProtocolAdapter = {
@@ -79,7 +93,7 @@ export const nip17Adapter: MessageProtocolAdapter = {
         try {
           sealPlaintext = await context.nip44Decrypt(event.pubkey, event.content);
         } catch (error) {
-          return decodeFailed(event, account, "outer-decrypt", errorKind(error));
+          return decodeFailed(event, account, "outer-decrypt", decryptErrorKind(error));
         }
         debugLog("nip17", "outer_decrypt_success", eventDiagnostic(event, account, "outer-decrypt"));
         const sealValue = parseObject(sealPlaintext);
@@ -95,7 +109,7 @@ export const nip17Adapter: MessageProtocolAdapter = {
         try {
           rumorPlaintext = await context.nip44Decrypt(seal.pubkey, seal.content);
         } catch (error) {
-          return decodeFailed(event, account, "rumor-decrypt", errorKind(error));
+          return decodeFailed(event, account, "rumor-decrypt", decryptErrorKind(error));
         }
         debugLog("nip17", "rumor_decrypt_success", eventDiagnostic(event, account, "rumor-decrypt"));
         const rumorValue = parseObject(rumorPlaintext);
@@ -142,7 +156,7 @@ export const nip17Adapter: MessageProtocolAdapter = {
       });
       return decoded;
     } catch (error) {
-      return decodeFailed(event, accountInput, "unexpected", errorKind(error));
+      return decodeFailed(event, accountInput, "unexpected", unexpectedErrorKind(error));
     }
   },
   encode: buildNip17Message

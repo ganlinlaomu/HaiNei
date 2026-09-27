@@ -2,7 +2,7 @@
  * WebCrypto utilities for secure private key encryption
  * Uses AES-GCM with PBKDF2 for password-based encryption
  */
-import { deviceStorage } from "@/services/deviceStorage";
+import { deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/deviceStorage";
 
 const PBKDF2_ITERATIONS = 100000;
 const SALT_LENGTH = 16;
@@ -24,7 +24,7 @@ export type EncryptedData = {
 /**
  * Derive an encryption key from a password using PBKDF2
  */
-async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+async function deriveKey(password: string, salt: Uint8Array, iterations = PBKDF2_ITERATIONS): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const passwordKey = await crypto.subtle.importKey(
     "raw",
@@ -38,7 +38,7 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
     {
       name: "PBKDF2",
       salt: ownedBuffer(salt),
-      iterations: PBKDF2_ITERATIONS,
+      iterations,
       hash: "SHA-256"
     },
     passwordKey,
@@ -135,7 +135,7 @@ export async function decryptPrivateKey(
   const ciphertext = base64ToArray(encrypted.ciphertext);
 
   // Derive decryption key from password
-  const key = await deriveKey(password, salt);
+  const key = await deriveKey(password, salt, encrypted.iterations || PBKDF2_ITERATIONS);
 
   // Decrypt the data
   try {
@@ -168,9 +168,9 @@ export function hasEncryptedKey(pkHex: string): boolean {
 /**
  * Store encrypted private key in device IndexedDB.
  */
-export function storeEncryptedKey(pkHex: string, encrypted: EncryptedData): void {
+export async function storeEncryptedKey(pkHex: string, encrypted: EncryptedData): Promise<void> {
   const key = `encrypted_sk_${pkHex}`;
-  deviceStorage.setItem(key, JSON.stringify(encrypted));
+  await putDeviceValue(key, JSON.stringify(encrypted));
 }
 
 /**
@@ -190,11 +190,7 @@ export function retrieveEncryptedKey(pkHex: string): EncryptedData | null {
 /**
  * Remove encrypted private key from device IndexedDB.
  */
-export function removeEncryptedKey(pkHex: string): void {
-  try {
-    const key = `encrypted_sk_${pkHex}`;
-    deviceStorage.removeItem(key);
-  } catch {
-    // ignore
-  }
+export async function removeEncryptedKey(pkHex: string): Promise<void> {
+  const key = `encrypted_sk_${pkHex}`;
+  await removeDeviceValue(key);
 }

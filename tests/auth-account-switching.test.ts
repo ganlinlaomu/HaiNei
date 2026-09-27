@@ -41,7 +41,7 @@ beforeEach(() => {
 });
 
 describe("private-key authentication", () => {
-  it("logs in with a private key and keeps signing/NIP-44 available", async () => {
+  it("keeps a one-time private-key login in memory without persisting plaintext", async () => {
     const store = createStore();
 
     await store.loginWithNsec(PRIVATE_KEY);
@@ -50,25 +50,36 @@ describe("private-key authentication", () => {
     expect(store.pkHex).toBe(PRIVATE_PUBKEY);
     expect(store.supportsNip44).toBe(true);
     expect(store.skHex).toBe(PRIVATE_KEY);
+    expect(store.isEncrypted).toBe(false);
+    expect(deviceStorage.getItem("skHex")).toBeNull();
+    expect(deviceStorage.getItem("pkHex")).toBeNull();
+    expect(listDeviceAccounts()[0]).toMatchObject({
+      pubkey: PRIVATE_PUBKEY,
+      authType: "private-key",
+      hasEncryptedKey: false,
+    });
   });
 
-  it("switches to an encrypted private-key account and unlocks without nsec re-entry", async () => {
+  it("stores an encrypted private key and unlocks it without nsec re-entry", async () => {
     const store = createStore();
     await store.loginWithNsec(PRIVATE_KEY, "local-password");
-    store.clearActiveSession();
+    expect(hasEncryptedKey(PRIVATE_PUBKEY)).toBe(true);
+    expect(deviceStorage.getItem("skHex")).toBeNull();
 
+    await store.clearActiveSession();
     await expect(store.selectRememberedAccount(PRIVATE_PUBKEY)).resolves.toBe("unlock");
     expect(store.skHex).toBe("");
     expect(store.isUnlocked).toBe(false);
+
     await store.unlockWithPassword("local-password");
     expect(store.skHex).toBe(PRIVATE_KEY);
     expect(store.isUnlocked).toBe(true);
   });
 
-  it("deduplicates the same private-key account in the device registry", async () => {
+  it("deduplicates the same encrypted account in the device registry", async () => {
     const store = createStore();
     await store.loginWithNsec(PRIVATE_KEY, "local-password");
-    store.clearActiveSession();
+    await store.clearActiveSession();
     await store.loginWithNsec(PRIVATE_KEY, "local-password");
 
     expect(listDeviceAccounts()).toHaveLength(1);
@@ -79,20 +90,20 @@ describe("private-key authentication", () => {
     });
   });
 
-  it("preserves the encrypted key while switching away", async () => {
+  it("preserves the encrypted key while clearing the active session", async () => {
     const store = createStore();
     await store.loginWithNsec(PRIVATE_KEY, "local-password");
-    store.clearActiveSession();
+    await store.clearActiveSession();
 
     expect(hasEncryptedKey(PRIVATE_PUBKEY)).toBe(true);
     expect(listDeviceAccounts()[0]).toMatchObject({ pubkey: PRIVATE_PUBKEY, hasEncryptedKey: true });
   });
 
-  it("deletes only the local encrypted key and registry entry on explicit removal", async () => {
+  it("deletes only the encrypted key and registry entry on explicit removal", async () => {
     const store = createStore();
     await store.loginWithNsec(PRIVATE_KEY, "local-password");
 
-    store.removeAccountFromDevice(PRIVATE_PUBKEY);
+    await store.removeAccountFromDevice(PRIVATE_PUBKEY);
 
     expect(hasEncryptedKey(PRIVATE_PUBKEY)).toBe(false);
     expect(listDeviceAccounts()).toEqual([]);
@@ -112,9 +123,9 @@ describe("session restoration", () => {
     expect(deviceStorage.getItem("pkHex")).toBeNull();
   });
 
-  it("restores a local private-key session", async () => {
+  it("restores an encrypted account as locked without persisting plaintext", async () => {
     const first = createStore();
-    await first.loginWithNsec(PRIVATE_KEY);
+    await first.loginWithNsec(PRIVATE_KEY, "local-password");
 
     setActivePinia(createPinia());
     const restored = createStore();
@@ -122,6 +133,27 @@ describe("session restoration", () => {
 
     expect(restored.loginMethod).toBe("private-key");
     expect(restored.pkHex).toBe(PRIVATE_PUBKEY);
-    expect(restored.skHex).toBe(PRIVATE_KEY);
+    expect(restored.skHex).toBe("");
+    expect(restored.isEncrypted).toBe(true);
+    expect(restored.isUnlocked).toBe(false);
+    expect(deviceStorage.getItem("skHex")).toBeNull();
+  });
+
+  it("uses a legacy plaintext session once and purges it from persistent storage", async () => {
+    deviceStorage.setItem("pkHex", PRIVATE_PUBKEY);
+    deviceStorage.setItem("loginMethod", "private-key");
+    deviceStorage.setItem("loginTimestamp", "1");
+    deviceStorage.setItem("isEncrypted", "false");
+    deviceStorage.setItem("skHex", PRIVATE_KEY);
+    const store = createStore();
+
+    await store.restoreSession();
+
+    expect(store.pkHex).toBe(PRIVATE_PUBKEY);
+    expect(store.skHex).toBe(PRIVATE_KEY);
+    expect(store.isUnlocked).toBe(true);
+    expect(deviceStorage.getItem("skHex")).toBeNull();
+    expect(deviceStorage.getItem("pkHex")).toBeNull();
+    expect(deviceStorage.getItem("loginMethod")).toBeNull();
   });
 });

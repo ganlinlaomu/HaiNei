@@ -332,7 +332,7 @@ describe("NIP-17 relay to Home receive path", () => {
     relay.deliver(recipientWrap, RELAYS[0]);
     await waitFor(() => expect(warn).toHaveBeenCalledWith(
       "[nip17] decode_failed",
-      expect.objectContaining({ stage: "outer-decrypt", eventKind: 1059 })
+      expect.objectContaining({ stage: "outer-decrypt", eventKind: 1059, reason: "nip44_decrypt_failed" })
     ));
     expect(await repository.list(ACCOUNT_B)).toEqual([]);
     expect(received).toEqual([]);
