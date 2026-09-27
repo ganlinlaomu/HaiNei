@@ -194,16 +194,19 @@
         </div>
       </details>
 
-      <details class="account-section top-level-group">
-        <summary class="top-level-row">
-          <span class="row-main">
-            <span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg></span>
-            <strong>账户</strong>
-          </span>
-          <span class="row-chevron" aria-hidden="true">›</span>
+      <details class="technical-section account-section">
+        <summary class="section-heading account-heading">
+          <div class="account-heading-main">
+            <span class="account-heading-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>
+            </span>
+            <div>
+              <h3>账户</h3>
+              <p>{{ nickname }} · {{ shortPk }}</p>
+            </div>
+          </div>
         </summary>
-        <div class="top-level-content account-panel">
-          <span class="small">当前账户：{{ shortPk }}</span>
+        <div class="account-panel">
           <div class="account-actions">
             <button class="btn btn-secondary" type="button" @click="switchAccount">切换账号</button>
             <button class="btn btn-secondary" type="button" @click="addAccount">添加账号</button>
@@ -219,7 +222,6 @@
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import {
   inspectRelays,
   onRelayConnectionState,
@@ -253,7 +255,6 @@ const settings = useSettingsStore();
 const ui = useUIStore();
 const router = useRouter();
 
-const hasAccount = computed(() => !!keyStore.pkHex);
 const nickname = computed(() => profiles.getProfile(keyStore.pkHex)?.nickname?.trim() || "未设置昵称");
 const shortPk = computed(() => keyStore.pkHex ? `${keyStore.pkHex.slice(0, 8)}...${keyStore.pkHex.slice(-6)}` : "");
 const relayList = computed(() => settings.relayList);
@@ -568,7 +569,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.system-content{padding:0 16px}.account-section{border-top:1px solid #e2e8f0;margin-top:8px}.account-section>summary{list-style:none}.account-section>summary::-webkit-details-marker{display:none}
+.system-content{padding:0 16px}.account-section{margin-top:8px}
 
 .settings-container {
   width: 100%;
@@ -655,7 +656,12 @@ h3 {
 .top-level-group[open] > .top-level-row .row-chevron { transform: rotate(90deg); }
 .top-level-content { padding: 4px 16px 16px; border-top: 1px solid #eef2f6; }
 .top-level-content.account-row { min-height: 64px; }
-.account-panel{display:grid;gap:12px;padding:14px 16px 16px}
+.account-heading-main{display:flex;min-width:0;align-items:center;gap:12px}
+.account-heading-icon{display:grid;width:24px;height:24px;flex:0 0 24px;place-items:center;color:#475569}
+.account-heading-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.account-heading-main>div{min-width:0}
+.account-heading-main p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.account-panel{padding:0 0 16px 36px}
 .account-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .account-actions .btn-danger{grid-column:1/-1}
 .technical-settings { padding-top: 0; }
