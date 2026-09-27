@@ -78,8 +78,9 @@ describe("direct-message navigation and UI contract", () => {
       expect(source).toContain("SecondaryPageHeader");
     }
     expect(settings).toContain('aria-label="复制公钥"');
-    expect(settings).toContain("navigator.clipboard.writeText(keyStore.pkHex)");
-    expect(settings).toContain('ui.addToast("已复制公钥"');
+    expect(settings).toContain('aria-label="打开我的二维码"');
+    expect(settings).toContain("navigator.clipboard.writeText(pubkeyToNpub(keyStore.pkHex))");
+    expect(settings).toContain('ui.addToast("已复制 npub 公钥"');
     expect(settings).not.toContain('class="technical-section"');
     expect(settings).not.toContain("inspectRelays");
     expect(settings).not.toContain("getCacheStats");
