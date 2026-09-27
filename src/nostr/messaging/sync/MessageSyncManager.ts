@@ -210,15 +210,26 @@ export class MessageSyncManager {
         await this.setStatus("catching-up", sessionId);
         const state = await this.repository.getSyncState(options.accountPubkey);
         const nowSeconds = Math.floor(this.now() / 1000);
-        const relays = relayUrl ? [relayUrl] : options.relays;
-        const relaySignature = [...new Set(relays)].sort().join("|");
-        const repairingHistory = !relayUrl && (
-          !state.historyBackfillCompletedAt
-          || state.historyBackfillRelaySignature !== relaySignature
+        const currentRelaySignature = [...new Set(options.relays)].sort().join("|");
+        const previousRelaySet = new Set(
+          (state.historyBackfillRelaySignature || "").split("|").filter(Boolean)
         );
-        const since = repairingHistory
+        const newlyAddedRelays = options.relays.filter(url => !previousRelaySet.has(url));
+        const localHighWatermark = state.highWatermarkCreatedAt
+          || (await this.repository.list(options.accountPubkey))
+            .reduce((max, message) => Math.max(max, message.createdAt || 0), 0)
+          || undefined;
+        const freshHistoryRepair = !relayUrl
+          && !state.historyBackfillCompletedAt
+          && !localHighWatermark;
+        const relays = relayUrl
+          ? [relayUrl]
+          : state.historyBackfillCompletedAt && newlyAddedRelays.length
+            ? newlyAddedRelays
+            : options.relays;
+        const since = freshHistoryRepair
           ? 0
-          : calculateCatchupSince(state.highWatermarkCreatedAt, nowSeconds);
+          : calculateCatchupSince(localHighWatermark, nowSeconds);
         const filters = buildMessageSubscriptions(options.accountPubkey, options.authors, since, nowSeconds)
           .map(filter => ({ ...filter, limit: 500 }));
         logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} session=${sessionId} phase=${activeSource} since=${since} until=${nowSeconds}`);
@@ -232,7 +243,7 @@ export class MessageSyncManager {
           },
           signal: this.abortController?.signal,
           timeoutMs: this.catchupTimeoutMs,
-          maxBatches: repairingHistory ? INITIAL_HISTORY_MAX_BATCHES : undefined,
+          maxBatches: freshHistoryRepair ? INITIAL_HISTORY_MAX_BATCHES : undefined,
           isCurrent: () => this.isCurrent(sessionId, options.accountPubkey),
           onEvent: async (event, eventRelay) => {
             await this.pipeline?.ingestNostrEvent(event, { source: activeSource!, relayUrl: eventRelay });
@@ -240,15 +251,26 @@ export class MessageSyncManager {
         });
         if (!this.isCurrent(sessionId, options.accountPubkey)) return;
         const completedAt = this.now();
+        const completedFreshHistory = freshHistoryRepair
+          && result.allRelaysCompleted
+          && result.exhaustedHistory
+          && !result.hitMaxBatches
+          && !result.incomplete;
+        const completedRelaySetUpdate = !relayUrl
+          && !freshHistoryRepair
+          && result.allRelaysCompleted
+          && !result.incomplete;
         await this.repository.updateSyncState(options.accountPubkey, {
           lastSuccessfulSyncAt: completedAt,
           lastCatchupCompletedAt: completedAt,
-          ...(repairingHistory && result.allRelaysCompleted && result.exhaustedHistory && !result.hitMaxBatches && !result.incomplete
+          ...(completedFreshHistory
             ? {
                 historyBackfillCompletedAt: completedAt,
-                historyBackfillRelaySignature: relaySignature
+                historyBackfillRelaySignature: currentRelaySignature
               }
-            : {})
+            : completedRelaySetUpdate
+              ? { historyBackfillRelaySignature: currentRelaySignature }
+              : {})
         });
         for (const completedRelay of result.completedRelays) {
           await this.repository.updateRelayState(options.accountPubkey, completedRelay, {
