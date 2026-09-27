@@ -35,11 +35,6 @@ import {
   rememberDeviceAccount,
   type DeviceAccount
 } from "@/services/accountRegistry";
-import {
-  connectWithPomegranate,
-  validatePomegranateSigner,
-  type HaiNeiRemoteSigner
-} from "@/services/pomegranateAuth";
 
 let restoreSessionFlight: Promise<void> | null = null;
 
@@ -73,8 +68,7 @@ export const useKeyStore = defineStore("keys", {
   state: () => ({
     skHex: "" as string,
     pkHex: "" as string,
-    loginMethod: "" as "google" | "private-key" | "",
-    googleSigner: null as HaiNeiRemoteSigner | null,
+    loginMethod: "" as "private-key" | "",
     accounts: listDeviceAccounts() as DeviceAccount[],
     loginTimestamp: 0 as number, // Unix timestamp when user logged in
     isEncrypted: false as boolean, // Whether the current login uses encrypted storage
@@ -95,15 +89,11 @@ export const useKeyStore = defineStore("keys", {
     supportsNip04(): boolean {
       if (!this.isLoggedIn) return false;
       
-      if (this.loginMethod === "private-key") return !!this.skHex;
-      if (this.loginMethod === "google") return !!this.googleSigner?.nip04;
-      return false;
+      return this.loginMethod === "private-key" && !!this.skHex;
     },
     supportsNip44(): boolean {
       if (!this.isLoggedIn) return false;
-      if (this.loginMethod === "private-key") return !!this.skHex;
-      if (this.loginMethod === "google") return !!this.googleSigner?.nip44;
-      return false;
+      return this.loginMethod === "private-key" && !!this.skHex;
     }
   },
   actions: {
@@ -269,11 +259,9 @@ export const useKeyStore = defineStore("keys", {
     clearActiveSession() {
       const currentPk = this.pkHex;
       if (currentPk) this.resetAccountStores(currentPk);
-      try { this.googleSigner?.disconnect?.(); } catch {}
       this.skHex = "";
       this.pkHex = "";
       this.loginMethod = "";
-      this.googleSigner = null;
       this.loginTimestamp = 0;
       this.isEncrypted = false;
       this.isUnlocked = false;
@@ -282,48 +270,16 @@ export const useKeyStore = defineStore("keys", {
       }
     },
 
-    async loginWithGoogle(expectedPubkey?: string) {
-      const connection = await connectWithPomegranate(expectedPubkey);
-      await this.loginWithGoogleSigner(connection.pubkey, connection.signer, expectedPubkey);
-    },
-
-    async loginWithGoogleSigner(pubkey: string, signer: unknown, expectedPubkey?: string) {
-      const previousPubkey = this.pkHex;
-      const connection = await validatePomegranateSigner(pubkey, signer, expectedPubkey);
-      if (previousPubkey && previousPubkey !== connection.pubkey) this.resetAccountStores(previousPubkey);
-      if (this.googleSigner && this.googleSigner !== connection.signer) {
-        try { this.googleSigner.disconnect?.(); } catch {}
-      }
-      this.skHex = "";
-      this.pkHex = connection.pubkey;
-      this.loginMethod = "google";
-      this.googleSigner = connection.signer;
-      this.loginTimestamp = Math.floor(Date.now() / 1000);
-      this.isEncrypted = false;
-      this.isUnlocked = true;
-      deviceStorage.removeItem("skHex");
-      this.persistActiveSession();
-      this.rememberCurrentAccount();
-      await this.loadAccountStores(this.pkHex);
-      logAccountLogin(previousPubkey, this.pkHex, this.loginMethod);
-    },
-
     async selectRememberedAccount(pubkey: string) {
       const account = listDeviceAccounts().find(item => item.pubkey === pubkey.toLowerCase());
       if (!account) throw new Error("未找到已记住的账号");
-      if (account.authType === "google") {
-        await this.loginWithGoogle(account.pubkey);
-        return "connected" as const;
-      }
       if (!account.hasEncryptedKey || !hasEncryptedKey(account.pubkey)) {
         throw new Error("该私钥账号未在本机加密保存，请重新输入私钥");
       }
       if (this.pkHex && this.pkHex !== account.pubkey) this.resetAccountStores(this.pkHex);
-      try { this.googleSigner?.disconnect?.(); } catch {}
       this.skHex = "";
       this.pkHex = account.pubkey;
       this.loginMethod = "private-key";
-      this.googleSigner = null;
       this.loginTimestamp = Math.floor(Date.now() / 1000);
       this.isEncrypted = true;
       this.isUnlocked = false;
@@ -353,9 +309,6 @@ export const useKeyStore = defineStore("keys", {
         if (!this.skHex) throw new Error("私钥登录但未找到私钥");
         return nostr.nip04.decrypt(this.skHex, senderPubHex, ciphertext);
       }
-      if (this.loginMethod === "google" && this.googleSigner?.nip04) {
-        return this.googleSigner.nip04.decrypt(senderPubHex, ciphertext);
-      }
       throw new Error("当前登录方式不支持 NIP-04");
     },
 
@@ -374,9 +327,6 @@ export const useKeyStore = defineStore("keys", {
         if (!this.skHex) throw new Error("私钥登录但未找到私钥");
         return nostr.nip04.encrypt(this.skHex, recipientPubHex, plaintext);
       }
-      if (this.loginMethod === "google" && this.googleSigner?.nip04) {
-        return this.googleSigner.nip04.encrypt(recipientPubHex, plaintext);
-      }
       throw new Error("当前登录方式不支持 NIP-04");
     },
 
@@ -387,9 +337,6 @@ export const useKeyStore = defineStore("keys", {
         const conversationKey = nostr.nip44.v2.utils.getConversationKey(nostr.utils.hexToBytes(this.skHex), senderPubHex);
         return nostr.nip44.v2.decrypt(ciphertext, conversationKey);
       }
-      if (this.loginMethod === "google" && this.googleSigner) {
-        return this.googleSigner.nip44.decrypt(senderPubHex, ciphertext);
-      }
       throw new Error("当前登录方式不支持 NIP-44");
     },
 
@@ -399,9 +346,6 @@ export const useKeyStore = defineStore("keys", {
         if (!this.skHex) throw new Error("私钥登录但未找到私钥");
         const conversationKey = nostr.nip44.v2.utils.getConversationKey(nostr.utils.hexToBytes(this.skHex), recipientPubHex);
         return nostr.nip44.v2.encrypt(plaintext, conversationKey);
-      }
-      if (this.loginMethod === "google" && this.googleSigner) {
-        return this.googleSigner.nip44.encrypt(recipientPubHex, plaintext);
       }
       throw new Error("当前登录方式不支持 NIP-44");
     },
@@ -420,18 +364,13 @@ export const useKeyStore = defineStore("keys", {
         if (!this.skHex) throw new Error("私钥登录但未找到私钥");
         return finalizeEvent(event, nostr.utils.hexToBytes(this.skHex));
       }
-      if (this.loginMethod === "google" && this.googleSigner) {
-        return this.googleSigner.signEvent(event);
-      }
       throw new Error(`未知的登录方式: ${this.loginMethod}`);
     },
     async loginWithSk(sk: string) {
       const previousPubkey = this.pkHex;
       if (previousPubkey) this.resetAccountStores(previousPubkey);
-      try { this.googleSigner?.disconnect?.(); } catch {}
       this.skHex = sk;
       this.loginMethod = "private-key";
-      this.googleSigner = null;
       this.loginTimestamp = Math.floor(Date.now() / 1000);
       this.isEncrypted = false;
       try {
@@ -492,12 +431,10 @@ export const useKeyStore = defineStore("keys", {
           const encrypted = await encryptPrivateKey(skHex, password);
           storeEncryptedKey(pk, encrypted);
           if (previousPubkey) this.resetAccountStores(previousPubkey);
-          try { this.googleSigner?.disconnect?.(); } catch {}
           
           this.skHex = skHex;
           this.pkHex = pk;
           this.loginMethod = "private-key";
-          this.googleSigner = null;
           this.isEncrypted = true;
           this.isUnlocked = true;
           this.loginTimestamp = Math.floor(Date.now() / 1000);
@@ -519,7 +456,6 @@ export const useKeyStore = defineStore("keys", {
         this.skHex = "";
         this.pkHex = "";
         this.loginMethod = "";
-        this.googleSigner = null;
         this.loginTimestamp = 0;
         this.isEncrypted = false;
         this.isUnlocked = false;
@@ -596,7 +532,7 @@ export const useKeyStore = defineStore("keys", {
           return;
         }
 
-        if (storedMethod === "nip07" || storedMethod === "nip46") {
+        if (storedMethod === "nip07" || storedMethod === "nip46" || storedMethod === "google") {
           debugLog("account", "session_restore_failed", {
             pubkeyPrefix: pk,
             loginMethod: storedMethod,
@@ -608,7 +544,7 @@ export const useKeyStore = defineStore("keys", {
         }
 
         const method = storedMethod === "sk" ? "private-key" : storedMethod;
-        if (method !== "private-key" && method !== "google") {
+        if (method !== "private-key") {
           this.clearActiveSession();
           this.isRestored = true;
           return;
@@ -617,13 +553,6 @@ export const useKeyStore = defineStore("keys", {
         this.loginMethod = method;
         this.pkHex = pk.toLowerCase();
         this.loginTimestamp = parseInt(deviceStorage.getItem("loginTimestamp") || "0", 10) || 0;
-
-        if (method === "google") {
-          const connection = await connectWithPomegranate(this.pkHex);
-          await this.loginWithGoogleSigner(connection.pubkey, connection.signer, this.pkHex);
-          this.isRestored = true;
-          return;
-        }
 
         if (isEncrypted) {
           if (!hasEncryptedKey(this.pkHex)) throw new Error("未找到加密的私钥");
