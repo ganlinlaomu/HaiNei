@@ -8,6 +8,7 @@ import {
   fetchAndMaterializeAccountState,
   materializeAccountState,
   mergeFriendshipSnapshots,
+  mergeNamespaceData,
   syncAccountStateNamespace,
   type AccountStateEnvelope,
   type AccountStateKeys,
@@ -15,6 +16,7 @@ import {
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useFriendsStore } from "@/stores/friends";
 import { canStartDirectMessage } from "@/nostr/messaging/directMessages";
+import { deviceStorage } from "@/services/deviceStorage";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -77,6 +79,27 @@ describe("encrypted account-state materialization", () => {
       [friendship("accepted", 20, "accept-old")],
     );
     expect(merged[0].state).toBe("removed");
+  });
+
+  it("purges retired system relays from encrypted settings restored from account state", async () => {
+    const restored = mergeNamespaceData("settings", null, {
+      relays: [
+        { url: "wss://relay.mostr.pub", read: true, write: true, enabled: true, source: "default", addedAt: 0, updatedAt: 0 },
+        { url: "wss://user.example", read: true, write: true, enabled: true, source: "user", addedAt: 1, updatedAt: 1 },
+      ],
+      mediaServers: [],
+    });
+    expect(restored.relays.some((relay: any) => relay.url === "wss://relay.mostr.pub")).toBe(false);
+    expect(restored.relays.some((relay: any) => relay.url === "wss://relay.damus.io" && relay.source === "default")).toBe(true);
+
+    await materializeAccountState(ACCOUNT, "settings", {
+      relays: [{ url: "wss://relay.mostr.pub", read: true, write: true, enabled: true, source: "default", addedAt: 0, updatedAt: 0 }],
+      mediaServers: [],
+    }, 7);
+    const stored = JSON.parse(deviceStorage.getItem(`nostr_settings_${ACCOUNT}`) || "{}");
+    expect(stored.settings.relays.some((relay: any) => relay.url === "wss://relay.mostr.pub")).toBe(false);
+    expect(stored.settings.relays.some((relay: any) => relay.url === "wss://relay.damus.io")).toBe(true);
+    expect((await db.accountStateMirrors.get([ACCOUNT, "settings"]))?.data).toEqual(stored.settings);
   });
 
   it("restores own profile, bookmarks, and cross-device DM read cursor with account isolation", async () => {

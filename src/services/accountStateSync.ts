@@ -7,6 +7,7 @@ import {
 } from "@/db/dexie";
 import { accountStateRepository } from "@/repositories/accountStateRepository";
 import { deviceStorage } from "@/services/deviceStorage";
+import { migrateConnectionSettings } from "@/services/connectionSettings";
 
 export const ACCOUNT_STATE_NAMESPACES: AccountStateNamespace[] = [
   "friendships", "friend_metadata", "own_profile", "settings", "bookmarks",
@@ -122,10 +123,10 @@ export function mergeNamespaceData(namespace: AccountStateNamespace, local: any,
     return { dismissedIds, readCursor: cursor ? { lastReadCreatedAt: cursor.lastReadCreatedAt, lastReadMessageId: cursor.lastReadMessageId } : undefined };
   }
   if (namespace === "settings") {
-    return {
+    return migrateConnectionSettings({
       relays: mergeByKey(local?.relays || [], remote?.relays || [], (item: any) => item.url),
       mediaServers: mergeByKey(local?.mediaServers || [], remote?.mediaServers || [], (item: any) => item.id),
-    };
+    }, { deviceId: "account-state" });
   }
   if (namespace === "feed_preferences") {
     return {
@@ -149,25 +150,28 @@ async function encryptEnvelope(keys: AccountStateKeys, namespace: AccountStateNa
 }
 
 export async function materializeAccountState(account: string, namespace: AccountStateNamespace, data: any, version: number) {
+  const materializedData = namespace === "settings"
+    ? migrateConnectionSettings(data, { deviceId: "account-state" })
+    : data;
   if (namespace === "friendships") {
     const existing = await db.accountFriendships.where("accountPubkey").equals(account).toArray();
-    await db.accountFriendships.bulkPut(mergeFriendshipSnapshots(existing, data || []).map(record => ({ ...record, accountPubkey: account })));
+    await db.accountFriendships.bulkPut(mergeFriendshipSnapshots(existing, materializedData || []).map(record => ({ ...record, accountPubkey: account })));
   } else if (namespace === "friend_metadata") {
-    await db.accountFriends.bulkPut((data || []).map((record: any) => ({ ...record, accountPubkey: account })));
-  } else if (namespace === "own_profile" && data?.ownerPubkey === account) {
-    await db.accountProfiles.put({ ...data, accountPubkey: account });
+    await db.accountFriends.bulkPut((materializedData || []).map((record: any) => ({ ...record, accountPubkey: account })));
+  } else if (namespace === "own_profile" && materializedData?.ownerPubkey === account) {
+    await db.accountProfiles.put({ ...materializedData, accountPubkey: account });
   } else if (namespace === "settings") {
-    deviceStorage.setItem(`nostr_settings_${account}`, JSON.stringify({ version: 3, settings: data, lastSyncTimestamp: Date.now() }));
+    deviceStorage.setItem(`nostr_settings_${account}`, JSON.stringify({ version: 3, settings: materializedData, lastSyncTimestamp: Date.now() }));
   } else if (namespace === "bookmarks") {
-    await db.accountBookmarks.bulkPut((data || []).map((record: BookmarkRecord) => ({ ...record, accountPubkey: account })));
+    await db.accountBookmarks.bulkPut((materializedData || []).map((record: BookmarkRecord) => ({ ...record, accountPubkey: account })));
   } else if (namespace === "feed_preferences") {
-    await db.accountMeta.put({ accountPubkey: account, key: "feed_preferences_v2", value: data });
+    await db.accountMeta.put({ accountPubkey: account, key: "feed_preferences_v2", value: materializedData });
   } else if (namespace === "read_state") {
-    await db.conversationReadStates.bulkPut((data || []).map((record: any) => ({ ...record, accountPubkey: account })));
+    await db.conversationReadStates.bulkPut((materializedData || []).map((record: any) => ({ ...record, accountPubkey: account })));
   } else if (namespace === "notification_state") {
-    await db.accountMeta.put({ accountPubkey: account, key: "notification_state", value: data });
+    await db.accountMeta.put({ accountPubkey: account, key: "notification_state", value: materializedData });
   }
-  await accountStateRepository.put({ accountPubkey: account, namespace, version, data, updatedAt: Date.now() });
+  await accountStateRepository.put({ accountPubkey: account, namespace, version, data: materializedData, updatedAt: Date.now() });
 }
 
 export async function fetchAndMaterializeAccountState(keys: AccountStateKeys, namespaces = ACCOUNT_STATE_NAMESPACES) {
@@ -177,16 +181,28 @@ export async function fetchAndMaterializeAccountState(keys: AccountStateKeys, na
   }
   const response = await authenticatedPost(keys, "/api/account-state/get", { namespaces });
   const restored: AccountStateNamespace[] = [];
+  let settingsNeedRewrite = false;
   for (const snapshot of (response?.snapshots || []) as RemoteSnapshot[]) {
     try {
       const envelope = await decryptSnapshot(keys, snapshot);
       const local = await accountStateRepository.get(account, snapshot.namespace);
-      const data = local ? mergeNamespaceData(snapshot.namespace, local.data, envelope.data) : envelope.data;
+      const merged = local ? mergeNamespaceData(snapshot.namespace, local.data, envelope.data) : envelope.data;
+      const data = snapshot.namespace === "settings"
+        ? migrateConnectionSettings(merged, { deviceId: "account-state" })
+        : merged;
+      if (snapshot.namespace === "settings" && JSON.stringify(data) !== JSON.stringify(envelope.data)) {
+        settingsNeedRewrite = true;
+      }
       await materializeAccountState(account, snapshot.namespace, data, snapshot.version);
       restored.push(snapshot.namespace);
     } catch (error) {
       console.warn("[account-state] ignored unreadable namespace", snapshot.namespace, error instanceof Error ? error.message : "unknown");
     }
+  }
+  if (settingsNeedRewrite) {
+    await syncAccountStateNamespace(keys, "settings").catch(error => {
+      console.warn("[account-state] settings cleanup sync failed", error instanceof Error ? error.message : "unknown");
+    });
   }
   return { available: true, restored };
 }
