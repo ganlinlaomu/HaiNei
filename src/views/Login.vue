@@ -44,7 +44,7 @@
           <div v-for="account in ks.accounts" :key="account.pubkey" class="account-option">
             <button type="button" class="account-select" :disabled="loading" @click="selectAccount(account.pubkey)">
               <strong>{{ shortPubkey(account.pubkey) }}</strong>
-              <small>{{ account.hasEncryptedKey ? "私钥 · 已加密保存" : "私钥" }}</small>
+              <small>{{ account.hasEncryptedKey ? "私钥 · 已加密保存" : "私钥 · 需重新输入" }}</small>
             </button>
             <button type="button" class="remove-account" :disabled="loading" @click="removeAccount(account.pubkey)">从设备移除</button>
           </div>
@@ -66,12 +66,21 @@
               {{ copiedNsec ? "已复制" : "复制私钥" }}
             </button>
           </div>
+          <div class="password-fields">
+            <label class="field-label" for="registration-password">本地保护密码</label>
+            <input id="registration-password" v-model="registrationPassword" class="input" type="password"
+              autocomplete="new-password" placeholder="至少 8 位" :disabled="loading" />
+            <label class="field-label" for="registration-confirm-password">确认密码</label>
+            <input id="registration-confirm-password" v-model="registrationConfirmPassword" class="input" type="password"
+              autocomplete="new-password" placeholder="再次输入密码" :disabled="loading" />
+            <p class="password-note">私钥会先加密再保存到此设备。这个密码不会上传，也无法找回。</p>
+          </div>
           <label class="registration-confirm">
             <input v-model="registrationConfirmed" type="checkbox" :disabled="loading" />
             <span>我已安全保存这份私钥</span>
           </label>
           <button class="btn btn-primary login-button" type="button"
-            :disabled="loading || !registrationConfirmed" @click="finishRegistration">
+            :disabled="loading || !registrationReady" @click="finishRegistration">
             {{ loading ? "正在创建…" : "进入海内" }}
           </button>
           <button class="btn btn-text" type="button" :disabled="loading" @click="cancelRegistration">取消</button>
@@ -98,6 +107,7 @@
               :disabled="loading" @click="saveEncrypted = !saveEncrypted">
               <span class="disclosure" aria-hidden="true">{{ saveEncrypted ? "▾" : "▸" }}</span>在本机加密保存私钥
             </button>
+            <p v-if="!saveEncrypted" class="password-note muted">当前为仅此次登录：私钥只保留在内存中，关闭或重启应用后需要重新输入。</p>
             <div v-if="saveEncrypted" id="local-password-fields" class="password-fields">
               <label class="field-label" for="local-password">本地保护密码</label>
               <input id="local-password" v-model="nsecPassword" class="input" type="password" autocomplete="new-password" placeholder="输入密码" :disabled="loading" />
@@ -108,7 +118,7 @@
             </div>
           </div>
           <button class="btn btn-primary login-button" type="submit" :disabled="loading">{{ loading ? "正在登录…" : "登录" }}</button>
-          <p class="privacy-note">私钥只保存在你的设备中</p>
+          <p class="privacy-note">{{ saveEncrypted ? "私钥加密后保存在此设备" : "私钥不会以明文写入本机存储" }}</p>
         </form>
       </section>
 
@@ -153,6 +163,8 @@ const showRegister = ref(false);
 const generatedNsec = ref("");
 const registrationConfirmed = ref(false);
 const copiedNsec = ref(false);
+const registrationPassword = ref("");
+const registrationConfirmPassword = ref("");
 
 const nsecInputEl = ref<HTMLInputElement | null>(null);
 const unlockPasswordEl = ref<HTMLInputElement | null>(null);
@@ -163,6 +175,12 @@ const pageMode = computed<"restoring" | "unlock" | "login">(() => {
   if (needsUnlock.value || unlockInProgress.value) return "unlock";
   return "login";
 });
+
+const registrationReady = computed(() =>
+  registrationConfirmed.value
+  && registrationPassword.value.length >= 8
+  && registrationPassword.value === registrationConfirmPassword.value
+);
 
 const recognizedKeyType = computed(() => {
   const value = nsecInput.value.trim();
@@ -215,6 +233,8 @@ function clearSensitiveInputs() {
   generatedNsec.value = "";
   registrationConfirmed.value = false;
   copiedNsec.value = false;
+  registrationPassword.value = "";
+  registrationConfirmPassword.value = "";
   showPrivateKey.value = false;
   saveEncrypted.value = false;
   showRegister.value = false;
@@ -321,9 +341,14 @@ async function selectAccount(pubkey: string) {
   }
 }
 
-function removeAccount(pubkey: string) {
+async function removeAccount(pubkey: string) {
   if (loading.value || !window.confirm("只从此设备移除该账号？账号数据不会被删除。")) return;
-  ks.removeAccountFromDevice(pubkey);
+  loading.value = true;
+  try {
+    await ks.removeAccountFromDevice(pubkey);
+  } finally {
+    loading.value = false;
+  }
 }
 
 async function doUnlock() {
@@ -363,6 +388,8 @@ function startRegistration() {
   showRegister.value = true;
   registrationConfirmed.value = false;
   copiedNsec.value = false;
+  registrationPassword.value = "";
+  registrationConfirmPassword.value = "";
   generatedNsec.value = nip19.nsecEncode(generateSecretKey());
 }
 
@@ -380,16 +407,26 @@ function cancelRegistration() {
   generatedNsec.value = "";
   registrationConfirmed.value = false;
   copiedNsec.value = false;
+  registrationPassword.value = "";
+  registrationConfirmPassword.value = "";
   showRegister.value = false;
 }
 
 async function finishRegistration() {
   if (loading.value || !generatedNsec.value || !registrationConfirmed.value) return;
+  if (registrationPassword.value.length < 8) {
+    errorMessage.value = "本地保护密码至少需要 8 位";
+    return;
+  }
+  if (registrationPassword.value !== registrationConfirmPassword.value) {
+    errorMessage.value = "两次输入的密码不一致";
+    return;
+  }
   loading.value = true;
   errorMessage.value = "";
-  loginStatus.value = "正在创建账号…";
+  loginStatus.value = "正在加密并创建账号…";
   try {
-    await ks.loginWithNsec(generatedNsec.value);
+    await ks.loginWithNsec(generatedNsec.value, registrationPassword.value);
     await finishLogin();
   } catch (error) {
     logLoginFailure("register", "create-account", error);
@@ -400,13 +437,18 @@ async function finishRegistration() {
   }
 }
 
-function switchAccount() {
+async function switchAccount() {
   if (loading.value) return;
+  loading.value = true;
   clearSensitiveInputs();
   errorMessage.value = "";
   loginStatus.value = "";
-  ks.clearActiveSession();
-  ks.refreshAccounts();
+  try {
+    await ks.clearActiveSession();
+    ks.refreshAccounts();
+  } finally {
+    loading.value = false;
+  }
 }
 </script>
 
