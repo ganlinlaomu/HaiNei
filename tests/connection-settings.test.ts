@@ -262,6 +262,8 @@ describe("per-item settings sync", () => {
     const remote = relay("wss://remote.example", "user", { updatedAt: 20 });
     expect(mergeRelayConfigs([local], [remote]).map(item => item.url).sort()).toEqual([
       "wss://local.example",
+      "wss://nostr.dzo-hadar.ts.net",
+      "wss://relay.mostr.pub",
       "wss://remote.example"
     ]);
   });
