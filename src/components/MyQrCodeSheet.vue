@@ -1,11 +1,11 @@
 <template>
   <div v-if="open" class="qr-overlay" role="presentation" @click.self="close">
-    <section class="qr-sheet" role="dialog" aria-modal="true" aria-label="我的二维码">
+    <section class="qr-sheet" role="dialog" aria-modal="true" :aria-label="dialogLabel">
       <div class="sheet-handle" aria-hidden="true"></div>
       <button class="close-button" type="button" aria-label="关闭" @click="close">×</button>
       <ProfileAvatar :pubkey="pubkey" :local-name="nickname" :size="64" />
       <h2>{{ nickname || "我的二维码" }}</h2>
-      <p class="hint">让对方使用海内扫描，即可发起好友请求</p>
+      <p class="hint">{{ hint }}</p>
       <div class="qr-card" v-html="qrSvg"></div>
       <p class="npub">{{ npub }}</p>
       <div class="actions">
@@ -23,7 +23,10 @@ import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { useUIStore } from "@/stores/ui";
 import { buildNostrProfileQrValue, pubkeyToNpub } from "@/utils/nostrQr";
 
-const props = defineProps<{ open: boolean; pubkey: string; nickname?: string }>();
+const props = withDefaults(defineProps<{ open: boolean; pubkey: string; nickname?: string; dialogLabel?: string; hint?: string }>(), {
+  dialogLabel: "我的二维码",
+  hint: "让对方使用海内扫描，即可发起好友请求"
+});
 const emit = defineEmits<{ (event: "close"): void }>();
 const ui = useUIStore();
 
