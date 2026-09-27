@@ -122,8 +122,17 @@ export function supportsPushNotifications() {
     && "Notification" in window;
 }
 
+function pushPreferenceKey(pubkey: string) {
+  return `hainei_push_enabled_${pubkey.toLowerCase()}`;
+}
+
+export function pushDesiredForAccount(pubkey: string) {
+  if (!pubkey) return false;
+  return deviceStorage.getItem(pushPreferenceKey(pubkey)) !== "0";
+}
+
 export function pushEnabledForAccount(pubkey: string) {
-  return !!pubkey && deviceStorage.getItem(`hainei_push_enabled_${pubkey.toLowerCase()}`) === "1";
+  return !!pubkey && deviceStorage.getItem(pushPreferenceKey(pubkey)) === "1";
 }
 
 export async function enablePushNotifications(pubkey: string, signEvent: SignEvent) {
@@ -179,13 +188,21 @@ export async function enablePushNotifications(pubkey: string, signEvent: SignEve
 }
 
 export async function disablePushNotifications(pubkey: string, signEvent: SignEvent) {
+  const enabledKey = pushPreferenceKey(pubkey);
+  deviceStorage.setItem(enabledKey, "0");
   if (!supportsPushNotifications()) return;
   const registration = await navigator.serviceWorker.ready;
   const subscription = await registration.pushManager.getSubscription();
   if (subscription) {
     await authenticatedPost("/api/push/unsubscribe", { endpoint: subscription.endpoint }, pubkey, signEvent);
   }
-  deviceStorage.removeItem(`hainei_push_enabled_${pubkey.toLowerCase()}`);
+}
+
+export async function ensureDefaultPushNotifications(pubkey: string, signEvent: SignEvent) {
+  if (!pushDesiredForAccount(pubkey) || pushEnabledForAccount(pubkey)) return false;
+  if (!supportsPushNotifications() || Notification.permission !== "granted") return false;
+  await enablePushNotifications(pubkey, signEvent);
+  return true;
 }
 
 export async function triggerGenericPush(
