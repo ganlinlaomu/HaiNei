@@ -128,6 +128,27 @@ describe("friend IndexedDB clone boundaries", () => {
     expect(() => structuredClone(stored)).not.toThrow();
   });
 
+  it("creates durable metadata when editing an accepted friend that only existed as a fallback", async () => {
+    const friends = useFriendsStore();
+    friends.loadedFor = ACCOUNT;
+    friends.list = [];
+
+    await expect(friends.upsertMetadata(PEER, {
+      name: "新备注",
+      groups: ["家人"],
+      group: "家人",
+    })).resolves.toBe(true);
+
+    expect(friends.list).toEqual([
+      expect.objectContaining({ pubkey: PEER, name: "新备注", groups: ["家人"], group: "家人" })
+    ]);
+    expect(await db.accountFriends.get([ACCOUNT, PEER])).toMatchObject({
+      name: "新备注",
+      groups: ["家人"],
+      group: "家人",
+    });
+  });
+
   it("schedules the D1 friend metadata snapshot only after IndexedDB persistence", async () => {
     const order: string[] = [];
     const originalPut = friendRepository.put.bind(friendRepository);
