@@ -212,6 +212,12 @@ import {
 } from "@/utils/postDraft";
 import { canStartPostEditorDrag, shouldDismissPostEditor } from "@/utils/postEditorGesture";
 import {
+  audienceGroupCounts,
+  audienceGroupsMeta,
+  audienceRecipients,
+  normalizeSelectedAudienceGroups,
+} from "@/utils/friendAudience";
+import {
   releaseObjectUrl,
   releasePostEditorMediaUrls,
   restoreDraftImageUploads,
@@ -289,66 +295,16 @@ export default defineComponent({
 
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
 
-    // groups derived from accepted friends list
-    const groups = computed(() => {
-      const list = acceptedFriends.value;
-      const order: string[] = [];
-      const seen = new Set<string>();
-      for (const f of list) {
-        const tags = getFriendTags(f);
-        for (const g of tags) {
-          if (!seen.has(g)) {
-            seen.add(g);
-            order.push(g);
-          }
-        }
-      }
-      return order;
-    });
-
-    const countByGroup = computed(() => {
-      const map: Record<string, number> = {};
-      const list = acceptedFriends.value;
-      for (const f of list) {
-        const tags = getFriendTags(f);
-        for (const g of tags) {
-          map[g] = (map[g] || 0) + 1;
-        }
-      }
-      return map;
-    });
-
+    const groupSummary = computed(() => audienceGroupCounts(acceptedFriends.value));
+    const groups = computed(() => groupSummary.value.order);
+    const countByGroup = computed(() => groupSummary.value.counts);
     const selectedSet = computed(() => new Set(selectedGroups.value || []));
-
-    // Helper function to extract tags from a friend object
-    function getFriendTags(friend: { groups?: string[]; group?: string }): string[] {
-      return friend.groups && Array.isArray(friend.groups) && friend.groups.length > 0 
-        ? friend.groups 
-        : (friend.group ? [friend.group] : ["未分组"]);
-    }
-
-    const recipients = computed(() => {
-      const list = acceptedFriends.value;
-      if (list.length === 0) return [] as string[];
-      if (allFriends.value) return list.map((f: any) => f.pubkey).filter(Boolean);
-      const sel = selectedSet.value;
-      // Collect all matching friends, using Set to ensure each person is counted only once
-      const uniquePubkeys = new Set<string>();
-      for (const f of list) {
-        const tags = getFriendTags(f);
-        // If any tag of the friend is selected, include this friend
-        if (tags.some(tag => sel.has(tag))) {
-          uniquePubkeys.add(f.pubkey);
-        }
-      }
-      return Array.from(uniquePubkeys);
-    });
-
-    const recipientsCount = computed(() => {
-      const set = new Set(recipients.value);
-      if (keys.pkHex) set.add(keys.pkHex);
-      return set.size;
-    });
+    const recipients = computed(() => audienceRecipients(
+      acceptedFriends.value,
+      allFriends.value,
+      selectedGroups.value
+    ));
+    const recipientsCount = computed(() => recipients.value.length);
 
     const visibilitySummary = computed(() => allFriends.value
       ? "全部好友"
@@ -832,7 +788,7 @@ export default defineComponent({
         const draft = loadPostDraft(accountAtOpen);
         content.value = draft?.content || "";
         allFriends.value = draft?.allFriends ?? true;
-        selectedGroups.value = (draft?.selectedGroups || []).filter(group => groups.value.includes(group));
+        selectedGroups.value = normalizeSelectedAudienceGroups(draft?.selectedGroups || [], groups.value);
         uploads.value = restoreDraftImageUploads(draft?.images || []);
         videoPreview.value = draft?.video || null;
         draftPersistenceEnabled = true;
@@ -858,6 +814,15 @@ export default defineComponent({
         }
       }
     }, { immediate: true });
+
+    watch(groups, availableGroups => {
+      if (allFriends.value) return;
+      const normalizedGroups = normalizeSelectedAudienceGroups(selectedGroups.value, availableGroups);
+      if (normalizedGroups.length !== selectedGroups.value.length
+        || normalizedGroups.some((group, index) => group !== selectedGroups.value[index])) {
+        selectedGroups.value = normalizedGroups;
+      }
+    });
 
     watch(
       [
@@ -944,12 +909,11 @@ export default defineComponent({
 
       if (recips.length === 0) { error.value = "未指定收件人"; sending.value = false; return; }
 
-      const groupsMeta = allFriends.value
-        ? [{ name: "全部好友", count: recipientsCount.value }]
-        : selectedGroups.value.map(g => ({
-            name: g,
-            count: countByGroup.value[g] || 0
-          }));
+      const groupsMeta = audienceGroupsMeta(
+        acceptedFriends.value,
+        allFriends.value,
+        selectedGroups.value
+      );
 
       try {
         // Build content with uploaded images appended
