@@ -61,6 +61,27 @@ describe("direct-message navigation and UI contract", () => {
     expect(secondaryHeader).toContain('if (props.backMode === "history") router.back()');
   });
 
+  it("shows a friend's non-DM posts on their profile", () => {
+    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    expect(profile).toContain('class="profile-posts"');
+    expect(profile).toContain('<PostCard v-for="post in ownerPosts"');
+    expect(profile).toContain("messages.inbox.filter(message =>");
+    expect(profile).toContain("message.pubkey.toLowerCase() === ownerPubkey.value");
+    expect(profile).toContain("!isDirectMessageTags(message.tags)");
+    expect(profile).toContain("!feedPreferences.isHidden(message.id)");
+    expect(profile).toContain("messages.load(account)");
+    expect(profile).toContain("暂无动态");
+  });
+
+  it("opens the peer profile from the DM header name/avatar and received-message avatar", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    expect(chat).toContain('class="peer-profile avatar-profile-link"');
+    expect(chat).toContain('class="peer-profile name-profile-link"');
+    expect(chat).toContain('class="message-avatar-link"');
+    expect(chat).toContain('@click="openPeerProfile"');
+    expect(chat).toContain('openProfile(router, keys.pkHex, peerPubkey.value, event)');
+  });
+
   it("uses My as a navigation hub with dedicated settings and consistent back navigation", () => {
     const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     const system = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");

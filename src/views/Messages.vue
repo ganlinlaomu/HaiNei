@@ -4,8 +4,10 @@
       <button type="button" class="back-button" aria-label="返回私信列表" @click="router.back()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
       </button>
-      <ProfileAvatar :pubkey="peerPubkey" :local-name="localName" :size="34" />
-      <strong>{{ displayName }}</strong>
+      <button class="peer-profile avatar-profile-link" type="button" :aria-label="`查看 ${displayName} 的个人资料`" @click="openPeerProfile">
+        <ProfileAvatar :pubkey="peerPubkey" :local-name="localName" :size="34" />
+      </button>
+      <button class="peer-profile name-profile-link" type="button" @click="openPeerProfile">{{ displayName }}</button>
     </header>
 
     <section ref="messageList" class="message-list" aria-live="polite" @scroll.passive="handleMessageScroll">
@@ -15,7 +17,9 @@
         <time v-if="showTimestamp(windowStart + index)" class="message-time">{{ formatMessageTime(message.created_at) }}</time>
         <div class="message-line" :class="{ own: isOwn(message) }">
           <span v-if="!isOwn(message)" class="avatar-slot">
-            <ProfileAvatar v-if="showAvatar(windowStart + index)" :pubkey="peerPubkey" :local-name="localName" :size="28" />
+            <button v-if="showAvatar(windowStart + index)" class="message-avatar-link" type="button" :aria-label="`查看 ${displayName} 的个人资料`" @click="openPeerProfile">
+              <ProfileAvatar :pubkey="peerPubkey" :local-name="localName" :size="28" />
+            </button>
           </span>
           <div class="message-stack">
             <div class="message-bubble" :class="{ 'media-caption-bubble': isMediaCaption(message), 'audio-bubble': hasAudio(message) }">
@@ -147,6 +151,7 @@ import {
   type MessageScrollMetrics,
 } from "@/utils/messageWindow";
 import { createVoiceRecordingSession, type VoiceRecordingResult, type VoiceRecordingSession } from "@/utils/voiceRecorder";
+import { openProfile } from "@/utils/profileNavigation";
 
 const route = useRoute();
 const router = useRouter();
@@ -199,6 +204,9 @@ const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreview
 const isMediaCaption = (message: InboxItem) => hasMessageImage(message) && !!messageText(message.content);
 const isOwn = (message: InboxItem) => message.pubkey === keys.pkHex;
 const isFailed = (message: InboxItem) => message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed";
+function openPeerProfile(event?: Event) {
+  return openProfile(router, keys.pkHex, peerPubkey.value, event);
+}
 function statusLabel(message: InboxItem) {
   switch (message.outgoing?.state) {
     case "uploading": return "上传中…";
@@ -529,7 +537,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .chat-page{position:fixed;inset:0;z-index:1000;display:grid;width:100%;max-width:none;margin:0;box-sizing:border-box;grid-template-rows:auto minmax(0,1fr) auto;background:#fff;color:#0f1419}
-.chat-header{display:grid;grid-template-columns:38px 34px minmax(0,1fr);align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}.chat-header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}
+.chat-header{display:grid;grid-template-columns:38px 34px minmax(0,1fr);align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.peer-profile,.message-avatar-link{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.avatar-profile-link,.message-avatar-link{display:grid;place-items:center}.name-profile-link{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:16px;font-weight:700}.peer-profile:focus-visible,.message-avatar-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:6px}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .message-list{min-height:0;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:9px;font-weight:400;line-height:1.3;opacity:.85}.message-status.failed,.caption-meta.failed{color:#dc2626}.message-status button,.caption-meta button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}.caption-meta{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;color:#718096;font-size:9px;line-height:1.3;white-space:nowrap}
 .audio-bubble{padding:9px 10px}
 .jump-to-latest{position:absolute;right:18px;bottom:calc(94px + env(safe-area-inset-bottom));z-index:4;display:flex;min-width:42px;height:42px;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid #d8dee5;border-radius:999px;background:#fff;color:#0f1419;box-shadow:0 5px 18px rgba(15,23,42,.16);font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent}.jump-to-latest:active{background:#f7f9f9;transform:scale(.97)}.jump-to-latest>span{font-size:20px;line-height:1}.jump-to-latest strong{font-size:12px;font-weight:650;white-space:nowrap}
