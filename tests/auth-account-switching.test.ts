@@ -4,19 +4,12 @@ import { getPublicKey } from "nostr-tools";
 import { hexToBytes } from "nostr-tools/utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const connectWithPomegranate = vi.hoisted(() => vi.fn());
-
-vi.mock("@/services/pomegranateAuth", async importOriginal => {
-  const actual = await importOriginal<typeof import("@/services/pomegranateAuth")>();
-  return { ...actual, connectWithPomegranate };
-});
-
 import { listDeviceAccounts } from "@/services/accountRegistry";
 import { deviceStorage } from "@/services/deviceStorage";
 import { useKeyStore } from "@/stores/keys";
 import { hasEncryptedKey } from "@/utils/crypto";
 
-const GOOGLE_PUBKEY = "a".repeat(64);
+const STALE_PUBKEY = "a".repeat(64);
 const PRIVATE_KEY = "01".padStart(64, "0");
 const PRIVATE_PUBKEY = getPublicKey(hexToBytes(PRIVATE_KEY));
 const SESSION_KEYS = [
@@ -34,18 +27,6 @@ class MemoryStorage implements Storage {
   setItem(key: string, value: string) { this.values.set(key, String(value)); }
 }
 
-function signer(pubkey = GOOGLE_PUBKEY) {
-  return {
-    getPublicKey: vi.fn(async () => pubkey),
-    signEvent: vi.fn(async event => ({ ...event, pubkey, id: "b".repeat(64), sig: "c".repeat(128) })),
-    nip44: {
-      encrypt: vi.fn(async (_peer: string, plaintext: string) => `encrypted:${plaintext}`),
-      decrypt: vi.fn(async (_peer: string, ciphertext: string) => ciphertext.replace("encrypted:", "")),
-    },
-    disconnect: vi.fn(),
-  };
-}
-
 function createStore() {
   const store = useKeyStore();
   vi.spyOn(store, "loadAccountStores").mockResolvedValue(undefined);
@@ -57,33 +38,18 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: new MemoryStorage() });
   for (const key of [...SESSION_KEYS, `encrypted_sk_${PRIVATE_PUBKEY}`]) deviceStorage.removeItem(key);
   setActivePinia(createPinia());
-  connectWithPomegranate.mockReset();
 });
 
-describe("Google and private-key authentication", () => {
-  it("logs in with a fully capable Google signer and adapts signing and NIP-44", async () => {
+describe("private-key authentication", () => {
+  it("logs in with a private key and keeps signing/NIP-44 available", async () => {
     const store = createStore();
-    const googleSigner = signer();
 
-    await store.loginWithGoogleSigner(GOOGLE_PUBKEY, googleSigner);
+    await store.loginWithNsec(PRIVATE_KEY);
 
-    expect(store.loginMethod).toBe("google");
-    expect(store.pkHex).toBe(GOOGLE_PUBKEY);
-    await store.signEvent({ kind: 1, created_at: 1, content: "hello", tags: [] });
-    await expect(store.nip44Encrypt("d".repeat(64), "hello")).resolves.toBe("encrypted:hello");
-    await expect(store.nip44Decrypt("d".repeat(64), "encrypted:hello")).resolves.toBe("hello");
-    expect(googleSigner.signEvent).toHaveBeenCalledOnce();
-  });
-
-  it("rejects Google login when NIP-44 is unavailable", async () => {
-    const store = createStore();
-    const incompleteSigner = {
-      getPublicKey: vi.fn(async () => GOOGLE_PUBKEY),
-      signEvent: vi.fn(),
-    };
-
-    await expect(store.loginWithGoogleSigner(GOOGLE_PUBKEY, incompleteSigner)).rejects.toThrow("NIP-44");
-    expect(store.pkHex).toBe("");
+    expect(store.loginMethod).toBe("private-key");
+    expect(store.pkHex).toBe(PRIVATE_PUBKEY);
+    expect(store.supportsNip44).toBe(true);
+    expect(store.skHex).toBe(PRIVATE_KEY);
   });
 
   it("switches to an encrypted private-key account and unlocks without nsec re-entry", async () => {
@@ -99,21 +65,18 @@ describe("Google and private-key authentication", () => {
     expect(store.isUnlocked).toBe(true);
   });
 
-  it("keeps Google and private-key accounts together in the device registry", async () => {
+  it("deduplicates the same private-key account in the device registry", async () => {
     const store = createStore();
-    await store.loginWithGoogleSigner(GOOGLE_PUBKEY, signer());
+    await store.loginWithNsec(PRIVATE_KEY, "local-password");
+    store.clearActiveSession();
     await store.loginWithNsec(PRIVATE_KEY, "local-password");
 
-    expect(listDeviceAccounts().map(account => account.authType).sort()).toEqual(["google", "private-key"]);
-  });
-
-  it("deduplicates the same pubkey instead of creating another local account", async () => {
-    const store = createStore();
-    await store.loginWithGoogleSigner(GOOGLE_PUBKEY, signer());
-    await store.loginWithGoogleSigner(GOOGLE_PUBKEY, signer());
-
     expect(listDeviceAccounts()).toHaveLength(1);
-    expect(listDeviceAccounts()[0].pubkey).toBe(GOOGLE_PUBKEY);
+    expect(listDeviceAccounts()[0]).toMatchObject({
+      pubkey: PRIVATE_PUBKEY,
+      authType: "private-key",
+      hasEncryptedKey: true,
+    });
   });
 
   it("preserves the encrypted key while switching away", async () => {
@@ -137,8 +100,8 @@ describe("Google and private-key authentication", () => {
 });
 
 describe("session restoration", () => {
-  it.each(["nip07", "nip46"])("clears a stale %s session", async staleMethod => {
-    deviceStorage.setItem("pkHex", GOOGLE_PUBKEY);
+  it.each(["nip07", "nip46", "google"])("clears a stale %s session", async staleMethod => {
+    deviceStorage.setItem("pkHex", STALE_PUBKEY);
     deviceStorage.setItem("loginMethod", staleMethod);
     const store = createStore();
 
@@ -149,23 +112,16 @@ describe("session restoration", () => {
     expect(deviceStorage.getItem("pkHex")).toBeNull();
   });
 
-  it("runs concurrent restore calls only once", async () => {
-    deviceStorage.setItem("pkHex", GOOGLE_PUBKEY);
-    deviceStorage.setItem("loginMethod", "google");
-    deviceStorage.setItem("loginTimestamp", "1");
-    deviceStorage.setItem("isEncrypted", "false");
-    const googleSigner = signer();
-    let release!: (value: { pubkey: string; signer: ReturnType<typeof signer> }) => void;
-    connectWithPomegranate.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
-    const store = createStore();
+  it("restores a local private-key session", async () => {
+    const first = createStore();
+    await first.loginWithNsec(PRIVATE_KEY);
 
-    const first = store.restoreSession();
-    const second = store.restoreSession();
-    expect(connectWithPomegranate).toHaveBeenCalledTimes(1);
-    release({ pubkey: GOOGLE_PUBKEY, signer: googleSigner });
-    await Promise.all([first, second]);
+    setActivePinia(createPinia());
+    const restored = createStore();
+    await restored.restoreSession();
 
-    expect(connectWithPomegranate).toHaveBeenCalledTimes(1);
-    expect(store.loginMethod).toBe("google");
+    expect(restored.loginMethod).toBe("private-key");
+    expect(restored.pkHex).toBe(PRIVATE_PUBKEY);
+    expect(restored.skHex).toBe(PRIVATE_KEY);
   });
 });
