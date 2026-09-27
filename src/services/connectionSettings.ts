@@ -71,7 +71,10 @@ export const DEFAULT_MEDIA_SERVERS: ReadonlyArray<Pick<MediaServer, "id" | "type
   }
 ];
 
-const RETIRED_DEFAULT_RELAY_URLS = new Set(["", "wss://relay.damus.io"]);
+const RETIRED_DEFAULT_RELAY_URLS = new Set([
+  "",
+  "wss://relay.mostr.pub"
+]);
 const RETIRED_DEFAULT_MEDIA = new Set([
   "",
   ""
