@@ -50,12 +50,11 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, computed, watch } from "vue";
+import { defineComponent, computed } from "vue";
 import { useRoute } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import { useNotificationsStore } from "@/stores/notifications";
-import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { useDirectMessagesStore } from "@/stores/directMessages";
 
 
@@ -77,14 +76,6 @@ export default defineComponent({
       if (route.meta.hideBottomNav === true) return false;
       return true; // Logged in and unlocked (or not encrypted)
     });
-
-    watch(
-      () => [keys.pkHex, notifications.loadedFor, notifications.unreadCount, directMessages.loadedFor, directMessages.unreadCount] as const,
-      ([account, loadedFor, unreadCount, directLoadedFor, directUnread]) => {
-        void syncAppBadge(accountBadgeCount(account, loadedFor, unreadCount, directLoadedFor, directUnread)).catch(() => undefined);
-      },
-      { immediate: true }
-    );
 
     function handleNavigation() {
       ui.closePostEditor();
