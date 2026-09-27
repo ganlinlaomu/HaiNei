@@ -189,7 +189,9 @@ export const useFriendshipsStore = defineStore("friendships", {
       const current = this.getRecord(peer);
       if (current?.state !== "incoming_pending") throw new Error("好友请求已失效");
       const { result, applied } = await this.sendControl(peer, "accept", current.requestEventId);
-      if (!applied.changed) throw new Error("好友请求已失效");
+      const accepted = applied.record || this.getRecord(peer);
+      const echoedOwnAccept = accepted?.state === "accepted" && accepted.acceptedEventId === result.message.id;
+      if (!applied.changed && !echoedOwnAccept) throw new Error("好友请求已失效");
       const friends = (await import("@/stores/friends")).useFriendsStore();
       if (friends.loadedFor !== this.loadedFor) {
         if (typeof indexedDB !== "undefined") await friends.load(this.loadedFor);
