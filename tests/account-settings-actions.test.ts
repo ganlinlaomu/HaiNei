@@ -12,7 +12,7 @@ describe("account actions in Settings", () => {
     expect(settings).toContain(">切换账号</button>");
     expect(settings).toContain(">添加账号</button>");
     expect(settings).toContain(">退出登录</button>");
-    expect(settings).toContain("<p>{{ nickname }} · {{ shortPk }}</p>");
+    expect(settings).toContain("<p>{{ nickname }} · {{ shortPk }} · {{ accountProtectionText }}</p>");
     expect(settings).toContain('goToAccountLogin("switch")');
     expect(settings).toContain('goToAccountLogin("add")');
     expect(settings).toContain('redirect: "/settings/system"');
