@@ -222,6 +222,41 @@ describe("friendship state and message authorization", () => {
     expect(mocks.requestCurrentProfile).toHaveBeenCalledWith(PEER);
   });
 
+  it("treats an echoed own accept as success and still creates contact metadata", async () => {
+    const friendships = useFriendshipsStore();
+    const friends = useFriendsStore();
+    friendships.loadedFor = ACCOUNT;
+    friendships.records = [{
+      accountPubkey: ACCOUNT, peerPubkey: PEER, state: "incoming_pending",
+      requestEventId: "request-event", updatedAt: 1,
+    }];
+    friends.loadedFor = ACCOUNT;
+    friends.list = [];
+    const ensureMetadata = vi.spyOn(friends, "ensureMetadata");
+
+    mocks.send.mockImplementationOnce(async (options: any) => {
+      const echoed = {
+        id: "echoed-accept",
+        senderPubkey: ACCOUNT,
+        recipientPubkeys: [PEER],
+        conversationId: "control",
+        plaintext: options.content,
+        createdAt: Math.floor(Date.now() / 1000),
+        protocol: "nip17",
+        transportKind: 1059,
+        transportEventId: "echoed-accept-wrap",
+        rumorId: "echoed-accept",
+        tags: options.tags || [],
+      } as CanonicalMessage;
+      await friendships.processFriendshipMessage(echoed);
+      return { message: echoed, events: [], relayResults: [] };
+    });
+
+    await expect(friendships.acceptRequest(PEER)).resolves.toMatchObject({ message: { id: "echoed-accept" } });
+    expect(friendships.getState(PEER)).toBe("accepted");
+    expect(ensureMetadata).toHaveBeenCalledWith({ pubkey: PEER, name: `${PEER.slice(0, 8)}…` });
+  });
+
   it("deduplicates repeated acceptance and blocks a conflicting relationship action while publish is in flight", async () => {
     let finishSend!: (value: any) => void;
     mocks.send.mockImplementationOnce(() => new Promise(resolve => { finishSend = resolve; }));
