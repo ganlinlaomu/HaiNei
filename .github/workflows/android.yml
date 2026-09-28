@@ -33,14 +33,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  debug-apk:
-    name: Build installable debug APK
+  android-apk:
+    name: Build Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       VITE_HAINEI_WORKER_URL: https://hainei-media.noster.workers.dev
+      HAINEI_KEYSTORE_BASE64: ${{ secrets.HAINEI_ANDROID_KEYSTORE_BASE64 }}
+      HAINEI_KEYSTORE_PASSWORD: ${{ secrets.HAINEI_ANDROID_KEYSTORE_PASSWORD }}
+      HAINEI_KEY_ALIAS: ${{ secrets.HAINEI_ANDROID_KEY_ALIAS }}
+      HAINEI_KEY_PASSWORD: ${{ secrets.HAINEI_ANDROID_KEY_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -106,7 +110,44 @@ jobs:
           ./.capacitor-ci/node_modules/.bin/cap add android
           ./.capacitor-ci/node_modules/.bin/cap sync android
 
+      - name: Prepare Android build metadata
+        run: |
+          BASE_VERSION="$(node -p "require('./package.json').version")"
+          VERSION_CODE="$((100000 + GITHUB_RUN_NUMBER))"
+          echo "HAINEI_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "HAINEI_VERSION_NAME=$BASE_VERSION+$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Prepare release signing
+        run: |
+          READY=false
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            && [ -n "$HAINEI_KEYSTORE_BASE64" ] \
+            && [ -n "$HAINEI_KEYSTORE_PASSWORD" ] \
+            && [ -n "$HAINEI_KEY_ALIAS" ] \
+            && [ -n "$HAINEI_KEY_PASSWORD" ]; then
+            KEYSTORE_FILE="$RUNNER_TEMP/hainei-release.jks"
+            printf '%s' "$HAINEI_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
+            test -s "$KEYSTORE_FILE"
+            echo "HAINEI_KEYSTORE_FILE=$KEYSTORE_FILE" >> "$GITHUB_ENV"
+            echo "HAINEI_ENABLE_RELEASE_SIGNING=1" >> "$GITHUB_ENV"
+            READY=true
+          else
+            echo "HAINEI_ENABLE_RELEASE_SIGNING=0" >> "$GITHUB_ENV"
+          fi
+          echo "HAINEI_SIGNING_READY=$READY" >> "$GITHUB_ENV"
+
+      - name: Patch native updater and version
+        run: node scripts/patch-android-update.mjs
+
+      - name: Build signed release APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.HAINEI_SIGNING_READY == 'true'
+        run: |
+          chmod +x android/gradlew
+          cd android
+          ./gradlew assembleRelease --no-daemon
+
       - name: Build debug APK
+        if: github.event_name != 'push' || github.ref != 'refs/heads/main' || env.HAINEI_SIGNING_READY != 'true'
         run: |
           chmod +x android/gradlew
           cd android
@@ -115,27 +156,59 @@ jobs:
       - name: Prepare APK artifact
         run: |
           mkdir -p artifacts
-          cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/HaiNei-debug.apk
+          if [ "$HAINEI_SIGNING_READY" = "true" ] && [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk artifacts/HaiNei.apk
+          else
+            cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/HaiNei-debug.apk
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: HaiNei-debug-apk
-          path: artifacts/HaiNei-debug.apk
+          name: HaiNei-android-apk
+          path: artifacts/*.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish rolling GitHub Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Generate update manifest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.HAINEI_SIGNING_READY == 'true'
+        run: |
+          SHA256="$(sha256sum artifacts/HaiNei.apk | awk '{print $1}')"
+          NOTES="$(git log -1 --pretty=%s)"
+          node scripts/generate-android-update-manifest.mjs \
+            artifacts/update.json \
+            "$HAINEI_VERSION_CODE" \
+            "$HAINEI_VERSION_NAME" \
+            "$SHA256" \
+            "$GITHUB_SHA" \
+            "$NOTES"
+
+      - name: Publish rolling signed GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.HAINEI_SIGNING_READY == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           RELEASE_TAG="android-latest"
-          RELEASE_TITLE="HaiNei Android Latest"
-          RELEASE_NOTES="Latest installable HaiNei debug APK from main. Commit: ${GITHUB_SHA}"
+          RELEASE_TITLE="HaiNei Android Latest · $HAINEI_VERSION_NAME"
+          NOTES_FILE="$RUNNER_TEMP/android-release-notes.txt"
+          printf 'Latest signed HaiNei Android APK.\n\nVersion: %s\nVersion code: %s\nCommit: %s\n' \
+            "$HAINEI_VERSION_NAME" "$HAINEI_VERSION_CODE" "$GITHUB_SHA" > "$NOTES_FILE"
+
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" artifacts/HaiNei-debug.apk --clobber
-            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes "$RELEASE_NOTES" --latest
+            git tag -f "$RELEASE_TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$RELEASE_TAG" --force
+            gh release upload "$RELEASE_TAG" artifacts/HaiNei.apk artifacts/update.json --clobber
+            gh release delete-asset "$RELEASE_TAG" HaiNei-debug.apk -y >/dev/null 2>&1 || true
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes-file "$NOTES_FILE" --latest
           else
-            gh release create "$RELEASE_TAG" artifacts/HaiNei-debug.apk               --target "$GITHUB_SHA"               --title "$RELEASE_TITLE"               --notes "$RELEASE_NOTES"               --latest
+            gh release create "$RELEASE_TAG" artifacts/HaiNei.apk artifacts/update.json \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes-file "$NOTES_FILE" \
+              --latest
           fi
+
+      - name: Warn when release signing is not configured
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.HAINEI_SIGNING_READY != 'true'
+        run: |
+          echo "::warning::Signed Android release was not published. Configure HAINEI_ANDROID_KEYSTORE_BASE64, HAINEI_ANDROID_KEYSTORE_PASSWORD, HAINEI_ANDROID_KEY_ALIAS, and HAINEI_ANDROID_KEY_PASSWORD."
