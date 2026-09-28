@@ -84,7 +84,7 @@ import { useProfilesStore } from "@/stores/profiles";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
-import { isDmReceiptMessage } from "@/nostr/messaging/dmReceipts";
+import { isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
 import { isAuthorizedCanonicalDirectMessage, useDirectMessagesStore } from "@/stores/directMessages";
 import { buildHeightPrefix, resolveVirtualRange, updateHeightPrefix } from "@/utils/virtualFeed";
 
@@ -142,7 +142,10 @@ export default defineComponent({
     const lastSeenCreatedAt = ref(0); // Track the watermark for filtering pending messages
     const inboxRevision = computed(() => msgs.inboxRevision);
     const feedPreferenceRevision = computed(() => feedPreferences.revision);
-    const visibleInbox = () => msgs.inbox.filter(message => !isDirectMessageTags(message.tags) && feedPreferences.isVisible(message));
+    const isHomeRenderable = (message: InboxItem) => !isDirectMessageTags(message.tags)
+      && !isDmReceiptMessage({ tags: message.tags })
+      && !isDmReceiptPayload(message.content);
+    const visibleInbox = () => msgs.inbox.filter(message => isHomeRenderable(message) && feedPreferences.isVisible(message));
 
     const status = ref("未连接");
     let homeAccountPk = "";
@@ -198,7 +201,7 @@ export default defineComponent({
           ? msgs.inbox[0]
           : msgs.inbox.find(message => message.id === mutation.itemId);
         if (inserted
-          && !isDirectMessageTags(inserted.tags)
+          && isHomeRenderable(inserted)
           && feedPreferences.isVisible(inserted)
           && !next.some(message => message.id === inserted.id)) {
           next = insertSortedHomeMessage(next, inserted);
