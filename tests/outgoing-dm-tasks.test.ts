@@ -51,7 +51,12 @@ vi.mock("@/repositories/syncedMessageRepository", () => ({
   },
 }));
 vi.mock("@/repositories/metaRepository", () => ({
-  metaRepository: { get: vi.fn(async () => undefined), put: vi.fn(async () => undefined) },
+  metaRepository: {
+    get: vi.fn(async () => undefined),
+    put: vi.fn(async () => undefined),
+    delete: vi.fn(async () => undefined),
+    listPrefix: vi.fn(async () => []),
+  },
 }));
 
 import { useDirectMessagesStore } from "@/stores/directMessages";
