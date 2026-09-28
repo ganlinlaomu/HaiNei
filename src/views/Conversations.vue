@@ -48,7 +48,7 @@
           <ProfileAvatar :pubkey="conversation.peerPubkey" :local-name="localName(conversation.peerPubkey)" :size="48" />
           <span class="conversation-copy">
             <strong>{{ displayName(conversation.peerPubkey) }}</strong>
-            <span class="preview">{{ preview(conversation.latest) }}</span>
+            <span class="preview">{{ preview(conversation.latest, conversation.draft) }}</span>
           </span>
           <span class="conversation-meta">
             <time>{{ formatRelativeTime(conversation.latest.created_at) }}</time>
@@ -71,7 +71,7 @@ import { useRouter } from "vue-router";
 import NewConversationSheet from "@/components/NewConversationSheet.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { directMessagePreview } from "@/nostr/messaging/directMessages";
-import { buildDirectConversationSummaries, useDirectMessagesStore } from "@/stores/directMessages";
+import { buildDirectConversationSummaries, useDirectMessagesStore, type DmDraft } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
@@ -93,16 +93,47 @@ const ui = useUIStore();
 const searchQuery = ref("");
 const filterMode = ref<"all" | "unread">("all");
 const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
-const conversations = computed(() => buildDirectConversationSummaries(
+const canonicalConversations = computed(() => buildDirectConversationSummaries(
   directMessages.conversationItems(),
   keys.pkHex,
   directMessages.unreadByConversation,
   { friendshipRecords: friendships.records, preferencesByPeer: directMessages.preferencesByPeer },
 ));
+const conversations = computed(() => {
+  const existing = new Set(canonicalConversations.value.map(item => item.peerPubkey));
+  const rows = canonicalConversations.value.map(item => ({
+    ...item,
+    draft: directMessages.draftsByPeer[item.peerPubkey],
+  }));
+  for (const [peerPubkey, draft] of Object.entries(directMessages.draftsByPeer)) {
+    if (!draft || existing.has(peerPubkey) || !friendships.isAccepted(peerPubkey) || directMessages.preferencesByPeer[peerPubkey]?.hidden) continue;
+    rows.push({
+      peerPubkey,
+      conversationId: `draft:${peerPubkey}`,
+      latest: {
+        id: `draft:${peerPubkey}`,
+        pubkey: keys.pkHex,
+        recipientPubkeys: [peerPubkey],
+        created_at: Math.floor(draft.updatedAt / 1000),
+        content: "",
+        protocol: "nip17" as const,
+        transportKind: 1059,
+        tags: [["t", "hainei-dm"]],
+      },
+      unread: 0,
+      draft,
+    });
+  }
+  return rows.sort((a, b) => b.latest.created_at - a.latest.created_at || a.latest.id.localeCompare(b.latest.id));
+});
 const friendByPubkey = computed(() => new Map(friends.list.map(friend => [friend.pubkey, friend])));
 const localName = (pubkey: string) => friendByPubkey.value.get(pubkey)?.name;
 const displayName = (pubkey: string) => privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey));
-const preview = (message: InboxItem) => {
+const preview = (message: InboxItem, draft?: DmDraft) => {
+  if (draft) {
+    const text = draft.text.trim() || (draft.replyTo ? "引用回复" : "");
+    if (text) return `草稿：${text}`;
+  }
   if (message.outgoing?.state === "uploading") return "[图片] · 上传中…";
   if (message.outgoing?.state === "sending") return message.outgoing.hasImage ? "[图片] · 发送中…" : "消息发送中…";
   if (message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed") return "发送失败";
@@ -134,6 +165,8 @@ async function load() {
   const account = keys.pkHex;
   if (!account) return;
   await loadAccountStoresOnce(account, [messages, friendships, friends, profiles]);
+  if (keys.pkHex !== account) return;
+  await directMessages.refresh(account);
 }
 function openConversation(pubkey: string) {
   if (isSwipeOpen(pubkey)) {
@@ -175,6 +208,6 @@ onDeactivated(() => {
 .conversations-page{width:100%;min-height:100%;margin:0 auto;box-sizing:border-box;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 28px);background:#fff;color:#0f1419}
 .page-header{position:sticky;top:0;z-index:4;display:flex;align-items:center;justify-content:space-between;min-height:54px;padding:0 16px;background:rgba(255,255,255,.97)}.page-header h1{margin:0;font-size:21px;font-weight:750}.conversation-filter{display:flex;min-height:36px;align-items:center;gap:2px;padding:0 2px 0 10px;border:0;border-radius:999px;background:transparent;color:#536471;font-size:14px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}.conversation-filter:active{background:#f1f5f9}.conversation-filter span{font-size:16px;line-height:1;transform:translateY(-1px)}
 .conversation-search{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:9px;margin:4px 16px 10px;padding:0 13px;border-radius:999px;background:#eff3f4;color:#536471}.conversation-search svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}.conversation-search input{width:100%;height:42px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:15px}.conversation-search input::placeholder{color:#536471}
-.conversation-list{display:flex;width:100%;flex-direction:column;border-top:1px solid #eff1f3}.conversation-row{position:relative;width:100%;min-height:72px;overflow:hidden;border-bottom:1px solid #eff1f3;background:#fff;color:#0f1419;touch-action:pan-y}.swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:120px}.action{width:60px;border:0;color:#fff;font-size:12px;font-weight:650}.action.hide{background:#536471}.action.delete{background:#f4212e}.conversation-main{position:relative;z-index:1;display:grid;width:100%;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:12px;min-width:0;min-height:72px;padding:11px 16px;border:0;background:#fff;color:inherit;text-align:left;cursor:pointer;transition:transform .2s ease}.conversation-main:active{background:#f7f9f9}.conversation-copy{display:flex;min-width:0;flex-direction:column;gap:4px}.conversation-copy strong,.preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.conversation-copy strong{font-size:15px}.preview{color:#536471;font-size:13px}.conversation-meta{display:flex;align-items:flex-end;gap:7px;flex-direction:column;color:#536471;font-size:11px}.unread-badge{display:grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#1d9bf0;color:#fff;font-size:10px;font-weight:700}
+.conversation-list{display:flex;width:100%;flex-direction:column;border-top:1px solid #eff1f3}.conversation-row{position:relative;width:100%;min-height:72px;overflow:hidden;border-bottom:1px solid #eff1f3;background:#fff;color:#0f1419;touch-action:pan-y}.swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:120px}.action{width:60px;border:0;color:#fff;font-size:12px;font-weight:650}.action.hide{background:#536471}.action.delete{background:#f4212e}.conversation-main{position:relative;z-index:1;display:grid;width:100%;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:12px;min-width:0;min-height:72px;padding:11px 16px;border:0;background:#fff;color:inherit;text-align:left;cursor:pointer;transition:transform .2s ease}.conversation-main:active{background:#f7f9f9}.conversation-copy{display:flex;min-width:0;flex-direction:column;gap:4px}.conversation-copy strong,.preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.conversation-copy strong{font-size:15px}.preview{color:#536471;font-size:13px}.preview::first-letter{font-variant:normal}.conversation-meta{display:flex;align-items:flex-end;gap:7px;flex-direction:column;color:#536471;font-size:11px}.unread-badge{display:grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#1d9bf0;color:#fff;font-size:10px;font-weight:700}
 .empty-state{display:flex;min-height:44vh;align-items:center;justify-content:center;flex-direction:column;gap:7px;padding:24px;color:#536471;text-align:center}.empty-state strong{color:#0f1419;font-size:19px}.empty-state span{font-size:14px}.empty-action{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:#0f1419;color:#fff;font-size:14px;font-weight:650}.search-empty{padding:48px 20px;color:#536471;font-size:14px;text-align:center}
 </style>
