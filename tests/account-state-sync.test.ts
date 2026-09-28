@@ -104,6 +104,23 @@ describe("encrypted account-state materialization", () => {
     expect((await db.accountStateMirrors.get([ACCOUNT, "settings"]))?.data).toEqual(stored.settings);
   });
 
+  it("keeps the newest read-receipt privacy choice across devices", () => {
+    const merged = mergeNamespaceData("settings", {
+      relays: [], mediaServers: [],
+      privacy: { readReceipts: false, updatedAt: 20, updatedBy: "phone" },
+    }, {
+      relays: [], mediaServers: [],
+      privacy: { readReceipts: true, updatedAt: 10, updatedBy: "tablet" },
+    });
+    expect(merged.privacy.readReceipts).toBe(false);
+
+    const newerRemote = mergeNamespaceData("settings", merged, {
+      relays: [], mediaServers: [],
+      privacy: { readReceipts: true, updatedAt: 30, updatedBy: "tablet" },
+    });
+    expect(newerRemote.privacy.readReceipts).toBe(true);
+  });
+
   it("keeps newer local friend metadata when a stale D1 snapshot is restored", async () => {
     await db.accountFriends.put({
       accountPubkey: ACCOUNT,
