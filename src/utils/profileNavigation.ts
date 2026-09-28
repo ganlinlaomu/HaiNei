@@ -4,10 +4,9 @@ function normalized(pubkey: string) {
   return pubkey.trim().toLowerCase();
 }
 
-export function profileLocation(accountPubkey: string, ownerPubkey: string) {
-  const account = normalized(accountPubkey);
+export function profileLocation(_accountPubkey: string, ownerPubkey: string) {
   const owner = normalized(ownerPubkey);
-  return owner === account ? "/settings/profile" : `/profile/${owner}`;
+  return `/profile/${owner}`;
 }
 
 export function canViewPrivateProfile(
