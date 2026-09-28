@@ -7,7 +7,7 @@ import {
 } from "@/db/dexie";
 import { accountStateRepository } from "@/repositories/accountStateRepository";
 import { deviceStorage } from "@/services/deviceStorage";
-import { migrateConnectionSettings } from "@/services/connectionSettings";
+import { migrateConnectionSettings, SETTINGS_VERSION } from "@/services/connectionSettings";
 
 export const ACCOUNT_STATE_NAMESPACES: AccountStateNamespace[] = [
   "friendships", "friend_metadata", "own_profile", "settings", "bookmarks",
@@ -177,7 +177,7 @@ export async function materializeAccountState(account: string, namespace: Accoun
   } else if (namespace === "own_profile" && materializedData?.ownerPubkey === account) {
     await db.accountProfiles.put({ ...materializedData, accountPubkey: account });
   } else if (namespace === "settings") {
-    deviceStorage.setItem(`nostr_settings_${account}`, JSON.stringify({ version: 3, settings: materializedData, lastSyncTimestamp: Date.now() }));
+    deviceStorage.setItem(`nostr_settings_${account}`, JSON.stringify({ version: SETTINGS_VERSION, settings: materializedData, lastSyncTimestamp: Date.now() }));
   } else if (namespace === "bookmarks") {
     await db.accountBookmarks.bulkPut((materializedData || []).map((record: BookmarkRecord) => ({ ...record, accountPubkey: account })));
   } else if (namespace === "feed_preferences") {
