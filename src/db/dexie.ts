@@ -184,6 +184,7 @@ export type OutgoingDmTaskRecord = {
   localId: string;
   peerPubkey: string;
   text: string;
+  replyTo?: string;
   imageBytes?: ArrayBuffer;
   imageName?: string;
   imageType?: string;

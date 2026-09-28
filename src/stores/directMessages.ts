@@ -82,6 +82,7 @@ function taskInboxItem(task: OutgoingDmTaskRecord): InboxItem {
     created_at: task.createdAt,
     content: taskContent(task),
     conversationId: `local:${task.peerPubkey}`,
+    replyTo: task.replyTo,
     protocol: "nip17",
     transportKind: 1059,
     tags: [["t", DIRECT_MESSAGE_TYPE]],
@@ -123,6 +124,7 @@ export function matchOutgoingTasksToCanonical(
     const peer = directMessagePeer({ senderPubkey: message.pubkey, recipientPubkeys: message.recipientPubkeys || [] }, accountPubkey);
     const matchIndex = unmatchedTasks.findIndex(task => task.peerPubkey === peer
       && task.createdAt === message.created_at
+      && task.replyTo === message.replyTo
       && taskContent(task) === message.content);
     if (matchIndex < 0) continue;
     const [task] = unmatchedTasks.splice(matchIndex, 1);
@@ -136,7 +138,8 @@ function canonicalInboxItem(result: PublishedMessage): InboxItem {
     id: result.message.id, pubkey: result.message.senderPubkey, created_at: result.message.createdAt,
     content: result.message.plaintext || "", protocol: "nip17", transportKind: result.message.transportKind,
     rumorId: result.message.rumorId, recipientPubkeys: result.message.recipientPubkeys,
-    conversationId: result.message.conversationId, tags: result.message.tags,
+    conversationId: result.message.conversationId, replyTo: result.message.replyTo,
+    rootId: result.message.rootId, tags: result.message.tags,
   };
 }
 function ensureResumeListeners() {
@@ -584,7 +587,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       for (const item of items) if (item.conversationId) this.unreadByConversation[item.conversationId] = 0;
       await this.markPeerRead(peer);
     },
-    send(peerPubkey: string, content: string, image?: File) {
+    send(peerPubkey: string, content: string, image?: File, replyTo?: string) {
       const keys = useKeyStore();
       const account = keys.pkHex.toLowerCase();
       const peer = peerPubkey.trim().toLowerCase();
@@ -598,6 +601,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         localId: createLocalId(),
         peerPubkey: peer,
         text,
+        ...(replyTo ? { replyTo } : {}),
         ...(image ? { imageName: image.name, imageType: image.type } : {}),
         state: image ? "uploading" : "sending",
         createdAt: Math.floor(now / 1000),
@@ -638,7 +642,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       })();
       return task.localId;
     },
-    sendAudio(peerPubkey: string, recording: { blob: Blob; mime: string; duration: number; size: number }) {
+    sendAudio(peerPubkey: string, recording: { blob: Blob; mime: string; duration: number; size: number }, replyTo?: string) {
       const keys = useKeyStore();
       const account = keys.pkHex.toLowerCase();
       const peer = peerPubkey.trim().toLowerCase();
@@ -653,6 +657,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         localId: createLocalId(),
         peerPubkey: peer,
         text: "",
+        ...(replyTo ? { replyTo } : {}),
         mediaType: "audio",
         audioMime: recording.mime,
         audioDuration: recording.duration,
@@ -824,6 +829,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
             ? await publishQueuedOutgoing(account, task.outgoingId, "message")
             : await sendDirectMessage({
               recipientPubkeys: [task.peerPubkey], content, createdAt: task.createdAt,
+              replyTo: task.replyTo,
               tags: [["t", DIRECT_MESSAGE_TYPE]], relays: getRelaysFromStorage("write"), pushCategory: "message",
               context: { senderPubkey: account, nip44Encrypt: keys.supportsNip44 ? keys.nip44Encrypt.bind(keys) : undefined, signEvent: keys.signEvent.bind(keys) },
               onQueued: async outgoingId => { await this.patchTask(localId, { outgoingId }); },

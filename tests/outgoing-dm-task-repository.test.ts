@@ -13,6 +13,7 @@ function pending(accountPubkey = ACCOUNT): OutgoingDmTaskRecord {
     localId: "local-1",
     peerPubkey: "c".repeat(64),
     text: "pending",
+    replyTo: "d".repeat(64),
     imageBytes: bytes("image"),
     imageName: "photo.jpg",
     imageType: "image/jpeg",
@@ -41,7 +42,7 @@ describe("account-scoped outgoing DM task persistence", () => {
   it("persists only ArrayBuffer image and prepared data", async () => {
     await outgoingDmTaskRepository.put(pending());
     const restored = await outgoingDmTaskRepository.get(ACCOUNT, "local-1");
-    expect(restored).toMatchObject({ state: "uploading", imageName: "photo.jpg", text: "pending" });
+    expect(restored).toMatchObject({ state: "uploading", imageName: "photo.jpg", text: "pending", replyTo: "d".repeat(64) });
     expect(new TextDecoder().decode(restored!.imageBytes)).toBe("image");
     expect(new TextDecoder().decode(restored!.preparedImage!.encryptedBytes)).toBe("encrypted");
     expect(containsBlob(restored)).toBe(false);
