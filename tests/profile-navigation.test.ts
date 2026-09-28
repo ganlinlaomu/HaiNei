@@ -6,8 +6,8 @@ const FRIEND = "b".repeat(64);
 const STRANGER = "c".repeat(64);
 
 describe("private profile navigation", () => {
-  it("opens the editor for the current account", () => {
-    expect(profileLocation(ACCOUNT, ACCOUNT)).toBe("/settings/profile");
+  it("opens the profile view for the current account", () => {
+    expect(profileLocation(ACCOUNT, ACCOUNT)).toBe(`/profile/${ACCOUNT}`);
   });
 
   it("opens the read-only profile route for an accepted friend", () => {
