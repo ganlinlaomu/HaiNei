@@ -7,6 +7,7 @@ import {
   decodeDmReceipt,
   dmReceiptTags,
   isDmReceiptMessage,
+  isDmReceiptPayload,
   serializeDmReceipt,
 } from "@/nostr/messaging/dmReceipts";
 import { createHomeMessageHandler } from "@/nostr/messaging/homeDelivery";
@@ -46,7 +47,9 @@ describe("encrypted DM receipts", () => {
       upTo: { createdAt: 100, messageId: FIRST },
     });
 
-    expect(decodeDmReceipt({ ...delivered, tags: [["t", "hainei-dm"]] })).toBeNull();
+    const legacyPayload = serializeDmReceipt("read", { createdAt: 100, messageId: FIRST });
+    expect(isDmReceiptPayload(legacyPayload)).toBe(true);
+    expect(decodeDmReceipt({ ...delivered, plaintext: legacyPayload, tags: [["t", "hainei-dm"]] })).toBeNull();
     expect(decodeDmReceipt({
       ...delivered,
       plaintext: JSON.stringify({
