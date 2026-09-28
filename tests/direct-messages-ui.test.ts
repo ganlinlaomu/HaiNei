@@ -460,6 +460,35 @@ describe("direct-message navigation and UI contract", () => {
     expect(conversations).toContain("`/messages/${pubkey}`");
   });
 
+  it("provides local in-chat search and per-peer durable drafts without Relay search", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const meta = readFileSync(join(process.cwd(), "src/repositories/metaRepository.ts"), "utf8");
+
+    expect(chat).toContain('aria-label="搜索当前聊天"');
+    expect(chat).toContain('placeholder="搜索当前聊天"');
+    expect(chat).toContain("scheduleSearch");
+    expect(chat).toContain("directMessages.searchPeerMessages(peerPubkey.value, query)");
+    expect(chat).toContain("directMessages.loadPeerMessageContext(peerPubkey.value, messageId, 20)");
+    expect(chat).toContain("searchContextActive");
+    expect(chat).toContain("if (searchContextActive.value)");
+    expect(chat).toContain("await focusMessage(messageId)");
+    expect(chat).toContain("'message-highlight': highlightedMessageId === message.id");
+    expect(chat).toContain("watch([draft, replyingToId], scheduleDraftSave)");
+    expect(chat).toContain("}, 300)");
+    expect(chat).toContain("directMessages.saveDraft(peer, { text, replyTo }, account)");
+    expect(chat).toContain('window.addEventListener("pagehide", handlePageHide)');
+    expect(store).toContain("syncedMessageRepository.listConversation(account, conversationId)");
+    expect(store).toContain('value.normalize("NFKC").toLocaleLowerCase()');
+    expect(store).toContain('const DRAFT_PREFIX = "dm-draft:"');
+    expect(store).toContain("clearDraftThrough(peer, now, account)");
+    expect(meta).toContain("listPrefix(accountPubkey: string, prefix: string)");
+    expect(conversations).toContain("directMessages.draftsByPeer");
+    expect(conversations).toContain("草稿：");
+    expect(store).not.toContain("searchDirectMessagesOnRelay");
+  });
+
   it("keeps the latest private message visible when the composer receives focus", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain('@focus="handleComposerFocus"');
