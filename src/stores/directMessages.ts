@@ -366,17 +366,17 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (receiptTimers.has(key)) return;
       const timer = setTimeout(() => {
         receiptTimers.delete(key);
-        void this.flushReceipt(peer, status, key);
+        void this.flushReceipt(account, peer, status, key);
       }, 500);
       receiptTimers.set(key, timer);
     },
-    async flushReceipt(peerPubkey: string, status: DmReceiptStatus, queueKey?: string) {
-      const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
+    async flushReceipt(accountPubkey: string, peerPubkey: string, status: DmReceiptStatus, queueKey?: string) {
+      const account = accountPubkey.toLowerCase();
       const peer = peerPubkey.toLowerCase();
       const key = queueKey || receiptQueueKey(account, peer, status);
       const upTo = pendingReceiptCursors.get(key);
       pendingReceiptCursors.delete(key);
-      if (!upTo || !account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      if (!upTo || !account || useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return;
       const friendships = useFriendshipsStore();
       if (friendships.loadedFor !== account) await friendships.load(account);
       if (!friendships.isAccepted(peer)) return;
