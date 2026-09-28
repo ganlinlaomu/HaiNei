@@ -1,23 +1,66 @@
 <template>
   <main class="chat-page">
-    <header class="chat-header">
-      <button type="button" class="back-button" aria-label="返回私信列表" @click="router.back()">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
-      </button>
-      <button class="peer-profile avatar-profile-link" type="button" :aria-label="`查看 ${displayName} 的个人资料`" @click="openPeerProfile">
-        <ProfileAvatar :pubkey="peerPubkey" :local-name="localName" :size="34" />
-      </button>
-      <button class="peer-profile name-profile-link" type="button" @click="openPeerProfile">{{ displayName }}</button>
+    <header class="chat-header" :class="{ 'search-mode': searchOpen }">
+      <template v-if="searchOpen">
+        <button type="button" class="back-button" aria-label="关闭聊天搜索" @click="closeSearch">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+        </button>
+        <label class="chat-search-field">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+          <input
+            ref="searchInput"
+            v-model="searchQuery"
+            type="search"
+            autocomplete="off"
+            placeholder="搜索当前聊天"
+            aria-label="搜索当前聊天"
+            @input="scheduleSearch"
+            @keydown.esc="closeSearch"
+          />
+        </label>
+        <span class="search-count">{{ searchStatusText }}</span>
+      </template>
+      <template v-else>
+        <button type="button" class="back-button" aria-label="返回私信列表" @click="router.back()">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+        </button>
+        <button class="peer-profile avatar-profile-link" type="button" :aria-label="`查看 ${displayName} 的个人资料`" @click="openPeerProfile">
+          <ProfileAvatar :pubkey="peerPubkey" :local-name="localName" :size="34" />
+        </button>
+        <button class="peer-profile name-profile-link" type="button" @click="openPeerProfile">{{ displayName }}</button>
+        <button class="header-search-button" type="button" aria-label="搜索当前聊天" @click="openSearch">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        </button>
+      </template>
+      <div v-if="searchOpen && searchQuery.trim()" class="chat-search-results">
+        <div v-if="searching" class="search-result-state">正在搜索本机消息…</div>
+        <div v-else-if="searchResults.length === 0" class="search-result-state">未找到相关消息</div>
+        <template v-else>
+          <button
+            v-for="result in searchResults"
+            :key="result.id"
+            class="chat-search-result"
+            type="button"
+            @click="selectSearchResult(result.id)"
+          >
+            <span class="search-result-meta">
+              <strong>{{ result.senderPubkey === keys.pkHex ? "你" : displayName }}</strong>
+              <time>{{ formatSearchTime(result.createdAt) }}</time>
+            </span>
+            <span class="search-result-preview">{{ result.preview }}</span>
+          </button>
+        </template>
+      </div>
     </header>
 
     <section ref="messageList" class="message-list" aria-live="polite" @scroll.passive="handleMessageScroll">
       <div v-if="!accepted" class="relationship-notice">已不是已接受的好友，无法发送新消息。</div>
       <div v-if="accepted && messages.length === 0" class="empty-chat">开始一段私密对话</div>
       <template v-for="(message, index) in windowMessages" :key="message.id">
-        <time v-if="showTimestamp(windowStart + index)" class="message-time">{{ formatMessageTime(message.created_at) }}</time>
+        <time v-if="showWindowTimestamp(index)" class="message-time">{{ formatMessageTime(message.created_at) }}</time>
         <div
           class="message-line"
-          :class="{ own: isOwn(message), 'reply-highlight': highlightedMessageId === message.id }"
+          :class="{ own: isOwn(message), 'message-highlight': highlightedMessageId === message.id }"
           :data-message-id="message.id"
           @touchstart="handleMessageTouchStart(message, $event)"
           @touchmove="handleMessageTouchMove(message, $event)"
@@ -26,7 +69,7 @@
           @contextmenu.prevent="openMessageActionMenu(message)"
         >
           <span v-if="!isOwn(message)" class="avatar-slot">
-            <button v-if="showAvatar(windowStart + index)" class="message-avatar-link" type="button" :aria-label="`查看 ${displayName} 的个人资料`" @click="openPeerProfile">
+            <button v-if="showWindowAvatar(index)" class="message-avatar-link" type="button" :aria-label="`查看 ${displayName} 的个人资料`" @click="openPeerProfile">
               <ProfileAvatar :pubkey="peerPubkey" :local-name="localName" :size="28" />
             </button>
           </span>
@@ -188,7 +231,7 @@ import DmAudioMessage from "@/components/DmAudioMessage.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { directMessagePreview } from "@/nostr/messaging/directMessages";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
-import { useDirectMessagesStore } from "@/stores/directMessages";
+import { useDirectMessagesStore, type DmSearchResult } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
@@ -220,11 +263,23 @@ const accepted = computed(() => friendships.loadedFor === keys.pkHex && friendsh
 const localName = computed(() => friends.list.find(friend => friend.pubkey === peerPubkey.value)?.name);
 const displayName = computed(() => privateProfileDisplayName(profiles.getProfile(peerPubkey.value)?.nickname, peerPubkey.value, localName.value));
 const messages = computed(() => directMessages.peerMessages(peerPubkey.value));
+const searchContextMessages = ref<InboxItem[]>([]);
+const searchContextActive = ref(false);
 const windowStart = ref(initialMessageWindowStart(messages.value.length));
-const windowMessages = computed(() => messages.value.slice(windowStart.value));
+const windowMessages = computed(() => searchContextActive.value ? searchContextMessages.value : messages.value.slice(windowStart.value));
 const draft = ref("");
 const replyingToId = ref("");
-const replyingToMessage = computed(() => messages.value.find(message => message.id === replyingToId.value));
+const draftReplyMessage = ref<InboxItem | undefined>();
+const lookupMessage = (id?: string) => id
+  ? messages.value.find(message => message.id === id) || searchContextMessages.value.find(message => message.id === id)
+  : undefined;
+const replyingToMessage = computed(() => lookupMessage(replyingToId.value) || (draftReplyMessage.value?.id === replyingToId.value ? draftReplyMessage.value : undefined));
+const searchOpen = ref(false);
+const searchQuery = ref("");
+const searchResults = ref<DmSearchResult[]>([]);
+const searching = ref(false);
+const searchInput = ref<HTMLInputElement | null>(null);
+const searchStatusText = computed(() => !searchQuery.value.trim() ? "" : searching.value ? "…" : `${searchResults.value.length} 条`);
 const selectedImage = ref<{ file: File; preview: string } | null>(null);
 const recording = shallowRef<VoiceRecordingSession | null>(null);
 const startingRecording = ref(false);
@@ -241,7 +296,7 @@ const swipingMessageId = ref("");
 const swipeOffset = ref(0);
 const highlightedMessageId = ref("");
 const actionMenuMessageId = ref("");
-const actionMenuMessage = computed(() => messages.value.find(message => message.id === actionMenuMessageId.value));
+const actionMenuMessage = computed(() => lookupMessage(actionMenuMessageId.value));
 const actionMenuCopyText = computed(() => actionMenuMessage.value ? messageText(actionMenuMessage.value.content) : "");
 const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
 const INITIAL_MESSAGE_COUNT = 60;
@@ -271,6 +326,11 @@ let recordingTimer: number | null = null;
 let recordingHealthUnsubscribe: (() => void) | null = null;
 let composerFocused = false;
 let composerFocusSettleTimer: number | null = null;
+let searchTimer: number | null = null;
+let searchGeneration = 0;
+let draftSaveTimer: number | null = null;
+let draftReady = false;
+let suppressDraftPersistence = false;
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
 const messageText = (content: string) => ["[图片]", "[语音]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
@@ -286,7 +346,7 @@ function quotePreview(message?: InboxItem) {
   return preview || (hasAudio(message) ? "[语音]" : hasMessageImage(message) ? "[图片]" : "消息");
 }
 function quotedMessage(replyTo?: string) {
-  return replyTo ? messages.value.find(message => message.id === replyTo) : undefined;
+  return lookupMessage(replyTo);
 }
 function quotedAuthor(replyTo?: string) {
   const quoted = quotedMessage(replyTo);
@@ -302,11 +362,13 @@ function canReplyTo(message: InboxItem) {
 }
 function startReply(message: InboxItem) {
   if (!canReplyTo(message)) return;
+  draftReplyMessage.value = message;
   replyingToId.value = message.id;
   void nextTick(() => textInput.value?.focus());
 }
 function cancelReply() {
   replyingToId.value = "";
+  draftReplyMessage.value = undefined;
 }
 function clearLongPressTimer() {
   if (longPressTimer !== null) window.clearTimeout(longPressTimer);
@@ -411,31 +473,44 @@ function handleMessageTouchCancel(message: InboxItem) {
   if (messageGesture?.id !== message.id) return;
   resetMessageGesture();
 }
-async function jumpToQuotedMessage(replyTo?: string) {
-  if (!replyTo) return;
-  const targetIndex = messages.value.findIndex(message => message.id === replyTo);
-  if (targetIndex < 0) {
-    ui.addToast("引用的消息暂不可用", 1_800, "info");
-    return;
-  }
-  if (targetIndex < windowStart.value) {
-    windowStart.value = Math.max(0, targetIndex - 6);
-    await nextTick();
-  }
-  const target = messageList.value?.querySelector<HTMLElement>(`[data-message-id="${replyTo}"]`);
-  if (!target) {
-    ui.addToast("引用的消息暂不可用", 1_800, "info");
-    return;
-  }
+async function highlightFocusedMessage(messageId: string) {
+  const target = messageList.value?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+  if (!target) return false;
   target.scrollIntoView({ behavior: "smooth", block: "center" });
   highlightedMessageId.value = "";
   await nextTick();
-  highlightedMessageId.value = replyTo;
+  highlightedMessageId.value = messageId;
   if (replyHighlightTimer !== null) window.clearTimeout(replyHighlightTimer);
   replyHighlightTimer = window.setTimeout(() => {
-    if (highlightedMessageId.value === replyTo) highlightedMessageId.value = "";
+    if (highlightedMessageId.value === messageId) highlightedMessageId.value = "";
     replyHighlightTimer = null;
   }, 1_250);
+  return true;
+}
+async function focusMessage(messageId: string) {
+  const targetIndex = messages.value.findIndex(message => message.id === messageId);
+  if (targetIndex >= 0) {
+    searchContextActive.value = false;
+    searchContextMessages.value = [];
+    if (targetIndex < windowStart.value) windowStart.value = Math.max(0, targetIndex - 6);
+    await nextTick();
+  } else {
+    const context = await directMessages.loadPeerMessageContext(peerPubkey.value, messageId, 20);
+    if (!context.length) {
+      ui.addToast("消息暂不可用", 1_800, "info");
+      return false;
+    }
+    searchContextMessages.value = context;
+    searchContextActive.value = true;
+    showJumpToLatest.value = true;
+    await nextTick();
+  }
+  if (await highlightFocusedMessage(messageId)) return true;
+  ui.addToast("消息暂不可用", 1_800, "info");
+  return false;
+}
+async function jumpToQuotedMessage(replyTo?: string) {
+  if (replyTo) await focusMessage(replyTo);
 }
 function openPeerProfile(event?: Event) {
   return openProfile(router, keys.pkHex, peerPubkey.value, event);
@@ -463,14 +538,17 @@ function statusLabel(message: InboxItem) {
     default: return "";
   }
 }
-function showAvatar(index: number) {
-  if (isOwn(messages.value[index])) return false;
-  const previous = messages.value[index - 1];
-  return !previous || previous.pubkey !== messages.value[index].pubkey || messages.value[index].created_at - previous.created_at > 300;
+function showWindowAvatar(index: number) {
+  const current = windowMessages.value[index];
+  if (!current || isOwn(current)) return false;
+  const previous = windowMessages.value[index - 1];
+  return !previous || previous.pubkey !== current.pubkey || current.created_at - previous.created_at > 300;
 }
-function showTimestamp(index: number) {
-  const previous = messages.value[index - 1];
-  return !previous || messages.value[index].created_at - previous.created_at > 900;
+function showWindowTimestamp(index: number) {
+  const current = windowMessages.value[index];
+  if (!current) return false;
+  const previous = windowMessages.value[index - 1];
+  return !previous || current.created_at - previous.created_at > 900;
 }
 function formatMessageTime(timestamp: number) {
   const date = new Date(timestamp * 1000);
@@ -478,6 +556,91 @@ function formatMessageTime(timestamp: number) {
 }
 function formatBubbleTime(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+function formatSearchTime(timestamp: number) {
+  return new Date(timestamp * 1000).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function clearSearchTimer() {
+  if (searchTimer !== null) window.clearTimeout(searchTimer);
+  searchTimer = null;
+}
+function openSearch() {
+  textInput.value?.blur();
+  searchOpen.value = true;
+  void nextTick(() => searchInput.value?.focus());
+}
+function closeSearch() {
+  clearSearchTimer();
+  searchGeneration += 1;
+  searchOpen.value = false;
+  searchQuery.value = "";
+  searchResults.value = [];
+  searching.value = false;
+}
+function scheduleSearch() {
+  clearSearchTimer();
+  const query = searchQuery.value.trim();
+  if (!query) {
+    searchResults.value = [];
+    searching.value = false;
+    return;
+  }
+  const generation = ++searchGeneration;
+  searching.value = true;
+  searchTimer = window.setTimeout(async () => {
+    searchTimer = null;
+    const results = await directMessages.searchPeerMessages(peerPubkey.value, query).catch(() => []);
+    if (generation !== searchGeneration || query !== searchQuery.value.trim()) return;
+    searchResults.value = results;
+    searching.value = false;
+  }, 180);
+}
+async function selectSearchResult(messageId: string) {
+  closeSearch();
+  await focusMessage(messageId);
+}
+function exitSearchContext() {
+  searchContextActive.value = false;
+  searchContextMessages.value = [];
+  resetMessageWindow();
+}
+function clearDraftSaveTimer() {
+  if (draftSaveTimer !== null) window.clearTimeout(draftSaveTimer);
+  draftSaveTimer = null;
+}
+function scheduleDraftSave() {
+  if (!draftReady || suppressDraftPersistence) return;
+  clearDraftSaveTimer();
+  const account = keys.pkHex;
+  const peer = peerPubkey.value;
+  const text = draft.value;
+  const replyTo = replyingToId.value || undefined;
+  if (!account || !peer) return;
+  draftSaveTimer = window.setTimeout(() => {
+    draftSaveTimer = null;
+    void directMessages.saveDraft(peer, { text, replyTo }, account);
+  }, 300);
+}
+function flushDraft(account: string = keys.pkHex, peer: string = peerPubkey.value) {
+  clearDraftSaveTimer();
+  if (!draftReady || suppressDraftPersistence || !account || !peer) return;
+  void directMessages.saveDraft(peer, { text: draft.value, replyTo: replyingToId.value || undefined }, account);
+}
+async function restoreDraft(account: string, peer: string) {
+  draftReady = false;
+  clearDraftSaveTimer();
+  const saved = await directMessages.loadDraft(peer, account);
+  if (disposed || keys.pkHex !== account || peerPubkey.value !== peer) return;
+  draft.value = saved?.text || "";
+  replyingToId.value = saved?.replyTo || "";
+  draftReplyMessage.value = undefined;
+  if (saved?.replyTo && !messages.value.some(message => message.id === saved.replyTo)) {
+    const context = await directMessages.loadPeerMessageContext(peer, saved.replyTo, 0);
+    if (disposed || keys.pkHex !== account || peerPubkey.value !== peer) return;
+    draftReplyMessage.value = context.find(message => message.id === saved.replyTo);
+  }
+  await nextTick();
+  draftReady = true;
 }
 function setMessageListToBottom() {
   const list = messageList.value;
@@ -550,6 +713,10 @@ async function prependOlderMessages() {
 function handleMessageScroll() {
   const list = messageList.value;
   if (!list) return;
+  if (searchContextActive.value) {
+    showJumpToLatest.value = true;
+    return;
+  }
   if (list.scrollTop <= TOP_LOAD_THRESHOLD) void prependOlderMessages();
 
   const metrics = scrollMetrics(list);
@@ -563,6 +730,7 @@ function handleMessageScroll() {
 }
 
 function jumpToLatest() {
+  exitSearchContext();
   scrollToBottom();
   void nextTick(() => directMessages.markPeerRead(peerPubkey.value));
 }
@@ -580,6 +748,8 @@ async function load() {
   }
   try {
     await Promise.all([messageStore.load(account), friendships.load(account), friends.load(account), profiles.load(account)]);
+    if (generation !== loadGeneration || account !== keys.pkHex) return;
+    await restoreDraft(account, peerPubkey.value);
     if (generation !== loadGeneration || account !== keys.pkHex) return;
     resetMessageWindow();
     await nextTick();
@@ -711,9 +881,15 @@ function submitMessage() {
     const replyTo = replyingToMessage.value?.id;
     try {
       directMessages.sendAudio(peerPubkey.value, audio, replyTo);
+      clearDraftSaveTimer();
+      suppressDraftPersistence = true;
       draft.value = "";
       clearRecordedAudio();
       cancelReply();
+      void nextTick(() => {
+        suppressDraftPersistence = false;
+        if (draft.value || replyingToId.value) scheduleDraftSave();
+      });
     } catch (error) {
       voiceError.value = error instanceof Error ? error.message : "语音发送失败";
       ui.addToast(voiceError.value, 2200, "error");
@@ -725,19 +901,35 @@ function submitMessage() {
   const replyTo = replyingToMessage.value?.id;
   try {
     directMessages.send(peerPubkey.value, text, image, replyTo);
+    clearDraftSaveTimer();
+    suppressDraftPersistence = true;
     draft.value = "";
     removeSelectedImage();
     cancelReply();
+    void nextTick(() => {
+      suppressDraftPersistence = false;
+      if (draft.value || replyingToId.value) scheduleDraftSave();
+    });
   } catch (error) {
     ui.addToast(error instanceof Error ? error.message : "发送失败，请稍后重试", 2200, "error");
   }
 }
 
+function handlePageHide() {
+  flushDraft();
+}
 onMounted(() => {
   window.visualViewport?.addEventListener("resize", handleVisualViewportResize);
+  window.addEventListener("pagehide", handlePageHide);
   void load();
 });
-watch([() => keys.pkHex, peerPubkey], () => {
+watch([draft, replyingToId], scheduleDraftSave);
+watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
+  if (previous?.[0] && previous?.[1]) flushDraft(previous[0], previous[1]);
+  draftReady = false;
+  clearDraftSaveTimer();
+  closeSearch();
+  exitSearchContext();
   cancelVoiceRecording();
   clearRecordedAudio();
   cancelReply();
@@ -769,6 +961,13 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
   const newTailCount = hasNewTail
     ? Math.max(1, previousLastIndex >= 0 ? nextIds.length - previousLastIndex - 1 : nextIds.length - previousIds.length)
     : 0;
+  if (searchContextActive.value) {
+    if (hasNewTail) {
+      showJumpToLatest.value = true;
+      pendingTailCount.value += newTailCount;
+    }
+    return;
+  }
   const followingLatest = !!list && !!previousMetrics
     && isNearMessageBottom(previousMetrics, BOTTOM_FOLLOW_THRESHOLD);
   if (list && previousMetrics && hasNewTail && followingLatest) {
@@ -784,6 +983,11 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
 });
 onBeforeUnmount(() => {
   disposed = true;
+  flushDraft();
+  draftReady = false;
+  clearDraftSaveTimer();
+  clearSearchTimer();
+  window.removeEventListener("pagehide", handlePageHide);
   window.visualViewport?.removeEventListener("resize", handleVisualViewportResize);
   handleComposerBlur();
   loadGeneration += 1;
@@ -801,14 +1005,14 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .chat-page{position:fixed;inset:0;z-index:1000;display:grid;width:100%;max-width:none;margin:0;box-sizing:border-box;grid-template-rows:auto minmax(0,1fr) auto;background:#fff;color:#0f1419}
-.chat-header{display:grid;grid-template-columns:38px 34px minmax(0,1fr);align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.peer-profile,.message-avatar-link{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.avatar-profile-link,.message-avatar-link{display:grid;place-items:center}.name-profile-link{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:16px;font-weight:700}.peer-profile:focus-visible,.message-avatar-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:6px}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
-.message-list{min-height:0;overflow-x:hidden;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0;-webkit-user-select:none;user-select:none}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.swipe-reply-indicator{display:grid;height:30px;flex:0 0 auto;place-items:center;overflow:hidden;border-radius:50%;color:#657786;transition:color 120ms ease,background 120ms ease}.swipe-reply-indicator.active{background:#e8f4fd;color:#1687e8}.swipe-reply-indicator svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.quoted-message{display:flex;width:100%;min-width:0;flex-direction:column;gap:1px;margin:0 0 6px;padding:6px 8px;border:0;border-left:3px solid #1687e8;border-radius:7px;background:rgba(255,255,255,.58);color:inherit;font:inherit;line-height:1.25;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}.quoted-message:active{background:rgba(255,255,255,.88)}.quoted-message strong{overflow:hidden;color:#536471;font-size:11px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.quoted-message span{overflow:hidden;max-width:280px;color:#536471;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.message-line.reply-highlight .message-bubble{animation:reply-target-highlight 1.25s ease-out}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:9px;font-weight:400;line-height:1.3;opacity:.85}.message-status.failed,.caption-meta.failed{color:#dc2626}.message-status.read,.caption-meta.read{color:#1687e8}.message-status button,.caption-meta button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble>.quoted-message{margin:8px 10px 6px}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}.caption-meta{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;color:#718096;font-size:9px;line-height:1.3;white-space:nowrap}
+.chat-header{position:relative;z-index:8;display:grid;grid-template-columns:38px 34px minmax(0,1fr) 38px;align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.chat-header.search-mode{grid-template-columns:38px minmax(0,1fr) auto}.header-search-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.header-search-button:active{background:#eff3f4}.header-search-button svg,.chat-search-field svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}.chat-search-field{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:7px;height:38px;padding:0 11px;border-radius:999px;background:#eff3f4;color:#536471}.chat-search-field input{min-width:0;width:100%;height:38px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:15px}.search-count{min-width:32px;color:#657786;font-size:12px;text-align:right;white-space:nowrap}.chat-search-results{position:absolute;top:54px;right:0;left:0;z-index:9;max-height:min(56vh,520px);overflow-y:auto;border-bottom:1px solid #e2e8f0;background:#fff;box-shadow:0 12px 28px rgba(15,23,42,.12)}.search-result-state{padding:28px 18px;color:#657786;font-size:13px;text-align:center}.chat-search-result{display:flex;width:100%;min-height:62px;flex-direction:column;gap:4px;padding:10px 16px;border:0;border-bottom:1px solid #eff1f3;background:#fff;color:#0f1419;text-align:left}.chat-search-result:active{background:#f7f9f9}.search-result-meta{display:flex;align-items:center;justify-content:space-between;gap:12px}.search-result-meta strong{font-size:12px}.search-result-meta time{color:#8b98a5;font-size:11px}.search-result-preview{display:-webkit-box;overflow:hidden;color:#536471;font-size:13px;line-height:1.35;-webkit-box-orient:vertical;-webkit-line-clamp:2}.peer-profile,.message-avatar-link{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.avatar-profile-link,.message-avatar-link{display:grid;place-items:center}.name-profile-link{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:16px;font-weight:700}.peer-profile:focus-visible,.message-avatar-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:6px}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.message-list{min-height:0;overflow-x:hidden;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0;-webkit-user-select:none;user-select:none}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.swipe-reply-indicator{display:grid;height:30px;flex:0 0 auto;place-items:center;overflow:hidden;border-radius:50%;color:#657786;transition:color 120ms ease,background 120ms ease}.swipe-reply-indicator.active{background:#e8f4fd;color:#1687e8}.swipe-reply-indicator svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.quoted-message{display:flex;width:100%;min-width:0;flex-direction:column;gap:1px;margin:0 0 6px;padding:6px 8px;border:0;border-left:3px solid #1687e8;border-radius:7px;background:rgba(255,255,255,.58);color:inherit;font:inherit;line-height:1.25;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}.quoted-message:active{background:rgba(255,255,255,.88)}.quoted-message strong{overflow:hidden;color:#536471;font-size:11px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.quoted-message span{overflow:hidden;max-width:280px;color:#536471;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.message-line.message-highlight .message-bubble{animation:message-target-highlight 1.25s ease-out}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:9px;font-weight:400;line-height:1.3;opacity:.85}.message-status.failed,.caption-meta.failed{color:#dc2626}.message-status.read,.caption-meta.read{color:#1687e8}.message-status button,.caption-meta button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble>.quoted-message{margin:8px 10px 6px}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}.caption-meta{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;color:#718096;font-size:9px;line-height:1.3;white-space:nowrap}
 .audio-bubble{padding:9px 10px}
 .message-action-backdrop{position:fixed;inset:0;z-index:20;display:flex;align-items:flex-end;justify-content:center;padding:16px 16px calc(16px + env(safe-area-inset-bottom));background:rgba(15,23,42,.18)}
 .message-action-menu{width:min(100%,360px);overflow:hidden;border:1px solid #e3e8ee;border-radius:16px;background:#fff;box-shadow:0 16px 44px rgba(15,23,42,.2)}
 .message-action-preview{display:flex;min-width:0;flex-direction:column;gap:2px;padding:12px 14px;border-bottom:1px solid #eef1f4}.message-action-preview strong,.message-action-preview span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.message-action-preview strong{font-size:12px;color:#0f1419}.message-action-preview span{font-size:12px;color:#657786}
 .message-action-menu>button{display:flex;width:100%;min-height:48px;align-items:center;gap:11px;padding:0 16px;border:0;border-top:1px solid #f1f3f5;background:#fff;color:#0f1419;font:inherit;font-size:15px;text-align:left}.message-action-menu>button:first-of-type{border-top:0}.message-action-menu>button:active{background:#f7f9f9}.message-action-menu>button svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
-@keyframes reply-target-highlight{0%{filter:brightness(.92);box-shadow:0 0 0 4px rgba(22,135,232,.24)}55%{filter:brightness(.98);box-shadow:0 0 0 3px rgba(22,135,232,.12)}100%{filter:none;box-shadow:0 0 0 0 rgba(22,135,232,0)}}
+@keyframes message-target-highlight{0%{filter:brightness(.92);box-shadow:0 0 0 4px rgba(22,135,232,.24)}55%{filter:brightness(.98);box-shadow:0 0 0 3px rgba(22,135,232,.12)}100%{filter:none;box-shadow:0 0 0 0 rgba(22,135,232,0)}}
 .jump-to-latest{position:absolute;right:18px;bottom:calc(94px + env(safe-area-inset-bottom));z-index:4;display:flex;min-width:42px;height:42px;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid #d8dee5;border-radius:999px;background:#fff;color:#0f1419;box-shadow:0 5px 18px rgba(15,23,42,.16);font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent}.jump-to-latest:active{background:#f7f9f9;transform:scale(.97)}.jump-to-latest>span{font-size:20px;line-height:1}.jump-to-latest strong{font-size:12px;font-weight:650;white-space:nowrap}
 .composer-region{position:relative;z-index:3;width:min(100%,720px);margin:0 auto;padding:4px 0 calc(28px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(255,255,255,0),#fff 22%)}
 .replying-preview{display:flex;min-width:0;align-items:center;gap:10px;margin:0 16px 6px;padding:7px 10px 7px 12px;border-left:3px solid #1687e8;border-radius:10px;background:#f7f9f9}.replying-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}.replying-copy strong,.replying-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.replying-copy strong{color:#0f1419;font-size:12px}.replying-copy span{color:#536471;font-size:12px}.replying-preview>button{width:30px;height:30px;flex:0 0 30px;padding:0;border:0;border-radius:50%;background:transparent;color:#536471;font-size:22px}.replying-preview>button:active{background:#e8ecef}
@@ -817,5 +1021,5 @@ onBeforeUnmount(() => {
 .composer-recording{padding-right:14px;padding-left:14px}.recording-dot{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#ef4444;animation:recording-pulse 1.2s ease-in-out infinite}.composer-recording strong{margin-right:auto;font-size:14px;font-variant-numeric:tabular-nums}.composer-recording button{min-width:58px;height:38px;border:0;background:transparent;color:#536471;font-weight:600}.composer-recording .finish-recording{color:#1687e8}.finishing-label{margin-left:auto;color:#536471;font-size:14px}.composer-preview{padding-left:10px}.composer-voice-preview{min-width:0;flex:1}.composer-preview :deep(.voice-message){min-width:0;grid-template-columns:34px minmax(70px,1fr) 36px}.remove-audio{font-size:25px;color:#64748b}
 @keyframes recording-pulse{50%{opacity:.35}}
 @media (min-width:768px){.composer-region{padding-bottom:16px}.message-list{width:min(100%,720px);margin:0 auto}}
-@media (prefers-reduced-motion:reduce){.message-line.reply-highlight .message-bubble{animation:none;box-shadow:0 0 0 3px rgba(22,135,232,.16)}}
+@media (prefers-reduced-motion:reduce){.message-line.message-highlight .message-bubble{animation:none;box-shadow:0 0 0 3px rgba(22,135,232,.16)}}
 </style>

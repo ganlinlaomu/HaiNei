@@ -1,7 +1,8 @@
 import { defineStore } from "pinia";
 import type { FriendshipRecord, OutgoingDmTaskRecord } from "@/db/dexie";
 import { getRelaysFromStorage } from "@/nostr/relays";
-import { DIRECT_MESSAGE_TYPE, canStartDirectMessage, directMessagePeer, isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { DIRECT_MESSAGE_TYPE, canStartDirectMessage, directMessagePeer, directMessagePreview, isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { deriveConversationId } from "@/nostr/messaging/protocol/common";
 import {
   cursorAfter as receiptCursorAfter,
   cursorCovers,
@@ -36,6 +37,17 @@ export type PeerReceiptState = {
   delivered?: DmReceiptCursor;
   read?: DmReceiptCursor;
 };
+export type DmDraft = {
+  text: string;
+  replyTo?: string;
+  updatedAt: number;
+};
+export type DmSearchResult = {
+  id: string;
+  createdAt: number;
+  senderPubkey: string;
+  preview: string;
+};
 export type ConversationPreference = {
   hidden: boolean;
   hiddenMode?: "hidden" | "deleted";
@@ -49,6 +61,8 @@ function readKey(conversationId: string) { return `dm-read:${conversationId}`; }
 function preferenceKey(peerPubkey: string) { return `dm-conversation:${peerPubkey}`; }
 function receiptStateKey(peerPubkey: string) { return `dm-receipt:${peerPubkey}`; }
 function sentReceiptStateKey(peerPubkey: string) { return `dm-receipt-sent:${peerPubkey}`; }
+function draftKey(peerPubkey: string) { return `dm-draft:${peerPubkey.toLowerCase()}`; }
+const DRAFT_PREFIX = "dm-draft:";
 const activeOutgoingTasks = new Map<string, Promise<void>>();
 const taskPreviewUrls = new Map<string, string>();
 const pendingReceiptCursors = new Map<string, DmReceiptCursor>();
@@ -86,6 +100,25 @@ export function receiptStatusForMessage(
   if (cursorCovers(state?.read, message)) return "read";
   if (cursorCovers(state?.delivered, message)) return "delivered";
   return "sent";
+}
+function normalizeSearchText(value: string) {
+  return value.normalize("NFKC").toLocaleLowerCase();
+}
+function recordInboxItem(record: Awaited<ReturnType<typeof syncedMessageRepository.listConversation>>[number]): InboxItem {
+  return {
+    id: record.id,
+    pubkey: record.senderPubkey,
+    recipientPubkeys: record.recipientPubkeys,
+    created_at: record.createdAt,
+    content: record.plaintext || "",
+    conversationId: record.conversationId,
+    replyTo: record.replyTo,
+    rootId: record.rootId,
+    protocol: "nip17",
+    transportKind: record.transportKind,
+    rumorId: record.rumorId,
+    tags: record.tags || [],
+  };
 }
 function persistenceError(error: unknown) {
   const wrapped = new Error(error instanceof Error ? error.message : "indexeddb write failed") as Error & { phase: string };
@@ -297,6 +330,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     preferencesByPeer: {} as Record<string, ConversationPreference | undefined>,
     receiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
     sentReceiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
+    draftsByPeer: {} as Record<string, DmDraft | undefined>,
     outgoingTasks: [] as OutgoingDmTaskRecord[],
   }),
   getters: {
@@ -326,6 +360,88 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       return [...canonical, ...this.outgoingTasks
         .filter(task => !matches.matchedLocalIds.has(task.localId))
         .map(taskInboxItem)];
+    },
+    async loadDraft(peerPubkey: string, accountPubkey?: string) {
+      const account = (accountPubkey || this.loadedFor || useKeyStore().pkHex).toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      if (!account || !peer) return undefined;
+      const stored = (await metaRepository.get(account, draftKey(peer)).catch(() => undefined))?.value as DmDraft | undefined;
+      if ((this.loadedFor || useKeyStore().pkHex.toLowerCase()) === account) {
+        this.draftsByPeer = { ...this.draftsByPeer, [peer]: stored };
+      }
+      return stored;
+    },
+    async saveDraft(peerPubkey: string, value: Pick<DmDraft, "text" | "replyTo">, accountPubkey?: string) {
+      const account = (accountPubkey || this.loadedFor || useKeyStore().pkHex).toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      if (!account || !peer) return;
+      const text = value.text || "";
+      const replyTo = value.replyTo && /^[0-9a-f]{64}$/i.test(value.replyTo) ? value.replyTo : undefined;
+      if (!text && !replyTo) return this.clearDraft(peer, account);
+      const draft: DmDraft = { text, ...(replyTo ? { replyTo } : {}), updatedAt: Date.now() };
+      await metaRepository.put(account, draftKey(peer), draft);
+      if ((this.loadedFor || useKeyStore().pkHex.toLowerCase()) === account) {
+        this.draftsByPeer = { ...this.draftsByPeer, [peer]: draft };
+      }
+      return draft;
+    },
+    async clearDraft(peerPubkey: string, accountPubkey?: string) {
+      const account = (accountPubkey || this.loadedFor || useKeyStore().pkHex).toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      if (!account || !peer) return;
+      await metaRepository.delete(account, draftKey(peer));
+      if ((this.loadedFor || useKeyStore().pkHex.toLowerCase()) === account) {
+        const next = { ...this.draftsByPeer };
+        delete next[peer];
+        this.draftsByPeer = next;
+      }
+    },
+    async clearDraftThrough(peerPubkey: string, updatedAt: number, accountPubkey?: string) {
+      const account = (accountPubkey || this.loadedFor || useKeyStore().pkHex).toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      if (!account || !peer) return;
+      const current = (await metaRepository.get(account, draftKey(peer)).catch(() => undefined))?.value as DmDraft | undefined;
+      if (!current || current.updatedAt > updatedAt) return;
+      await this.clearDraft(peer, account);
+    },
+    async searchPeerMessages(peerPubkey: string, query: string): Promise<DmSearchResult[]> {
+      const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      const needle = normalizeSearchText(query.trim());
+      if (!account || !peer || !needle) return [];
+      const friendships = useFriendshipsStore();
+      if (friendships.loadedFor !== account) await friendships.load(account);
+      const conversationId = await deriveConversationId([account, peer]);
+      const records = await syncedMessageRepository.listConversation(account, conversationId);
+      const preference = this.preferencesByPeer[peer];
+      const byId = new Map<string, InboxItem>();
+      for (const item of records.map(recordInboxItem)) byId.set(item.id, item);
+      for (const item of this.peerMessages(peer)) byId.set(item.id, item);
+      return [...byId.values()]
+        .filter(item => isDirectMessageTags(item.tags)
+          && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) === peer
+          && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
+          && afterDeletion(item, preference))
+        .map(item => ({ item, preview: directMessagePreview(item.content) }))
+        .filter(({ preview }) => !!preview && !["[图片]", "[语音]"].includes(preview) && normalizeSearchText(preview).includes(needle))
+        .map(({ item, preview }) => ({ id: item.id, createdAt: item.created_at, senderPubkey: item.pubkey, preview }))
+        .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+    },
+    async loadPeerMessageContext(peerPubkey: string, messageId: string, radius = 20) {
+      const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      if (!account || !peer || !messageId) return [] as InboxItem[];
+      const friendships = useFriendshipsStore();
+      if (friendships.loadedFor !== account) await friendships.load(account);
+      const conversationId = await deriveConversationId([account, peer]);
+      const records = await syncedMessageRepository.listConversationAround(account, conversationId, messageId, radius);
+      return records
+        .map(recordInboxItem)
+        .filter(item => isDirectMessageTags(item.tags)
+          && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) === peer
+          && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
+          && afterDeletion(item, this.preferencesByPeer[peer]))
+        .sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
     },
     outgoingReceiptStatus(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey">) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
@@ -625,6 +741,15 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         ...direct.map(item => directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account)).filter(Boolean),
         ...outgoingTasks.map(task => task.peerPubkey),
       ])] as string[];
+      const draftRecords = await metaRepository.listPrefix(account, DRAFT_PREFIX);
+      const drafts = Object.fromEntries(draftRecords.flatMap(record => {
+        const peer = record.key.slice(DRAFT_PREFIX.length).toLowerCase();
+        const value = record.value as DmDraft | undefined;
+        return peer && value && (value.text || value.replyTo) ? [[peer, value] as const] : [];
+      }));
+      const draftPeers = Object.keys(drafts);
+      for (const peer of draftPeers) if (!peers.includes(peer)) peers.push(peer);
+
       const [preferenceEntries, receiptEntries, sentReceiptEntries] = await Promise.all([
         Promise.all(peers.map(async peer => {
           const record = await metaRepository.get(account, preferenceKey(peer));
@@ -680,6 +805,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.preferencesByPeer = preferences;
       this.receiptStateByPeer = receiptStates;
       this.sentReceiptStateByPeer = sentReceiptStates;
+      this.draftsByPeer = drafts;
       this.readCursors = Object.fromEntries(cursors);
       this.unreadByConversation = Object.fromEntries(conversationIds.map(conversationId => {
         const read = this.readCursors[conversationId];
@@ -828,6 +954,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           }
           return;
         }
+        void this.clearDraftThrough(peer, now, account)
+          .catch(error => console.warn("[dm] draft cleanup failed", error instanceof Error ? error.message : "unknown error"));
         void this.runTask(task.localId);
       })();
       return task.localId;
@@ -863,6 +991,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       void (async () => {
         try {
           await outgoingDmTaskRepository.put(task);
+          void this.clearDraftThrough(peer, now, account)
+            .catch(error => console.warn("[dm] draft cleanup failed", error instanceof Error ? error.message : "unknown error"));
           const preparedAudio = await prepareEncryptedDmAudio(recording.blob, recording.duration);
           const updated = { ...task, preparedAudio, updatedAt: Date.now() };
           await outgoingDmTaskRepository.put(updated);
@@ -1081,6 +1211,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.preferencesByPeer = {};
       this.receiptStateByPeer = {};
       this.sentReceiptStateByPeer = {};
+      this.draftsByPeer = {};
       clearReceiptTimers();
       this.outgoingTasks = [];
     },

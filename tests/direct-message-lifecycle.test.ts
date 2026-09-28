@@ -23,6 +23,12 @@ vi.mock("@/repositories/metaRepository", () => ({
       return value === undefined ? undefined : { accountPubkey: account, key, value };
     }),
     put: mocks.put,
+    delete: vi.fn(async (account: string, key: string) => {
+      mocks.meta.delete(`${account}:${key}`);
+    }),
+    listPrefix: vi.fn(async (account: string, prefix: string) => [...mocks.meta.entries()]
+      .filter(([key]) => key.startsWith(`${account}:${prefix}`))
+      .map(([key, value]) => ({ accountPubkey: account, key: key.slice(account.length + 1), value }))),
   },
 }));
 vi.mock("@/nostr/relays", () => ({ getRelaysFromStorage: () => [] }));
@@ -91,6 +97,28 @@ describe("direct-message authorization and conversation lifecycle", () => {
       expect(readFileSync(join(process.cwd(), file), "utf8")).not.toContain("directMessages.refresh(");
     }
     expect(readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8")).toContain("useDirectMessagesStore().refresh(pk)");
+  });
+
+  it("keeps text/reply drafts isolated by account and peer and protects newer drafts", async () => {
+    const direct = useDirectMessagesStore();
+    direct.loadedFor = ACCOUNT;
+    const otherPeer = "c".repeat(64);
+    const otherAccount = "d".repeat(64);
+
+    const first = await direct.saveDraft(PEER, { text: "下午三点", replyTo: "1".repeat(64) }, ACCOUNT);
+    await direct.saveDraft(otherPeer, { text: "另一个好友" }, ACCOUNT);
+    await direct.saveDraft(PEER, { text: "另一个账号" }, otherAccount);
+
+    expect(direct.draftsByPeer[PEER]).toMatchObject({ text: "下午三点", replyTo: "1".repeat(64) });
+    expect(direct.draftsByPeer[otherPeer]?.text).toBe("另一个好友");
+    expect(mocks.meta.get(`${otherAccount}:dm-draft:${PEER}`)).toMatchObject({ text: "另一个账号" });
+
+    await direct.clearDraftThrough(PEER, (first?.updatedAt || 0) - 1, ACCOUNT);
+    expect(direct.draftsByPeer[PEER]?.text).toBe("下午三点");
+
+    await direct.clearDraftThrough(PEER, (first?.updatedAt || 0) + 1, ACCOUNT);
+    expect(direct.draftsByPeer[PEER]).toBeUndefined();
+    expect(mocks.meta.has(`${ACCOUNT}:dm-draft:${PEER}`)).toBe(false);
   });
 
   it("increments unread and unhides from a canonical inbox update without a full refresh", async () => {

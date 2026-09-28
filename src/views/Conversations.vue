@@ -48,7 +48,7 @@
           <ProfileAvatar :pubkey="conversation.peerPubkey" :local-name="localName(conversation.peerPubkey)" :size="48" />
           <span class="conversation-copy">
             <strong>{{ displayName(conversation.peerPubkey) }}</strong>
-            <span class="preview">{{ preview(conversation.latest) }}</span>
+            <span class="preview">{{ preview(conversation.latest, conversation.draft) }}</span>
           </span>
           <span class="conversation-meta">
             <time>{{ formatRelativeTime(conversation.latest.created_at) }}</time>
@@ -71,7 +71,7 @@ import { useRouter } from "vue-router";
 import NewConversationSheet from "@/components/NewConversationSheet.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { directMessagePreview } from "@/nostr/messaging/directMessages";
-import { buildDirectConversationSummaries, useDirectMessagesStore } from "@/stores/directMessages";
+import { buildDirectConversationSummaries, useDirectMessagesStore, type DmDraft } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
@@ -93,16 +93,47 @@ const ui = useUIStore();
 const searchQuery = ref("");
 const filterMode = ref<"all" | "unread">("all");
 const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
-const conversations = computed(() => buildDirectConversationSummaries(
+const canonicalConversations = computed(() => buildDirectConversationSummaries(
   directMessages.conversationItems(),
   keys.pkHex,
   directMessages.unreadByConversation,
   { friendshipRecords: friendships.records, preferencesByPeer: directMessages.preferencesByPeer },
 ));
+const conversations = computed(() => {
+  const existing = new Set(canonicalConversations.value.map(item => item.peerPubkey));
+  const rows = canonicalConversations.value.map(item => ({
+    ...item,
+    draft: directMessages.draftsByPeer[item.peerPubkey],
+  }));
+  for (const [peerPubkey, draft] of Object.entries(directMessages.draftsByPeer)) {
+    if (!draft || existing.has(peerPubkey) || !friendships.isAccepted(peerPubkey) || directMessages.preferencesByPeer[peerPubkey]?.hidden) continue;
+    rows.push({
+      peerPubkey,
+      conversationId: `draft:${peerPubkey}`,
+      latest: {
+        id: `draft:${peerPubkey}`,
+        pubkey: keys.pkHex,
+        recipientPubkeys: [peerPubkey],
+        created_at: Math.floor(draft.updatedAt / 1000),
+        content: "",
+        protocol: "nip17" as const,
+        transportKind: 1059,
+        tags: [["t", "hainei-dm"]],
+      },
+      unread: 0,
+      draft,
+    });
+  }
+  return rows.sort((a, b) => b.latest.created_at - a.latest.created_at || a.latest.id.localeCompare(b.latest.id));
+});
 const friendByPubkey = computed(() => new Map(friends.list.map(friend => [friend.pubkey, friend])));
 const localName = (pubkey: string) => friendByPubkey.value.get(pubkey)?.name;
 const displayName = (pubkey: string) => privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey));
-const preview = (message: InboxItem) => {
+const preview = (message: InboxItem, draft?: DmDraft) => {
+  if (draft) {
+    const text = draft.text.trim() || (draft.replyTo ? "引用回复" : "");
+    if (text) return `草稿：${text}`;
+  }
   if (message.outgoing?.state === "uploading") return "[图片] · 上传中…";
   if (message.outgoing?.state === "sending") return message.outgoing.hasImage ? "[图片] · 发送中…" : "消息发送中…";
   if (message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed") return "发送失败";

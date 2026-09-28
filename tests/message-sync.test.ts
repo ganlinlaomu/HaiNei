@@ -92,6 +92,16 @@ describe("reliable message persistence", () => {
     expect((await repo.list(ACCOUNT_A)).sort(compareMessages).map(item => item.id)).toEqual(["a", "c", "middle", "later"]);
   });
 
+  it("loads only a bounded context around an old conversation message", async () => {
+    const repo = new SyncedMessageRepository(database());
+    for (let index = 0; index < 100; index += 1) {
+      const id = String(index).padStart(3, "0");
+      await repo.insertMessageIfAbsent(ACCOUNT_A, message(id, index + 1));
+    }
+    const context = await repo.listConversationAround(ACCOUNT_A, `conversation:${PEER}`, "050", 5);
+    expect(context.map(item => item.id)).toEqual(["045", "046", "047", "048", "049", "050", "051", "052", "053", "054", "055"]);
+  });
+
   it("derives unread from read cursors and never counts self messages", async () => {
     const repo = new SyncedMessageRepository(database());
     await repo.insertMessageIfAbsent(ACCOUNT_A, message("a", 1));
