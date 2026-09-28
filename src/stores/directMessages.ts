@@ -943,7 +943,6 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         }
         try {
           await outgoingDmTaskRepository.put(durableTask);
-          await this.clearDraftIfMatches(peer, { text, replyTo }, account);
         } catch (error) {
           const index = this.outgoingTasks.findIndex(item => item.localId === task.localId && item.accountPubkey === account);
           if (index >= 0) {
@@ -956,6 +955,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           }
           return;
         }
+        void this.clearDraftIfMatches(peer, { text, replyTo }, account)
+          .catch(error => console.warn("[dm] draft cleanup failed", error instanceof Error ? error.message : "unknown error"));
         void this.runTask(task.localId);
       })();
       return task.localId;
@@ -991,7 +992,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       void (async () => {
         try {
           await outgoingDmTaskRepository.put(task);
-          await this.clearDraftIfMatches(peer, { text: "", replyTo }, account);
+          void this.clearDraftIfMatches(peer, { text: "", replyTo }, account)
+            .catch(error => console.warn("[dm] draft cleanup failed", error instanceof Error ? error.message : "unknown error"));
           const preparedAudio = await prepareEncryptedDmAudio(recording.blob, recording.duration);
           const updated = { ...task, preparedAudio, updatedAt: Date.now() };
           await outgoingDmTaskRepository.put(updated);
