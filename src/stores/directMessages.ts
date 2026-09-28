@@ -396,12 +396,12 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         this.draftsByPeer = next;
       }
     },
-    async clearDraftIfMatches(peerPubkey: string, expected: Pick<DmDraft, "text" | "replyTo">, accountPubkey?: string) {
+    async clearDraftThrough(peerPubkey: string, updatedAt: number, accountPubkey?: string) {
       const account = (accountPubkey || this.loadedFor || useKeyStore().pkHex).toLowerCase();
       const peer = peerPubkey.toLowerCase();
       if (!account || !peer) return;
       const current = (await metaRepository.get(account, draftKey(peer)).catch(() => undefined))?.value as DmDraft | undefined;
-      if (!current || current.text !== expected.text || (current.replyTo || undefined) !== (expected.replyTo || undefined)) return;
+      if (!current || current.updatedAt > updatedAt) return;
       await this.clearDraft(peer, account);
     },
     async searchPeerMessages(peerPubkey: string, query: string): Promise<DmSearchResult[]> {
@@ -955,7 +955,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           }
           return;
         }
-        void this.clearDraftIfMatches(peer, { text, replyTo }, account)
+        void this.clearDraftThrough(peer, now, account)
           .catch(error => console.warn("[dm] draft cleanup failed", error instanceof Error ? error.message : "unknown error"));
         void this.runTask(task.localId);
       })();
@@ -992,7 +992,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       void (async () => {
         try {
           await outgoingDmTaskRepository.put(task);
-          void this.clearDraftIfMatches(peer, { text: "", replyTo }, account)
+          void this.clearDraftThrough(peer, now, account)
             .catch(error => console.warn("[dm] draft cleanup failed", error instanceof Error ? error.message : "unknown error"));
           const preparedAudio = await prepareEncryptedDmAudio(recording.blob, recording.duration);
           const updated = { ...task, preparedAudio, updatedAt: Date.now() };
