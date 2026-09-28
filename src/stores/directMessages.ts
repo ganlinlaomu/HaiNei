@@ -676,7 +676,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       ensureResumeListeners();
       void this.resumePending(false);
     },
-    async markPeerRead(peerPubkey: string, emitReceipt = true) {
+    async markPeerRead(peerPubkey: string) {
+      return this.markPeerReadInternal(peerPubkey, true);
+    },
+    async markPeerReadInternal(peerPubkey: string, emitReceipt: boolean) {
       const account = useKeyStore().pkHex.toLowerCase();
       if (!account || this.loadedFor !== account) await this.refresh(account);
       const peer = peerPubkey.toLowerCase();
@@ -731,7 +734,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       await metaRepository.put(this.loadedFor, preferenceKey(peer), preference);
       this.preferencesByPeer = { ...this.preferencesByPeer, [peer]: preference };
       for (const item of items) if (item.conversationId) this.unreadByConversation[item.conversationId] = 0;
-      await this.markPeerRead(peer, false);
+      await this.markPeerReadInternal(peer, false);
     },
     async deleteConversation(peerPubkey: string) {
       const peer = peerPubkey.toLowerCase();
@@ -751,7 +754,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       await metaRepository.put(this.loadedFor, preferenceKey(peer), preference);
       this.preferencesByPeer = { ...this.preferencesByPeer, [peer]: preference };
       for (const item of items) if (item.conversationId) this.unreadByConversation[item.conversationId] = 0;
-      await this.markPeerRead(peer, false);
+      await this.markPeerReadInternal(peer, false);
     },
     send(peerPubkey: string, content: string, image?: File, replyTo?: string) {
       const keys = useKeyStore();
