@@ -1,6 +1,7 @@
 <template>
   <div class="app-root" :class="{ 'login-route': hideAppChrome, 'compose-fab-page': isPrimaryRoute }">
     <UpdateNotification />
+    <AndroidUpdateNotification />
     <HeaderBar v-if="!hideAppChrome" />
     <router-view v-slot="{ Component }">
       <keep-alive :include="['Home', 'Friends', 'Conversations', 'Notifications', 'Settings']">
@@ -55,6 +56,7 @@ import { useRoute } from "vue-router";
 import HeaderBar from "@/components/HeaderBar.vue";
 import ToastContainer from "@/components/ToastContainer.vue";
 import UpdateNotification from "@/components/UpdateNotification.vue";
+import AndroidUpdateNotification from "@/components/AndroidUpdateNotification.vue";
 import { useUIStore } from "@/stores/ui";
 import { loadPostEditor, preloadPostEditor } from "@/components/postEditorLoader";
 import { useKeyStore } from "@/stores/keys";
@@ -67,7 +69,7 @@ import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
 
 export default defineComponent({
-  components: { HeaderBar, ToastContainer, PostEditorModal, UpdateNotification },
+  components: { HeaderBar, ToastContainer, PostEditorModal, UpdateNotification, AndroidUpdateNotification },
   setup() {
     const route = useRoute();
     const ui = useUIStore();
