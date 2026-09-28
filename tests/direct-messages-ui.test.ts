@@ -99,10 +99,22 @@ describe("direct-message navigation and UI contract", () => {
     const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
     const taskRepository = readFileSync(join(process.cwd(), "src/repositories/outgoingDmTaskRepository.ts"), "utf8");
 
-    expect(chat).toContain('class="message-reply-button"');
+    expect(chat).not.toContain('class="message-reply-button"');
     expect(chat).toContain('class="quoted-message"');
+    expect(chat).toContain('@click.stop="jumpToQuotedMessage(message.replyTo)"');
     expect(chat).toContain('class="replying-preview"');
     expect(chat).toContain("replyingToId");
+    expect(chat).toContain('@touchstart="handleMessageTouchStart(message, $event)"');
+    expect(chat).toContain('@touchmove="handleMessageTouchMove(message, $event)"');
+    expect(chat).toContain("SWIPE_REPLY_THRESHOLD");
+    expect(chat).toContain("LONG_PRESS_MS");
+    expect(chat).toContain('class="message-action-menu"');
+    expect(chat).toContain("replyFromActionMenu");
+    expect(chat).toContain("copyFromActionMenu");
+    expect(chat).toContain("isMediaGestureTarget");
+    expect(chat).toContain(".post-image-preview, .optimistic-image, .voice-message");
+    expect(chat).toContain('target.scrollIntoView({ behavior: "smooth", block: "center" })');
+    expect(chat).toContain("'reply-highlight': highlightedMessageId === message.id");
     expect(chat).toContain("directMessages.send(peerPubkey.value, text, image, replyTo)");
     expect(chat).toContain("directMessages.sendAudio(peerPubkey.value, audio, replyTo)");
     expect(store).toContain("replyTo: task.replyTo");
