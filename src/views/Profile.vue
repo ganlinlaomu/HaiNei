@@ -65,6 +65,7 @@ import { useProfilesStore } from "@/stores/profiles";
 import { useMessagesStore } from "@/stores/messages";
 import { useUIStore } from "@/stores/ui";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
 import { canViewPrivateProfile } from "@/utils/profileNavigation";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { pubkeyToNpub } from "@/utils/nostrQr";
@@ -115,6 +116,8 @@ const ownerPosts = computed(() => canView.value && messages.loadedFor === keys.p
   ? messages.inbox.filter(message =>
       message.pubkey.toLowerCase() === ownerPubkey.value
       && !isDirectMessageTags(message.tags)
+      && !isDmReceiptMessage({ tags: message.tags })
+      && !isDmReceiptPayload(message.content)
       && !feedPreferences.isHidden(message.id))
   : []);
 

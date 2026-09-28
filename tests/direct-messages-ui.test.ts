@@ -61,6 +61,17 @@ describe("direct-message navigation and UI contract", () => {
     expect(secondaryHeader).toContain('if (props.backMode === "history") router.back()');
   });
 
+  it("keeps DM receipt controls out of Home and profile feeds", () => {
+    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const messages = readFileSync(join(process.cwd(), "src/stores/messages.ts"), "utf8");
+    expect(home).toContain("isHomeRenderable");
+    expect(home).toContain("!isDmReceiptPayload(message.content)");
+    expect(profile).toContain("!isDmReceiptPayload(message.content)");
+    expect(messages).toContain('values.has(`t:${DM_RECEIPT_TYPE}`)');
+    expect(messages).toContain("isDmReceiptPayload(content)");
+  });
+
   it("shows a friend's non-DM posts on their profile", () => {
     const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
     expect(profile).toContain('class="profile-posts"');

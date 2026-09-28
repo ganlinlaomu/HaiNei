@@ -5,6 +5,7 @@ import { syncedMessageRepository } from "@/repositories/syncedMessageRepository"
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { notifyCanonicalMessageAdded } from "@/services/directMessageStateEvents";
+import { DM_RECEIPT_TYPE, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
 
 export type InboxItem = {
   id: string;
@@ -62,13 +63,15 @@ function outboxKeyFor(pk: string | null | undefined) {
   return `nostr_outbox_${pk}`;
 }
 
-function isHomeControl(tags: string[][] | undefined) {
+function isHomeControl(tags: string[][] | undefined, content?: string) {
   const values = new Set((tags || []).map(tag => `${tag[0]}:${tag[1]}`));
   return values.has("l:hainei-friendship")
     || values.has("l:hainei-interaction")
     || values.has("t:hainei-profile")
     || values.has("t:hainei-profile-request")
-    || values.has("t:hainei-tombstone");
+    || values.has("t:hainei-tombstone")
+    || values.has(`t:${DM_RECEIPT_TYPE}`)
+    || isDmReceiptPayload(content);
 }
 
 function legacyTags(item: InboxItem) {
@@ -144,7 +147,7 @@ export const useMessagesStore = defineStore("messages", {
       }
       const records = await syncedMessageRepository.list(targetPk);
       if (this.loadedFor !== targetPk) return;
-      this.inbox = records.filter(record => !isHomeControl(record.tags)).map(record => ({
+      this.inbox = records.filter(record => !isHomeControl(record.tags, record.plaintext)).map(record => ({
         id: record.id,
         pubkey: record.senderPubkey,
         created_at: record.createdAt,
@@ -183,7 +186,7 @@ export const useMessagesStore = defineStore("messages", {
     scheduleOutboxSave() {},
 
     addInbox(item: InboxItem) {
-      if (!item || !item.id) return;
+      if (!item || !item.id || isHomeControl(item.tags, item.content)) return;
       
       // Check if message already exists
       const existingIndex = this.inbox.findIndex((m) => m.id === item.id);
