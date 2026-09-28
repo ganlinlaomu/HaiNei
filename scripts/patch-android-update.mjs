@@ -222,7 +222,7 @@ if (!manifest.includes(".fileprovider")) {
     "</application>",
     `        <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="\\${applicationId}.fileprovider"
+            android:authorities="cafe.aso.hainei.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data
