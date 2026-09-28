@@ -52,7 +52,8 @@ function media(id: string, source: MediaServer["source"], patch: Partial<MediaSe
 describe("Relay configuration", () => {
   it("uses the current built-in Relay and media fallbacks", () => {
     expect(DEFAULT_RELAY_URLS).toEqual([
-      "wss://nostr.dzo-hadar.ts.net"
+      "wss://nostr.dzo-hadar.ts.net",
+      "wss://relay.gulugulu.moe"
     ]);
     expect(DEFAULT_MEDIA_SERVERS).toEqual([
       expect.objectContaining({ url: "https://blossom-imgbed.noster.workers.dev" })
@@ -267,6 +268,7 @@ describe("per-item settings sync", () => {
     expect(mergeRelayConfigs([local], [remote]).map(item => item.url).sort()).toEqual([
       "wss://local.example",
       "wss://nostr.dzo-hadar.ts.net",
+      "wss://relay.gulugulu.moe",
       "wss://remote.example"
     ]);
   });
