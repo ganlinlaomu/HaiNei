@@ -886,7 +886,10 @@ function submitMessage() {
       draft.value = "";
       clearRecordedAudio();
       cancelReply();
-      void nextTick(() => { suppressDraftPersistence = false; });
+      void nextTick(() => {
+        suppressDraftPersistence = false;
+        if (draft.value || replyingToId.value) scheduleDraftSave();
+      });
     } catch (error) {
       voiceError.value = error instanceof Error ? error.message : "语音发送失败";
       ui.addToast(voiceError.value, 2200, "error");
@@ -903,7 +906,10 @@ function submitMessage() {
     draft.value = "";
     removeSelectedImage();
     cancelReply();
-    void nextTick(() => { suppressDraftPersistence = false; });
+    void nextTick(() => {
+      suppressDraftPersistence = false;
+      if (draft.value || replyingToId.value) scheduleDraftSave();
+    });
   } catch (error) {
     ui.addToast(error instanceof Error ? error.message : "发送失败，请稍后重试", 2200, "error");
   }
