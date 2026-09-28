@@ -881,6 +881,7 @@ function submitMessage() {
     const replyTo = replyingToMessage.value?.id;
     try {
       directMessages.sendAudio(peerPubkey.value, audio, replyTo);
+      clearDraftSaveTimer();
       suppressDraftPersistence = true;
       draft.value = "";
       clearRecordedAudio();
@@ -897,6 +898,7 @@ function submitMessage() {
   const replyTo = replyingToMessage.value?.id;
   try {
     directMessages.send(peerPubkey.value, text, image, replyTo);
+    clearDraftSaveTimer();
     suppressDraftPersistence = true;
     draft.value = "";
     removeSelectedImage();
