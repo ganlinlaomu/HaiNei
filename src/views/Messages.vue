@@ -35,20 +35,21 @@
       <div v-if="searchOpen && searchQuery.trim()" class="chat-search-results">
         <div v-if="searching" class="search-result-state">正在搜索本机消息…</div>
         <div v-else-if="searchResults.length === 0" class="search-result-state">未找到相关消息</div>
-        <button
-          v-for="result in searchResults"
-          v-else
-          :key="result.id"
-          class="chat-search-result"
-          type="button"
-          @click="selectSearchResult(result.id)"
-        >
-          <span class="search-result-meta">
-            <strong>{{ result.senderPubkey === keys.pkHex ? "你" : displayName }}</strong>
-            <time>{{ formatSearchTime(result.createdAt) }}</time>
-          </span>
-          <span class="search-result-preview">{{ result.preview }}</span>
-        </button>
+        <template v-else>
+          <button
+            v-for="result in searchResults"
+            :key="result.id"
+            class="chat-search-result"
+            type="button"
+            @click="selectSearchResult(result.id)"
+          >
+            <span class="search-result-meta">
+              <strong>{{ result.senderPubkey === keys.pkHex ? "你" : displayName }}</strong>
+              <time>{{ formatSearchTime(result.createdAt) }}</time>
+            </span>
+            <span class="search-result-preview">{{ result.preview }}</span>
+          </button>
+        </template>
       </div>
     </header>
 
@@ -295,7 +296,7 @@ const swipingMessageId = ref("");
 const swipeOffset = ref(0);
 const highlightedMessageId = ref("");
 const actionMenuMessageId = ref("");
-const actionMenuMessage = computed(() => messages.value.find(message => message.id === actionMenuMessageId.value));
+const actionMenuMessage = computed(() => lookupMessage(actionMenuMessageId.value));
 const actionMenuCopyText = computed(() => actionMenuMessage.value ? messageText(actionMenuMessage.value.content) : "");
 const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
 const INITIAL_MESSAGE_COUNT = 60;
@@ -620,7 +621,7 @@ function scheduleDraftSave() {
     void directMessages.saveDraft(peer, { text, replyTo }, account);
   }, 300);
 }
-function flushDraft(account = keys.pkHex, peer = peerPubkey.value) {
+function flushDraft(account: string = keys.pkHex, peer: string = peerPubkey.value) {
   clearDraftSaveTimer();
   if (!draftReady || suppressDraftPersistence || !account || !peer) return;
   void directMessages.saveDraft(peer, { text: draft.value, replyTo: replyingToId.value || undefined }, account);
@@ -906,9 +907,12 @@ function submitMessage() {
   }
 }
 
+function handlePageHide() {
+  flushDraft();
+}
 onMounted(() => {
   window.visualViewport?.addEventListener("resize", handleVisualViewportResize);
-  window.addEventListener("pagehide", flushDraft);
+  window.addEventListener("pagehide", handlePageHide);
   void load();
 });
 watch([draft, replyingToId], scheduleDraftSave);
@@ -975,7 +979,7 @@ onBeforeUnmount(() => {
   draftReady = false;
   clearDraftSaveTimer();
   clearSearchTimer();
-  window.removeEventListener("pagehide", flushDraft);
+  window.removeEventListener("pagehide", handlePageHide);
   window.visualViewport?.removeEventListener("resize", handleVisualViewportResize);
   handleComposerBlur();
   loadGeneration += 1;
