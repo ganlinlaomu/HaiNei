@@ -24,10 +24,10 @@ export function isDmReceiptMessage(message: Pick<CanonicalMessage, "tags">) {
   return message.tags?.some(tag => tag[0] === "t" && tag[1] === DM_RECEIPT_TYPE) === true;
 }
 
-export function decodeDmReceipt(message: Pick<CanonicalMessage, "plaintext" | "tags">): DmReceiptPayload | null {
-  if (!isDmReceiptMessage(message) || !message.plaintext) return null;
+export function decodeDmReceiptPayload(plaintext: string | undefined): DmReceiptPayload | null {
+  if (!plaintext) return null;
   try {
-    const parsed = JSON.parse(message.plaintext) as Partial<DmReceiptPayload>;
+    const parsed = JSON.parse(plaintext) as Partial<DmReceiptPayload>;
     if (parsed.type !== DM_RECEIPT_TYPE || (parsed.status !== "delivered" && parsed.status !== "read")) return null;
     const createdAt = Number(parsed.upTo?.createdAt);
     const messageId = String(parsed.upTo?.messageId || "").toLowerCase();
@@ -40,6 +40,15 @@ export function decodeDmReceipt(message: Pick<CanonicalMessage, "plaintext" | "t
   } catch {
     return null;
   }
+}
+
+export function isDmReceiptPayload(plaintext: string | undefined) {
+  return decodeDmReceiptPayload(plaintext) !== null;
+}
+
+export function decodeDmReceipt(message: Pick<CanonicalMessage, "plaintext" | "tags">): DmReceiptPayload | null {
+  if (!isDmReceiptMessage(message)) return null;
+  return decodeDmReceiptPayload(message.plaintext);
 }
 
 export function cursorAfter(next: DmReceiptCursor, current?: DmReceiptCursor | null) {
