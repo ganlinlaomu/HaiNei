@@ -21,6 +21,7 @@ import { syncedMessageRepository } from "@/repositories/syncedMessageRepository"
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
+import { useSettingsStore } from "@/stores/settings";
 import { uploadEncryptedCommentImage } from "@/utils/commentImage";
 import { prepareEncryptedDmAudio, uploadPreparedEncryptedDmAudio } from "@/utils/encryptedDmAudio";
 import { serializePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
@@ -316,7 +317,12 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     outgoingReceiptStatus(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey">) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
       if (!account || message.pubkey !== account) return null;
-      return receiptStatusForMessage(message, this.receiptStateByPeer[peerPubkey.toLowerCase()]);
+      const settings = useSettingsStore();
+      const state = this.receiptStateByPeer[peerPubkey.toLowerCase()];
+      if (settings.loadedFor === account && !settings.settings.privacy.readReceipts) {
+        return receiptStatusForMessage(message, state ? { ...state, read: undefined } : state);
+      }
+      return receiptStatusForMessage(message, state);
     },
     async persistReceiptState(peerPubkey: string, state: PeerReceiptState, sent = false) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
@@ -330,8 +336,13 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!receipt) return false;
       const peer = message.senderPubkey.toLowerCase();
       const friendships = useFriendshipsStore();
-      if (friendships.loadedFor !== account) await friendships.load(account);
+      const settings = useSettingsStore();
+      await Promise.all([
+        friendships.loadedFor === account ? Promise.resolve() : friendships.load(account),
+        settings.loadedFor === account ? Promise.resolve() : settings.load(account),
+      ]);
       if (!friendships.isAccepted(peer) || useKeyStore().pkHex.toLowerCase() !== account) return false;
+      if (receipt.status === "read" && !settings.settings.privacy.readReceipts) return false;
 
       let current = this.receiptStateByPeer[peer];
       if (!current) {
@@ -358,6 +369,18 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
       const peer = peerPubkey.toLowerCase();
       if (!account || !peer || peer === account || !/^[0-9a-f]{64}$/i.test(upTo.messageId)) return;
+      const settings = useSettingsStore();
+      if (status === "read") {
+        if (settings.loadedFor !== account) {
+          void settings.load(account).then(() => {
+            if (useKeyStore().pkHex.toLowerCase() === account && settings.settings.privacy.readReceipts) {
+              this.scheduleReceipt(peer, status, upTo);
+            }
+          });
+          return;
+        }
+        if (!settings.settings.privacy.readReceipts) return;
+      }
       const sent = this.sentReceiptStateByPeer[peer]?.[status];
       if (!receiptCursorAfter(upTo, sent)) return;
       const key = receiptQueueKey(account, peer, status);
@@ -378,8 +401,13 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       pendingReceiptCursors.delete(key);
       if (!upTo || !account || useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return;
       const friendships = useFriendshipsStore();
-      if (friendships.loadedFor !== account) await friendships.load(account);
+      const settings = useSettingsStore();
+      await Promise.all([
+        friendships.loadedFor === account ? Promise.resolve() : friendships.load(account),
+        settings.loadedFor === account ? Promise.resolve() : settings.load(account),
+      ]);
       if (!friendships.isAccepted(peer)) return;
+      if (status === "read" && !settings.settings.privacy.readReceipts) return;
       const keys = useKeyStore();
       if (!keys.supportsNip44) return;
 
@@ -552,9 +580,11 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!account) return this.reset();
       const messages = useMessagesStore();
       const friendships = useFriendshipsStore();
+      const settings = useSettingsStore();
       await Promise.all([
         messages.loadedFor === account ? Promise.resolve() : messages.load(account),
         friendships.loadedFor === account && !friendships.loading ? Promise.resolve() : friendships.load(account),
+        settings.loadedFor === account ? Promise.resolve() : settings.load(account),
       ]);
       if (useKeyStore().pkHex !== account) return;
       let outgoingTasks = await outgoingDmTaskRepository.list(account);
