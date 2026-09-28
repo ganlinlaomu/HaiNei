@@ -414,8 +414,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const conversationId = await deriveConversationId([account, peer]);
       const records = await syncedMessageRepository.listConversation(account, conversationId);
       const preference = this.preferencesByPeer[peer];
-      return records
-        .map(recordInboxItem)
+      const byId = new Map<string, InboxItem>();
+      for (const item of records.map(recordInboxItem)) byId.set(item.id, item);
+      for (const item of this.peerMessages(peer)) byId.set(item.id, item);
+      return [...byId.values()]
         .filter(item => isDirectMessageTags(item.tags)
           && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) === peer
           && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
@@ -432,17 +434,14 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const friendships = useFriendshipsStore();
       if (friendships.loadedFor !== account) await friendships.load(account);
       const conversationId = await deriveConversationId([account, peer]);
-      const records = await syncedMessageRepository.listConversation(account, conversationId);
-      const items = records
+      const records = await syncedMessageRepository.listConversationAround(account, conversationId, messageId, radius);
+      return records
         .map(recordInboxItem)
         .filter(item => isDirectMessageTags(item.tags)
           && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) === peer
           && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
           && afterDeletion(item, this.preferencesByPeer[peer]))
         .sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
-      const index = items.findIndex(item => item.id === messageId);
-      if (index < 0) return [] as InboxItem[];
-      return items.slice(Math.max(0, index - radius), index + radius + 1);
     },
     outgoingReceiptStatus(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey">) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
