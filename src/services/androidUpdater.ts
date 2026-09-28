@@ -1,3 +1,5 @@
+import { deviceStorage } from "@/services/deviceStorage";
+
 export type AndroidUpdateManifest = {
   versionCode: number;
   versionName: string;
@@ -105,7 +107,7 @@ export async function getCurrentAndroidVersion(): Promise<NativeVersion | null> 
 function shouldThrottleCheck(force: boolean) {
   if (force) return false;
   try {
-    const last = Number(localStorage.getItem(LAST_CHECK_KEY) || "0");
+    const last = Number(deviceStorage.getItem(LAST_CHECK_KEY) || "0");
     return last > 0 && Date.now() - last < CHECK_INTERVAL_MS;
   } catch {
     return false;
@@ -114,7 +116,7 @@ function shouldThrottleCheck(force: boolean) {
 
 function markChecked() {
   try {
-    localStorage.setItem(LAST_CHECK_KEY, String(Date.now()));
+    deviceStorage.setItem(LAST_CHECK_KEY, String(Date.now()));
   } catch {
     // Update checks must still work when storage is unavailable.
   }
