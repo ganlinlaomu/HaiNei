@@ -21,21 +21,22 @@
           <span>你的备注</span>
           <strong>{{ localNote }}</strong>
         </div>
-        <div class="friend-state">已接受的好友</div>
+        <div v-if="!isSelf" class="friend-state">已接受的好友</div>
         <div class="profile-actions">
-          <button v-if="canMessage" class="message-button" type="button" @click="router.push(`/messages/${ownerPubkey}`)">私信</button>
-          <button class="secondary-action" type="button" aria-label="复制用户公钥" @click="copyPubkey">复制公钥</button>
-          <button class="secondary-action" type="button" aria-label="打开用户二维码" @click="showQr = true">二维码</button>
+          <button v-if="isSelf" class="message-button" type="button" @click="router.push('/settings/profile')">编辑资料</button>
+          <button v-else-if="canMessage" class="message-button" type="button" @click="router.push(`/messages/${ownerPubkey}`)">私信</button>
+          <button class="secondary-action" type="button" :aria-label="isSelf ? '复制我的公钥' : '复制用户公钥'" @click="copyPubkey">复制公钥</button>
+          <button class="secondary-action" type="button" :aria-label="isSelf ? '打开我的二维码' : '打开用户二维码'" @click="showQr = true">二维码</button>
         </div>
-        <button v-if="feedPreferences.isMuted(ownerPubkey)" class="unmute-button" type="button" @click="feedPreferences.unmute(ownerPubkey)">恢复显示此人的动态</button>
+        <button v-if="!isSelf && feedPreferences.isMuted(ownerPubkey)" class="unmute-button" type="button" @click="feedPreferences.unmute(ownerPubkey)">恢复显示此人的动态</button>
       </section>
 
       <MyQrCodeSheet
         :open="showQr"
         :pubkey="ownerPubkey"
         :nickname="ownerName"
-        dialog-label="用户二维码"
-        hint="扫描二维码即可识别此用户"
+        :dialog-label="isSelf ? '我的二维码' : '用户二维码'"
+        :hint="isSelf ? '扫描二维码即可识别我的公钥' : '扫描二维码即可识别此用户'"
         @close="showQr = false"
       />
 
@@ -81,6 +82,7 @@ const ready = ref(false);
 const showQr = ref(false);
 let loadGeneration = 0;
 const ownerPubkey = computed(() => String(route.params.pubkey || "").trim().toLowerCase());
+const isSelf = computed(() => ownerPubkey.value === keys.pkHex);
 const canView = computed(() => canViewPrivateProfile(
   keys.pkHex,
   ownerPubkey.value,
@@ -91,7 +93,7 @@ const profile = computed(() => canView.value && profiles.loadedFor === keys.pkHe
   : undefined);
 const ownerName = computed(() => profile.value?.nickname?.trim() || `${ownerPubkey.value.slice(0, 8)}…`);
 const localNote = computed(() => {
-  if (!canView.value) return "";
+  if (!canView.value || isSelf.value) return "";
   const value = friends.list.find(friend => friend.pubkey === ownerPubkey.value)?.name?.trim() || "";
   if (!value || value === ownerName.value || value === `${ownerPubkey.value.slice(0, 8)}…` || value === `${ownerPubkey.value.slice(0, 8)}...`) return "";
   return value;
@@ -121,10 +123,6 @@ async function load() {
   ready.value = false;
   const account = keys.pkHex;
   if (!account) return;
-  if (ownerPubkey.value === account) {
-    await router.replace("/settings/profile");
-    return;
-  }
   await Promise.all([friends.load(account), friendships.load(account), profiles.load(account), messages.load(account), feedPreferences.load(account)]);
   if (generation === loadGeneration && keys.pkHex === account) ready.value = true;
 }
