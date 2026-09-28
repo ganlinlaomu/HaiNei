@@ -23,6 +23,12 @@ vi.mock("@/repositories/metaRepository", () => ({
       return value === undefined ? undefined : { accountPubkey: account, key, value };
     }),
     put: mocks.put,
+    delete: vi.fn(async (account: string, key: string) => {
+      mocks.meta.delete(`${account}:${key}`);
+    }),
+    listPrefix: vi.fn(async (account: string, prefix: string) => [...mocks.meta.entries()]
+      .filter(([key]) => key.startsWith(`${account}:${prefix}`))
+      .map(([key, value]) => ({ accountPubkey: account, key: key.slice(account.length + 1), value }))),
   },
 }));
 vi.mock("@/nostr/relays", () => ({ getRelaysFromStorage: () => [] }));
