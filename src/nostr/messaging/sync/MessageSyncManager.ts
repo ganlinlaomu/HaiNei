@@ -91,7 +91,8 @@ export class MessageSyncManager {
       isCurrent,
       options.onMessage,
       this.repository,
-      this.decode
+      this.decode,
+      options.onPersistedMessage
     );
 
     await this.setStatus("connecting", sessionId);
@@ -122,6 +123,7 @@ export class MessageSyncManager {
       };
       try {
         await options.onMessage?.(restoredMessage, { source: "local-migration" });
+        await options.onPersistedMessage?.(restoredMessage, { source: "local-migration" }, false);
         debugLog("storage", "dexie_message_restored", {
           logicalMessageId: record.id.slice(0, 12),
           transportEventId: record.transportEventIds[0]?.slice(0, 12) || "unknown",

@@ -27,6 +27,8 @@ export type HomeMessageDelivery = {
   notifyFriendshipMessage?: (message: CanonicalMessage) => void;
   processProfileMessage?: (message: CanonicalMessage) => boolean | Promise<boolean>;
   processFeedControlMessage?: (message: CanonicalMessage) => boolean | Promise<boolean>;
+  isReceipt?: (message: CanonicalMessage) => boolean;
+  processReceipt?: (message: CanonicalMessage) => boolean | void | Promise<boolean | void>;
   isInteraction: (message: CanonicalMessage) => boolean;
   processInteraction: (message: CanonicalMessage) => void | Promise<void>;
   mirrorMessage: (message: CanonicalMessage) => void;
@@ -67,6 +69,11 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
     }
     if (delivery.isAcceptedMessage && !delivery.isAcceptedMessage(message)) {
       debugLog("ui", "ui_non_friend_discarded", diagnostic, "info");
+      return false;
+    }
+    if (delivery.isReceipt?.(message)) {
+      await delivery.processReceipt?.(message);
+      debugLog("ui", "ui_dm_receipt_routed", diagnostic, "info");
       return false;
     }
     if (delivery.isInteraction(message)) {

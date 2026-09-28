@@ -32,7 +32,8 @@ export class MessageIngestionPipeline {
     private readonly isSessionCurrent: () => boolean,
     private readonly onInserted?: (message: CanonicalMessage, metadata: MessageIngestionMetadata) => boolean | void | Promise<boolean | void>,
     private readonly repository: SyncedMessageRepository = syncedMessageRepository,
-    private readonly decode: DecodeMessage = decodeMessageEvent
+    private readonly decode: DecodeMessage = decodeMessageEvent,
+    private readonly onPersisted?: (message: CanonicalMessage, metadata: MessageIngestionMetadata, inserted: boolean) => void | Promise<void>
   ) {}
 
   async ingestNostrEvent(event: NostrEvent, metadata: MessageIngestionMetadata) {
@@ -161,6 +162,16 @@ export class MessageIngestionPipeline {
     if (!this.isSessionCurrent()) {
       debugLog("sync", "stale_session_discarded", diagnostic, "warn");
       return { inserted: result.inserted, discarded: true };
+    }
+    if (this.onPersisted) {
+      try {
+        await this.onPersisted(message, metadata, result.inserted);
+      } catch (error) {
+        debugLog("sync", "post_persist_side_effect_failed", {
+          ...diagnostic,
+          reason: error instanceof Error ? error.name || "Error" : "unknown_error"
+        }, "warn");
+      }
     }
     return { inserted: result.inserted, discarded: false };
   }

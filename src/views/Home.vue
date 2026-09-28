@@ -84,7 +84,8 @@ import { useProfilesStore } from "@/stores/profiles";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
-import { isAuthorizedCanonicalDirectMessage } from "@/stores/directMessages";
+import { isDmReceiptMessage } from "@/nostr/messaging/dmReceipts";
+import { isAuthorizedCanonicalDirectMessage, useDirectMessagesStore } from "@/stores/directMessages";
 import { buildHeightPrefix, resolveVirtualRange, updateHeightPrefix } from "@/utils/virtualFeed";
 
 
@@ -126,6 +127,7 @@ export default defineComponent({
     const friendships = useFriendshipsStore();
     const keys = useKeyStore();
     const msgs = useMessagesStore();
+    const directMessages = useDirectMessagesStore();
     const interactions = useInteractionsStore();
     const settings = useSettingsStore();
     const notifications = useNotificationsStore();
@@ -1078,10 +1080,13 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
               const control = decodeFriendshipControl(message);
               if (control && control.action !== "request") notifications.resolveFriendRequests(message.senderPubkey);
             },
+            isReceipt: isDmReceiptMessage,
+            processReceipt: message => directMessages.processReceipt(message),
             isInteraction: isInteractionMessage,
             processInteraction: message => interactions.processCanonicalInteraction(message, accountAtStart),
             mirrorMessage: mirrorSyncedMessage
           }),
+          onPersistedMessage: message => directMessages.acknowledgePersistedIncoming(accountAtStart, message),
           onStatus: syncStatus => {
             if (keys.pkHex !== accountAtStart || syncGeneration !== homeSyncGeneration) return;
             if (syncStatus === "live" || syncStatus === "error") {
