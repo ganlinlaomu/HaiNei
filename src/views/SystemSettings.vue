@@ -154,7 +154,7 @@
         <p class="section-detail">节省流量模式会缩短图片预加载距离，并避免不必要的视频预加载。</p>
       </details>
 
-      <details v-if="isNativeApp" class="technical-section">
+      <details v-if="isNativeAndroid" class="technical-section">
         <summary class="section-heading">
           <div><h3>应用更新 / Update</h3><p>{{ androidUpdateSummary }}</p></div>
         </summary>
@@ -307,7 +307,11 @@ const clearingCache = ref(false);
 const pushBusy = ref(false);
 const retryingQueue = ref(false);
 const pushEnabled = ref(false);
-const isNativeApp = isNativeAndroidApp();
+const isNativeApp = (() => {
+  const capacitor = (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
+  return capacitor?.isNativePlatform?.() === true;
+})();
+const isNativeAndroid = isNativeAndroidApp();
 const checkingAndroidUpdate = ref(false);
 const androidVersionName = ref("");
 const androidUpdateSummary = ref("自动检查更新");
@@ -619,7 +623,7 @@ async function togglePush() {
 }
 
 async function refreshAndroidVersion() {
-  if (!isNativeApp) return;
+  if (!isNativeAndroid) return;
   try {
     const current = await getCurrentAndroidVersion();
     androidVersionName.value = current?.versionName || "";
@@ -629,7 +633,7 @@ async function refreshAndroidVersion() {
 }
 
 async function checkForAndroidAppUpdate() {
-  if (!isNativeApp || checkingAndroidUpdate.value) return;
+  if (!isNativeAndroid || checkingAndroidUpdate.value) return;
   checkingAndroidUpdate.value = true;
   androidUpdateSummary.value = "正在检查…";
   try {
@@ -690,7 +694,7 @@ watch(() => keyStore.pkHex, async pk => {
 
 onMounted(() => {
   startStatusPolling();
-  if (isNativeApp) void refreshAndroidVersion();
+  if (isNativeAndroid) void refreshAndroidVersion();
 });
 onActivated(() => {
   startStatusPolling();
