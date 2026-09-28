@@ -5,7 +5,8 @@ import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/n
 import { MessageSyncManager } from "@/nostr/messaging/sync";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
-import { isAuthorizedCanonicalDirectMessage } from "@/stores/directMessages";
+import { isDmReceiptMessage } from "@/nostr/messaging/dmReceipts";
+import { isAuthorizedCanonicalDirectMessage, useDirectMessagesStore } from "@/stores/directMessages";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
@@ -34,6 +35,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   const interactions = useInteractionsStore();
   const notifications = useNotificationsStore();
   const messages = useMessagesStore();
+  const directMessages = useDirectMessagesStore();
   const accepted = friendships.records.filter(record => record.state === "accepted").map(record => record.peerPubkey);
   registerOutgoingPushSigner(account, keys.signEvent.bind(keys));
   await accountMessageSyncManager.start({
@@ -72,6 +74,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         if (notification) notifications.addNotification(notification);
         else if (decodeFriendshipControl(message)) notifications.resolveFriendRequests(message.senderPubkey);
       },
+      isReceipt: isDmReceiptMessage,
+      processReceipt: message => directMessages.processReceipt(message),
       isInteraction: isInteractionMessage,
       processInteraction: async message => { await interactions.processCanonicalInteraction(message, account); },
       mirrorMessage: message => messages.addInbox({
@@ -82,6 +86,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         replyTo: message.replyTo, rootId: message.rootId, tags: message.tags,
       }),
     }),
+    onPersistedMessage: message => directMessages.acknowledgePersistedIncoming(account, message),
   });
   return true;
 }
