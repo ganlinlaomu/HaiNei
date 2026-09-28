@@ -258,6 +258,7 @@ let messageGesture: {
   startY: number;
   horizontal: boolean;
   longPressed: boolean;
+  allowSwipe: boolean;
 } | null = null;
 let longPressTimer: number | null = null;
 let replyHighlightTimer: number | null = null;
@@ -321,6 +322,10 @@ function isInteractiveMessageTarget(target: EventTarget | null) {
   return target instanceof Element
     && !!target.closest("button, a, input, textarea, select, audio, video, [role='slider']");
 }
+function isMediaGestureTarget(target: EventTarget | null) {
+  return target instanceof Element
+    && !!target.closest(".post-image-preview, .optimistic-image, .voice-message");
+}
 function swipeReplyIndicatorStyle() {
   const progress = Math.min(1, swipeOffset.value / SWIPE_REPLY_THRESHOLD);
   return {
@@ -365,6 +370,7 @@ function handleMessageTouchStart(message: InboxItem, event: TouchEvent) {
     startY: touch.clientY,
     horizontal: false,
     longPressed: false,
+    allowSwipe: !isMediaGestureTarget(event.target),
   };
   swipingMessageId.value = message.id;
   longPressTimer = window.setTimeout(() => {
@@ -381,6 +387,7 @@ function handleMessageTouchMove(message: InboxItem, event: TouchEvent) {
   const dx = touch.clientX - gesture.startX;
   const dy = touch.clientY - gesture.startY;
   if (Math.hypot(dx, dy) > SWIPE_INTENT_THRESHOLD) clearLongPressTimer();
+  if (!gesture.allowSwipe) return;
   if (!gesture.horizontal) {
     if (Math.abs(dy) > Math.abs(dx)) return;
     if (Math.abs(dx) < SWIPE_INTENT_THRESHOLD) return;
