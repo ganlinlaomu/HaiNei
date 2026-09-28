@@ -15,18 +15,42 @@
       <div v-if="accepted && messages.length === 0" class="empty-chat">开始一段私密对话</div>
       <template v-for="(message, index) in windowMessages" :key="message.id">
         <time v-if="showTimestamp(windowStart + index)" class="message-time">{{ formatMessageTime(message.created_at) }}</time>
-        <div class="message-line" :class="{ own: isOwn(message) }">
+        <div
+          class="message-line"
+          :class="{ own: isOwn(message), 'reply-highlight': highlightedMessageId === message.id }"
+          :data-message-id="message.id"
+          @pointerdown="handleMessagePointerDown(message, $event)"
+          @pointermove="handleMessagePointerMove(message, $event)"
+          @pointerup="handleMessagePointerUp(message, $event)"
+          @pointercancel="handleMessagePointerCancel(message, $event)"
+          @contextmenu.prevent="openMessageActionMenu(message)"
+        >
           <span v-if="!isOwn(message)" class="avatar-slot">
             <button v-if="showAvatar(windowStart + index)" class="message-avatar-link" type="button" :aria-label="`查看 ${displayName} 的个人资料`" @click="openPeerProfile">
               <ProfileAvatar :pubkey="peerPubkey" :local-name="localName" :size="28" />
             </button>
           </span>
+          <span
+            v-if="swipingMessageId === message.id && swipeOffset > SWIPE_INTENT_THRESHOLD && canReplyTo(message)"
+            class="swipe-reply-indicator"
+            :class="{ active: swipeOffset >= SWIPE_REPLY_THRESHOLD }"
+            :style="swipeReplyIndicatorStyle()"
+            aria-hidden="true"
+          >
+            <svg viewBox="0 0 24 24"><path d="M9 8 4 12l5 4"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg>
+          </span>
           <div class="message-stack">
             <div class="message-bubble" :class="{ 'media-caption-bubble': isMediaCaption(message), 'audio-bubble': hasAudio(message) }">
-              <div v-if="message.replyTo" class="quoted-message" role="note" aria-label="引用的消息">
+              <button
+                v-if="message.replyTo"
+                class="quoted-message"
+                type="button"
+                :aria-label="`跳到引用消息：${quotedPreview(message.replyTo)}`"
+                @click.stop="jumpToQuotedMessage(message.replyTo)"
+              >
                 <strong>{{ quotedAuthor(message.replyTo) }}</strong>
                 <span>{{ quotedPreview(message.replyTo) }}</span>
-              </div>
+              </button>
               <DmAudioMessage
                 v-if="hasAudio(message)"
                 :media="audioMedia(message)"
@@ -59,18 +83,26 @@
               <button v-if="isFailed(message)" type="button" @click="directMessages.retry(message.outgoing.localId)">重试</button>
             </span>
           </div>
-          <button
-            v-if="canReplyTo(message)"
-            class="message-reply-button"
-            type="button"
-            :aria-label="`引用回复${isOwn(message) ? '自己的' : displayName + '的'}消息`"
-            @click="startReply(message)"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 8 4 12l5 4"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg>
-          </button>
         </div>
       </template>
     </section>
+
+    <div v-if="actionMenuMessage" class="message-action-backdrop" @click.self="closeMessageActionMenu">
+      <div class="message-action-menu" role="menu" :aria-label="`消息操作：${quotePreview(actionMenuMessage)}`">
+        <div class="message-action-preview">
+          <strong>{{ isOwn(actionMenuMessage) ? "你" : displayName }}</strong>
+          <span>{{ quotePreview(actionMenuMessage) }}</span>
+        </div>
+        <button type="button" role="menuitem" @click="replyFromActionMenu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 8 4 12l5 4"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg>
+          <span>回复</span>
+        </button>
+        <button v-if="actionMenuCopyText" type="button" role="menuitem" @click="copyFromActionMenu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/></svg>
+          <span>复制</span>
+        </button>
+      </div>
+    </div>
 
     <button
       v-if="showJumpToLatest"
@@ -205,11 +237,31 @@ const textInput = ref<HTMLInputElement | null>(null);
 const messageList = ref<HTMLElement | null>(null);
 const showJumpToLatest = ref(false);
 const pendingTailCount = ref(0);
+const swipingMessageId = ref("");
+const swipeOffset = ref(0);
+const highlightedMessageId = ref("");
+const actionMenuMessageId = ref("");
+const actionMenuMessage = computed(() => messages.value.find(message => message.id === actionMenuMessageId.value));
+const actionMenuCopyText = computed(() => actionMenuMessage.value ? messageText(actionMenuMessage.value.content) : "");
 const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
 const INITIAL_MESSAGE_COUNT = 60;
 const OLDER_MESSAGE_BATCH = 40;
 const TOP_LOAD_THRESHOLD = 120;
 const BOTTOM_FOLLOW_THRESHOLD = 120;
+const SWIPE_INTENT_THRESHOLD = 8;
+const SWIPE_REPLY_THRESHOLD = 52;
+const SWIPE_MAX_DISTANCE = 72;
+const LONG_PRESS_MS = 460;
+let messageGesture: {
+  id: string;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  horizontal: boolean;
+  longPressed: boolean;
+} | null = null;
+let longPressTimer: number | null = null;
+let replyHighlightTimer: number | null = null;
 let prependingOlder = false;
 let loadingConversation = false;
 let loadGeneration = 0;
@@ -255,6 +307,129 @@ function startReply(message: InboxItem) {
 }
 function cancelReply() {
   replyingToId.value = "";
+}
+function clearLongPressTimer() {
+  if (longPressTimer !== null) window.clearTimeout(longPressTimer);
+  longPressTimer = null;
+}
+function resetMessageGesture() {
+  clearLongPressTimer();
+  messageGesture = null;
+  swipingMessageId.value = "";
+  swipeOffset.value = 0;
+}
+function isInteractiveMessageTarget(target: EventTarget | null) {
+  return target instanceof Element
+    && !!target.closest("button, a, input, textarea, select, audio, video, [role='slider']");
+}
+function swipeReplyIndicatorStyle() {
+  const progress = Math.min(1, swipeOffset.value / SWIPE_REPLY_THRESHOLD);
+  return {
+    width: `${Math.min(30, swipeOffset.value * 0.5)}px`,
+    opacity: String(progress),
+    transform: `scale(${0.75 + progress * 0.25})`,
+  };
+}
+function openMessageActionMenu(message: InboxItem) {
+  if (!canReplyTo(message)) return;
+  resetMessageGesture();
+  textInput.value?.blur();
+  actionMenuMessageId.value = message.id;
+}
+function closeMessageActionMenu() {
+  actionMenuMessageId.value = "";
+}
+function replyFromActionMenu() {
+  const message = actionMenuMessage.value;
+  closeMessageActionMenu();
+  if (message) startReply(message);
+}
+async function copyFromActionMenu() {
+  const text = actionMenuCopyText.value;
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    ui.addToast("已复制", 1_500, "success");
+    closeMessageActionMenu();
+  } catch {
+    ui.addToast("复制失败", 1_800, "error");
+  }
+}
+function handleMessagePointerDown(message: InboxItem, event: PointerEvent) {
+  if (!canReplyTo(message) || event.pointerType === "mouse" || event.button !== 0 || isInteractiveMessageTarget(event.target)) return;
+  resetMessageGesture();
+  messageGesture = {
+    id: message.id,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    horizontal: false,
+    longPressed: false,
+  };
+  swipingMessageId.value = message.id;
+  try { (event.currentTarget as HTMLElement)?.setPointerCapture?.(event.pointerId); } catch {}
+  longPressTimer = window.setTimeout(() => {
+    if (!messageGesture || messageGesture.id !== message.id) return;
+    messageGesture.longPressed = true;
+    openMessageActionMenu(message);
+  }, LONG_PRESS_MS);
+}
+function handleMessagePointerMove(message: InboxItem, event: PointerEvent) {
+  const gesture = messageGesture;
+  if (!gesture || gesture.id !== message.id || gesture.pointerId !== event.pointerId) return;
+  const dx = event.clientX - gesture.startX;
+  const dy = event.clientY - gesture.startY;
+  if (Math.hypot(dx, dy) > SWIPE_INTENT_THRESHOLD) clearLongPressTimer();
+  if (!gesture.horizontal) {
+    if (Math.abs(dy) > Math.abs(dx)) return;
+    if (Math.abs(dx) < SWIPE_INTENT_THRESHOLD) return;
+    gesture.horizontal = true;
+  }
+  if (dx <= 0) {
+    swipeOffset.value = 0;
+    return;
+  }
+  if (event.cancelable) event.preventDefault();
+  swipeOffset.value = Math.min(SWIPE_MAX_DISTANCE, dx);
+}
+function handleMessagePointerUp(message: InboxItem, event: PointerEvent) {
+  const gesture = messageGesture;
+  if (!gesture || gesture.id !== message.id || gesture.pointerId !== event.pointerId) return;
+  const shouldReply = !gesture.longPressed && gesture.horizontal && swipeOffset.value >= SWIPE_REPLY_THRESHOLD;
+  try { (event.currentTarget as HTMLElement)?.releasePointerCapture?.(event.pointerId); } catch {}
+  resetMessageGesture();
+  if (shouldReply) startReply(message);
+}
+function handleMessagePointerCancel(message: InboxItem, event: PointerEvent) {
+  const gesture = messageGesture;
+  if (!gesture || gesture.id !== message.id || gesture.pointerId !== event.pointerId) return;
+  resetMessageGesture();
+}
+async function jumpToQuotedMessage(replyTo?: string) {
+  if (!replyTo) return;
+  const targetIndex = messages.value.findIndex(message => message.id === replyTo);
+  if (targetIndex < 0) {
+    ui.addToast("引用的消息暂不可用", 1_800, "info");
+    return;
+  }
+  if (targetIndex < windowStart.value) {
+    windowStart.value = Math.max(0, targetIndex - 6);
+    await nextTick();
+  }
+  const target = messageList.value?.querySelector<HTMLElement>(`[data-message-id="${replyTo}"]`);
+  if (!target) {
+    ui.addToast("引用的消息暂不可用", 1_800, "info");
+    return;
+  }
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  highlightedMessageId.value = "";
+  await nextTick();
+  highlightedMessageId.value = replyTo;
+  if (replyHighlightTimer !== null) window.clearTimeout(replyHighlightTimer);
+  replyHighlightTimer = window.setTimeout(() => {
+    if (highlightedMessageId.value === replyTo) highlightedMessageId.value = "";
+    replyHighlightTimer = null;
+  }, 1_250);
 }
 function openPeerProfile(event?: Event) {
   return openProfile(router, keys.pkHex, peerPubkey.value, event);
@@ -544,6 +719,11 @@ watch([() => keys.pkHex, peerPubkey], () => {
   cancelVoiceRecording();
   clearRecordedAudio();
   cancelReply();
+  closeMessageActionMenu();
+  resetMessageGesture();
+  highlightedMessageId.value = "";
+  if (replyHighlightTimer !== null) window.clearTimeout(replyHighlightTimer);
+  replyHighlightTimer = null;
   void load();
 });
 watch(() => messages.value.map(message => message.id).join("\0"), async (nextSignature, previousSignature) => {
@@ -585,6 +765,10 @@ onBeforeUnmount(() => {
   handleComposerBlur();
   loadGeneration += 1;
   if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
+  if (replyHighlightTimer !== null) window.clearTimeout(replyHighlightTimer);
+  replyHighlightTimer = null;
+  closeMessageActionMenu();
+  resetMessageGesture();
   messageList.value?.style.removeProperty("overflow-anchor");
   removeSelectedImage();
   cancelVoiceRecording();
@@ -595,8 +779,13 @@ onBeforeUnmount(() => {
 <style scoped>
 .chat-page{position:fixed;inset:0;z-index:1000;display:grid;width:100%;max-width:none;margin:0;box-sizing:border-box;grid-template-rows:auto minmax(0,1fr) auto;background:#fff;color:#0f1419}
 .chat-header{display:grid;grid-template-columns:38px 34px minmax(0,1fr);align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.peer-profile,.message-avatar-link{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.avatar-profile-link,.message-avatar-link{display:grid;place-items:center}.name-profile-link{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:16px;font-weight:700}.peer-profile:focus-visible,.message-avatar-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:6px}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
-.message-list{min-height:0;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-reply-button{display:grid;width:32px;height:32px;flex:0 0 32px;padding:0;place-items:center;border:0;border-radius:50%;background:transparent;color:#657786;opacity:.62}.message-reply-button:active{background:#eff3f4;opacity:1}.message-reply-button svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.message-line.own .message-reply-button{order:-1}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.quoted-message{display:flex;min-width:0;flex-direction:column;gap:1px;margin:0 0 6px;padding:6px 8px;border-left:3px solid #1687e8;border-radius:7px;background:rgba(255,255,255,.58);line-height:1.25}.quoted-message strong{overflow:hidden;color:#536471;font-size:11px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.quoted-message span{overflow:hidden;max-width:280px;color:#536471;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:9px;font-weight:400;line-height:1.3;opacity:.85}.message-status.failed,.caption-meta.failed{color:#dc2626}.message-status button,.caption-meta button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble>.quoted-message{margin:8px 10px 6px}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}.caption-meta{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;color:#718096;font-size:9px;line-height:1.3;white-space:nowrap}
+.message-list{min-height:0;overflow-x:hidden;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0;touch-action:pan-y;-webkit-user-select:none;user-select:none}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.swipe-reply-indicator{display:grid;height:30px;flex:0 0 auto;place-items:center;overflow:hidden;border-radius:50%;color:#657786;transition:color 120ms ease,background 120ms ease}.swipe-reply-indicator.active{background:#e8f4fd;color:#1687e8}.swipe-reply-indicator svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.quoted-message{display:flex;width:100%;min-width:0;flex-direction:column;gap:1px;margin:0 0 6px;padding:6px 8px;border:0;border-left:3px solid #1687e8;border-radius:7px;background:rgba(255,255,255,.58);color:inherit;font:inherit;line-height:1.25;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}.quoted-message:active{background:rgba(255,255,255,.88)}.quoted-message strong{overflow:hidden;color:#536471;font-size:11px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.quoted-message span{overflow:hidden;max-width:280px;color:#536471;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.message-line.reply-highlight .message-bubble{animation:reply-target-highlight 1.25s ease-out}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:9px;font-weight:400;line-height:1.3;opacity:.85}.message-status.failed,.caption-meta.failed{color:#dc2626}.message-status button,.caption-meta button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble>.quoted-message{margin:8px 10px 6px}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}.caption-meta{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;color:#718096;font-size:9px;line-height:1.3;white-space:nowrap}
 .audio-bubble{padding:9px 10px}
+.message-action-backdrop{position:fixed;inset:0;z-index:20;display:flex;align-items:flex-end;justify-content:center;padding:16px 16px calc(16px + env(safe-area-inset-bottom));background:rgba(15,23,42,.18)}
+.message-action-menu{width:min(100%,360px);overflow:hidden;border:1px solid #e3e8ee;border-radius:16px;background:#fff;box-shadow:0 16px 44px rgba(15,23,42,.2)}
+.message-action-preview{display:flex;min-width:0;flex-direction:column;gap:2px;padding:12px 14px;border-bottom:1px solid #eef1f4}.message-action-preview strong,.message-action-preview span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.message-action-preview strong{font-size:12px;color:#0f1419}.message-action-preview span{font-size:12px;color:#657786}
+.message-action-menu>button{display:flex;width:100%;min-height:48px;align-items:center;gap:11px;padding:0 16px;border:0;border-top:1px solid #f1f3f5;background:#fff;color:#0f1419;font:inherit;font-size:15px;text-align:left}.message-action-menu>button:first-of-type{border-top:0}.message-action-menu>button:active{background:#f7f9f9}.message-action-menu>button svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+@keyframes reply-target-highlight{0%{filter:brightness(.92);box-shadow:0 0 0 4px rgba(22,135,232,.24)}55%{filter:brightness(.98);box-shadow:0 0 0 3px rgba(22,135,232,.12)}100%{filter:none;box-shadow:0 0 0 0 rgba(22,135,232,0)}}
 .jump-to-latest{position:absolute;right:18px;bottom:calc(94px + env(safe-area-inset-bottom));z-index:4;display:flex;min-width:42px;height:42px;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid #d8dee5;border-radius:999px;background:#fff;color:#0f1419;box-shadow:0 5px 18px rgba(15,23,42,.16);font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent}.jump-to-latest:active{background:#f7f9f9;transform:scale(.97)}.jump-to-latest>span{font-size:20px;line-height:1}.jump-to-latest strong{font-size:12px;font-weight:650;white-space:nowrap}
 .composer-region{position:relative;z-index:3;width:min(100%,720px);margin:0 auto;padding:4px 0 calc(28px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(255,255,255,0),#fff 22%)}
 .replying-preview{display:flex;min-width:0;align-items:center;gap:10px;margin:0 16px 6px;padding:7px 10px 7px 12px;border-left:3px solid #1687e8;border-radius:10px;background:#f7f9f9}.replying-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}.replying-copy strong,.replying-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.replying-copy strong{color:#0f1419;font-size:12px}.replying-copy span{color:#536471;font-size:12px}.replying-preview>button{width:30px;height:30px;flex:0 0 30px;padding:0;border:0;border-radius:50%;background:transparent;color:#536471;font-size:22px}.replying-preview>button:active{background:#e8ecef}
@@ -605,4 +794,5 @@ onBeforeUnmount(() => {
 .composer-recording{padding-right:14px;padding-left:14px}.recording-dot{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#ef4444;animation:recording-pulse 1.2s ease-in-out infinite}.composer-recording strong{margin-right:auto;font-size:14px;font-variant-numeric:tabular-nums}.composer-recording button{min-width:58px;height:38px;border:0;background:transparent;color:#536471;font-weight:600}.composer-recording .finish-recording{color:#1687e8}.finishing-label{margin-left:auto;color:#536471;font-size:14px}.composer-preview{padding-left:10px}.composer-voice-preview{min-width:0;flex:1}.composer-preview :deep(.voice-message){min-width:0;grid-template-columns:34px minmax(70px,1fr) 36px}.remove-audio{font-size:25px;color:#64748b}
 @keyframes recording-pulse{50%{opacity:.35}}
 @media (min-width:768px){.composer-region{padding-bottom:16px}.message-list{width:min(100%,720px);margin:0 auto}}
+@media (prefers-reduced-motion:reduce){.message-line.reply-highlight .message-bubble{animation:none;box-shadow:0 0 0 3px rgba(22,135,232,.16)}}
 </style>
