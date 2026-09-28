@@ -58,12 +58,12 @@ import { useDirectMessagesStore } from "@/stores/directMessages";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useMessagesStore } from "@/stores/messages";
 
-function canonical(id = "canonical-1", content = "你好") {
+function canonical(id = "canonical-1", content = "你好", replyTo?: string) {
   return {
     message: {
       id, senderPubkey: ACCOUNT, recipientPubkeys: [PEER], conversationId: "conversation-1",
       plaintext: content, createdAt: 100, protocol: "nip17" as const, transportKind: 1059,
-      rumorId: id, tags: [["p", PEER], ["t", "hainei-dm"]],
+      rumorId: id, ...(replyTo ? { replyTo } : {}), tags: [["p", PEER], ["t", "hainei-dm"]],
     },
     events: [],
     relayResults: [],
@@ -144,6 +144,26 @@ describe("optimistic outgoing DM tasks", () => {
     release(canonical());
     await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
     expect(direct.peerMessages(PEER)).toHaveLength(1);
+  });
+
+  it("keeps quoted reply metadata on optimistic state, durable task, and NIP-17 send", async () => {
+    const replyTo = "d".repeat(64);
+    mocks.send.mockImplementation(async (options: any) => {
+      await options.onQueued("canonical-reply");
+      return canonical("canonical-reply", options.content, options.replyTo);
+    });
+    const { direct } = seed();
+    const localId = direct.send(PEER, "引用回复", undefined, replyTo);
+
+    expect(direct.peerMessages(PEER)[0]).toMatchObject({
+      content: "引用回复",
+      replyTo,
+      outgoing: { localId, state: "sending" },
+    });
+    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledOnce());
+    expect(mocks.send.mock.calls[0][0].replyTo).toBe(replyTo);
+    expect(mocks.tasks.get(`${ACCOUNT}:${localId}`).replyTo).toBe(replyTo);
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
   });
 
   it("marks a text failure on the same bubble and retries its durable outgoing item", async () => {
