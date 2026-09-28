@@ -154,6 +154,18 @@
         <p class="section-detail">节省流量模式会缩短图片预加载距离，并避免不必要的视频预加载。</p>
       </details>
 
+      <details v-if="isNativeAndroid" class="technical-section">
+        <summary class="section-heading">
+          <div><h3>应用更新 / Update</h3><p>{{ androidUpdateSummary }}</p></div>
+        </summary>
+        <div class="account-row">
+          <span class="small">{{ androidVersionName ? `当前版本：${androidVersionName}` : "Android APK 自动检查更新" }}</span>
+          <button class="btn btn-secondary" type="button" :disabled="checkingAndroidUpdate" @click="checkForAndroidAppUpdate">
+            {{ checkingAndroidUpdate ? "检查中…" : "检查更新" }}
+          </button>
+        </div>
+      </details>
+
       <details class="technical-section">
         <summary class="section-heading">
           <div><h3>后台推送 / {{ isNativeApp ? "Android Push" : "Web Push" }}</h3><p>{{ pushStatusText }}</p></div>
@@ -264,6 +276,11 @@ import {
   type RelaySource
 } from "@/services/connectionSettings";
 import { isAccountResourceStale, runAfterFirstPaint } from "@/utils/bottomTabActivation";
+import {
+  checkAndroidUpdate,
+  getCurrentAndroidVersion,
+  isNativeAndroidApp,
+} from "@/services/androidUpdater";
 
 const keyStore = useKeyStore();
 const profiles = useProfilesStore();
@@ -294,6 +311,10 @@ const isNativeApp = (() => {
   const capacitor = (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
   return capacitor?.isNativePlatform?.() === true;
 })();
+const isNativeAndroid = isNativeAndroidApp();
+const checkingAndroidUpdate = ref(false);
+const androidVersionName = ref("");
+const androidUpdateSummary = ref("自动检查更新");
 const pushSupported = !isNativeApp && supportsPushNotifications();
 const pushStatusText = computed(() => isNativeApp
   ? "原生通知将在下一阶段启用"
@@ -601,6 +622,38 @@ async function togglePush() {
   }
 }
 
+async function refreshAndroidVersion() {
+  if (!isNativeAndroid) return;
+  try {
+    const current = await getCurrentAndroidVersion();
+    androidVersionName.value = current?.versionName || "";
+  } catch {
+    androidVersionName.value = "";
+  }
+}
+
+async function checkForAndroidAppUpdate() {
+  if (!isNativeAndroid || checkingAndroidUpdate.value) return;
+  checkingAndroidUpdate.value = true;
+  androidUpdateSummary.value = "正在检查…";
+  try {
+    const update = await checkAndroidUpdate(true);
+    if (update) {
+      androidUpdateSummary.value = `发现新版本 ${update.versionName}`;
+      ui.addToast(`发现新版本 ${update.versionName}`, 2_500, "success");
+    } else {
+      androidUpdateSummary.value = "已经是最新版本";
+      ui.addToast("当前已经是最新版本", 2_000, "success");
+    }
+    await refreshAndroidVersion();
+  } catch (error) {
+    androidUpdateSummary.value = "检查失败";
+    ui.addToast(error instanceof Error ? error.message : "检查更新失败", 2_500, "error");
+  } finally {
+    checkingAndroidUpdate.value = false;
+  }
+}
+
 async function retryFailedQueue() {
   const account = keyStore.pkHex;
   if (!account || retryingQueue.value) return;
@@ -639,7 +692,10 @@ watch(() => keyStore.pkHex, async pk => {
   void refreshDiagnostics();
 }, { immediate: true });
 
-onMounted(startStatusPolling);
+onMounted(() => {
+  startStatusPolling();
+  if (isNativeAndroid) void refreshAndroidVersion();
+});
 onActivated(() => {
   startStatusPolling();
   scheduleCacheStatsRefresh();
