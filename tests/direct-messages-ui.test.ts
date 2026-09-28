@@ -94,6 +94,22 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('openProfile(router, keys.pkHex, peerPubkey.value, event)');
   });
 
+  it("supports quoted replies in direct-message bubbles and composer", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const taskRepository = readFileSync(join(process.cwd(), "src/repositories/outgoingDmTaskRepository.ts"), "utf8");
+
+    expect(chat).toContain('class="message-reply-button"');
+    expect(chat).toContain('class="quoted-message"');
+    expect(chat).toContain('class="replying-preview"');
+    expect(chat).toContain("replyingToId");
+    expect(chat).toContain("directMessages.send(peerPubkey.value, text, image, replyTo)");
+    expect(chat).toContain("directMessages.sendAudio(peerPubkey.value, audio, replyTo)");
+    expect(store).toContain("replyTo: task.replyTo");
+    expect(store).toContain("replyTo === message.replyTo");
+    expect(taskRepository).toContain("record.replyTo");
+  });
+
   it("uses My as a navigation hub with dedicated settings and consistent back navigation", () => {
     const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     const system = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
