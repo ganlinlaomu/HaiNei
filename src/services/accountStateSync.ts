@@ -123,9 +123,19 @@ export function mergeNamespaceData(namespace: AccountStateNamespace, local: any,
     return { dismissedIds, readCursor: cursor ? { lastReadCreatedAt: cursor.lastReadCreatedAt, lastReadMessageId: cursor.lastReadMessageId } : undefined };
   }
   if (namespace === "settings") {
+    const localSettings = migrateConnectionSettings(local, { deviceId: "account-state" });
+    const remoteSettings = migrateConnectionSettings(remote, { deviceId: "account-state" });
+    const leftPrivacy = localSettings.privacy;
+    const rightPrivacy = remoteSettings.privacy;
+    const privacy = rightPrivacy.updatedAt > leftPrivacy.updatedAt
+      || (rightPrivacy.updatedAt === leftPrivacy.updatedAt
+        && String(rightPrivacy.updatedBy || "").localeCompare(String(leftPrivacy.updatedBy || "")) > 0)
+      ? rightPrivacy
+      : leftPrivacy;
     return migrateConnectionSettings({
-      relays: mergeByKey(local?.relays || [], remote?.relays || [], (item: any) => item.url),
-      mediaServers: mergeByKey(local?.mediaServers || [], remote?.mediaServers || [], (item: any) => item.id),
+      relays: mergeByKey(localSettings.relays, remoteSettings.relays, (item: any) => item.url),
+      mediaServers: mergeByKey(localSettings.mediaServers, remoteSettings.mediaServers, (item: any) => item.id),
+      privacy,
     }, { deviceId: "account-state" });
   }
   if (namespace === "feed_preferences") {
