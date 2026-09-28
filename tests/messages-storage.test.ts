@@ -78,6 +78,37 @@ describe("Home Dexie restoration", () => {
     expect(messages.inbox).toEqual([]);
   });
 
+  it("never restores DM receipts into the shared Home inbox, including legacy tagless rows", async () => {
+    const receipt = JSON.stringify({
+      type: "hainei-dm-receipt",
+      status: "read",
+      upTo: { createdAt: 1790635215, messageId: "9".repeat(64) },
+    });
+    mocks.list.mockResolvedValue([
+      {
+        accountPubkey: ACCOUNT, id: "receipt-tagged", senderPubkey: OTHER, recipientPubkeys: [ACCOUNT],
+        conversationId: "receipt", plaintext: receipt, createdAt: 12, protocol: "nip17",
+        transportKind: 1059, transportEventIds: ["wrap-1"], tags: [["t", "hainei-dm-receipt"]],
+        firstSeenAt: 1, lastSeenAt: 1
+      },
+      {
+        accountPubkey: ACCOUNT, id: "receipt-legacy", senderPubkey: OTHER, recipientPubkeys: [ACCOUNT],
+        conversationId: "receipt", plaintext: receipt, createdAt: 11, protocol: "nip17",
+        transportKind: 1059, transportEventIds: ["wrap-2"], tags: [],
+        firstSeenAt: 1, lastSeenAt: 1
+      },
+    ]);
+    const messages = useMessagesStore();
+    await messages.load(ACCOUNT);
+    expect(messages.inbox).toEqual([]);
+
+    messages.addInbox({
+      id: "receipt-live", pubkey: OTHER, recipientPubkeys: [ACCOUNT], created_at: 13,
+      content: receipt, tags: [["t", "hainei-dm-receipt"]],
+    });
+    expect(messages.inbox).toEqual([]);
+  });
+
   it("imports only the selected account's compatible legacy inbox and leaves other accounts untouched", async () => {
     storage.setItem(`nostr_inbox_${ACCOUNT}`, JSON.stringify([{
       id: "legacy", pubkey: OTHER, created_at: 4, content: "old", protocol: "nip17", transportKind: 1059
