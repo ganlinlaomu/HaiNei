@@ -42,9 +42,14 @@ export interface MediaServer extends SyncMetadata {
   failureCount?: number;
 }
 
+export interface PrivacySettings extends SyncMetadata {
+  readReceipts: boolean;
+}
+
 export interface ConnectionSettings {
   relays: RelayConfig[];
   mediaServers: MediaServer[];
+  privacy: PrivacySettings;
 }
 
 export interface SyncEventMetadata {
@@ -52,7 +57,7 @@ export interface SyncEventMetadata {
   eventId: string;
 }
 
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 export const RELAY_SYNC_IDENTIFIER = "hainei-relays";
 export const MEDIA_SYNC_IDENTIFIER = "hainei-media";
 export const DEVICE_ID_STORAGE_KEY = "hainei_device_id";
@@ -236,7 +241,11 @@ export function defaultMediaServers(): MediaServer[] {
 }
 
 export function createDefaultConnectionSettings(): ConnectionSettings {
-  return { relays: defaultRelayConfigs(), mediaServers: defaultMediaServers() };
+  return {
+    relays: defaultRelayConfigs(),
+    mediaServers: defaultMediaServers(),
+    privacy: { readReceipts: true, updatedAt: 0, updatedBy: "builtin" }
+  };
 }
 
 function relayFromUnknown(value: unknown, now: number, deviceId: string): RelayConfig | null {
@@ -360,6 +369,9 @@ export function migrateConnectionSettings(
     : Array.isArray(root.blossomServers)
       ? root.blossomServers
       : Array.isArray(options.legacyMediaServers) ? options.legacyMediaServers : [];
+  const privacyInput = root.privacy && typeof root.privacy === "object"
+    ? root.privacy as Partial<PrivacySettings>
+    : {};
 
   const migratedRelays = relayInput
     .map(item => relayFromUnknown(item, now, options.deviceId))
@@ -380,7 +392,12 @@ export function migrateConnectionSettings(
 
   return {
     relays: ensureDefaultRelayCandidates(migratedRelays),
-    mediaServers: dedupeMedia(migratedMedia)
+    mediaServers: dedupeMedia(migratedMedia),
+    privacy: {
+      readReceipts: privacyInput.readReceipts !== false,
+      updatedAt: Number.isFinite(Number(privacyInput.updatedAt)) ? Number(privacyInput.updatedAt) : 0,
+      updatedBy: privacyInput.updatedBy || options.deviceId
+    }
   };
 }
 
