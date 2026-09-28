@@ -35,7 +35,7 @@ import {
 
 export type { MediaServer, MediaServerType, RelayConfig };
 
-type SettingsDomain = "relays" | "media";
+type SettingsDomain = "relays" | "media" | "privacy";
 
 type StoredSettingsData = {
   version: number;
@@ -130,6 +130,17 @@ export const useSettingsStore = defineStore("settings", {
       const key = dataSaverKeyFor(this.loadedFor);
       if (!key) return;
       try { deviceStorage.setItem(key, enabled ? "1" : "0"); } catch {}
+    },
+
+    setReadReceipts(enabled: boolean) {
+      if (!this.loadedFor) return;
+      const current = this.settings.privacy;
+      this.settings.privacy = {
+        readReceipts: enabled,
+        updatedAt: Math.max(Date.now(), (current?.updatedAt || 0) + 1),
+        updatedBy: this.deviceId || "device"
+      };
+      this.changed(["privacy"]);
     },
 
     _clearValidationError() {

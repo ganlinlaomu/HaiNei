@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
 import {
   DM_RECEIPT_TYPE,
   cursorAfter,
@@ -11,7 +12,8 @@ import {
 import { createHomeMessageHandler } from "@/nostr/messaging/homeDelivery";
 import { MessageIngestionPipeline } from "@/nostr/messaging/sync/ingestion";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
-import { receiptStatusForMessage } from "@/stores/directMessages";
+import { receiptStatusForMessage, useDirectMessagesStore } from "@/stores/directMessages";
+import { useSettingsStore } from "@/stores/settings";
 
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
@@ -31,6 +33,8 @@ function receiptMessage(status: "delivered" | "read", createdAt = 100, messageId
     tags: dmReceiptTags(status),
   };
 }
+
+afterEach(() => vi.useRealTimers());
 
 describe("encrypted DM receipts", () => {
   it("encodes and validates private delivered/read cursor controls", () => {
@@ -66,6 +70,33 @@ describe("encrypted DM receipts", () => {
     expect(receiptStatusForMessage({ id: FIRST, created_at: 101 }, state)).toBe("delivered");
     expect(receiptStatusForMessage({ id: SECOND, created_at: 102 }, state)).toBe("sent");
     expect(cursorCovers(state.read, { id: FIRST, created_at: 99 })).toBe(true);
+  });
+
+  it("honors the privacy opt-out without disabling delivery receipts", () => {
+    vi.useFakeTimers();
+    setActivePinia(createPinia());
+    const directMessages = useDirectMessagesStore();
+    const settings = useSettingsStore();
+    directMessages.loadedFor = ACCOUNT;
+    settings.loadedFor = ACCOUNT;
+    settings.settings.privacy = { readReceipts: false, updatedAt: 1, updatedBy: "test" };
+
+    directMessages.receiptStateByPeer[PEER] = {
+      delivered: { createdAt: 100, messageId: FIRST },
+      read: { createdAt: 101, messageId: SECOND },
+    };
+    expect(directMessages.outgoingReceiptStatus(PEER, {
+      id: FIRST, created_at: 100, pubkey: ACCOUNT,
+    } as any)).toBe("delivered");
+
+    const flush = vi.spyOn(directMessages, "flushReceipt").mockResolvedValue(undefined);
+    directMessages.scheduleReceipt(PEER, "read", { createdAt: 102, messageId: SECOND });
+    vi.advanceTimersByTime(600);
+    expect(flush).not.toHaveBeenCalled();
+
+    directMessages.scheduleReceipt(PEER, "delivered", { createdAt: 102, messageId: SECOND });
+    vi.advanceTimersByTime(600);
+    expect(flush).toHaveBeenCalledWith(ACCOUNT, PEER, "delivered", expect.any(String));
   });
 
   it("routes receipt controls without mirroring them into chat history", async () => {

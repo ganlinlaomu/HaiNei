@@ -60,6 +60,17 @@ describe("Relay configuration", () => {
     ]);
   });
 
+  it("defaults read receipts on and preserves an explicit privacy opt-out", () => {
+    expect(migrateConnectionSettings({}, { deviceId: "device-a", now: NOW }).privacy.readReceipts).toBe(true);
+    expect(migrateConnectionSettings({
+      privacy: { readReceipts: false, updatedAt: 42, updatedBy: "device-b" }
+    }, { deviceId: "device-a", now: NOW }).privacy).toEqual({
+      readReceipts: false,
+      updatedAt: 42,
+      updatedBy: "device-b"
+    });
+  });
+
   it("retires old built-in services without deleting matching user entries", () => {
     const migrated = migrateConnectionSettings({
       relays: [

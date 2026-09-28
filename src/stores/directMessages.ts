@@ -21,6 +21,8 @@ import { syncedMessageRepository } from "@/repositories/syncedMessageRepository"
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
+import { useSettingsStore } from "@/stores/settings";
+import { deviceStorage } from "@/services/deviceStorage";
 import { uploadEncryptedCommentImage } from "@/utils/commentImage";
 import { prepareEncryptedDmAudio, uploadPreparedEncryptedDmAudio } from "@/utils/encryptedDmAudio";
 import { serializePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
@@ -64,6 +66,18 @@ function clearReceiptTimers() {
 }
 function mergeReceiptCursor(current: DmReceiptCursor | undefined, next: DmReceiptCursor) {
   return receiptCursorAfter(next, current) ? next : current;
+}
+function readReceiptsEnabledForAccount(accountPubkey: string) {
+  const account = accountPubkey.toLowerCase();
+  const settings = useSettingsStore();
+  if (settings.loadedFor === account) return settings.settings.privacy.readReceipts;
+  try {
+    const raw = deviceStorage.getItem(`nostr_settings_${account}`);
+    if (!raw) return true;
+    return JSON.parse(raw)?.settings?.privacy?.readReceipts !== false;
+  } catch {
+    return true;
+  }
 }
 export function receiptStatusForMessage(
   message: Pick<InboxItem, "id" | "created_at">,
@@ -316,7 +330,11 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     outgoingReceiptStatus(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey">) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
       if (!account || message.pubkey !== account) return null;
-      return receiptStatusForMessage(message, this.receiptStateByPeer[peerPubkey.toLowerCase()]);
+      const state = this.receiptStateByPeer[peerPubkey.toLowerCase()];
+      if (!readReceiptsEnabledForAccount(account)) {
+        return receiptStatusForMessage(message, state ? { ...state, read: undefined } : state);
+      }
+      return receiptStatusForMessage(message, state);
     },
     async persistReceiptState(peerPubkey: string, state: PeerReceiptState, sent = false) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
@@ -332,6 +350,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const friendships = useFriendshipsStore();
       if (friendships.loadedFor !== account) await friendships.load(account);
       if (!friendships.isAccepted(peer) || useKeyStore().pkHex.toLowerCase() !== account) return false;
+      if (receipt.status === "read" && !readReceiptsEnabledForAccount(account)) return false;
 
       let current = this.receiptStateByPeer[peer];
       if (!current) {
@@ -358,6 +377,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
       const peer = peerPubkey.toLowerCase();
       if (!account || !peer || peer === account || !/^[0-9a-f]{64}$/i.test(upTo.messageId)) return;
+      if (status === "read" && !readReceiptsEnabledForAccount(account)) return;
       const sent = this.sentReceiptStateByPeer[peer]?.[status];
       if (!receiptCursorAfter(upTo, sent)) return;
       const key = receiptQueueKey(account, peer, status);
@@ -380,6 +400,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const friendships = useFriendshipsStore();
       if (friendships.loadedFor !== account) await friendships.load(account);
       if (!friendships.isAccepted(peer)) return;
+      if (status === "read" && !readReceiptsEnabledForAccount(account)) return;
       const keys = useKeyStore();
       if (!keys.supportsNip44) return;
 

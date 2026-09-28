@@ -7,7 +7,7 @@ import {
 } from "@/db/dexie";
 import { accountStateRepository } from "@/repositories/accountStateRepository";
 import { deviceStorage } from "@/services/deviceStorage";
-import { migrateConnectionSettings } from "@/services/connectionSettings";
+import { migrateConnectionSettings, SETTINGS_VERSION } from "@/services/connectionSettings";
 
 export const ACCOUNT_STATE_NAMESPACES: AccountStateNamespace[] = [
   "friendships", "friend_metadata", "own_profile", "settings", "bookmarks",
@@ -123,9 +123,19 @@ export function mergeNamespaceData(namespace: AccountStateNamespace, local: any,
     return { dismissedIds, readCursor: cursor ? { lastReadCreatedAt: cursor.lastReadCreatedAt, lastReadMessageId: cursor.lastReadMessageId } : undefined };
   }
   if (namespace === "settings") {
+    const localSettings = migrateConnectionSettings(local, { deviceId: "account-state" });
+    const remoteSettings = migrateConnectionSettings(remote, { deviceId: "account-state" });
+    const leftPrivacy = localSettings.privacy;
+    const rightPrivacy = remoteSettings.privacy;
+    const privacy = rightPrivacy.updatedAt > leftPrivacy.updatedAt
+      || (rightPrivacy.updatedAt === leftPrivacy.updatedAt
+        && String(rightPrivacy.updatedBy || "").localeCompare(String(leftPrivacy.updatedBy || "")) > 0)
+      ? rightPrivacy
+      : leftPrivacy;
     return migrateConnectionSettings({
-      relays: mergeByKey(local?.relays || [], remote?.relays || [], (item: any) => item.url),
-      mediaServers: mergeByKey(local?.mediaServers || [], remote?.mediaServers || [], (item: any) => item.id),
+      relays: mergeByKey(localSettings.relays, remoteSettings.relays, (item: any) => item.url),
+      mediaServers: mergeByKey(localSettings.mediaServers, remoteSettings.mediaServers, (item: any) => item.id),
+      privacy,
     }, { deviceId: "account-state" });
   }
   if (namespace === "feed_preferences") {
@@ -167,7 +177,7 @@ export async function materializeAccountState(account: string, namespace: Accoun
   } else if (namespace === "own_profile" && materializedData?.ownerPubkey === account) {
     await db.accountProfiles.put({ ...materializedData, accountPubkey: account });
   } else if (namespace === "settings") {
-    deviceStorage.setItem(`nostr_settings_${account}`, JSON.stringify({ version: 3, settings: materializedData, lastSyncTimestamp: Date.now() }));
+    deviceStorage.setItem(`nostr_settings_${account}`, JSON.stringify({ version: SETTINGS_VERSION, settings: materializedData, lastSyncTimestamp: Date.now() }));
   } else if (namespace === "bookmarks") {
     await db.accountBookmarks.bulkPut((materializedData || []).map((record: BookmarkRecord) => ({ ...record, accountPubkey: account })));
   } else if (namespace === "feed_preferences") {
