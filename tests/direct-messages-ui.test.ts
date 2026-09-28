@@ -73,6 +73,18 @@ describe("direct-message navigation and UI contract", () => {
     expect(profile).toContain("暂无动态");
   });
 
+  it("uses the same profile view for self and exposes editing only there", () => {
+    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
+    expect(profile).toContain("const isSelf = computed(() => ownerPubkey.value === keys.pkHex)");
+    expect(profile).toContain('v-if="isSelf" class="message-button"');
+    expect(profile).toContain("@click=\"router.push('/settings/profile')\">编辑资料</button>");
+    expect(profile).not.toContain('router.replace("/settings/profile")');
+    expect(settings).toContain('aria-label="查看我的个人资料"');
+    expect(settings).toContain("void router.push(`/profile/${keyStore.pkHex}`)");
+    expect(settings).toContain('@click="openOwnProfile"');
+  });
+
   it("opens the peer profile from the DM header name/avatar and received-message avatar", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain('class="peer-profile avatar-profile-link"');
@@ -117,7 +129,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(friends).toContain('<SecondaryPageHeader title="好友 / 好友分组" back-label="返回我的" />');
     expect(friends).toContain('components: { ProfileAvatar, SecondaryPageHeader, QrScannerSheet }');
     expect(saved).toContain('<SecondaryPageHeader title="已收藏" back-label="返回我的" />');
-    expect(profile).toContain('<SecondaryPageHeader title="我的资料" back-label="返回我的" />');
+    expect(profile).toContain('<SecondaryPageHeader title="编辑资料" back-label="返回个人资料" back-mode="history" />');
     expect(friends).toMatch(/return \{[\s\S]*router,[\s\S]*acceptedFriends/);
     expect(secondaryHeader).toContain('backTo: "/settings"');
     expect(secondaryHeader).toContain('backLabel: "返回我的"');
