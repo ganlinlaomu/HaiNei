@@ -5,9 +5,9 @@ function normalized(pubkey: string) {
 }
 
 export function profileLocation(accountPubkey: string, ownerPubkey: string) {
-  const account = normalized(accountPubkey);
+  normalized(accountPubkey);
   const owner = normalized(ownerPubkey);
-  return owner === account ? "/settings/profile" : `/profile/${owner}`;
+  return `/profile/${owner}`;
 }
 
 export function canViewPrivateProfile(
