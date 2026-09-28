@@ -19,6 +19,20 @@ export class MetaRepository {
     await this.database.accountMeta.put(record);
     return record;
   }
+
+  async delete(accountPubkey: string, key: string) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    await this.database.accountMeta.delete([account, key]);
+  }
+
+  async listPrefix(accountPubkey: string, prefix: string) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    return this.database.accountMeta
+      .where("accountPubkey")
+      .equals(account)
+      .filter(record => record.key.startsWith(prefix))
+      .toArray();
+  }
 }
 
 export const metaRepository = new MetaRepository();
