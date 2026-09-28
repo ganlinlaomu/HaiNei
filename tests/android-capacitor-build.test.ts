@@ -13,7 +13,7 @@ describe("Android Capacitor build", () => {
     });
   });
 
-  it("builds an installable debug APK entirely in GitHub Actions", () => {
+  it("builds Android in GitHub Actions and patches the native updater", () => {
     const workflow = readFileSync(join(process.cwd(), ".github/workflows/android.yml"), "utf8");
     expect(workflow).toContain("node-version: 22");
     expect(workflow).toContain('java-version: "21"');
@@ -21,9 +21,23 @@ describe("Android Capacitor build", () => {
     expect(workflow).toContain("@capacitor/android@8");
     expect(workflow).toContain('"platform-tools" "platforms;android-36" "build-tools;36.0.0"');
     expect(workflow).toContain("./.capacitor-ci/node_modules/.bin/cap add android");
+    expect(workflow).toContain("node scripts/patch-android-update.mjs");
     expect(workflow).toContain("./gradlew assembleDebug --no-daemon");
-    expect(workflow).toContain("HaiNei-debug.apk");
+    expect(workflow).toContain("./gradlew assembleRelease --no-daemon");
     expect(workflow).toContain("actions/upload-artifact@v4");
+  });
+
+  it("publishes only signed main builds as the rolling update release", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/android.yml"), "utf8");
+    expect(workflow).toContain("HAINEI_ANDROID_KEYSTORE_BASE64");
+    expect(workflow).toContain("HAINEI_ANDROID_KEYSTORE_PASSWORD");
+    expect(workflow).toContain("HAINEI_ANDROID_KEY_ALIAS");
+    expect(workflow).toContain("HAINEI_ANDROID_KEY_PASSWORD");
+    expect(workflow).toContain("HAINEI_SIGNING_READY");
+    expect(workflow).toContain("artifacts/HaiNei.apk");
+    expect(workflow).toContain("artifacts/update.json");
+    expect(workflow).toContain("android-latest");
+    expect(workflow).toContain("generate-android-update-manifest.mjs");
   });
 
   it("injects the HaiNei Worker URL into Android builds and refuses broken APKs", () => {
@@ -38,5 +52,14 @@ describe("Android Capacitor build", () => {
     const source = readFileSync(join(process.cwd(), "src/main.ts"), "utf8");
     expect(source).toContain("function isNativeContainer()");
     expect(source).toContain("if (isNativeContainer()) return;");
+  });
+
+  it("mounts Android update UI without replacing the existing PWA updater", () => {
+    const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
+    const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    expect(app).toContain("<UpdateNotification />");
+    expect(app).toContain("<AndroidUpdateNotification />");
+    expect(settings).toContain("应用更新 / Update");
+    expect(settings).toContain("checkAndroidUpdate(true)");
   });
 });
