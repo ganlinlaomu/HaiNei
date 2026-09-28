@@ -114,7 +114,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("isMediaGestureTarget");
     expect(chat).toContain(".post-image-preview, .optimistic-image, .voice-message");
     expect(chat).toContain('target.scrollIntoView({ behavior: "smooth", block: "center" })');
-    expect(chat).toContain("'reply-highlight': highlightedMessageId === message.id");
+    expect(chat).toContain("'message-highlight': highlightedMessageId === message.id");
     expect(chat).toContain("directMessages.send(peerPubkey.value, text, image, replyTo)");
     expect(chat).toContain("directMessages.sendAudio(peerPubkey.value, audio, replyTo)");
     expect(store).toContain("replyTo: task.replyTo");
