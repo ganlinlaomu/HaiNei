@@ -190,6 +190,30 @@ export class SyncedMessageRepository {
       .toArray();
   }
 
+  async listConversationAround(accountPubkey: string, conversationId: string, messageId: string, radius = 20) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const target = await this.database.syncedMessages.get([account, messageId]);
+    if (!target || target.conversationId !== conversationId) return [] as SyncedMessageRecord[];
+    const index = this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt]");
+    const [before, sameTimestamp, after] = await Promise.all([
+      index
+        .between([account, conversationId, Dexie.minKey], [account, conversationId, target.createdAt], true, false)
+        .reverse()
+        .limit(radius)
+        .toArray(),
+      index.equals([account, conversationId, target.createdAt]).toArray(),
+      index
+        .between([account, conversationId, target.createdAt], [account, conversationId, Dexie.maxKey], false, true)
+        .limit(radius)
+        .toArray(),
+    ]);
+    const byId = new Map([...before, ...sameTimestamp, ...after].map(record => [record.id, record]));
+    const ordered = [...byId.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    const targetIndex = ordered.findIndex(record => record.id === messageId);
+    if (targetIndex < 0) return [] as SyncedMessageRecord[];
+    return ordered.slice(Math.max(0, targetIndex - radius), targetIndex + radius + 1);
+  }
+
   async getSyncState(accountPubkey: string): Promise<MessageSyncStateRecord> {
     const account = normalizeAccountPubkey(accountPubkey);
     return (await this.database.messageSyncStates.get(account)) || {
