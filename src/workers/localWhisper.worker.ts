@@ -1,4 +1,4 @@
-const TRANSFORMERS_MODULE_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js";
+const TRANSFORMERS_MODULE_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/dist/transformers.min.js";
 const MODEL_ID = "onnx-community/whisper-base";
 
 type Pipeline = (
@@ -53,7 +53,7 @@ async function run(message: { id: number; audio: Float32Array }) {
     const started = performance.now();
     const output = await transcriber(audio, {
       task: "transcribe",
-      language: "chinese",
+      language: "zh",
       chunk_length_s: 30,
       stride_length_s: 5,
     });
