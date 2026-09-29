@@ -105,7 +105,7 @@ export function reduceFriendshipControl(
 }
 
 export const useFriendshipsStore = defineStore("friendships", {
-  state: () => ({ records: [] as FriendshipRecord[], loadedFor: "", loading: false }),
+  state: () => ({ records: [] as FriendshipRecord[], loadedFor: "", loading: false, authorizationReady: false }),
   getters: {
     getRecord: state => (peerPubkey: string) => state.records.find(item => item.peerPubkey === normalized(peerPubkey)),
     getState(): (peerPubkey: string) => FriendshipState | undefined {
@@ -125,10 +125,12 @@ export const useFriendshipsStore = defineStore("friendships", {
       this.records = [];
       this.loadedFor = account;
       this.loading = true;
+      this.authorizationReady = false;
       try {
         const records = await friendshipRepository.list(account);
         if (this.loadedFor === account) {
           this.records = records;
+          this.authorizationReady = true;
           notifyDirectMessageAuthorizationChanged(account);
           notifyMessageAuthorizationChanged(account);
         }
@@ -142,6 +144,7 @@ export const useFriendshipsStore = defineStore("friendships", {
       const records = await friendshipRepository.list(account);
       if (this.loadedFor !== account) return false;
       this.records = records;
+      this.authorizationReady = true;
       notifyDirectMessageAuthorizationChanged(account);
       notifyMessageAuthorizationChanged(account);
       return true;
@@ -150,6 +153,7 @@ export const useFriendshipsStore = defineStore("friendships", {
       this.records = [];
       this.loadedFor = "";
       this.loading = false;
+      this.authorizationReady = false;
     },
     async applyControl(peerPubkey: string, event: FriendshipControlEvent) {
       const accountPubkey = this.loadedFor;
