@@ -98,8 +98,16 @@ function queueBadgeIncrementWhenBackground() {
 }
 
 self.addEventListener('message', (event) => {
+  if (event.data?.type === 'GET_BUILD_INFO') {
+    event.ports?.[0]?.postMessage({
+      type: 'BUILD_INFO',
+      version: VERSION,
+      buildId: BUILD_ID
+    });
+    return;
+  }
   if (event.data?.type === 'SKIP_WAITING') {
-    self.skipWaiting();
+    event.waitUntil(self.skipWaiting());
     return;
   }
   if (event.data?.type === 'SYNC_APP_BADGE') {
