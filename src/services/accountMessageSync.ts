@@ -3,6 +3,7 @@ import { getRelaysFromStorage } from "@/nostr/relays";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
+import type { SyncStatus } from "@/nostr/messaging/sync/types";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { isDmReceiptMessage } from "@/nostr/messaging/dmReceipts";
@@ -22,8 +23,33 @@ export type AccountSyncKeys = {
   signEvent(event: EventTemplate): Promise<VerifiedEvent>;
 };
 
-export const accountMessageSyncManager = new MessageSyncManager();
+const accountMessageSyncManager = new MessageSyncManager();
 let activeKeys: AccountSyncKeys | null = null;
+
+export type AccountMessageSyncSnapshot = {
+  accountPubkey: string;
+  status: SyncStatus;
+};
+
+let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle" };
+const accountSyncStatusListeners = new Set<(snapshot: AccountMessageSyncSnapshot) => void>();
+
+function setAccountMessageSyncStatus(accountPubkey: string, status: SyncStatus) {
+  accountSyncSnapshot = { accountPubkey: accountPubkey.toLowerCase(), status };
+  for (const listener of accountSyncStatusListeners) {
+    try { listener({ ...accountSyncSnapshot }); } catch {}
+  }
+}
+
+export function getAccountMessageSyncStatus(): AccountMessageSyncSnapshot {
+  return { ...accountSyncSnapshot };
+}
+
+export function onAccountMessageSyncStatus(listener: (snapshot: AccountMessageSyncSnapshot) => void) {
+  accountSyncStatusListeners.add(listener);
+  listener(getAccountMessageSyncStatus());
+  return () => accountSyncStatusListeners.delete(listener);
+}
 
 export async function startAccountMessageSync(keys: AccountSyncKeys) {
   const account = keys.pkHex.toLowerCase();
@@ -38,15 +64,16 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   const directMessages = useDirectMessagesStore();
   const accepted = friendships.records.filter(record => record.state === "accepted").map(record => record.peerPubkey);
   registerOutgoingPushSigner(account, keys.signEvent.bind(keys));
-  await accountMessageSyncManager.start({
-    accountPubkey: account,
-    relays: getRelaysFromStorage("read"),
-    authors: [...new Set([...accepted, account])],
-    decodeContext: {
+  try {
+    await accountMessageSyncManager.start({
+      accountPubkey: account,
+      relays: getRelaysFromStorage("read"),
+      authors: [...new Set([...accepted, account])],
+      decodeContext: {
       accountPubkey: account,
       nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined,
     },
-    onMessage: createHomeMessageHandler({
+      onMessage: createHomeMessageHandler({
       accountPubkey: account,
       currentAccount: () => activeKeys?.pkHex || "",
       isAcceptedMessage: message => {
@@ -86,9 +113,14 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         replyTo: message.replyTo, rootId: message.rootId, tags: message.tags,
       }),
     }),
-    onPersistedMessage: message => directMessages.acknowledgePersistedIncoming(account, message),
-  });
-  return true;
+      onPersistedMessage: message => directMessages.acknowledgePersistedIncoming(account, message),
+      onStatus: status => setAccountMessageSyncStatus(account, status),
+    });
+    return true;
+  } catch (error) {
+    if (activeKeys?.pkHex.toLowerCase() === account) setAccountMessageSyncStatus(account, "error");
+    throw error;
+  }
 }
 
 export async function restartAccountMessageSync() {
@@ -96,7 +128,21 @@ export async function restartAccountMessageSync() {
   return startAccountMessageSync(activeKeys);
 }
 
+export async function resumeAccountMessageSync(source: "reconnect" | "resume" | "manual" = "manual") {
+  if (!activeKeys?.isLoggedIn) return false;
+  await accountMessageSyncManager.resume(source);
+  return true;
+}
+
+export async function markAccountConversationRead(conversationId: string) {
+  if (!activeKeys?.isLoggedIn || !conversationId) return false;
+  await accountMessageSyncManager.markConversationRead(conversationId);
+  return true;
+}
+
 export function stopAccountMessageSync() {
+  const account = activeKeys?.pkHex.toLowerCase() || accountSyncSnapshot.accountPubkey;
   activeKeys = null;
   accountMessageSyncManager.stop();
+  setAccountMessageSyncStatus(account, "idle");
 }
