@@ -32,6 +32,7 @@ function normalizeDeliveryResult(result: MessageDeliveryResult): "persist" | "di
 export class MessageIngestionPipeline {
   private readonly deliveredLogicalIds = new Set<string>();
   private readonly discardedLogicalIds = new Set<string>();
+  private readonly logicalFlights = new Map<string, Promise<{ inserted: boolean; discarded: boolean; deferred: boolean }>>();
   private retryDeferredFlight: Promise<number> | null = null;
 
   constructor(
@@ -119,7 +120,21 @@ export class MessageIngestionPipeline {
       return { inserted: result.inserted, discarded: false, deferred: false };
     }
 
-    return this.processCanonicalMessage(message, metadata, logicalToken);
+    const existingFlight = this.logicalFlights.get(logicalToken);
+    if (existingFlight) {
+      performanceCounters.duplicateEventsDropped++;
+      const settled = await existingFlight;
+      if (settled.deferred || settled.discarded) return settled;
+      const merged = await this.repository.enqueueMessage(this.accountPubkey, message);
+      return { inserted: merged.inserted, discarded: false, deferred: false };
+    }
+
+    const flight = this.processCanonicalMessage(message, metadata, logicalToken)
+      .finally(() => {
+        if (this.logicalFlights.get(logicalToken) === flight) this.logicalFlights.delete(logicalToken);
+      });
+    this.logicalFlights.set(logicalToken, flight);
+    return flight;
   }
 
   private async processCanonicalMessage(
