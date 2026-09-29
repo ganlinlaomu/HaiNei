@@ -103,6 +103,7 @@
                 :duration="message.outgoing?.audioDuration || audioMedia(message)?.duration || 0"
                 :account-pubkey="keys.pkHex"
                 :transcript-key="`${keys.pkHex}:${message.id}`"
+                :own="isOwn(message)"
                 :suspended="voiceCaptureOwnsAudioSession"
               />
               <template v-else-if="isMediaCaption(message)">
@@ -178,7 +179,7 @@
       <form class="chat-composer" @submit.prevent="submitMessage">
         <input ref="imageInput" class="image-input" type="file" accept="image/*" @change="selectImage" />
         <div v-if="recordedAudio && !voiceCaptureOwnsAudioSession" class="composer-preview">
-          <DmAudioMessage class="composer-voice-preview" :preview-url="recordedAudio.preview" :duration="recordedAudio.duration" />
+          <DmAudioMessage class="composer-voice-preview" :preview-url="recordedAudio.preview" :duration="recordedAudio.duration" :own="true" />
           <button class="composer-icon-button remove-audio" type="button" aria-label="删除录音" @click="clearRecordedAudio">×</button>
           <button class="composer-icon-button send-button" type="submit" aria-label="发送" :disabled="!canSend">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z"/><path d="m12 13 7-8"/></svg>
