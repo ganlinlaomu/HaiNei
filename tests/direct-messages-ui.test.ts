@@ -558,7 +558,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("width:min(100%,720px)");
   });
 
-  it("revalidates friendship before new DM navigation and uses history-aware DM authorization in both sync owners", () => {
+  it("revalidates friendship before new DM navigation and keeps DM authorization in the account sync owner", () => {
     const sheet = readFileSync(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
     const accountSync = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
     const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
@@ -567,7 +567,12 @@ describe("direct-message navigation and UI contract", () => {
     expect(sheet).toContain("if (!friendships.isAccepted(pubkey))");
     expect(sheet).toContain("好友关系已变更，请重新选择");
     expect(accountSync).toContain("isAuthorizedCanonicalDirectMessage(");
-    expect(home).toContain("isAuthorizedCanonicalDirectMessage(");
+    expect(home).not.toContain("isAuthorizedCanonicalDirectMessage(");
+    expect(home).not.toContain("accountMessageSyncManager");
+    expect(home).not.toContain("messageSync.start(");
+    expect(home).not.toContain("messageSync.stop(");
+    expect(home).toContain("onAccountMessageSyncStatus(applyAccountSyncStatus)");
+    expect(home).toContain('resumeAccountMessageSync("manual")');
     expect(store).toContain('if (!friendships.isAccepted(task.peerPubkey)) throw new Error("好友关系已变更")');
   });
 
