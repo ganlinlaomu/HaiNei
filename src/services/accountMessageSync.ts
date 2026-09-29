@@ -95,9 +95,9 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       onMessage: createHomeMessageHandler({
         accountPubkey: account,
         currentAccount: () => activeKeys?.pkHex || "",
-        isAuthorizationReady: () => friendships.loadedFor === account && !friendships.loading,
+        isAuthorizationReady: () => friendships.loadedFor === account && friendships.authorizationReady && !friendships.loading,
         isAcceptedMessage: message => {
-          if (friendships.loadedFor !== account || friendships.loading) return "unresolved";
+          if (friendships.loadedFor !== account || friendships.loading || !friendships.authorizationReady) return "unresolved";
           if (isDirectMessageTags(message.tags)) {
             const peer = message.senderPubkey === account
               ? message.recipientPubkeys.find(pubkey => pubkey !== account) || ""
