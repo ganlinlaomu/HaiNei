@@ -21,6 +21,7 @@
           class="carousel-image"
           loading="lazy"
           decoding="async"
+          @load="captureImageDimensions(idx, $event)"
           @error="markFailed(idx)"
           @click="handleImageTap(idx)"
         />
@@ -273,6 +274,15 @@ export default defineComponent({
       }
     }
 
+    function captureImageDimensions(idx: number, event: Event) {
+      const item = images.value[idx];
+      const image = event.currentTarget as HTMLImageElement | null;
+      if (!item || !image?.naturalWidth || !image.naturalHeight) return;
+      if (item.width === image.naturalWidth && item.height === image.naturalHeight) return;
+      item.width = image.naturalWidth;
+      item.height = image.naturalHeight;
+    }
+
     function markFailed(idx: number) {
       if (images.value[idx]) images.value[idx].status = "error";
     }
@@ -441,6 +451,7 @@ export default defineComponent({
       viewerImageUrls,
       viewerVisible,
       viewerIndex,
+      captureImageDimensions,
       markFailed,
       retryImage,
       handleImageTap,
