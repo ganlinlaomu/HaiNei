@@ -45,6 +45,19 @@ export class MessageIngestionPipeline {
     private readonly onPersisted?: (message: CanonicalMessage, metadata: MessageIngestionMetadata, inserted: boolean) => void | Promise<void>
   ) {}
 
+  private async clearDeferredBestEffort(messageId: string, diagnostic?: Record<string, unknown>) {
+    try {
+      await this.repository.clearDeferredAuthorizationMessage(this.accountPubkey, messageId);
+    } catch (error) {
+      debugLog("storage", "deferred_cleanup_failed", {
+        account: this.accountPubkey.slice(0, 12),
+        logicalMessageId: messageId.slice(0, 12),
+        ...(diagnostic || {}),
+        reason: error instanceof Error ? error.name || "Error" : "storage_error",
+      }, "warn");
+    }
+  }
+
   async ingestNostrEvent(event: NostrEvent, metadata: MessageIngestionMetadata) {
     const diagnostic = eventContext(event, metadata);
     debugLog("sync", "ingestion_received", diagnostic);
@@ -108,7 +121,7 @@ export class MessageIngestionPipeline {
     const logicalToken = `logical:${logicalKey}`;
 
     if (this.discardedLogicalIds.has(logicalToken)) {
-      await this.repository.clearDeferredAuthorizationMessage(this.accountPubkey, message.id).catch(() => {});
+      await this.clearDeferredBestEffort(message.id);
       performanceCounters.duplicateEventsDropped++;
       return { inserted: false, discarded: true, deferred: false };
     }
@@ -116,7 +129,7 @@ export class MessageIngestionPipeline {
     if (this.deliveredLogicalIds.has(logicalToken)) {
       performanceCounters.duplicateEventsDropped++;
       const result = await this.repository.enqueueMessage(this.accountPubkey, message);
-      await this.repository.clearDeferredAuthorizationMessage(this.accountPubkey, message.id).catch(() => {});
+      await this.clearDeferredBestEffort(message.id);
       return { inserted: result.inserted, discarded: false, deferred: false };
     }
 
@@ -181,7 +194,7 @@ export class MessageIngestionPipeline {
 
     if (delivery === "discard") {
       this.discardedLogicalIds.add(logicalToken);
-      await this.repository.clearDeferredAuthorizationMessage(this.accountPubkey, message.id);
+      await this.clearDeferredBestEffort(message.id, diagnostic);
       try {
         await this.repository.advanceHighWatermark(this.accountPubkey, message.createdAt);
       } catch (error) {
@@ -205,7 +218,7 @@ export class MessageIngestionPipeline {
     }
 
     this.deliveredLogicalIds.add(logicalToken);
-    await this.repository.clearDeferredAuthorizationMessage(this.accountPubkey, message.id);
+    await this.clearDeferredBestEffort(message.id, diagnostic);
     debugLog("storage", result.inserted ? "storage_inserted" : "storage_duplicate", {
       ...diagnostic,
       inserted: result.inserted
