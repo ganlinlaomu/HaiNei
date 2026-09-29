@@ -14,6 +14,7 @@ import { isInteractionMessage, useInteractionsStore } from "@/stores/interaction
 import { useMessagesStore } from "@/stores/messages";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
+import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { onMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 
 export type AccountSyncKeys = {
@@ -79,6 +80,15 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
     }
   }
   const profiles = useProfilesStore();
+  const initialSyncState = await syncedMessageRepository.getSyncState(account);
+  let friendshipHistoryComplete = !!initialSyncState.historyBackfillCompletedAt;
+
+  const authorizePeerAt = (peerPubkey: string, createdAt: number) => {
+    const authorized = isFriendshipAcceptedAt(friendships.getRecord(peerPubkey), createdAt);
+    if (authorized) return "accepted" as const;
+    return friendshipHistoryComplete ? "rejected" as const : "unresolved" as const;
+  };
+
   const feedPreferences = useFeedPreferencesStore();
   const interactions = useInteractionsStore();
   const notifications = useNotificationsStore();
@@ -109,24 +119,19 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
             const peer = message.senderPubkey === account
               ? message.recipientPubkeys.find(pubkey => pubkey !== account) || ""
               : message.senderPubkey;
-            if (!peer) return "rejected";
-            return isAuthorizedCanonicalDirectMessage(
-              message,
-              account,
-              friendships.getRecord(peer),
-            ) ? "accepted" : "rejected";
+            if (!peer) return friendshipHistoryComplete ? "rejected" : "unresolved";
+            if (isAuthorizedCanonicalDirectMessage(message, account, friendships.getRecord(peer))) {
+              return "accepted";
+            }
+            return friendshipHistoryComplete ? "rejected" : "unresolved";
           }
           if (message.senderPubkey === account) {
             const recipients = message.recipientPubkeys.filter(pubkey => pubkey !== account);
-            return recipients.every(pubkey => isFriendshipAcceptedAt(
-              friendships.getRecord(pubkey),
-              message.createdAt,
-            )) ? "accepted" : "rejected";
+            const decisions = recipients.map(pubkey => authorizePeerAt(pubkey, message.createdAt));
+            if (decisions.every(decision => decision === "accepted")) return "accepted";
+            return decisions.some(decision => decision === "unresolved") ? "unresolved" : "rejected";
           }
-          return isFriendshipAcceptedAt(
-            friendships.getRecord(message.senderPubkey),
-            message.createdAt,
-          ) ? "accepted" : "rejected";
+          return authorizePeerAt(message.senderPubkey, message.createdAt);
         },
         processFriendshipMessage: message => friendships.processFriendshipMessage(message),
         processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
@@ -163,7 +168,17 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         }),
       }),
       onPersistedMessage: message => directMessages.acknowledgePersistedIncoming(account, message),
-      onStatus: status => setAccountMessageSyncStatus(account, status),
+      onStatus: status => {
+        setAccountMessageSyncStatus(account, status);
+        if (status !== "live" || friendshipHistoryComplete) return;
+        void syncedMessageRepository.getSyncState(account).then(state => {
+          if (activeKeys?.pkHex.toLowerCase() !== account || !state.historyBackfillCompletedAt) return;
+          friendshipHistoryComplete = true;
+          return accountMessageSyncManager.retryDeferredAuthorization();
+        }).catch(error => {
+          console.warn("[message-sync] friendship history readiness check failed", error);
+        });
+      },
     });
     return true;
   } catch (error) {
