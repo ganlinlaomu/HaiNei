@@ -102,6 +102,7 @@
                 :preview-url="message.outgoing?.audioPreviewUrl"
                 :duration="message.outgoing?.audioDuration || audioMedia(message)?.duration || 0"
                 :account-pubkey="keys.pkHex"
+                :suspended="startingRecording || !!recording || finishingRecording"
               />
               <template v-else-if="isMediaCaption(message)">
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
