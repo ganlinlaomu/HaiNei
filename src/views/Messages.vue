@@ -102,6 +102,7 @@
                 :preview-url="message.outgoing?.audioPreviewUrl"
                 :duration="message.outgoing?.audioDuration || audioMedia(message)?.duration || 0"
                 :account-pubkey="keys.pkHex"
+                :transcript-key="`${keys.pkHex}:${message.id}`"
                 :suspended="voiceCaptureOwnsAudioSession"
               />
               <template v-else-if="isMediaCaption(message)">
