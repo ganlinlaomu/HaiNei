@@ -71,6 +71,13 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
 
   activeKeys = keys;
   const friendships = useFriendshipsStore();
+  if (friendships.loadedFor !== account || !friendships.authorizationReady) {
+    try {
+      await friendships.load(account);
+    } catch (error) {
+      console.warn("[message-sync] friendship authorization remains unresolved", error);
+    }
+  }
   const profiles = useProfilesStore();
   const feedPreferences = useFeedPreferencesStore();
   const interactions = useInteractionsStore();
