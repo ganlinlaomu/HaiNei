@@ -254,6 +254,15 @@
           </div>
         </summary>
         <div class="account-panel">
+          <div v-if="biometricSupported && keyStore.isEncrypted" class="account-row biometric-row">
+            <div class="privacy-copy">
+              <strong>{{ biometricLabel }} 快速登录</strong>
+              <span class="small">{{ biometricEnabled ? "已开启，下次可直接验证后进入海内" : "开启后不再需要每次输入本地密码" }}</span>
+            </div>
+            <button class="btn btn-secondary" type="button" :disabled="biometricBusy" @click="toggleBiometricUnlock">
+              {{ biometricBusy ? "处理中…" : biometricEnabled ? "关闭" : "启用" }}
+            </button>
+          </div>
           <div class="account-actions">
             <button class="btn btn-secondary" type="button" @click="switchAccount">切换账号</button>
             <button class="btn btn-secondary" type="button" @click="addAccount">添加账号</button>
@@ -328,6 +337,8 @@ const clearingCache = ref(false);
 const pushBusy = ref(false);
 const retryingQueue = ref(false);
 const pushEnabled = ref(false);
+const biometricSupported = ref(false);
+const biometricBusy = ref(false);
 const isNativeApp = (() => {
   const capacitor = (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
   return capacitor?.isNativePlatform?.() === true;
@@ -345,7 +356,11 @@ const pushStatusText = computed(() => isNativeApp
 const pushHelpText = computed(() => isNativeApp
   ? "Android APK 已禁用 PWA Service Worker；后续将接入原生 Push 与 Badge。"
   : pushSupported ? "需要你主动授权浏览器通知权限" : "当前浏览器不支持 Web Push");
-const accountProtectionText = computed(() => keyStore.isEncrypted ? "本机加密保存" : "仅当前会话");
+const biometricEnabled = computed(() => keyStore.hasBiometricUnlock());
+const biometricLabel = computed(() => /iPhone/i.test(navigator.userAgent) ? "Face ID" : "生物识别");
+const accountProtectionText = computed(() =>
+  biometricEnabled.value ? `${biometricLabel.value} · 本机加密` : keyStore.isEncrypted ? "本机加密保存" : "仅当前会话"
+);
 const enabledRelayCount = computed(() => relayList.value.filter(relay => relay.enabled).length);
 const connectedRelayCount = computed(() => relayList.value.filter(relay => relay.enabled && statuses[relay.url]?.state === "connected").length);
 const diagnostics = reactive({
@@ -611,6 +626,29 @@ function formatSize(bytes: number) {
   return `${(bytes / 1024 ** index).toFixed(2)} ${units[index]}`;
 }
 
+async function refreshBiometricSupport() {
+  biometricSupported.value = await keyStore.supportsBiometricUnlock();
+}
+
+async function toggleBiometricUnlock() {
+  if (biometricBusy.value) return;
+  biometricBusy.value = true;
+  try {
+    if (biometricEnabled.value) {
+      await keyStore.disableBiometricUnlock();
+      ui.addToast(`${biometricLabel.value} 快速登录已关闭`, 2_000, "success");
+    } else {
+      await keyStore.enableBiometricUnlock();
+      ui.addToast(`${biometricLabel.value} 快速登录已开启`, 2_000, "success");
+    }
+  } catch (error) {
+    const cancelled = error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError");
+    if (!cancelled) ui.addToast(error instanceof Error ? error.message : `${biometricLabel.value} 设置失败`, 2_500, "error");
+  } finally {
+    biometricBusy.value = false;
+  }
+}
+
 async function goToAccountLogin(mode: "switch" | "add") {
   await keyStore.clearActiveSession();
   keyStore.refreshAccounts();
@@ -719,6 +757,7 @@ watch(() => keyStore.pkHex, async pk => {
 
 onMounted(() => {
   startStatusPolling();
+  void refreshBiometricSupport();
   if (isNativeAndroid) void refreshAndroidVersion();
 });
 onActivated(() => {
