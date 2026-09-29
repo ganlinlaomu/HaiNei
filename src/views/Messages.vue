@@ -97,13 +97,13 @@
                 <span>{{ quotedPreview(message.replyTo) }}</span>
               </button>
               <DmAudioMessage
-                v-if="hasAudio(message)"
+                v-if="hasAudio(message) && !voiceCaptureOwnsAudioSession"
                 :media="audioMedia(message)"
                 :preview-url="message.outgoing?.audioPreviewUrl"
                 :duration="message.outgoing?.audioDuration || audioMedia(message)?.duration || 0"
                 :account-pubkey="keys.pkHex"
-                :suspended="startingRecording || !!recording || finishingRecording"
               />
+              <span v-else-if="hasAudio(message)" class="audio-capture-placeholder" aria-label="语音消息">语音</span>
               <template v-else-if="isMediaCaption(message)">
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else :content="message.content" :show-all="true" alt-text="私信图片" />
@@ -307,6 +307,7 @@ const actionMenuStyle = computed(() => ({
 }));
 const actionMenuMessage = computed(() => lookupMessage(actionMenuMessageId.value));
 const actionMenuCopyText = computed(() => actionMenuMessage.value ? messageText(actionMenuMessage.value.content) : "");
+const voiceCaptureOwnsAudioSession = computed(() => startingRecording.value || !!recording.value || finishingRecording.value);
 const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
 const INITIAL_MESSAGE_COUNT = 60;
 const OLDER_MESSAGE_BATCH = 40;
@@ -860,6 +861,12 @@ function acceptRecordingResult(
   clearRecordedAudio();
   recordedAudio.value = { ...result, preview: URL.createObjectURL(result.blob) };
 }
+function waitForAudioElementsToUnmount() {
+  return new Promise<void>(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
 async function startVoiceRecording() {
   if (startingRecording.value || recording.value || recordedAudio.value || selectedImage.value || !accepted.value || !keys.pkHex) return;
   startingRecording.value = true;
@@ -867,6 +874,14 @@ async function startVoiceRecording() {
   const accountAtStart = keys.pkHex;
   const peerAtStart = peerPubkey.value;
   try {
+    // iOS 27 can interrupt a fresh microphone capture when an HTMLAudioElement
+    // from the conversation still owns the media session. Setting the reactive
+    // flag is not enough: Vue has not removed those elements until nextTick.
+    await nextTick();
+    await waitForAudioElementsToUnmount();
+    if (disposed || !accepted.value || keys.pkHex !== accountAtStart || peerPubkey.value !== peerAtStart) return;
+    const remainingAudioElements = document.querySelectorAll(".message-list audio, .composer-region audio").length;
+    console.info("[voice-recorder]", { event: "pre-capture-audio-elements", count: remainingAudioElements });
     const session = await createVoiceRecordingSession();
     if (disposed || !accepted.value || keys.pkHex !== accountAtStart || peerPubkey.value !== peerAtStart) return session.dispose();
     recording.value = session;
