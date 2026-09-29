@@ -26,12 +26,25 @@ function ciphertext(value: unknown) {
   return value;
 }
 
-export async function getAccountState(env: Env, accountPubkey: string, namespaceValues: unknown) {
+export async function getAccountState(
+  env: Env,
+  accountPubkey: string,
+  namespaceValues: unknown,
+  knownVersionsValue?: unknown,
+) {
   if (!Array.isArray(namespaceValues) || namespaceValues.length > MAX_NAMESPACES_PER_GET) {
     throw new HttpError(400, "invalid_account_state_namespaces");
   }
   const namespaces = [...new Set(namespaceValues.map(namespace))];
   if (!namespaces.length) return { snapshots: [] };
+  const knownVersions = knownVersionsValue && typeof knownVersionsValue === "object" && !Array.isArray(knownVersionsValue)
+    ? knownVersionsValue as Record<string, unknown>
+    : {};
+  for (const [key, value] of Object.entries(knownVersions)) {
+    if (!allowed.has(key) || !Number.isSafeInteger(Number(value)) || Number(value) < 0) {
+      throw new HttpError(400, "invalid_account_state_known_versions");
+    }
+  }
   const placeholders = namespaces.map(() => "?").join(",");
   const rows = await env.DB.prepare(`
     SELECT namespace, version, ciphertext, updated_at, device_id
@@ -40,13 +53,15 @@ export async function getAccountState(env: Env, accountPubkey: string, namespace
   `).bind(accountPubkey, ...namespaces).all<{
     namespace: AccountStateNamespace; version: number; ciphertext: string; updated_at: number; device_id: string | null;
   }>();
-  return { snapshots: rows.results.map(row => ({
-    namespace: row.namespace,
-    version: Number(row.version),
-    ciphertext: row.ciphertext,
-    updatedAt: Number(row.updated_at),
-    deviceId: row.device_id || undefined,
-  })) };
+  return { snapshots: rows.results
+    .filter(row => Number(row.version) > Number(knownVersions[row.namespace] || 0))
+    .map(row => ({
+      namespace: row.namespace,
+      version: Number(row.version),
+      ciphertext: row.ciphertext,
+      updatedAt: Number(row.updated_at),
+      deviceId: row.device_id || undefined,
+    })) };
 }
 
 export async function putAccountState(env: Env, accountPubkey: string, payload: Record<string, unknown>, now = Date.now()) {
