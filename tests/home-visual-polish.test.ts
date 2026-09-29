@@ -36,6 +36,18 @@ describe("Home visual polish contract", () => {
     expect(home).not.toContain("linear-gradient(135deg, #667eea 0%, #764ba2 100%)");
   });
 
+  it("keeps profile activity flat regardless of wide viewport", () => {
+    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+
+    expect(card).toContain("flat?: boolean");
+    expect(card).toContain("'force-flat': flat");
+    expect(card).toContain(".post-card:not(.force-flat)");
+    expect(profile).toContain('<PostCard v-for="post in ownerPosts" :key="post.id" :message="post" flat />');
+    expect(profile).toContain(".post-list{display:grid;gap:0}");
+    expect(profile).toContain(".profile-posts{width:100%;box-sizing:border-box;padding:4px 0 0}");
+  });
+
   it("renders success feedback as compact neutral toast instead of a green block", () => {
     const toast = readFileSync(join(process.cwd(), "src/components/ToastContainer.vue"), "utf8");
     const editor = readFileSync(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
