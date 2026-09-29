@@ -48,7 +48,7 @@
         v-for="m in virtualMessages"
         :key="m.id"
         :message="m"
-        :open-comment-id="route.query.mid === m.id ? String(route.query.iid || '') : undefined"
+        :open-comment-id="route.query.mid === m.id ? String(route.query.rid || route.query.iid || '') : undefined"
         @height="recordPostHeight"
       />
       <div v-if="bottomSpacerHeight" class="virtual-spacer" :style="{ height: `${bottomSpacerHeight}px` }" aria-hidden="true"></div>
@@ -662,111 +662,91 @@ async function safeUpdateLocalRefs() {
 
 
   async function handleNotificationJump() {
-  const mid = route.query.mid as string | undefined;
-  const iid = route.query.iid as string | undefined;
- 
+    const mid = route.query.mid as string | undefined;
+    const targetCommentId = String(route.query.rid || route.query.iid || "") || undefined;
 
+    if (!mid) return;
 
-  if (!mid) return;
-
-  // ① 等消息本身存在（点赞能跳就是靠这个）
-  const waitForMessage = async () => {
-    for (let i = 0; i < 20; i++) {
-      if (displayedMessages.value.some(m => m.id === mid)) return true;
-      await new Promise(r => setTimeout(r, 50));
+    // If the target post is already known but outside the current page window,
+    // expose enough rows immediately instead of polling for it to appear.
+    const sourceIndex = messagesRef.value.findIndex(message => message.id === mid);
+    if (sourceIndex >= 0 && !displayedMessages.value.some(message => message.id === mid)) {
+      displayedMessages.value = messagesRef.value.slice(
+        0,
+        Math.min(messagesRef.value.length, Math.max(displayedMessages.value.length, sourceIndex + 1))
+      );
     }
-    return false;
-  };
 
-  const msgReady = await waitForMessage();
-  if (!msgReady) {
-    console.warn("通知跳转失败：消息未出现", mid);
-    return;
-  }
-
-  const targetIndex = displayedMessages.value.findIndex(message => message.id === mid);
-  const jumpScroller = scrollContainer;
-  if (targetIndex >= 0 && jumpScroller && feedElement.value) {
-    virtualStart.value = Math.max(0, targetIndex - 2);
-    virtualEnd.value = Math.min(displayedMessages.value.length, targetIndex + 4);
-    jumpScroller.scrollTop = feedElement.value.offsetTop + rangeHeight(0, targetIndex);
-    await nextTick();
-  }
-
-  // PostCard/CommentSheet owns opening and focusing the requested comment via
-  // openCommentId. Home only positions the containing post.
-  // ② 等目标 DOM 真正渲染出来
-  const targetId = iid ? `comment-${iid}` : `msg-${mid}`;
-
-  const waitForElement = async () => {
-    for (let i = 0; i < 40; i++) {
-      const el = document.getElementById(targetId);
-      if (el) return el;
-      await new Promise(r => setTimeout(r, 50));
+    // Allow the normal sync path a short opportunity to materialize a post that
+    // has not reached the local list yet. Keep this bounded so notification taps
+    // never feel blocked by multi-second polling.
+    for (let attempt = 0; attempt < 4 && !displayedMessages.value.some(message => message.id === mid); attempt += 1) {
+      await new Promise<void>(resolve => {
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
+        else setTimeout(resolve, 16);
+      });
     }
-    return null;
-  };
 
-  const el = await waitForElement();
+    const targetIndex = displayedMessages.value.findIndex(message => message.id === mid);
+    if (targetIndex < 0) {
+      logger.warn("通知跳转失败：消息未出现", mid);
+      return;
+    }
 
-  if (!el) {
-    console.warn("通知跳转失败：DOM 未找到", targetId);
-    return;
-  }
+    const jumpScroller = scrollContainer;
+    if (jumpScroller && feedElement.value) {
+      virtualStart.value = Math.max(0, targetIndex - 2);
+      virtualEnd.value = Math.min(displayedMessages.value.length, targetIndex + 4);
+      jumpScroller.scrollTop = feedElement.value.offsetTop + rangeHeight(0, targetIndex);
+      await nextTick();
+    }
 
-  // CommentSheet owns comment scrolling/highlighting. Keep the feed positioned
-  // on the post and avoid scrolling the background container behind the sheet.
-  if (iid) {
+    // CommentSheet owns exact comment/reply reveal and scrolling. Once the
+    // containing PostCard is rendered, return immediately instead of waiting
+    // for comment DOM nodes in Home.
+    if (targetCommentId) {
+      notificationJumpDone.value = true;
+      return;
+    }
+
+    const targetId = `msg-${mid}`;
+    let el = document.getElementById(targetId);
+    if (!el) {
+      await nextTick();
+      el = document.getElementById(targetId);
+    }
+    if (!el) {
+      logger.warn("通知跳转失败：DOM 未找到", targetId);
+      return;
+    }
+
+    if (jumpScroller) {
+      const rect = el.getBoundingClientRect();
+      const containerRect = jumpScroller.getBoundingClientRect();
+      const elementTop = rect.top - containerRect.top;
+      const elementBottom = rect.bottom - containerRect.top;
+      const viewportHeight = containerRect.height;
+      const safeViewportBottom = viewportHeight - bottomNavigationHeight() - SCROLL_SAFE_OFFSET;
+
+      if (elementTop < SCROLL_SAFE_OFFSET) {
+        jumpScroller.scrollTo({
+          top: jumpScroller.scrollTop + elementTop - SCROLL_SAFE_OFFSET,
+          behavior: "auto",
+        });
+      } else if (elementBottom > safeViewportBottom) {
+        jumpScroller.scrollTo({
+          top: jumpScroller.scrollTop + elementTop - SCROLL_SAFE_OFFSET,
+          behavior: "auto",
+        });
+      }
+    } else {
+      el.scrollIntoView({ behavior: "auto", block: "start" });
+    }
+
+    el.classList.add("highlight");
+    setTimeout(() => el.classList.remove("highlight"), 1500);
     notificationJumpDone.value = true;
-    return;
   }
-
-  // ④ 滚动 + 高亮
-  // Use custom scroll calculation to prevent bottom bar from disappearing
-  // when scrolling to elements near the bottom
-  await nextTick();
-  
-  // Get the scrollable container
-  if (jumpScroller) {
-    const rect = el.getBoundingClientRect();
-    const containerRect = jumpScroller.getBoundingClientRect();
-    
-    // Calculate where the element currently is in the viewport
-    const elementTop = rect.top - containerRect.top;
-    const elementBottom = rect.bottom - containerRect.top;
-    
-    // Calculate safe viewing area (viewport minus bottom bar)
-    const viewportHeight = containerRect.height;
-    const safeViewportBottom = viewportHeight - bottomNavigationHeight() - SCROLL_SAFE_OFFSET;
-    
-    // Determine if element needs scrolling
-    if (elementTop < SCROLL_SAFE_OFFSET) {
-      // Element is above viewport, scroll to bring it to top with safe offset
-      const targetTop = jumpScroller.scrollTop + elementTop - SCROLL_SAFE_OFFSET;
-      jumpScroller.scrollTo({ top: targetTop, behavior: 'smooth' });
-    } else if (elementBottom > safeViewportBottom) {
-      // Element extends into bottom bar area
-      // Try to scroll to show it at the top of safe area
-      const desiredScrollDelta = elementTop - SCROLL_SAFE_OFFSET;
-      const targetTop = jumpScroller.scrollTop + desiredScrollDelta;
-      jumpScroller.scrollTo({ top: targetTop, behavior: 'smooth' });
-    }
-    // If element is already fully visible in safe area, no scroll needed
-  } else {
-    // Fallback to scrollIntoView if container not found
-    // Use instant behavior to match custom scroll implementation
-    el.scrollIntoView({
-      behavior: "auto",
-      block: "start"
-    });
-  }
-
-  el.classList.add("highlight");
-  setTimeout(() => el.classList.remove("highlight"), 1500);
-  notificationJumpDone.value = true;
-    
-}
-
 
 
 
