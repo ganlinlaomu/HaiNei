@@ -15,7 +15,7 @@ type Pipeline = (
 ) => Promise<{ text?: string } | Array<{ text?: string }>>;
 
 type PipelineOptions = {
-  dtype?: string;
+  dtype?: string | Record<string, string>;
   device?: string;
   progress_callback?: (progress: { status?: string; progress?: number }) => void;
 };
@@ -39,8 +39,21 @@ function postProgress(id: number, stage: "loading-model" | "transcribing", progr
   self.postMessage({ id, type: "progress", stage, progress });
 }
 
+function isAppleMobileWebKit() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const platform = navigator.platform || "";
+  return /iPhone|iPad|iPod/i.test(ua)
+    || (platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
 function webGpuAvailable() {
-  return !webGpuDisabled && typeof navigator !== "undefined" && "gpu" in navigator;
+  // Keep iPhone/iPad on the stable WASM path. Safari can expose WebGPU here,
+  // but loading/inference with Whisper may terminate the whole page process.
+  return !webGpuDisabled
+    && !isAppleMobileWebKit()
+    && typeof navigator !== "undefined"
+    && "gpu" in navigator;
 }
 
 function transformersModule() {
@@ -53,7 +66,13 @@ function transformersModule() {
 async function createTranscriber(id: number, backend: Backend) {
   const transformers = await transformersModule();
   const options: PipelineOptions = backend === "webgpu"
-    ? { device: "webgpu", dtype: "fp16" }
+    ? {
+        device: "webgpu",
+        dtype: {
+          encoder_model: "fp32",
+          decoder_model_merged: "q4",
+        },
+      }
     : { dtype: "q8" };
 
   options.progress_callback = progress => {
