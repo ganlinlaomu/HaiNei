@@ -23,21 +23,27 @@ export type AccountSyncKeys = {
   signEvent(event: EventTemplate): Promise<VerifiedEvent>;
 };
 
-const accountMessageSyncManager = new MessageSyncManager();
-let activeKeys: AccountSyncKeys | null = null;
-
 export type AccountMessageSyncSnapshot = {
   accountPubkey: string;
   status: SyncStatus;
 };
 
+// The account service is the sole owner of the MessageSyncManager lifecycle.
+// UI layers may request resume/read operations through the functions below,
+// but they never receive the manager instance or start/stop subscriptions.
+const accountMessageSyncManager = new MessageSyncManager();
+let activeKeys: AccountSyncKeys | null = null;
 let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle" };
 const accountSyncStatusListeners = new Set<(snapshot: AccountMessageSyncSnapshot) => void>();
 
 function setAccountMessageSyncStatus(accountPubkey: string, status: SyncStatus) {
   accountSyncSnapshot = { accountPubkey: accountPubkey.toLowerCase(), status };
   for (const listener of accountSyncStatusListeners) {
-    try { listener({ ...accountSyncSnapshot }); } catch {}
+    try {
+      listener({ ...accountSyncSnapshot });
+    } catch {
+      // A UI status observer must never interfere with sync ownership.
+    }
   }
 }
 
@@ -54,6 +60,7 @@ export function onAccountMessageSyncStatus(listener: (snapshot: AccountMessageSy
 export async function startAccountMessageSync(keys: AccountSyncKeys) {
   const account = keys.pkHex.toLowerCase();
   if (!account || !keys.isLoggedIn) return false;
+
   activeKeys = keys;
   const friendships = useFriendshipsStore();
   const profiles = useProfilesStore();
@@ -62,57 +69,75 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   const notifications = useNotificationsStore();
   const messages = useMessagesStore();
   const directMessages = useDirectMessagesStore();
-  const accepted = friendships.records.filter(record => record.state === "accepted").map(record => record.peerPubkey);
+  const accepted = friendships.records
+    .filter(record => record.state === "accepted")
+    .map(record => record.peerPubkey);
+
   registerOutgoingPushSigner(account, keys.signEvent.bind(keys));
+
   try {
     await accountMessageSyncManager.start({
       accountPubkey: account,
       relays: getRelaysFromStorage("read"),
       authors: [...new Set([...accepted, account])],
       decodeContext: {
-      accountPubkey: account,
-      nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined,
-    },
+        accountPubkey: account,
+        nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined,
+      },
       onMessage: createHomeMessageHandler({
-      accountPubkey: account,
-      currentAccount: () => activeKeys?.pkHex || "",
-      isAcceptedMessage: message => {
-        if (isDirectMessageTags(message.tags)) {
-          const peer = message.senderPubkey === account
-            ? message.recipientPubkeys.find(pubkey => pubkey !== account) || ""
-            : message.senderPubkey;
-          return !!peer && isAuthorizedCanonicalDirectMessage(
-            message,
-            account,
-            friendships.getRecord(peer),
-          );
-        }
-        return message.senderPubkey === account
-          ? message.recipientPubkeys.filter(pubkey => pubkey !== account).every(pubkey => friendships.isAccepted(pubkey))
-          : friendships.isAccepted(message.senderPubkey);
-      },
-      processFriendshipMessage: message => friendships.processFriendshipMessage(message),
-      processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
-      processFeedControlMessage: message => feedPreferences.processTombstone(
-        message, friendships.isAccepted, messageId => messages.inbox.find(item => item.id === messageId)?.pubkey,
-      ),
-      notifyFriendshipMessage: message => {
-        const notification = incomingFriendRequestNotification(message, account);
-        if (notification) notifications.addNotification(notification);
-        else if (decodeFriendshipControl(message)) notifications.resolveFriendRequests(message.senderPubkey);
-      },
-      isReceipt: isDmReceiptMessage,
-      processReceipt: message => directMessages.processReceipt(message),
-      isInteraction: isInteractionMessage,
-      processInteraction: async message => { await interactions.processCanonicalInteraction(message, account); },
-      mirrorMessage: message => messages.addInbox({
-        id: message.id, pubkey: message.senderPubkey, created_at: message.createdAt,
-        content: message.plaintext || "", protocol: message.protocol, transportKind: message.transportKind,
-        transportEventId: message.transportEventId, rumorId: message.rumorId,
-        recipientPubkeys: message.recipientPubkeys, conversationId: message.conversationId,
-        replyTo: message.replyTo, rootId: message.rootId, tags: message.tags,
+        accountPubkey: account,
+        currentAccount: () => activeKeys?.pkHex || "",
+        isAcceptedMessage: message => {
+          if (isDirectMessageTags(message.tags)) {
+            const peer = message.senderPubkey === account
+              ? message.recipientPubkeys.find(pubkey => pubkey !== account) || ""
+              : message.senderPubkey;
+            return !!peer && isAuthorizedCanonicalDirectMessage(
+              message,
+              account,
+              friendships.getRecord(peer),
+            );
+          }
+          return message.senderPubkey === account
+            ? message.recipientPubkeys
+                .filter(pubkey => pubkey !== account)
+                .every(pubkey => friendships.isAccepted(pubkey))
+            : friendships.isAccepted(message.senderPubkey);
+        },
+        processFriendshipMessage: message => friendships.processFriendshipMessage(message),
+        processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
+        processFeedControlMessage: message => feedPreferences.processTombstone(
+          message,
+          friendships.isAccepted,
+          messageId => messages.inbox.find(item => item.id === messageId)?.pubkey,
+        ),
+        notifyFriendshipMessage: message => {
+          const notification = incomingFriendRequestNotification(message, account);
+          if (notification) notifications.addNotification(notification);
+          else if (decodeFriendshipControl(message)) notifications.resolveFriendRequests(message.senderPubkey);
+        },
+        isReceipt: isDmReceiptMessage,
+        processReceipt: message => directMessages.processReceipt(message),
+        isInteraction: isInteractionMessage,
+        processInteraction: async message => {
+          await interactions.processCanonicalInteraction(message, account);
+        },
+        mirrorMessage: message => messages.addInbox({
+          id: message.id,
+          pubkey: message.senderPubkey,
+          created_at: message.createdAt,
+          content: message.plaintext || "",
+          protocol: message.protocol,
+          transportKind: message.transportKind,
+          transportEventId: message.transportEventId,
+          rumorId: message.rumorId,
+          recipientPubkeys: message.recipientPubkeys,
+          conversationId: message.conversationId,
+          replyTo: message.replyTo,
+          rootId: message.rootId,
+          tags: message.tags,
+        }),
       }),
-    }),
       onPersistedMessage: message => directMessages.acknowledgePersistedIncoming(account, message),
       onStatus: status => setAccountMessageSyncStatus(account, status),
     });
