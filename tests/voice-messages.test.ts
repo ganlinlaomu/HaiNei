@@ -508,6 +508,14 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain("peerPubkey.value !== peer");
     expect(messages).toContain("recording.value !== session");
     expect(messages).toContain("URL.createObjectURL(result.blob)");
+    expect(messages).toContain('aria-label="按住录音"');
+    expect(messages).toContain('@touchstart.prevent="handleVoiceTouchStart"');
+    expect(messages).toContain('@mousedown.prevent="handleVoiceMouseDown"');
+    expect(messages).toContain("松开发送 · ← 取消 · ↑ 锁定");
+    expect(messages).toContain("MIN_VOICE_DURATION_SECONDS = 1");
+    expect(messages).toContain('ui.addToast("说话时间太短"');
+    expect(messages).toContain("directMessages.sendAudio(peer, result");
+    expect(messages).toContain("onAutoFinish: () => { autoSendVoiceOnFinish = true; }");
     expect(messages).toContain('@click="chooseImage"');
     expect(messages).toContain("imageInput.value?.click()");
     expect(messages).toContain('accept="image/*"');
