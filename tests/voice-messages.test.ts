@@ -130,6 +130,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  try { delete (navigator as Navigator & { audioSession?: unknown }).audioSession; } catch {}
   FakeRecorder.emitStop = true;
   FakeRecorder.emitData = true;
   FakeRecorder.emitFinalData = true;
@@ -408,6 +409,36 @@ describe("voice recording lifecycle", () => {
     expect(second.track.stop).toHaveBeenCalledOnce();
   });
 
+  it("resets the WebKit audio session between consecutive recordings", async () => {
+    vi.useFakeTimers();
+    const audioSession = { type: "stale-play-and-record" };
+    Object.defineProperty(navigator, "audioSession", { value: audioSession, configurable: true });
+
+    const firstHarness = recorderHarness();
+    const first = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: firstHarness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    expect(audioSession.type).toBe("play-and-record");
+    const firstFinished = first.finish();
+    await vi.advanceTimersByTimeAsync(20);
+    await firstFinished;
+    expect(audioSession.type).toBe("auto");
+
+    const secondHarness = recorderHarness();
+    const second = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: secondHarness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    expect(audioSession.type).toBe("play-and-record");
+    const secondFinished = second.finish();
+    await vi.advanceTimersByTimeAsync(20);
+    await secondFinished;
+    expect(audioSession.type).toBe("auto");
+    expect(firstHarness.track.stop).toHaveBeenCalledOnce();
+    expect(secondHarness.track.stop).toHaveBeenCalledOnce();
+  });
+
   it("automatically finishes at the five-minute limit", async () => {
     vi.useFakeTimers();
     const harness = recorderHarness();
@@ -486,6 +517,10 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain("width:calc(100% - 32px)");
     expect(messages).toContain("height:54px;min-height:54px");
     expect(messages).toContain("calc(28px + env(safe-area-inset-bottom))");
+    expect(messages).toContain(':suspended="startingRecording || !!recording || finishingRecording"');
+    expect(player).toContain('preload="none"');
+    expect(player).toContain('props.suspended ? ""');
+    expect(player).toContain("audio.value.removeAttribute");
     expect(player).toContain("decryptDmAudio");
     expect(player).toContain("URL.revokeObjectURL");
     expect(player).not.toContain("localStorage");
