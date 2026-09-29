@@ -14,10 +14,14 @@ describe("notification comment navigation", () => {
     expect(notifications).not.toContain("iid: n.commentId, rid: n.replyId");
   });
 
-  it("opens the comment sheet without polling comment DOM in Home", () => {
+  it("resolves the exact post even when it is outside the Home page window", () => {
     const home = source("src/views/Home.vue");
+    expect(home).toContain("syncedMessageRepository.get(keys.pkHex, mid)");
+    expect(home).toContain("resolveNotificationPost(mid)");
+    expect(home).toContain("insertSortedHomeMessage(displayedMessages.value, targetPost)");
+    expect(home).toContain("if (!readyForPending.value || homeAccountPk !== keys.pkHex) return");
+    expect(home).toContain("virtualStart.value = Math.max(0, targetIndex - 1)");
     expect(home).toContain("route.query.rid || route.query.iid");
-    expect(home).toContain("if (targetCommentId)");
     expect(home).toContain("notificationJumpDone.value = true");
     expect(home).not.toContain("for (let i = 0; i < 40; i++)");
     expect(home).not.toContain("const targetId = iid ?");
