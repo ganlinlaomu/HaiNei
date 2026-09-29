@@ -118,7 +118,6 @@ export default defineComponent({
     const readyForPending = ref(false);
     const route = useRoute();
     const router = useRouter();
-    const realtimeSessionSince = ref(0);
     const notificationJumpDone = ref(false);
     const lastSeenCreatedAt = ref(0); // Track the watermark for filtering pending messages
     const inboxRevision = computed(() => msgs.inboxRevision);
@@ -128,7 +127,6 @@ export default defineComponent({
       && !isDmReceiptPayload(message.content);
     const visibleInbox = () => msgs.inbox.filter(message => isHomeRenderable(message) && feedPreferences.isVisible(message));
 
-    const status = ref("未连接");
     let homeAccountPk = "";
     let homeSyncGeneration = 0;
     const messageSync = accountMessageSyncManager;
@@ -323,11 +321,9 @@ export default defineComponent({
     const pendingMessages = ref([] as any[]); // Messages fetched but not yet displayed
     const isInitialLoad = ref(true); // Track if this is the first load
     const startupSyncing = ref(false);
-    const showingSendMeta = ref<Set<string>>(new Set());
     
     // 分页相关状态
     const PAGE_SIZE = 20; // 每页显示 20 条
-    const currentPage = ref(1); // 当前页码
     const hasMore = computed(() => {
       return messagesRef.value.length > displayedMessages.value.length;
     });
@@ -353,7 +349,6 @@ export default defineComponent({
       pendingMessages.value = [];
       readyForPending.value = false;
       lastSeenCreatedAt.value = 0;
-      realtimeSessionSince.value = 0;
       notificationJumpDone.value = false;
       startupSyncing.value = false;
       homeAccountPk = "";
@@ -371,7 +366,6 @@ export default defineComponent({
 
       refreshVisibleInbox(true);
       displayedMessages.value = messagesRef.value.slice(0, PAGE_SIZE);
-      currentPage.value = 1;
       isInitialLoad.value = false;
 
       const storedLastSeen = getLastSeenCreatedAt(accountPk) || 0;
@@ -582,7 +576,6 @@ async function safeUpdateLocalRefs() {
       if (isLoadingMore.value || !hasMore.value) return;
       
       isLoadingMore.value = true;
-      logger.info(`加载更多消息，当前页: ${currentPage.value}`);
       
       const appendPage = () => {
         const startIndex = displayedMessages.value.length;
@@ -590,7 +583,6 @@ async function safeUpdateLocalRefs() {
         const newMessages = messagesRef.value.slice(startIndex, endIndex);
 
         displayedMessages.value = [...displayedMessages.value, ...newMessages];
-        currentPage.value++;
         isLoadingMore.value = false;
 
         logger.info(`加载了 ${newMessages.length} 条消息，总共显示 ${displayedMessages.value.length} 条`);
@@ -747,7 +739,6 @@ async function safeUpdateLocalRefs() {
         logger.info("开始订阅流程");
         if (!keys.isLoggedIn) {
           messageSync.stop();
-          status.value = "未登录";
           logger.warn("[startSub] skip: not logged in");
           return;
         }
@@ -781,7 +772,6 @@ async function safeUpdateLocalRefs() {
         await startRealtimeSubscription(knownAuthors, relays);
       } catch (e) {
         logger.error("startSub failed", e);
-        status.value = "订阅失败";
       }
     }
     
@@ -793,7 +783,6 @@ async function safeUpdateLocalRefs() {
       const syncGeneration = ++homeSyncGeneration;
       try {
         startupSyncing.value = true;
-realtimeSessionSince.value = Math.floor(Date.now() / 1000);
         await messageSync.start({
           accountPubkey: accountAtStart,
           relays,
@@ -851,10 +840,8 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
               reconcileStartupSnapshot(true);
               startupSyncing.value = false;
             }
-            status.value = syncStatus === "live" ? "已连接" :
-              syncStatus === "catching-up" ? "正在同步" :
-              syncStatus === "offline" ? "离线" :
-              syncStatus === "error" ? "重试中" : "连接中";
+            if (syncStatus === "offline") logger.info("[Home] sync offline");
+            if (syncStatus === "error") logger.warn("[Home] sync retrying");
           }
         });
         
@@ -923,12 +910,18 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
    }, { flush: "sync" });
    watch(
      () => keys.pkHex,
-     (accountPk, previousPk) => {
+     async (accountPk, previousPk) => {
        if (!accountPk || !previousPk || accountPk === previousPk) return;
+       if (scrollContainer) saveHomeScroll(previousPk, scrollContainer.scrollTop);
        closeHomeSubscriptions();
        clearHomeRuntimeState();
        logger.info(`[account] Home account switch ${previousPk.slice(0, 8)} -> ${accountPk.slice(0, 8)}`);
-       startSub().catch((e) => logger.error("[account] switched account start failed", e));
+       try {
+         await startSub();
+         await restoreCurrentHomeScroll();
+       } catch (e) {
+         logger.error("[account] switched account start failed", e);
+       }
      }
    );
    watch(
