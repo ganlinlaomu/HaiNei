@@ -1,5 +1,3 @@
-export type TranscriptionLanguage = "chinese" | "japanese" | "english" | "auto";
-
 export type TranscriptionProgress = {
   stage: "decoding" | "loading-model" | "transcribing";
   progress?: number;
@@ -85,7 +83,6 @@ async function decodeAudio(blob: Blob) {
 export async function transcribeAudioLocally(
   blob: Blob,
   onProgress?: (progress: TranscriptionProgress) => void,
-  language: TranscriptionLanguage = "chinese",
 ) {
   onProgress?.({ stage: "decoding" });
   const audio = await decodeAudio(blob);
@@ -94,7 +91,7 @@ export async function transcribeAudioLocally(
     pending.set(id, { resolve, reject, onProgress });
   });
   transcriptionWorker().postMessage(
-    { id, audio, language: language === "auto" ? undefined : language },
+    { id, audio },
     [audio.buffer],
   );
   return result;
