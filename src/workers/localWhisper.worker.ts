@@ -31,6 +31,7 @@ type TransformersModule = {
 let transformersPromise: Promise<TransformersModule> | null = null;
 let transcriberPromise: Promise<Pipeline> | null = null;
 let activeBackend: Backend | null = null;
+let webGpuDisabled = false;
 let activeRequestId = 0;
 let queue = Promise.resolve();
 
@@ -39,7 +40,7 @@ function postProgress(id: number, stage: "loading-model" | "transcribing", progr
 }
 
 function webGpuAvailable() {
-  return typeof navigator !== "undefined" && "gpu" in navigator;
+  return !webGpuDisabled && typeof navigator !== "undefined" && "gpu" in navigator;
 }
 
 function transformersModule() {
@@ -128,6 +129,7 @@ async function run(message: { id: number; audio: Float32Array }) {
       // Safari/WebGPU support can vary by device/PWA context. If GPU setup or
       // inference fails, retry the same request once on the proven WASM q8 path.
       if (activeBackend !== "webgpu" && !webGpuAvailable()) throw error;
+      webGpuDisabled = true;
       transcriberPromise = null;
       activeBackend = null;
       output = await transcribeWith(id, audio, "wasm");
