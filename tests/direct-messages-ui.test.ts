@@ -124,6 +124,11 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('querySelector<HTMLElement>(".message-bubble")');
     expect(chat).toContain("fitsBelow");
     expect(chat).toContain("position:fixed");
+    expect(chat).toContain("@selectstart.prevent");
+    expect(chat).toContain("@dragstart.prevent");
+    expect(chat).toContain("-webkit-touch-callout:none");
+    expect(chat).toContain("window.getSelection?.()?.removeAllRanges()");
+    expect(chat).not.toContain("@touchstart.prevent");
     expect(chat).toContain("replyFromActionMenu");
     expect(chat).toContain("copyFromActionMenu");
     expect(chat).toContain("isMediaGestureTarget");
