@@ -17,24 +17,14 @@
     <audio v-if="!suspended" ref="audio" :src="sourceUrl" preload="none" @timeupdate="syncPlayback" @loadedmetadata="syncMetadata" @ended="playing = false"></audio>
     <button v-if="error" class="voice-retry" type="button" @click="toggle">重试</button>
     <div class="voice-transcription">
-      <select v-model="transcriptionLanguage" class="transcription-language" aria-label="转写语言" :disabled="transcribing || suspended">
-        <option value="chinese">中文</option>
-        <option value="japanese">日本語</option>
-        <option value="english">English</option>
-        <option value="auto">自动</option>
-      </select>
       <button
         type="button"
         class="transcription-toggle"
         :disabled="transcribing || suspended"
-        @click="toggleTranscription"
-      >
-        {{ transcript ? (transcriptVisible ? "收起文字" : "展开文字") : transcribing ? transcriptionStatus : "转文字" }}
-      </button>
-      <span v-if="!transcript && !transcribing && !transcriptionError" class="transcription-note">本机转写 · 语音不上传 · 首次使用会下载模型</span>
+        @click="transcribe"
+      >转文字</button>
       <span v-if="transcriptionError" class="transcription-error">{{ transcriptionError }}</span>
-      <p v-if="transcript && transcriptVisible" class="transcript-text">{{ transcript }}</p>
-      <span v-if="transcript && transcriptVisible && transcriptionElapsedMs" class="transcription-meta">本机完成 · {{ (transcriptionElapsedMs / 1000).toFixed(1) }} 秒</span>
+      <p v-if="transcript" class="transcript-text">{{ transcript }}</p>
     </div>
   </div>
 </template>
@@ -43,7 +33,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { PrivateAudioMedia } from "@/nostr/messaging/privateMedia";
 import { decryptDmAudio } from "@/utils/encryptedDmAudio";
-import { transcribeAudioLocally, type TranscriptionLanguage, type TranscriptionProgress } from "@/utils/localTranscription";
+import { transcribeAudioLocally } from "@/utils/localTranscription";
 
 const props = withDefaults(defineProps<{
   media?: PrivateAudioMedia | null;
@@ -61,12 +51,8 @@ const playing = ref(false);
 const currentTime = ref(0);
 const playDuration = ref(0);
 const transcribing = ref(false);
-const transcriptionStatus = ref("准备本机转写…");
 const transcriptionError = ref("");
 const transcript = ref("");
-const transcriptVisible = ref(false);
-const transcriptionElapsedMs = ref(0);
-const transcriptionLanguage = ref<TranscriptionLanguage>("chinese");
 let decryptedBlob: Blob | null = null;
 let controller: AbortController | null = null;
 const sourceUrl = computed(() => props.suspended ? "" : (props.previewUrl || decryptedUrl.value));
@@ -137,28 +123,14 @@ function seek(event: Event) {
   syncPlayback();
 }
 
-function updateTranscriptionProgress(progress: TranscriptionProgress) {
-  if (progress.stage === "decoding") transcriptionStatus.value = "正在读取语音…";
-  else if (progress.stage === "transcribing") transcriptionStatus.value = "正在本机转写…";
-  else if (typeof progress.progress === "number" && progress.progress > 0 && progress.progress < 100) {
-    transcriptionStatus.value = `下载模型 ${Math.round(progress.progress)}%`;
-  } else transcriptionStatus.value = "正在加载本机模型…";
-}
-async function toggleTranscription() {
-  if (transcript.value) {
-    transcriptVisible.value = !transcriptVisible.value;
-    return;
-  }
+async function transcribe() {
   if (transcribing.value || props.suspended) return;
   transcribing.value = true;
   transcriptionError.value = "";
-  transcriptionStatus.value = "准备本机转写…";
   try {
     const blob = await ensureAudioBlob();
-    const result = await transcribeAudioLocally(blob, updateTranscriptionProgress, transcriptionLanguage.value);
+    const result = await transcribeAudioLocally(blob);
     transcript.value = result.text || "未识别到清晰语音";
-    transcriptionElapsedMs.value = result.elapsedMs;
-    transcriptVisible.value = true;
   } catch (cause) {
     transcriptionError.value = cause instanceof Error ? cause.message : "本机转写失败";
   } finally {
@@ -167,10 +139,7 @@ async function toggleTranscription() {
 }
 function resetTranscription() {
   transcript.value = "";
-  transcriptVisible.value = false;
-  transcriptionElapsedMs.value = 0;
   transcriptionError.value = "";
-  transcriptionStatus.value = "准备本机转写…";
 }
 
 watch(() => [props.media?.encryptedRef, props.previewUrl, props.accountPubkey], () => {
@@ -189,5 +158,5 @@ onBeforeUnmount(releaseRuntimeAudio);
 </script>
 
 <style scoped>
-.voice-message{display:grid;grid-template-columns:34px minmax(100px,180px) 36px;align-items:center;gap:7px;min-width:210px}.voice-toggle{display:grid;width:34px;height:34px;padding:0;place-items:center;border:0;border-radius:50%;background:#1d9bf0;color:#fff;font-size:13px}.voice-toggle:disabled{opacity:.55}.voice-progress{width:100%;height:3px;margin:0;accent-color:#1d9bf0}.voice-duration{color:#536471;font-size:11px;text-align:right}.voice-message audio{display:none}.voice-retry{grid-column:2 / 4;padding:0;border:0;background:transparent;color:#dc2626;font-size:11px;text-align:left}.voice-transcription{grid-column:1 / -1;display:flex;min-width:0;flex-wrap:wrap;align-items:center;gap:5px 8px;padding-top:2px}.transcription-language{max-width:78px;padding:2px 4px;border:1px solid #d8dee5;border-radius:6px;background:transparent;color:#536471;font-size:10px}.transcription-language:disabled{opacity:.5}.transcription-toggle{padding:0;border:0;background:transparent;color:#1687e8;font-size:11px;font-weight:650}.transcription-toggle:disabled{opacity:.5}.transcription-note,.transcription-meta{color:#8b98a5;font-size:10px}.transcription-error{color:#dc2626;font-size:10px}.transcript-text{width:100%;margin:2px 0 0;padding:8px 9px;border-radius:9px;background:rgba(255,255,255,.62);color:#334155;font-size:13px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.voice-message{display:grid;grid-template-columns:34px minmax(100px,180px) 36px;align-items:center;gap:7px;min-width:210px}.voice-toggle{display:grid;width:34px;height:34px;padding:0;place-items:center;border:0;border-radius:50%;background:#1d9bf0;color:#fff;font-size:13px}.voice-toggle:disabled{opacity:.55}.voice-progress{width:100%;height:3px;margin:0;accent-color:#1d9bf0}.voice-duration{color:#536471;font-size:11px;text-align:right}.voice-message audio{display:none}.voice-retry{grid-column:2 / 4;padding:0;border:0;background:transparent;color:#dc2626;font-size:11px;text-align:left}.voice-transcription{grid-column:1 / -1;display:flex;min-width:0;flex-wrap:wrap;align-items:center;gap:5px 8px;padding-top:2px}.transcription-toggle{padding:0;border:0;background:transparent;color:#1687e8;font-size:11px;font-weight:650}.transcription-toggle:disabled{opacity:.5}.transcription-error{color:#dc2626;font-size:10px}.transcript-text{width:100%;margin:2px 0 0;padding:8px 9px;border-radius:9px;background:rgba(255,255,255,.62);color:#334155;font-size:13px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
 </style>
