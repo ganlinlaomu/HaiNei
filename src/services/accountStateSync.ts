@@ -212,6 +212,7 @@ export async function fetchAndMaterializeAccountState(
   let settingsNeedRewrite = false;
   for (const snapshot of (response?.snapshots || []) as RemoteSnapshot[]) {
     try {
+      if (options.onlyNewer && snapshot.version <= Number(knownVersions?.[snapshot.namespace] || 0)) continue;
       const envelope = await decryptSnapshot(keys, snapshot);
       const local = await accountStateRepository.get(account, snapshot.namespace);
       const merged = local ? mergeNamespaceData(snapshot.namespace, local.data, envelope.data) : envelope.data;
