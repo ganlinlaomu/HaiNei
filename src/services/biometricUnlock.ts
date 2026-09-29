@@ -27,7 +27,7 @@ function storageKey(pubkey: string) {
   return `${STORAGE_PREFIX}${pubkey.toLowerCase()}`;
 }
 
-function copyBuffer(input: BufferSource): ArrayBuffer {
+function copyBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
   const view = input instanceof ArrayBuffer
     ? new Uint8Array(input)
     : new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
