@@ -302,7 +302,9 @@ export async function createVoiceRecordingSession(options: {
     if (!completionMode && !settled) syncHealth("start");
   }
   function onDataAvailable(event: BlobEvent) {
-    if (event.data.size) chunks.push(event.data);
+    if (!event.data.size) return;
+    chunks.push(event.data);
+    diagnose("dataavailable", `chunk=${chunks.length};size=${event.data.size}`);
   }
   function onStop() {
     diagnose("recorder-stop");
@@ -365,7 +367,13 @@ export async function createVoiceRecordingSession(options: {
   });
 
   try {
-    recorder.start();
+    // WebM chunks can be concatenated into the same recording and give iOS/WebKit
+    // less final buffered media to lose when stop() flushes the encoder. Keep MP4
+    // continuous because Safari MP4 timeslices have historically produced fragile
+    // fragmented output.
+    const timeslice = recorder.mimeType.toLowerCase().includes("webm") ? 1_000 : undefined;
+    recorder.start(timeslice);
+    diagnose("recorder-start-mode", timeslice ? `timeslice=${timeslice}` : "continuous");
     if (recorder.state !== "recording" || !streamIsActive() || !hasLiveTrack()) throw new Error("inactive");
   } catch {
     clearTimers();
