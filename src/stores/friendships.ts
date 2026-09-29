@@ -10,8 +10,22 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
 import { notifyDirectMessageAuthorizationChanged } from "@/services/directMessageStateEvents";
+import { notifyMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
+
+export function isFriendshipAcceptedAt(friendship: FriendshipRecord | undefined, createdAt: number) {
+  if (!friendship) return false;
+  const windows = friendship.acceptedWindows || [];
+  if (!windows.length) {
+    if (!friendship.acceptedAt) return friendship.state === "accepted";
+    const endedAt = friendship.state === "accepted" ? undefined : friendship.lastControlAt;
+    return createdAt >= friendship.acceptedAt
+      && (endedAt === undefined || createdAt <= endedAt);
+  }
+  return windows.some(window => createdAt >= window.acceptedAt
+    && (window.endedAt === undefined || createdAt <= window.endedAt));
+}
 
 const activeFriendshipControls = new Map<string, { action: FriendshipAction; promise: Promise<any> }>();
 
@@ -116,6 +130,7 @@ export const useFriendshipsStore = defineStore("friendships", {
         if (this.loadedFor === account) {
           this.records = records;
           notifyDirectMessageAuthorizationChanged(account);
+          notifyMessageAuthorizationChanged(account);
         }
       } finally {
         if (this.loadedFor === account) this.loading = false;
@@ -128,6 +143,7 @@ export const useFriendshipsStore = defineStore("friendships", {
       if (this.loadedFor !== account) return false;
       this.records = records;
       notifyDirectMessageAuthorizationChanged(account);
+      notifyMessageAuthorizationChanged(account);
       return true;
     },
     reset() {
@@ -148,6 +164,7 @@ export const useFriendshipsStore = defineStore("friendships", {
       if (index >= 0) this.records[index] = record;
       else this.records.push(record);
       notifyDirectMessageAuthorizationChanged(accountPubkey);
+      notifyMessageAuthorizationChanged(accountPubkey);
       scheduleAccountStateSync(useKeyStore(), "friendships");
       return { changed: true, record };
     },
