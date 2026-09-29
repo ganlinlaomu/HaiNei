@@ -14,7 +14,7 @@ describe("Home visual polish contract", () => {
     expect(home).toContain(".feed { gap:10px");
 
     expect(card).toContain(".post-card{background:#fff;padding:14px 16px 12px;border:0;border-bottom:1px solid #edf1f5;border-radius:0;box-shadow:none}");
-    expect(card).toContain("@media(min-width:640px){.post-card{padding:16px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}");
+    expect(card).toContain("@media(min-width:640px){.post-card:not(.force-flat){padding:16px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}");
   });
 
   it("moves audience context into author metadata and keeps actions focused", () => {
@@ -34,6 +34,18 @@ describe("Home visual polish contract", () => {
     expect(home).toContain('<span class="notification-icon">↑</span>');
     expect(home).toContain("background: rgba(255,255,255,.96)");
     expect(home).not.toContain("linear-gradient(135deg, #667eea 0%, #764ba2 100%)");
+  });
+
+  it("keeps profile activity flat regardless of wide viewport", () => {
+    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+
+    expect(card).toContain("flat?: boolean");
+    expect(card).toContain("'force-flat': flat");
+    expect(card).toContain(".post-card:not(.force-flat)");
+    expect(profile).toContain('<PostCard v-for="post in ownerPosts" :key="post.id" :message="post" flat />');
+    expect(profile).toContain(".post-list{display:grid;gap:0}");
+    expect(profile).toContain(".profile-posts{width:100%;box-sizing:border-box;padding:4px 0 0}");
   });
 
   it("renders success feedback as compact neutral toast instead of a green block", () => {

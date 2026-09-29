@@ -1,5 +1,5 @@
 <template>
-  <article ref="root" :id="`msg-${message.id}`" class="post-card">
+  <article ref="root" :id="`msg-${message.id}`" class="post-card" :class="{ 'force-flat': flat }">
     <header class="post-author">
       <button class="profile-link avatar-link" type="button" :aria-label="`查看 ${displayName(message.pubkey)} 的资料`" @click="openAuthor(message.pubkey, $event)">
         <ProfileAvatar :pubkey="message.pubkey" :local-name="localName(message.pubkey)" :size="38" />
@@ -76,7 +76,7 @@ import { shouldSendDoubleTapLike } from "@/utils/feedCarousel";
 import CommentSheet from "./CommentSheet.vue";
 import { feedScrollAfterSheetClose } from "@/utils/commentThreads";
 
-const props = defineProps<{ message: InboxItem; openCommentId?: string }>();
+const props = withDefaults(defineProps<{ message: InboxItem; openCommentId?: string; flat?: boolean }>(), { flat: false });
 const emit = defineEmits<{ height: [id: string, height: number] }>();
 const keys = useKeyStore(); const friends = useFriendsStore(); const interactions = useInteractionsStore(); const ui = useUIStore();
 const profiles = useProfilesStore();
@@ -170,6 +170,6 @@ onBeforeUnmount(() => observer?.disconnect());
 .message-text{margin-top:9px;color:#202938;font-size:15px;line-height:1.58;white-space:pre-wrap;overflow-wrap:anywhere}.text-button{display:inline-flex;min-height:28px;align-items:center;margin-left:3px;padding:0 3px;border:0;background:transparent;color:#2563eb;font:inherit;font-size:13px;vertical-align:baseline;cursor:pointer}
 .actions{display:flex;align-items:center;gap:10px;margin-top:6px;padding-top:3px;border-top:0}.action{min-width:42px;min-height:42px;padding:7px 8px;border:0;border-radius:9px;background:transparent;color:#334155;font-size:12px}.icon-action{display:inline-flex;align-items:center;justify-content:center;gap:4px}.icon-action svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.action span{font-size:11px;color:#64748b}.action.liked{color:#ef4444}.action.liked svg{fill:currentColor}.action.bookmark.saved{color:#60A5FA}.action.bookmark.saved svg{fill:currentColor}.bookmark{margin-left:auto}
 .panel{margin-top:8px;padding:9px 11px;border:1px solid #e5e7eb;border-radius:10px;background:#f8fafc}.meta-row{display:flex;justify-content:space-between;margin-top:5px;font-size:12px}
-@media(min-width:640px){.post-card{padding:16px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}.actions{padding-top:6px;border-top:1px solid #f1f5f9}.message-text{line-height:1.62}}
+@media(min-width:640px){.post-card:not(.force-flat){padding:16px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}.post-card:not(.force-flat) .actions{padding-top:6px;border-top:1px solid #f1f5f9}.post-card:not(.force-flat) .message-text{line-height:1.62}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 </style>
