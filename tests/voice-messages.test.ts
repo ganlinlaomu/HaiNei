@@ -44,6 +44,7 @@ class FakeRecorder extends EventTarget {
   static supported = new Set(["audio/mp4", "audio/webm;codecs=opus"]);
   static emitStop = true;
   static emitData = true;
+  static emitFinalData = true;
   static rejectExplicitMime = false;
   static stopCalls = 0;
   static startArguments: Array<number | undefined> = [];
@@ -52,6 +53,8 @@ class FakeRecorder extends EventTarget {
   static isTypeSupported(type: string) { return FakeRecorder.supported.has(type); }
   state: RecordingState = "inactive";
   mimeType = "audio/mp4";
+  private interval: ReturnType<typeof setInterval> | null = null;
+  private chunkIndex = 0;
   constructor(public stream: MediaStream, options?: MediaRecorderOptions) {
     super();
     FakeRecorder.constructorOptions.push(options);
@@ -62,12 +65,19 @@ class FakeRecorder extends EventTarget {
   start(timeslice?: number) {
     FakeRecorder.startArguments.push(timeslice);
     this.state = "recording";
+    if (timeslice) {
+      this.interval = setInterval(() => {
+        if (this.state === "recording") this.emitDataChunk(`slice-${++this.chunkIndex}|`);
+      }, timeslice);
+    }
     setTimeout(() => this.dispatchEvent(new Event("start")), 0);
   }
   stop() {
     if (this.state === "inactive") return;
     FakeRecorder.stopCalls += 1;
     this.state = "inactive";
+    if (this.interval) clearInterval(this.interval);
+    this.interval = null;
     this.flushFinalRecording();
   }
   unexpectedStop() {
@@ -93,10 +103,14 @@ class FakeRecorder extends EventTarget {
     if (FakeRecorder.emitStop) setTimeout(() => this.dispatchEvent(new Event("stop")), 20);
   }
   private emitFinalData() {
+    if (!FakeRecorder.emitFinalData) return;
+    this.emitDataChunk("continuous-safari-recording");
+  }
+  private emitDataChunk(value: string) {
     const track = (this.stream.getAudioTracks()[0] as unknown as FakeTrack);
     if (!FakeRecorder.emitData || track.stoppedByApp) return;
     const data = new Event("dataavailable") as Event & { data: Blob };
-    Object.defineProperty(data, "data", { value: new Blob(["continuous-safari-recording"], { type: this.mimeType }) });
+    Object.defineProperty(data, "data", { value: new Blob([value], { type: this.mimeType }) });
     this.dispatchEvent(data);
   }
 }
@@ -118,6 +132,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   FakeRecorder.emitStop = true;
   FakeRecorder.emitData = true;
+  FakeRecorder.emitFinalData = true;
   FakeRecorder.rejectExplicitMime = false;
   FakeRecorder.stopCalls = 0;
   FakeRecorder.startArguments = [];
@@ -135,7 +150,7 @@ describe("voice recording lifecycle", () => {
     FakeRecorder.supported = new Set(["audio/mp4", "audio/webm;codecs=opus"]);
   });
 
-  it("starts one continuous recording with the preferred MIME and no timeslice", async () => {
+  it("records preferred WebM in one-second chunks without restarting the recorder", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const harness = recorderHarness();
@@ -144,7 +159,7 @@ describe("voice recording lifecycle", () => {
       Recorder: FakeRecorder as unknown as typeof MediaRecorder,
     });
     expect(harness.getUserMedia).toHaveBeenCalledWith({ audio: true });
-    expect(FakeRecorder.startArguments).toEqual([undefined]);
+    expect(FakeRecorder.startArguments).toEqual([1_000]);
     expect(FakeRecorder.constructorOptions).toEqual([{ mimeType: "audio/webm;codecs=opus" }]);
     expect(session.mime).toBe("audio/webm;codecs=opus");
     expect(session.isActive()).toBe(true);
@@ -163,6 +178,7 @@ describe("voice recording lifecycle", () => {
     });
     expect(FakeRecorder.constructorOptions).toEqual([{ mimeType: "audio/webm;codecs=opus" }, undefined]);
     expect(session.mime).toBe("audio/mp4");
+    expect(FakeRecorder.startArguments).toEqual([undefined]);
   });
 
   it("stays active beyond 4, 10, and 30 seconds without internal recorder restarts", async () => {
@@ -206,6 +222,25 @@ describe("voice recording lifecycle", () => {
     expect(console.info).toHaveBeenCalledWith("[voice-recorder]", expect.objectContaining({
       event: "app-track-stop", reason: "user-finish:0",
     }));
+  });
+
+  it("keeps periodic WebM chunks when Safari loses the final stop chunk", async () => {
+    vi.useFakeTimers();
+    FakeRecorder.emitFinalData = false;
+    const harness = recorderHarness();
+    const session = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    await vi.advanceTimersByTimeAsync(13_200);
+    const finishing = session.finish();
+    await vi.advanceTimersByTimeAsync(20);
+    const result = await finishing;
+    expect(result).toMatchObject({ mime: "audio/webm;codecs=opus" });
+    expect(result!.duration).toBeGreaterThanOrEqual(13);
+    expect(await result!.blob.text()).toContain("slice-13|");
+    expect(FakeRecorder.instances).toHaveLength(1);
+    expect(FakeRecorder.stopCalls).toBe(1);
   });
 
   it("makes Finish idempotent and never calls MediaRecorder.stop twice", async () => {
