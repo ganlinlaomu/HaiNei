@@ -14,7 +14,7 @@
       @input="seek"
     />
     <span class="voice-duration">{{ formatDuration(playing || currentTime ? currentTime : (playDuration || duration)) }}</span>
-    <audio ref="audio" :src="sourceUrl" preload="none" @timeupdate="syncPlayback" @loadedmetadata="syncMetadata" @ended="playing = false"></audio>
+    <audio v-if="!suspended" ref="audio" :src="sourceUrl" preload="none" @timeupdate="syncPlayback" @loadedmetadata="syncMetadata" @ended="playing = false"></audio>
     <button v-if="error" class="voice-retry" type="button" @click="toggle">重试</button>
   </div>
 </template>
