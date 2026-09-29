@@ -9,9 +9,12 @@ describe("account actions in Settings", () => {
     expect(settings).toContain('<summary class="section-heading account-heading">');
     expect(settings).toContain('class="account-heading-icon"');
     expect(settings).not.toContain('<details class="account-section top-level-group">');
-    expect(settings).toContain(">切换账号</button>");
-    expect(settings).toContain(">添加账号</button>");
-    expect(settings).toContain(">退出登录</button>");
+    expect(settings).toContain('@click="switchAccount"');
+    expect(settings).toContain("切换账号");
+    expect(settings).toContain('@click="addAccount"');
+    expect(settings).toContain("添加账号");
+    expect(settings).toContain('@click="doLogout"');
+    expect(settings).toContain("退出登录");
     expect(settings).toContain("<p>{{ nickname }} · {{ shortPk }} · {{ accountProtectionText }}</p>");
     expect(settings).toContain('goToAccountLogin("switch")');
     expect(settings).toContain('goToAccountLogin("add")');
