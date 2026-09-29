@@ -412,7 +412,7 @@ describe("voice recording lifecycle", () => {
   it("resets the WebKit audio session between consecutive recordings", async () => {
     vi.useFakeTimers();
     const audioSession = { type: "stale-play-and-record" };
-    Object.defineProperty(navigator, "audioSession", { value: audioSession, configurable: true });
+    vi.stubGlobal("navigator", { audioSession });
 
     const firstHarness = recorderHarness();
     const first = await createVoiceRecordingSession({
