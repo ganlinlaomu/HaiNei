@@ -97,13 +97,13 @@
                 <span>{{ quotedPreview(message.replyTo) }}</span>
               </button>
               <DmAudioMessage
-                v-if="hasAudio(message) && !voiceCaptureOwnsAudioSession"
+                v-if="hasAudio(message)"
                 :media="audioMedia(message)"
                 :preview-url="message.outgoing?.audioPreviewUrl"
                 :duration="message.outgoing?.audioDuration || audioMedia(message)?.duration || 0"
                 :account-pubkey="keys.pkHex"
+                :suspended="voiceCaptureOwnsAudioSession"
               />
-              <span v-else-if="hasAudio(message)" class="audio-capture-placeholder" aria-label="语音消息">语音</span>
               <template v-else-if="isMediaCaption(message)">
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else :content="message.content" :show-all="true" alt-text="私信图片" />
