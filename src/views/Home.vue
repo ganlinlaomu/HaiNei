@@ -88,6 +88,7 @@ import type { SyncStatus } from "@/nostr/messaging/sync/types";
 import { useProfilesStore } from "@/stores/profiles";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
+import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
 import { isAuthorizedCanonicalDirectMessage, useDirectMessagesStore } from "@/stores/directMessages";
@@ -661,90 +662,95 @@ async function safeUpdateLocalRefs() {
     }
 
 
+  function syncedRecordToInbox(record: Awaited<ReturnType<typeof syncedMessageRepository.get>>): InboxItem | null {
+    if (!record) return null;
+    return {
+      id: record.id,
+      pubkey: record.senderPubkey,
+      created_at: record.createdAt,
+      content: record.plaintext || "",
+      protocol: "nip17",
+      transportKind: record.transportKind,
+      transportEventId: record.transportEventIds[0],
+      rumorId: record.rumorId,
+      recipientPubkeys: record.recipientPubkeys,
+      conversationId: record.conversationId,
+      replyTo: record.replyTo,
+      rootId: record.rootId,
+      tags: record.tags || [],
+    };
+  }
+
+  async function resolveNotificationPost(mid: string) {
+    const existing = messagesRef.value.find(message => message.id === mid)
+      || displayedMessages.value.find(message => message.id === mid)
+      || msgs.inbox.find(message => message.id === mid);
+    if (existing) return existing;
+
+    if (!keys.pkHex) return null;
+    const record = await syncedMessageRepository.get(keys.pkHex, mid);
+    const restored = syncedRecordToInbox(record);
+    if (!restored || !isHomeRenderable(restored)) return null;
+    return restored;
+  }
+
   async function handleNotificationJump() {
     const mid = route.query.mid as string | undefined;
     const targetCommentId = String(route.query.rid || route.query.iid || "") || undefined;
+    if (!mid || route.path !== "/") return;
 
-    if (!mid) return;
+    // Do not race Home initialization. The query stays in place and
+    // initializeHomeRuntime invokes this again after the account snapshot is ready.
+    if (!readyForPending.value || homeAccountPk !== keys.pkHex) return;
 
-    // If the target post is already known but outside the current page window,
-    // expose enough rows immediately instead of polling for it to appear.
-    const sourceIndex = messagesRef.value.findIndex(message => message.id === mid);
-    if (sourceIndex >= 0 && !displayedMessages.value.some(message => message.id === mid)) {
-      displayedMessages.value = messagesRef.value.slice(
-        0,
-        Math.min(messagesRef.value.length, Math.max(displayedMessages.value.length, sourceIndex + 1))
-      );
+    const targetPost = await resolveNotificationPost(mid);
+    if (!targetPost || route.query.mid !== mid) {
+      logger.warn("通知跳转失败：目标动态未找到", mid);
+      ui.addToast("这条动态暂未同步到本机", 1800, "error");
+      return;
     }
 
-    // Allow the normal sync path a short opportunity to materialize a post that
-    // has not reached the local list yet. Keep this bounded so notification taps
-    // never feel blocked by multi-second polling.
-    for (let attempt = 0; attempt < 4 && !displayedMessages.value.some(message => message.id === mid); attempt += 1) {
-      await new Promise<void>(resolve => {
-        if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
-        else setTimeout(resolve, 16);
-      });
+    // Notification navigation must not depend on the normal first-page window.
+    // Inject the exact post into the current rendered list without loading all
+    // intervening history.
+    if (!messagesRef.value.some(message => message.id === targetPost.id)) {
+      messagesRef.value = insertSortedHomeMessage(messagesRef.value, targetPost);
     }
+    if (!displayedMessages.value.some(message => message.id === targetPost.id)) {
+      displayedMessages.value = insertSortedHomeMessage(displayedMessages.value, targetPost);
+    }
+
+    await nextTick();
+    if (route.query.mid !== mid) return;
 
     const targetIndex = displayedMessages.value.findIndex(message => message.id === mid);
     if (targetIndex < 0) {
-      logger.warn("通知跳转失败：消息未出现", mid);
+      logger.warn("通知跳转失败：目标动态未进入显示窗口", mid);
       return;
     }
 
-    const jumpScroller = scrollContainer;
-    if (jumpScroller && feedElement.value) {
-      virtualStart.value = Math.max(0, targetIndex - 2);
-      virtualEnd.value = Math.min(displayedMessages.value.length, targetIndex + 4);
-      jumpScroller.scrollTop = feedElement.value.offsetTop + rangeHeight(0, targetIndex);
-      await nextTick();
+    // Pin the virtual window around the exact target before moving the scroll
+    // container. This guarantees PostCard mounts before CommentSheet opens.
+    virtualStart.value = Math.max(0, targetIndex - 1);
+    virtualEnd.value = Math.min(displayedMessages.value.length, targetIndex + 2);
+    await nextTick();
+
+    if (scrollContainer && feedElement.value) {
+      const targetTop = feedElement.value.offsetTop + rangeHeight(0, targetIndex);
+      scrollContainer.scrollTo({ top: Math.max(0, targetTop - SCROLL_SAFE_OFFSET), behavior: "auto" });
     }
 
-    // CommentSheet owns exact comment/reply reveal and scrolling. Once the
-    // containing PostCard is rendered, return immediately instead of waiting
-    // for comment DOM nodes in Home.
-    if (targetCommentId) {
-      notificationJumpDone.value = true;
-      return;
+    await nextTick();
+    if (route.query.mid !== mid) return;
+
+    const postElement = document.getElementById(`msg-${mid}`);
+    if (postElement && !targetCommentId) {
+      postElement.classList.add("highlight");
+      setTimeout(() => postElement.classList.remove("highlight"), 1500);
     }
 
-    const targetId = `msg-${mid}`;
-    let el = document.getElementById(targetId);
-    if (!el) {
-      await nextTick();
-      el = document.getElementById(targetId);
-    }
-    if (!el) {
-      logger.warn("通知跳转失败：DOM 未找到", targetId);
-      return;
-    }
-
-    if (jumpScroller) {
-      const rect = el.getBoundingClientRect();
-      const containerRect = jumpScroller.getBoundingClientRect();
-      const elementTop = rect.top - containerRect.top;
-      const elementBottom = rect.bottom - containerRect.top;
-      const viewportHeight = containerRect.height;
-      const safeViewportBottom = viewportHeight - bottomNavigationHeight() - SCROLL_SAFE_OFFSET;
-
-      if (elementTop < SCROLL_SAFE_OFFSET) {
-        jumpScroller.scrollTo({
-          top: jumpScroller.scrollTop + elementTop - SCROLL_SAFE_OFFSET,
-          behavior: "auto",
-        });
-      } else if (elementBottom > safeViewportBottom) {
-        jumpScroller.scrollTo({
-          top: jumpScroller.scrollTop + elementTop - SCROLL_SAFE_OFFSET,
-          behavior: "auto",
-        });
-      }
-    } else {
-      el.scrollIntoView({ behavior: "auto", block: "start" });
-    }
-
-    el.classList.add("highlight");
-    setTimeout(() => el.classList.remove("highlight"), 1500);
+    // PostCard receives openCommentId reactively. Once its exact card is mounted,
+    // CommentSheet owns expansion and comment/reply centering.
     notificationJumpDone.value = true;
   }
 
