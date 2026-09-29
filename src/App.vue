@@ -65,6 +65,7 @@ import { preloadBottomTabViews } from "@/router/lazyViews";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useDirectMessagesStore } from "@/stores/directMessages";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
+import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
 
@@ -140,6 +141,13 @@ export default defineComponent({
       else ui.openPostEditor();
     }
 
+    function reconcileFriendStateOnForeground() {
+      if (document.visibilityState === "hidden" || !keys.isLoggedIn || !keys.isUnlocked) return;
+      void reconcileForegroundFriendState(keys).catch(error => {
+        console.warn("[account-state] foreground friend reconciliation failed", error instanceof Error ? error.message : "unknown");
+      });
+    }
+
     watch(
       () => [
         keys.pkHex,
@@ -179,8 +187,16 @@ export default defineComponent({
       },
       { immediate: true }
     );
-    onMounted(schedulePostEditorWarmup);
+    onMounted(() => {
+      schedulePostEditorWarmup();
+      document.addEventListener("visibilitychange", reconcileFriendStateOnForeground);
+      window.addEventListener("pageshow", reconcileFriendStateOnForeground);
+      window.addEventListener("online", reconcileFriendStateOnForeground);
+    });
     onBeforeUnmount(() => {
+      document.removeEventListener("visibilitychange", reconcileFriendStateOnForeground);
+      window.removeEventListener("pageshow", reconcileFriendStateOnForeground);
+      window.removeEventListener("online", reconcileFriendStateOnForeground);
       disposed = true;
       if (idleHandle !== null) {
         const cancelIdle = (window as any).cancelIdleCallback as undefined | ((handle: number) => void);
