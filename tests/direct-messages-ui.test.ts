@@ -128,7 +128,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("@dragstart.prevent");
     expect(chat).toContain("-webkit-touch-callout:none");
     expect(chat).toContain("window.getSelection?.()?.removeAllRanges()");
-    expect(chat).not.toContain("@touchstart.prevent");
+    expect(chat).toContain('@touchstart="handleMessageTouchStart(message, $event)"');
+    expect(chat).not.toContain('@touchstart.prevent="handleMessageTouchStart');
     expect(chat).toContain("replyFromActionMenu");
     expect(chat).toContain("copyFromActionMenu");
     expect(chat).toContain("isMediaGestureTarget");
