@@ -35,6 +35,13 @@ import {
   rememberDeviceAccount,
   type DeviceAccount
 } from "@/services/accountRegistry";
+import {
+  enrollBiometricUnlock,
+  hasBiometricUnlock,
+  removeBiometricUnlock,
+  supportsBiometricUnlock,
+  unlockPrivateKeyWithBiometric
+} from "@/services/biometricUnlock";
 
 let restoreSessionFlight: Promise<void> | null = null;
 
@@ -249,9 +256,44 @@ export const useKeyStore = defineStore("keys", {
       return "unlock" as const;
     },
 
+    hasBiometricUnlock(pubkey = this.pkHex) {
+      return !!pubkey && hasBiometricUnlock(pubkey);
+    },
+
+    async supportsBiometricUnlock() {
+      return supportsBiometricUnlock();
+    },
+
+    async enableBiometricUnlock() {
+      if (!this.pkHex || !this.skHex || !this.isUnlocked) throw new Error("请先解锁当前账号");
+      await enrollBiometricUnlock(this.pkHex, this.skHex);
+    },
+
+    async disableBiometricUnlock(pubkey = this.pkHex) {
+      if (!pubkey) return;
+      await removeBiometricUnlock(pubkey);
+    },
+
+    async unlockWithBiometric() {
+      if (!this.pkHex) throw new Error("未找到公钥信息");
+      const skHex = await unlockPrivateKeyWithBiometric(this.pkHex);
+      const pk = await safeGetPublicKey(skHex);
+      if (pk !== this.pkHex) throw new Error("Face ID 解锁的私钥与当前账号不匹配");
+
+      this.skHex = skHex;
+      this.isUnlocked = true;
+      this.loginTimestamp = Math.floor(Date.now() / 1000);
+      await this.persistActiveSession();
+      await this.rememberCurrentAccount();
+      await this.loadAccountStores(this.pkHex);
+    },
+
     async removeAccountFromDevice(pubkey: string) {
       const normalized = pubkey.toLowerCase();
-      await removeEncryptedKey(normalized);
+      await Promise.all([
+        removeEncryptedKey(normalized),
+        removeBiometricUnlock(normalized),
+      ]);
       this.accounts = await forgetDeviceAccount(normalized);
       if (this.pkHex === normalized) await this.clearActiveSession();
     },
