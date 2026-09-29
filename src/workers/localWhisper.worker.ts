@@ -1,5 +1,5 @@
 const TRANSFORMERS_MODULE_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js";
-const MODEL_ID = "onnx-community/whisper-tiny";
+const MODEL_ID = "onnx-community/whisper-base";
 
 type Pipeline = (
   audio: Float32Array,
@@ -44,8 +44,8 @@ async function getTranscriber(id: number) {
   return transcriberPromise;
 }
 
-async function run(message: { id: number; audio: Float32Array; language?: string }) {
-  const { id, audio, language } = message;
+async function run(message: { id: number; audio: Float32Array }) {
+  const { id, audio } = message;
   activeRequestId = id;
   try {
     const transcriber = await getTranscriber(id);
@@ -53,7 +53,7 @@ async function run(message: { id: number; audio: Float32Array; language?: string
     const started = performance.now();
     const output = await transcriber(audio, {
       task: "transcribe",
-      ...(language ? { language } : {}),
+      language: "chinese",
       chunk_length_s: 30,
       stride_length_s: 5,
     });
@@ -71,6 +71,6 @@ async function run(message: { id: number; audio: Float32Array; language?: string
   }
 }
 
-self.onmessage = (event: MessageEvent<{ id: number; audio: Float32Array; language?: string }>) => {
+self.onmessage = (event: MessageEvent<{ id: number; audio: Float32Array }>) => {
   queue = queue.then(() => run(event.data)).catch(() => undefined);
 };
