@@ -160,6 +160,77 @@ describe("reliable message persistence", () => {
     expect(visible).toEqual([]);
     expect(await repo.list(ACCOUNT_B)).toEqual([]);
   });
+
+  it("durably defers unresolved authorization without relying on the watermark", async () => {
+    const repo = new SyncedMessageRepository(database());
+    let authorized = false;
+    const pipeline = new MessageIngestionPipeline(
+      ACCOUNT_A,
+      { accountPubkey: ACCOUNT_A },
+      () => true,
+      value => value.id === "deferred" && !authorized ? "defer" : true,
+      repo,
+    );
+
+    const deferred = await pipeline.ingestCanonicalMessage(message("deferred", 100), { source: "realtime" });
+    expect(deferred).toMatchObject({ inserted: false, discarded: false, deferred: true });
+    expect(await repo.list(ACCOUNT_A)).toEqual([]);
+    expect(await repo.listDeferredAuthorizationMessages(ACCOUNT_A)).toHaveLength(1);
+    expect((await repo.getSyncState(ACCOUNT_A)).highWatermarkCreatedAt).toBeUndefined();
+
+    await pipeline.ingestCanonicalMessage(message("later", 200), { source: "realtime" });
+    expect((await repo.getSyncState(ACCOUNT_A)).highWatermarkCreatedAt).toBe(200);
+    expect(await repo.listDeferredAuthorizationMessages(ACCOUNT_A)).toHaveLength(1);
+
+    // Simulate an app restart after the global watermark has already moved past
+    // the deferred message. The durable queue, not Relay replay, recovers it.
+    authorized = true;
+    const restarted = new MessageIngestionPipeline(
+      ACCOUNT_A,
+      { accountPubkey: ACCOUNT_A },
+      () => true,
+      () => true,
+      repo,
+    );
+    expect(await restarted.retryDeferredAuthorization()).toBe(1);
+    expect((await repo.list(ACCOUNT_A)).map(item => item.id).sort()).toEqual(["deferred", "later"]);
+    expect(await repo.listDeferredAuthorizationMessages(ACCOUNT_A)).toEqual([]);
+  });
+
+  it("never persists a rejected message when another gift wrap repeats the same logical message", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const rejected = vi.fn(() => false);
+    const pipeline = new MessageIngestionPipeline(
+      ACCOUNT_A,
+      { accountPubkey: ACCOUNT_A },
+      () => true,
+      rejected,
+      repo,
+    );
+    const first = message("rejected", 100, { rumorId: "same-rumor", transportEventId: "wrap-a" });
+    const second = message("rejected", 100, { rumorId: "same-rumor", transportEventId: "wrap-b" });
+
+    expect(await pipeline.ingestCanonicalMessage(first, { source: "realtime" })).toMatchObject({ discarded: true });
+    expect(await pipeline.ingestCanonicalMessage(second, { source: "realtime" })).toMatchObject({ discarded: true });
+    expect(rejected).toHaveBeenCalledTimes(1);
+    expect(await repo.list(ACCOUNT_A)).toEqual([]);
+  });
+
+  it("defers handler failures instead of advancing the permanent watermark", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const pipeline = new MessageIngestionPipeline(
+      ACCOUNT_A,
+      { accountPubkey: ACCOUNT_A },
+      () => true,
+      async () => { throw new Error("friendship store unavailable"); },
+      repo,
+    );
+
+    const result = await pipeline.ingestCanonicalMessage(message("handler-failed", 321), { source: "realtime" });
+    expect(result).toMatchObject({ deferred: true, discarded: false });
+    expect((await repo.getSyncState(ACCOUNT_A)).highWatermarkCreatedAt).toBeUndefined();
+    expect((await repo.listDeferredAuthorizationMessages(ACCOUNT_A)).map(item => item.id)).toEqual(["handler-failed"]);
+  });
 });
 
 describe("relay catch-up", () => {
