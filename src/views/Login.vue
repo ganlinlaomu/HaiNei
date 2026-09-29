@@ -373,14 +373,23 @@ async function selectAccount(pubkey: string) {
   if (loading.value) return;
   errorMessage.value = "";
   loading.value = true;
+  let selectedForUnlock = false;
   try {
     const result = await ks.selectRememberedAccount(pubkey);
-    if (result === "connected") await finishLogin();
+    if (result === "connected") {
+      await finishLogin();
+      return;
+    }
+    selectedForUnlock = result === "unlock";
   } catch (error) {
     logLoginFailure("switch", "select-account", error);
     errorMessage.value = error instanceof Error ? error.message : "切换账号失败";
   } finally {
     loading.value = false;
+  }
+  if (selectedForUnlock) {
+    autoBiometricAccount.value = "";
+    await presentUnlockMethod();
   }
 }
 
