@@ -140,6 +140,12 @@ export class MessageSyncManager {
     }
     if (!isCurrent()) return;
 
+    // Re-evaluate messages that were durably quarantined by an earlier session.
+    // This happens after account stores have had a chance to restore friendship
+    // state, but before a new catch-up advances the session further.
+    await this.pipeline.retryDeferredAuthorization();
+    if (!isCurrent()) return;
+
     let state = await this.repository.getSyncState(accountPubkey);
     if (!state.historyBackfillCompletedAt && !state.historyBackfillStartedAt && localMessages.length === 0) {
       state = await this.repository.updateSyncState(accountPubkey, { historyBackfillStartedAt: this.now() });
@@ -303,6 +309,11 @@ export class MessageSyncManager {
         this.catchupSessionId = "";
       }
     }
+  }
+
+  async retryDeferredAuthorization() {
+    if (!this.options || !this.pipeline) return 0;
+    return this.pipeline.retryDeferredAuthorization();
   }
 
   async markConversationRead(conversationId: string) {
