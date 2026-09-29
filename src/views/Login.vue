@@ -17,21 +17,38 @@
           <p class="account-id" :title="shortAccount">{{ shortAccount }}</p>
         </div>
 
-        <label class="field-label" for="unlock-password">本地保护密码</label>
-        <input
-          id="unlock-password"
-          ref="unlockPasswordEl"
-          v-model="unlockPassword"
-          class="input"
-          type="password"
-          autocomplete="current-password"
-          placeholder="输入本地保护密码"
-          :disabled="loading"
-        />
+        <template v-if="biometricEnabled && !passwordFallbackVisible">
+          <button class="btn btn-primary biometric-login-button" type="button" :disabled="loading" @click="doBiometricUnlock(false)">
+            {{ loading ? `正在验证 ${biometricLabel}…` : `使用 ${biometricLabel} 登录` }}
+          </button>
+          <button class="btn btn-text" type="button" :disabled="loading" @click="showPasswordFallback">
+            使用本地密码
+          </button>
+        </template>
 
-        <button class="btn btn-primary" type="submit" :disabled="loading">
-          {{ loading ? "正在解锁…" : "解锁" }}
-        </button>
+        <template v-else>
+          <label class="field-label" for="unlock-password">本地保护密码</label>
+          <input
+            id="unlock-password"
+            ref="unlockPasswordEl"
+            v-model="unlockPassword"
+            class="input"
+            type="password"
+            autocomplete="current-password"
+            placeholder="输入本地保护密码"
+            :disabled="loading"
+            @change="handleUnlockAutofill"
+            @animationstart="handleUnlockAutofill"
+          />
+
+          <button class="btn btn-primary" type="submit" :disabled="loading">
+            {{ loading ? "正在解锁…" : "解锁" }}
+          </button>
+
+          <button v-if="biometricEnabled" class="btn btn-text" type="button" :disabled="loading" @click="passwordFallbackVisible = false; doBiometricUnlock(false)">
+            使用 {{ biometricLabel }} 登录
+          </button>
+        </template>
 
         <button class="btn btn-text" type="button" :disabled="loading" @click="switchAccount">
           切换账号
@@ -159,6 +176,8 @@ const nsecPassword = ref("");
 const confirmPassword = ref("");
 const unlockPassword = ref("");
 const unlockInProgress = ref(false);
+const passwordFallbackVisible = ref(false);
+const autoBiometricAccount = ref("");
 const showPrivateLogin = ref(false);
 const showRegister = ref(false);
 const generatedNsec = ref("");
@@ -171,6 +190,8 @@ const nsecInputEl = ref<HTMLInputElement | null>(null);
 const unlockPasswordEl = ref<HTMLInputElement | null>(null);
 
 const needsUnlock = computed(() => !!ks.pkHex && ks.isEncrypted && !ks.isUnlocked);
+const biometricEnabled = computed(() => !!ks.pkHex && ks.hasBiometricUnlock(ks.pkHex));
+const biometricLabel = computed(() => /iPhone/i.test(navigator.userAgent) ? "Face ID" : "生物识别");
 const addingAccount = computed(() => route.query.mode === "add");
 const pageMode = computed<"restoring" | "unlock" | "login">(() => {
   if (ks.isRestoring) return "restoring";
@@ -211,6 +232,25 @@ function shortPubkey(pubkey: string) {
   }
 }
 
+async function presentUnlockMethod() {
+  if (pageMode.value !== "unlock") return;
+  errorMessage.value = "";
+  loginStatus.value = "";
+
+  if (biometricEnabled.value && autoBiometricAccount.value !== ks.pkHex) {
+    autoBiometricAccount.value = ks.pkHex;
+    passwordFallbackVisible.value = false;
+    await doBiometricUnlock(true);
+    return;
+  }
+
+  if (!biometricEnabled.value) {
+    passwordFallbackVisible.value = true;
+    await nextTick();
+    unlockPasswordEl.value?.focus();
+  }
+}
+
 onMounted(async () => {
   ks.refreshAccounts();
 
@@ -219,17 +259,12 @@ onMounted(async () => {
     showRegister.value = false;
   }
 
-  if (pageMode.value === "unlock") {
-    await nextTick();
-    unlockPasswordEl.value?.focus();
-  }
+  await presentUnlockMethod();
 });
 
 watch(pageMode, async (mode) => {
-  errorMessage.value = "";
-  loginStatus.value = "";
-  await nextTick();
-  if (mode === "unlock") unlockPasswordEl.value?.focus();
+  if (mode !== "unlock") return;
+  await presentUnlockMethod();
 });
 
 function clearSensitiveInputs() {
@@ -237,6 +272,7 @@ function clearSensitiveInputs() {
   nsecPassword.value = "";
   confirmPassword.value = "";
   unlockPassword.value = "";
+  passwordFallbackVisible.value = false;
   generatedNsec.value = "";
   registrationConfirmed.value = false;
   copiedNsec.value = false;
@@ -356,6 +392,57 @@ async function removeAccount(pubkey: string) {
   } finally {
     loading.value = false;
   }
+}
+
+function isBiometricCancellation(error: unknown) {
+  return error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError");
+}
+
+async function showPasswordFallback() {
+  passwordFallbackVisible.value = true;
+  errorMessage.value = "";
+  await nextTick();
+  unlockPasswordEl.value?.focus();
+}
+
+async function doBiometricUnlock(automatic = false) {
+  if (loading.value || !biometricEnabled.value) return;
+  errorMessage.value = "";
+  loading.value = true;
+  unlockInProgress.value = true;
+  loginStatus.value = `正在验证 ${biometricLabel.value}…`;
+  try {
+    await ks.unlockWithBiometric();
+    await finishLogin();
+  } catch (error) {
+    if (!isBiometricCancellation(error)) {
+      logLoginFailure("unlock", "biometric", error);
+      errorMessage.value = error instanceof Error ? error.message : `${biometricLabel.value} 登录失败`;
+      passwordFallbackVisible.value = true;
+      await nextTick();
+      unlockPasswordEl.value?.focus();
+    } else if (!automatic) {
+      errorMessage.value = "";
+    }
+  } finally {
+    loading.value = false;
+    unlockInProgress.value = false;
+    loginStatus.value = "";
+  }
+}
+
+let autofillTimer: ReturnType<typeof window.setTimeout> | null = null;
+function handleUnlockAutofill(event: Event) {
+  if (loading.value || !unlockPassword.value) return;
+  if (event.type === "animationstart") {
+    const animation = event as AnimationEvent;
+    if (animation.animationName !== "hainei-password-autofill") return;
+  }
+  if (autofillTimer) window.clearTimeout(autofillTimer);
+  autofillTimer = window.setTimeout(() => {
+    autofillTimer = null;
+    if (unlockPassword.value && !loading.value) void doUnlock();
+  }, 80);
 }
 
 async function doUnlock() {
@@ -781,6 +868,16 @@ async function switchAccount() {
   line-height: 1.45;
   text-align: center;
   white-space: pre-line;
+}
+
+#unlock-password:-webkit-autofill {
+  animation-name: hainei-password-autofill;
+  animation-duration: 0.01s;
+}
+
+@keyframes hainei-password-autofill {
+  from { opacity: 0.99; }
+  to { opacity: 1; }
 }
 
 @keyframes slide-up {
