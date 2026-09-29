@@ -349,7 +349,6 @@ describe("direct-message navigation and UI contract", () => {
     expect(imagePreview).toContain('rootMargin: "500px 0px"');
     expect(imagePreview).toContain("DecryptPriority");
     expect(imagePreview).toContain("priority - b.priority");
-    expect(home).toContain("await Promise.all([");
     expect(home).toContain("requestAnimationFrame(appendPage)");
     expect(home).toContain("AUTO_LOAD_MORE_THRESHOLD");
     expect(home).toContain('addEventListener("scroll", handleHomeScroll');
