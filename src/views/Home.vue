@@ -7,9 +7,13 @@
       :style="{ height: pullDistance + 'px' }"
     >
       <span v-if="!refreshing">↓ 下拉刷新</span>
-      <span v-else>⟳ 刷新中...</span>
+      <span v-else>正在更新…</span>
     </div>
     
+    <div v-if="connectionNotice" class="home-connection-notice" role="status">
+      {{ connectionNotice }}
+    </div>
+
     <!-- New messages notification -->
     <div 
       v-if="pendingMessages.length > 0" 
@@ -27,10 +31,17 @@
 
 
     <div ref="feedElement" class="feed">
-      <div v-if="displayedMessages.length === 0" class="empty-feed">
-        <strong>这里还没有动态</strong>
-        <span>添加好友后，他们的动态会显示在这里。</span>
-        <button type="button" @click="router.push('/friends')">添加好友</button>
+      <div v-if="!isInitialLoad && displayedMessages.length === 0" class="empty-feed">
+        <template v-if="acceptedFriends.length === 0">
+          <strong>还没有好友</strong>
+          <span>添加一个朋友后，这里会出现你们共享的动态。</span>
+          <button type="button" @click="router.push('/friends')">添加好友</button>
+        </template>
+        <template v-else>
+          <strong>暂时没有新动态</strong>
+          <span>可以先分享一点近况。</span>
+          <button type="button" @click="ui.openPostEditor()">发布动态</button>
+        </template>
       </div>
       <div v-if="topSpacerHeight" class="virtual-spacer" :style="{ height: `${topSpacerHeight}px` }" aria-hidden="true"></div>
       <PostCard
@@ -42,15 +53,10 @@
       />
       <div v-if="bottomSpacerHeight" class="virtual-spacer" :style="{ height: `${bottomSpacerHeight}px` }" aria-hidden="true"></div>
       
-      <!-- 加载更多按钮 -->
-      <div v-if="hasMore" class="load-more-container">
-        <button 
-          class="load-more-btn" 
-          @click="loadMoreMessages" 
-          :disabled="isLoadingMore"
-        >
-          <span v-if="!isLoadingMore">加载更多 (还有 {{ remainingMessagesCount }} 条)</span>
-          <span v-else>加载中...</span>
+      <div v-if="hasMore" ref="loadMoreSentinel" class="load-more-sentinel" aria-live="polite">
+        <span v-if="isLoadingMore">正在加载…</span>
+        <button v-else-if="!autoLoadSupported" class="load-more-btn" type="button" @click="loadMoreMessages">
+          加载更多
         </button>
       </div>
     </div>
@@ -77,6 +83,8 @@ import { accountMessageSyncManager } from "@/services/accountMessageSync";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { useNotificationsStore } from "@/stores/notifications";
+import { useUIStore } from "@/stores/ui";
+import type { SyncStatus } from "@/nostr/messaging/sync/types";
 import { useProfilesStore } from "@/stores/profiles";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
@@ -113,6 +121,7 @@ export default defineComponent({
     const interactions = useInteractionsStore();
     const settings = useSettingsStore();
     const notifications = useNotificationsStore();
+    const ui = useUIStore();
     const profiles = useProfilesStore();
     const feedPreferences = useFeedPreferencesStore();
     const readyForPending = ref(false);
@@ -321,16 +330,22 @@ export default defineComponent({
     const pendingMessages = ref([] as any[]); // Messages fetched but not yet displayed
     const isInitialLoad = ref(true); // Track if this is the first load
     const startupSyncing = ref(false);
-    
+    const homeSyncStatus = ref<SyncStatus>("idle");
+    const connectionNotice = computed(() => {
+      if (homeSyncStatus.value === "offline") return "暂时离线，正在显示已缓存内容";
+      if (homeSyncStatus.value === "error") return "正在重新连接…";
+      return "";
+    });
+
     // 分页相关状态
     const PAGE_SIZE = 20; // 每页显示 20 条
     const hasMore = computed(() => {
       return messagesRef.value.length > displayedMessages.value.length;
     });
     const isLoadingMore = ref(false);
-    const remainingMessagesCount = computed(() => {
-      return messagesRef.value.length - displayedMessages.value.length;
-    });
+    const loadMoreSentinel = ref<HTMLElement | null>(null);
+    const autoLoadSupported = ref(typeof IntersectionObserver !== "undefined");
+    let loadMoreObserver: IntersectionObserver | null = null;
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
     const acceptedAuthorsSignature = computed(() => acceptedFriends.value
       .map(friend => friend.pubkey)
@@ -351,6 +366,7 @@ export default defineComponent({
       lastSeenCreatedAt.value = 0;
       notificationJumpDone.value = false;
       startupSyncing.value = false;
+      homeSyncStatus.value = "idle";
       homeAccountPk = "";
       visibleInboxMessageRevision = -1;
       visibleInboxPreferenceRevision = -1;
@@ -590,6 +606,26 @@ async function safeUpdateLocalRefs() {
       if (typeof requestAnimationFrame === "function") requestAnimationFrame(appendPage);
       else appendPage();
     }
+
+    function attachLoadMoreObserver() {
+      loadMoreObserver?.disconnect();
+      loadMoreObserver = null;
+      if (typeof IntersectionObserver === "undefined") {
+        autoLoadSupported.value = false;
+        return;
+      }
+      autoLoadSupported.value = true;
+      loadMoreObserver = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) loadMoreMessages();
+      }, { root: scrollContainer, rootMargin: "420px 0px" });
+      if (loadMoreSentinel.value) loadMoreObserver.observe(loadMoreSentinel.value);
+    }
+
+    function detachLoadMoreObserver() {
+      loadMoreObserver?.disconnect();
+      loadMoreObserver = null;
+    }
+
     const {
        container,
        pullDistance,
@@ -836,6 +872,7 @@ async function safeUpdateLocalRefs() {
           onPersistedMessage: message => directMessages.acknowledgePersistedIncoming(accountAtStart, message),
           onStatus: syncStatus => {
             if (keys.pkHex !== accountAtStart || syncGeneration !== homeSyncGeneration) return;
+            homeSyncStatus.value = syncStatus;
             if (syncStatus === "live" || syncStatus === "error") {
               reconcileStartupSnapshot(true);
               startupSyncing.value = false;
@@ -846,6 +883,7 @@ async function safeUpdateLocalRefs() {
         });
         
       } catch (e) {
+        if (keys.pkHex === accountAtStart && syncGeneration === homeSyncGeneration) homeSyncStatus.value = "error";
         logger.error("startRealtimeSubscription failed", e);
       } finally {
         if (keys.pkHex === accountAtStart && syncGeneration === homeSyncGeneration && startupSyncing.value) {
@@ -857,6 +895,8 @@ async function safeUpdateLocalRefs() {
     
    onMounted(async () => {
      attachVirtualScroll();
+     await nextTick();
+     attachLoadMoreObserver();
      if (!keys.pkHex || homeAccountPk === keys.pkHex) return;
      try {
        await initializeHomeRuntime(keys.pkHex);
@@ -868,16 +908,19 @@ async function safeUpdateLocalRefs() {
 
    onBeforeUnmount(() => {
      saveCurrentHomeScroll();
+     detachLoadMoreObserver();
      detachVirtualScroll();
      closeHomeSubscriptions(false);
      clearHomeRuntimeState();
    });
    onActivated(() => {
      attachVirtualScroll();
+     void nextTick(attachLoadMoreObserver);
      void restoreCurrentHomeScroll();
    });
    onDeactivated(() => {
      saveCurrentHomeScroll();
+     detachLoadMoreObserver();
      detachVirtualScroll();
    });
 
@@ -906,7 +949,10 @@ async function safeUpdateLocalRefs() {
 );
    watch(displayedMessages, () => {
      rebuildHeightIndex();
-     void nextTick(scheduleVirtualWindowUpdate);
+     void nextTick(() => {
+       scheduleVirtualWindowUpdate();
+       attachLoadMoreObserver();
+     });
    }, { flush: "sync" });
    watch(
      () => keys.pkHex,
@@ -991,10 +1037,15 @@ async function safeUpdateLocalRefs() {
       container,
       pullDistance,
       refreshing,
+      isInitialLoad,
+      acceptedFriends,
+      ui,
+      connectionNotice,
       hasMore,
       isLoadingMore,
       loadMoreMessages,
-      remainingMessagesCount,
+      loadMoreSentinel,
+      autoLoadSupported,
       virtualMessages,
       topSpacerHeight,
       bottomSpacerHeight,
@@ -1009,6 +1060,7 @@ async function safeUpdateLocalRefs() {
 
 <style scoped>
 .empty-feed{display:flex;min-height:42vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:#64748b;text-align:center}.empty-feed strong{color:#0f1419;font-size:19px}.empty-feed span{font-size:14px}.empty-feed button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:#0f1419;color:#fff;font-size:14px;font-weight:650}
+.home-connection-notice{position:sticky;top:0;z-index:11;width:100%;box-sizing:border-box;padding:6px 12px;border-bottom:1px solid #e7ebef;background:rgba(255,255,255,.96);color:#657786;font-size:12px;line-height:1.35;text-align:center;backdrop-filter:blur(10px)}
 
 .home-container {
   position: relative;
@@ -1113,11 +1165,7 @@ async function safeUpdateLocalRefs() {
   z-index: 10;
 }
 
-.load-more-container {
-  display: flex;
-  justify-content: center;
-  padding: var(--load-more-padding) 12px;
-}
+.load-more-sentinel{display:flex;min-height:34px;align-items:center;justify-content:center;padding:6px 12px;color:#8b98a5;font-size:12px}
 
 .load-more-btn {
   min-height: 36px;
