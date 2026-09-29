@@ -1,4 +1,6 @@
 <template>
+  <div class="debug-page-shell app-page">
+    <SecondaryPageHeader title="系统诊断" back-to="/settings/system" back-label="返回设置" />
   <main class="debug-page">
     <header class="page-header">
       <div>
@@ -83,9 +85,11 @@
       </div>
     </section>
   </main>
+  </div>
 </template>
 
 <script setup lang="ts">
+import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { APP_VERSION, DB_VERSION } from "@/db/dexie";
 import { inspectRelays, reconnectRelay } from "@/nostr/relays";
@@ -175,5 +179,6 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
 </script>
 
 <style scoped>
+.debug-page-shell{min-height:100dvh;background:#f8fafc}
 .debug-page{display:grid;gap:16px;padding:16px 16px calc(var(--bottom-nav-height) + 24px);max-width:1180px;margin:auto;color:#172033}.page-header,.section-title,.header-actions,.filters,.relay-row,.relay-metrics,.send-meta{display:flex;align-items:center}.page-header,.section-title{justify-content:space-between;gap:12px}.page-header h2,.section-title h3{margin:0}.eyebrow{margin:0 0 4px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:.08em}.header-actions,.filters,.relay-metrics,.send-meta{gap:8px;flex-wrap:wrap}.card-panel,.summary-card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px}.meta-grid,.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.meta-grid div,.summary-card{display:flex;flex-direction:column;gap:5px}.meta-grid span,.summary-card span,.section-title span,.empty{font-size:12px;color:#64748b}.summary-card strong{font-size:24px}.summary-card small{line-height:1.5}.relay-list{display:grid;margin-top:12px}.relay-row{display:grid;grid-template-columns:minmax(240px,1fr) 1fr auto;gap:12px;padding:12px 0;border-top:1px solid #eef2f7}.relay-name{overflow-wrap:anywhere}.relay-name i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px}.ready{background:#22c55e}.offline{background:#ef4444}.relay-metrics span,.send-meta span{font-size:12px;color:#475569;background:#f8fafc;padding:4px 7px;border-radius:6px}.compact-button{border:1px solid #cbd5e1;border-radius:7px;background:#fff;padding:6px 10px;cursor:pointer}.copy-block{display:grid;grid-template-columns:120px 110px 1fr;gap:10px;padding:11px 0;border-top:1px solid #eef2f7}.copy-results{display:flex;flex-direction:column;font-size:12px}.copy-results em{color:#64748b}.filters{margin:12px 0}.filters select,.filters input{border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;background:#fff}.filters input{flex:1;min-width:220px}.log-list{max-height:620px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;background:#0f172a}.log-row{display:grid;grid-template-columns:105px 110px minmax(180px,auto) 1fr;gap:8px;padding:8px 10px;border-bottom:1px solid #25324a;color:#e2e8f0;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}.log-row time{color:#94a3b8}.log-row .category{color:#60a5fa}.log-row pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:#cbd5e1}.level-warn{border-left:3px solid #f59e0b}.level-error{border-left:3px solid #ef4444}.log-list .empty{padding:20px}.btn{cursor:pointer}@media(max-width:760px){.page-header{align-items:flex-start;flex-direction:column}.meta-grid,.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.relay-row{grid-template-columns:1fr}.copy-block,.log-row{grid-template-columns:1fr}.log-row{gap:2px}.log-row pre{margin-top:4px}}
 </style>
