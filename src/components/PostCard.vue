@@ -8,7 +8,7 @@
         <button class="profile-link name-link" type="button" @click="openAuthor(message.pubkey, $event)">{{ displayName(message.pubkey) }}</button>
         <div class="author-meta">
           <time :datetime="new Date(message.created_at * 1000).toISOString()">{{ formatRelativeTime(message.created_at) }}</time>
-          <template v-if="isOwn && message._localMeta?.groupCount">
+          <template v-if="isOwn && message._localMeta">
             <span class="meta-separator" aria-hidden="true">·</span>
             <button class="audience-link" type="button" :aria-expanded="metaOpen" @click="toggleMeta">{{ visibilityLabel }}</button>
           </template>
@@ -98,7 +98,12 @@ const liked = computed(() => !!keys.pkHex && interactions.isLikedByUser(props.me
 const likeCount = computed(() => interactions.getLikeCount(props.message.id)); const commentCount = computed(() => interactions.getCommentCount(props.message.id));
 const isOwn = computed(() => props.message.pubkey === keys.pkHex);
 const bookmarked = computed(() => bookmarks.isBookmarked(props.message.id));
-const visibilityLabel = computed(() => { const groups = props.message._localMeta?.groups || []; return groups.length === 1 && groups[0].name === "全部好友" ? "全部好友" : `${props.message._localMeta?.groupCount || groups.length} 个分组`; });
+const visibilityLabel = computed(() => {
+  const groups = props.message._localMeta?.groups || [];
+  if (groups.length === 0) return "仅自己可见";
+  if (groups.length === 1 && groups[0].name === "全部好友") return "全部好友";
+  return `${props.message._localMeta?.groupCount || groups.length} 个分组`;
+});
 function localName(pubkey: string) { if (pubkey === keys.pkHex) return "自己"; return friends.list.find(friend => friend.pubkey === pubkey)?.name; }
 function displayName(pubkey: string) { return privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey)); }
 function openAuthor(pubkey: string, event?: Event) { return openProfile(router, keys.pkHex, pubkey, event); }
