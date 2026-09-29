@@ -1,6 +1,6 @@
 <template>
   <div class="voice-message" :class="{ loading, failed: !!error }">
-    <button type="button" class="voice-toggle" :aria-label="playing ? '暂停语音' : '播放语音'" :disabled="loading" @click="toggle">
+    <button type="button" class="voice-toggle" :aria-label="playing ? '暂停语音' : '播放语音'" :disabled="loading || suspended" @click="toggle">
       <span aria-hidden="true">{{ loading ? "…" : playing ? "Ⅱ" : "▶" }}</span>
     </button>
     <input
@@ -14,7 +14,7 @@
       @input="seek"
     />
     <span class="voice-duration">{{ formatDuration(playing || currentTime ? currentTime : (playDuration || duration)) }}</span>
-    <audio ref="audio" :src="sourceUrl" preload="metadata" @timeupdate="syncPlayback" @loadedmetadata="syncMetadata" @ended="playing = false"></audio>
+    <audio ref="audio" :src="sourceUrl" preload="none" @timeupdate="syncPlayback" @loadedmetadata="syncMetadata" @ended="playing = false"></audio>
     <button v-if="error" class="voice-retry" type="button" @click="toggle">重试</button>
   </div>
 </template>
@@ -29,7 +29,8 @@ const props = withDefaults(defineProps<{
   previewUrl?: string;
   duration?: number;
   accountPubkey?: string;
-}>(), { media: null, previewUrl: "", duration: 0, accountPubkey: "" });
+  suspended?: boolean;
+}>(), { media: null, previewUrl: "", duration: 0, accountPubkey: "", suspended: false });
 
 const audio = ref<HTMLAudioElement | null>(null);
 const decryptedUrl = ref("");
@@ -39,7 +40,7 @@ const playing = ref(false);
 const currentTime = ref(0);
 const playDuration = ref(0);
 let controller: AbortController | null = null;
-const sourceUrl = computed(() => props.previewUrl || decryptedUrl.value);
+const sourceUrl = computed(() => props.suspended ? "" : (props.previewUrl || decryptedUrl.value));
 
 function formatDuration(value: number) {
   const seconds = Math.max(0, Math.floor(Number.isFinite(value) ? value : 0));
@@ -76,7 +77,7 @@ async function ensureSource() {
   }
 }
 async function toggle() {
-  if (!(await ensureSource())) return;
+  if (props.suspended || !(await ensureSource())) return;
   if (!audio.value) return;
   if (audio.value.paused) {
     error.value = "";
@@ -95,6 +96,14 @@ function seek(event: Event) {
 }
 
 watch(() => [props.media?.encryptedRef, props.previewUrl, props.accountPubkey], releaseRuntimeAudio);
+watch(() => props.suspended, suspended => {
+  if (!suspended) return;
+  releaseRuntimeAudio();
+  if (audio.value) {
+    audio.value.removeAttribute("src");
+    audio.value.load();
+  }
+});
 onBeforeUnmount(releaseRuntimeAudio);
 </script>
 
