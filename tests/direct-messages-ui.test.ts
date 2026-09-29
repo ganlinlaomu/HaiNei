@@ -119,7 +119,11 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('@touchmove="handleMessageTouchMove(message, $event)"');
     expect(chat).toContain("SWIPE_REPLY_THRESHOLD");
     expect(chat).toContain("LONG_PRESS_MS");
-    expect(chat).toContain('class="message-action-menu"');
+    expect(chat).toContain('class="message-action-menu" :style="actionMenuStyle"');
+    expect(chat).toContain("actionMenuPosition");
+    expect(chat).toContain('querySelector<HTMLElement>(".message-bubble")');
+    expect(chat).toContain("fitsBelow");
+    expect(chat).toContain("position:fixed");
     expect(chat).toContain("replyFromActionMenu");
     expect(chat).toContain("copyFromActionMenu");
     expect(chat).toContain("isMediaGestureTarget");
@@ -324,13 +328,15 @@ describe("direct-message navigation and UI contract", () => {
     expect(friends).toContain(">添加好友</button>");
     expect(friends).not.toContain('class="more-button"');
     expect(home).toContain("条新动态");
-    expect(home).toContain("这里还没有动态");
+    expect(home).toContain("还没有好友");
+    expect(home).toContain("暂时没有新动态");
     expect(home).toContain("router.push('/friends')");
+    expect(home).toContain("ui.openPostEditor()");
     expect(conversations).toContain("ui.openNewConversation()");
     expect(conversations).toContain(">发起私信</button>");
   });
 
-  it("prioritizes near-viewport encrypted images and auto-loads Home pages near the bottom with a button fallback", () => {
+  it("prioritizes near-viewport encrypted images and auto-loads Home pages with an unsupported-browser fallback", () => {
     const imagePreview = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
     const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
     expect(imagePreview).toContain("IntersectionObserver");
@@ -343,7 +349,13 @@ describe("direct-message navigation and UI contract", () => {
     expect(home).toContain('addEventListener("scroll", handleHomeScroll');
     expect(home).toContain("distanceToBottom <= AUTO_LOAD_MORE_THRESHOLD");
     expect(home).toContain("loadMoreMessages()");
-    expect(home).toContain('class="load-more-btn"');
+    expect(home).toContain('ref="loadMoreSentinel"');
+    expect(home).toContain("IntersectionObserver");
+    expect(home).toContain('rootMargin: "420px 0px"');
+    expect(home).toContain('v-else-if="!autoLoadSupported" class="load-more-btn"');
+    expect(home).toContain('homeSyncStatus.value === "offline"');
+    expect(home).toContain("暂时离线，正在显示已缓存内容");
+    expect(home).toContain("正在重新连接…");
     expect(home).not.toContain("setTimeout(() => {\n        const startIndex = displayedMessages.value.length");
   });
 
