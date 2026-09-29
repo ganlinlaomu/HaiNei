@@ -60,13 +60,13 @@
         <time v-if="showWindowTimestamp(index)" class="message-time">{{ formatMessageTime(message.created_at) }}</time>
         <div
           class="message-line"
-          :class="{ own: isOwn(message), 'message-highlight': highlightedMessageId === message.id }"
+          :class="{ own: isOwn(message), 'message-highlight': highlightedMessageId === message.id, 'action-menu-source': actionMenuMessageId === message.id }"
           :data-message-id="message.id"
           @touchstart="handleMessageTouchStart(message, $event)"
           @touchmove="handleMessageTouchMove(message, $event)"
           @touchend="handleMessageTouchEnd(message)"
           @touchcancel="handleMessageTouchCancel(message)"
-          @contextmenu.prevent="openMessageActionMenu(message)"
+          @contextmenu.prevent="openMessageActionMenu(message, $event)"
         >
           <span v-if="!isOwn(message)" class="avatar-slot">
             <button v-if="showWindowAvatar(index)" class="message-avatar-link" type="button" :aria-label="`查看 ${displayName} 的个人资料`" @click="openPeerProfile">
@@ -131,7 +131,7 @@
     </section>
 
     <div v-if="actionMenuMessage" class="message-action-backdrop" @click.self="closeMessageActionMenu">
-      <div class="message-action-menu" role="menu" :aria-label="`消息操作：${quotePreview(actionMenuMessage)}`">
+      <div class="message-action-menu" :style="actionMenuStyle" role="menu" :aria-label="`消息操作：${quotePreview(actionMenuMessage)}`">
         <div class="message-action-preview">
           <strong>{{ isOwn(actionMenuMessage) ? "你" : displayName }}</strong>
           <span>{{ quotePreview(actionMenuMessage) }}</span>
@@ -296,6 +296,12 @@ const swipingMessageId = ref("");
 const swipeOffset = ref(0);
 const highlightedMessageId = ref("");
 const actionMenuMessageId = ref("");
+const actionMenuPosition = ref({ top: 0, left: 12, width: 280 });
+const actionMenuStyle = computed(() => ({
+  top: `${actionMenuPosition.value.top}px`,
+  left: `${actionMenuPosition.value.left}px`,
+  width: `${actionMenuPosition.value.width}px`,
+}));
 const actionMenuMessage = computed(() => lookupMessage(actionMenuMessageId.value));
 const actionMenuCopyText = computed(() => actionMenuMessage.value ? messageText(actionMenuMessage.value.content) : "");
 const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
@@ -396,10 +402,35 @@ function swipeReplyIndicatorStyle() {
     transform: `scale(${0.75 + progress * 0.25})`,
   };
 }
-function openMessageActionMenu(message: InboxItem) {
+function openMessageActionMenu(message: InboxItem, event?: MouseEvent) {
   if (!canReplyTo(message)) return;
+  const line = messageList.value?.querySelector<HTMLElement>(`[data-message-id="${message.id}"]`);
+  const anchor = line?.querySelector<HTMLElement>(".message-bubble") || line;
+  const rect = anchor?.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  const menuWidth = Math.min(300, Math.max(240, viewportWidth - 24));
+  const hasCopyAction = !!messageText(message.content);
+  const estimatedHeight = 62 + (hasCopyAction ? 104 : 52);
+  const edge = 12;
+  const gap = 8;
+
+  let left = event?.clientX !== undefined
+    ? event.clientX - menuWidth / 2
+    : isOwn(message)
+      ? (rect?.right || viewportWidth - edge) - menuWidth
+      : (rect?.left || edge);
+  left = Math.min(viewportWidth - menuWidth - edge, Math.max(edge, left));
+
+  const anchorTop = event?.clientY ?? rect?.top ?? viewportHeight / 2;
+  const anchorBottom = event?.clientY ?? rect?.bottom ?? viewportHeight / 2;
+  const fitsBelow = anchorBottom + gap + estimatedHeight <= viewportHeight - edge;
+  let top = fitsBelow ? anchorBottom + gap : anchorTop - estimatedHeight - gap;
+  top = Math.min(viewportHeight - estimatedHeight - edge, Math.max(edge, top));
+
   resetMessageGesture();
   textInput.value?.blur();
+  actionMenuPosition.value = { top, left, width: menuWidth };
   actionMenuMessageId.value = message.id;
 }
 function closeMessageActionMenu() {
@@ -713,6 +744,7 @@ async function prependOlderMessages() {
 function handleMessageScroll() {
   const list = messageList.value;
   if (!list) return;
+  if (actionMenuMessageId.value) closeMessageActionMenu();
   if (searchContextActive.value) {
     showJumpToLatest.value = true;
     return;
@@ -1008,10 +1040,10 @@ onBeforeUnmount(() => {
 .chat-header{position:relative;z-index:8;display:grid;grid-template-columns:38px 34px minmax(0,1fr) 38px;align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.chat-header.search-mode{grid-template-columns:38px minmax(0,1fr) auto}.header-search-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.header-search-button:active{background:#eff3f4}.header-search-button svg,.chat-search-field svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}.chat-search-field{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:7px;height:38px;padding:0 11px;border-radius:999px;background:#eff3f4;color:#536471}.chat-search-field input{min-width:0;width:100%;height:38px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:15px}.search-count{min-width:32px;color:#657786;font-size:12px;text-align:right;white-space:nowrap}.chat-search-results{position:absolute;top:54px;right:0;left:0;z-index:9;max-height:min(56vh,520px);overflow-y:auto;border-bottom:1px solid #e2e8f0;background:#fff;box-shadow:0 12px 28px rgba(15,23,42,.12)}.search-result-state{padding:28px 18px;color:#657786;font-size:13px;text-align:center}.chat-search-result{display:flex;width:100%;min-height:62px;flex-direction:column;gap:4px;padding:10px 16px;border:0;border-bottom:1px solid #eff1f3;background:#fff;color:#0f1419;text-align:left}.chat-search-result:active{background:#f7f9f9}.search-result-meta{display:flex;align-items:center;justify-content:space-between;gap:12px}.search-result-meta strong{font-size:12px}.search-result-meta time{color:#8b98a5;font-size:11px}.search-result-preview{display:-webkit-box;overflow:hidden;color:#536471;font-size:13px;line-height:1.35;-webkit-box-orient:vertical;-webkit-line-clamp:2}.peer-profile,.message-avatar-link{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.avatar-profile-link,.message-avatar-link{display:grid;place-items:center}.name-profile-link{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:16px;font-weight:700}.peer-profile:focus-visible,.message-avatar-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:6px}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .message-list{min-height:0;overflow-x:hidden;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0;-webkit-user-select:none;user-select:none}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.swipe-reply-indicator{display:grid;height:30px;flex:0 0 auto;place-items:center;overflow:hidden;border-radius:50%;color:#657786;transition:color 120ms ease,background 120ms ease}.swipe-reply-indicator.active{background:#e8f4fd;color:#1687e8}.swipe-reply-indicator svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.quoted-message{display:flex;width:100%;min-width:0;flex-direction:column;gap:1px;margin:0 0 6px;padding:6px 8px;border:0;border-left:3px solid #1687e8;border-radius:7px;background:rgba(255,255,255,.58);color:inherit;font:inherit;line-height:1.25;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}.quoted-message:active{background:rgba(255,255,255,.88)}.quoted-message strong{overflow:hidden;color:#536471;font-size:11px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.quoted-message span{overflow:hidden;max-width:280px;color:#536471;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.message-line.message-highlight .message-bubble{animation:message-target-highlight 1.25s ease-out}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:9px;font-weight:400;line-height:1.3;opacity:.85}.message-status.failed,.caption-meta.failed{color:#dc2626}.message-status.read,.caption-meta.read{color:#1687e8}.message-status button,.caption-meta button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble>.quoted-message{margin:8px 10px 6px}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}.caption-meta{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;color:#718096;font-size:9px;line-height:1.3;white-space:nowrap}
 .audio-bubble{padding:9px 10px}
-.message-action-backdrop{position:fixed;inset:0;z-index:20;display:flex;align-items:flex-end;justify-content:center;padding:16px 16px calc(16px + env(safe-area-inset-bottom));background:rgba(15,23,42,.18)}
-.message-action-menu{width:min(100%,360px);overflow:hidden;border:1px solid #e3e8ee;border-radius:16px;background:#fff;box-shadow:0 16px 44px rgba(15,23,42,.2)}
-.message-action-preview{display:flex;min-width:0;flex-direction:column;gap:2px;padding:12px 14px;border-bottom:1px solid #eef1f4}.message-action-preview strong,.message-action-preview span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.message-action-preview strong{font-size:12px;color:#0f1419}.message-action-preview span{font-size:12px;color:#657786}
-.message-action-menu>button{display:flex;width:100%;min-height:48px;align-items:center;gap:11px;padding:0 16px;border:0;border-top:1px solid #f1f3f5;background:#fff;color:#0f1419;font:inherit;font-size:15px;text-align:left}.message-action-menu>button:first-of-type{border-top:0}.message-action-menu>button:active{background:#f7f9f9}.message-action-menu>button svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.message-action-backdrop{position:fixed;inset:0;z-index:20;background:rgba(15,23,42,.12);backdrop-filter:blur(.5px)}
+.message-action-menu{position:fixed;overflow:hidden;border:1px solid rgba(203,213,225,.82);border-radius:18px;background:rgba(255,255,255,.98);box-shadow:0 18px 48px rgba(15,23,42,.22);backdrop-filter:blur(18px);transform-origin:center}
+.message-action-preview{display:flex;min-width:0;flex-direction:column;gap:2px;padding:11px 14px;border-bottom:1px solid #eef1f4}.message-action-preview strong,.message-action-preview span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.message-action-preview strong{font-size:12px;color:#0f1419}.message-action-preview span{font-size:13px;color:#657786}
+.message-action-menu>button{display:flex;width:100%;min-height:52px;align-items:center;gap:12px;padding:0 16px;border:0;border-top:1px solid #f1f3f5;background:transparent;color:#0f1419;font:inherit;font-size:16px;text-align:left}.message-action-menu>button:first-of-type{border-top:0}.message-action-menu>button:active{background:#f4f6f8}.message-action-menu>button svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.message-line.action-menu-source .message-bubble{box-shadow:0 0 0 3px rgba(22,135,232,.12)}
 @keyframes message-target-highlight{0%{filter:brightness(.92);box-shadow:0 0 0 4px rgba(22,135,232,.24)}55%{filter:brightness(.98);box-shadow:0 0 0 3px rgba(22,135,232,.12)}100%{filter:none;box-shadow:0 0 0 0 rgba(22,135,232,0)}}
 .jump-to-latest{position:absolute;right:18px;bottom:calc(94px + env(safe-area-inset-bottom));z-index:4;display:flex;min-width:42px;height:42px;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid #d8dee5;border-radius:999px;background:#fff;color:#0f1419;box-shadow:0 5px 18px rgba(15,23,42,.16);font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent}.jump-to-latest:active{background:#f7f9f9;transform:scale(.97)}.jump-to-latest>span{font-size:20px;line-height:1}.jump-to-latest strong{font-size:12px;font-weight:650;white-space:nowrap}
 .composer-region{position:relative;z-index:3;width:min(100%,720px);margin:0 auto;padding:4px 0 calc(28px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(255,255,255,0),#fff 22%)}
