@@ -12,8 +12,11 @@ describe("local Whisper transcription PoC", () => {
     expect(worker).toContain('@huggingface/transformers@4.3.0/dist/transformers.min.js');
     expect(worker).toContain('"automatic-speech-recognition"');
     expect(worker).toContain('device: "webgpu"');
-    expect(worker).toContain('dtype: "fp16"');
+    expect(worker).toContain('encoder_model: "fp32"');
+    expect(worker).toContain('decoder_model_merged: "q4"');
     expect(worker).toContain('dtype: "q8"');
+    expect(worker).toContain("isAppleMobileWebKit");
+    expect(worker).toContain("!isAppleMobileWebKit()");
     expect(worker).toContain("webGpuDisabled = true");
     expect(worker).toContain('task: "transcribe"');
     expect(worker).toContain('language: "zh"');
