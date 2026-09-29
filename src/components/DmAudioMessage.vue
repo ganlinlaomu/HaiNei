@@ -40,8 +40,11 @@ const props = withDefaults(defineProps<{
   previewUrl?: string;
   duration?: number;
   accountPubkey?: string;
+  transcriptKey?: string;
   suspended?: boolean;
-}>(), { media: null, previewUrl: "", duration: 0, accountPubkey: "", suspended: false });
+}>(), { media: null, previewUrl: "", duration: 0, accountPubkey: "", transcriptKey: "", suspended: false });
+
+const transcriptCache = new Map<string, string>();
 
 const audio = ref<HTMLAudioElement | null>(null);
 const decryptedUrl = ref("");
@@ -52,7 +55,7 @@ const currentTime = ref(0);
 const playDuration = ref(0);
 const transcribing = ref(false);
 const transcriptionError = ref("");
-const transcript = ref("");
+const transcript = ref(props.transcriptKey ? (transcriptCache.get(props.transcriptKey) || "") : "");
 let decryptedBlob: Blob | null = null;
 let controller: AbortController | null = null;
 const sourceUrl = computed(() => props.suspended ? "" : (props.previewUrl || decryptedUrl.value));
@@ -131,20 +134,21 @@ async function transcribe() {
     const blob = await ensureAudioBlob();
     const result = await transcribeAudioLocally(blob);
     transcript.value = result.text || "未识别到清晰语音";
+    if (props.transcriptKey) transcriptCache.set(props.transcriptKey, transcript.value);
   } catch (cause) {
     transcriptionError.value = cause instanceof Error ? cause.message : "本机转写失败";
   } finally {
     transcribing.value = false;
   }
 }
-function resetTranscription() {
-  transcript.value = "";
+function restoreTranscription() {
+  transcript.value = props.transcriptKey ? (transcriptCache.get(props.transcriptKey) || "") : "";
   transcriptionError.value = "";
 }
 
-watch(() => [props.media?.encryptedRef, props.previewUrl, props.accountPubkey], () => {
+watch(() => [props.media?.encryptedRef, props.previewUrl, props.accountPubkey, props.transcriptKey], () => {
   releaseRuntimeAudio();
-  resetTranscription();
+  restoreTranscription();
 });
 watch(() => props.suspended, suspended => {
   if (!suspended) return;
