@@ -10,7 +10,7 @@ type TransformersModule = {
   pipeline: (
     task: "automatic-speech-recognition",
     model: string,
-    options?: { progress_callback?: (progress: { status?: string; progress?: number }) => void },
+    options?: { dtype?: string; progress_callback?: (progress: { status?: string; progress?: number }) => void },
   ) => Promise<Pipeline>;
 };
 
@@ -28,6 +28,7 @@ async function getTranscriber(id: number) {
       postProgress(id, "loading-model");
       const transformers = await import(/* @vite-ignore */ TRANSFORMERS_MODULE_URL) as TransformersModule;
       return transformers.pipeline("automatic-speech-recognition", MODEL_ID, {
+        dtype: "q8",
         progress_callback: progress => {
           if (activeRequestId !== id) return;
           postProgress(id, "loading-model", typeof progress.progress === "number" ? progress.progress : undefined);
