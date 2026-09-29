@@ -212,7 +212,7 @@ export async function enrollBiometricUnlock(pubkey: string, skHex: string) {
 
   const credentialId = bytesToBase64Url(created.rawId);
   let secret = prfOutput(created);
-  if (!secret) secret = await evaluatePrf(credentialId, salt, rpId);
+  if (!secret) secret = await evaluatePrf(credentialId, new Uint8Array(copyBuffer(salt)), rpId);
 
   const encrypted = await encryptPrivateKey(skHex, secret);
   const record: BiometricUnlockRecord = {
@@ -231,7 +231,7 @@ export async function unlockPrivateKeyWithBiometric(pubkey: string) {
   if (!record) throw new Error("尚未启用 Face ID 登录");
   const rpId = currentRpId();
   if (!rpId || record.rpId !== rpId) throw new Error("Face ID 登录只可在原绑定地址使用");
-  const salt = base64UrlToBytes(record.prfSalt);
+  const salt = new Uint8Array(copyBuffer(base64UrlToBytes(record.prfSalt)));
   const secret = await evaluatePrf(record.credentialId, salt, rpId);
   try {
     return await decryptPrivateKey(record, secret);
