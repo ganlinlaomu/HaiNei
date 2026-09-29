@@ -554,5 +554,9 @@ describe("encrypted private audio messages", () => {
     expect(player).toContain(".voice-duration.played");
     expect(player).toContain(".voice-toggle.playing");
     expect(player).not.toContain('class="voice-progress"');
+    expect(player).not.toContain("转文字");
+    expect(player).not.toContain("transcribeAudioLocally");
+    expect(messages).not.toContain("transcript-key");
+    expect(messages).toContain(':waveform-key="message.id"');
   });
 });
