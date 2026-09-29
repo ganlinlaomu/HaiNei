@@ -9,11 +9,12 @@ import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { isDmReceiptMessage } from "@/nostr/messaging/dmReceipts";
 import { isAuthorizedCanonicalDirectMessage, useDirectMessagesStore } from "@/stores/directMessages";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
-import { useFriendshipsStore } from "@/stores/friendships";
+import { isFriendshipAcceptedAt, useFriendshipsStore } from "@/stores/friendships";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
 import { useMessagesStore } from "@/stores/messages";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
+import { onMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 
 export type AccountSyncKeys = {
   pkHex: string;
@@ -35,6 +36,13 @@ const accountMessageSyncManager = new MessageSyncManager();
 let activeKeys: AccountSyncKeys | null = null;
 let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle" };
 const accountSyncStatusListeners = new Set<(snapshot: AccountMessageSyncSnapshot) => void>();
+
+onMessageAuthorizationChanged(accountPubkey => {
+  if (activeKeys?.pkHex.toLowerCase() !== accountPubkey) return;
+  void accountMessageSyncManager.retryDeferredAuthorization().catch(error => {
+    console.warn("[message-sync] deferred authorization retry failed", error);
+  });
+});
 
 function setAccountMessageSyncStatus(accountPubkey: string, status: SyncStatus) {
   accountSyncSnapshot = { accountPubkey: accountPubkey.toLowerCase(), status };
@@ -87,22 +95,31 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       onMessage: createHomeMessageHandler({
         accountPubkey: account,
         currentAccount: () => activeKeys?.pkHex || "",
+        isAuthorizationReady: () => friendships.loadedFor === account && !friendships.loading,
         isAcceptedMessage: message => {
+          if (friendships.loadedFor !== account || friendships.loading) return "unresolved";
           if (isDirectMessageTags(message.tags)) {
             const peer = message.senderPubkey === account
               ? message.recipientPubkeys.find(pubkey => pubkey !== account) || ""
               : message.senderPubkey;
-            return !!peer && isAuthorizedCanonicalDirectMessage(
+            if (!peer) return "rejected";
+            return isAuthorizedCanonicalDirectMessage(
               message,
               account,
               friendships.getRecord(peer),
-            );
+            ) ? "accepted" : "rejected";
           }
-          return message.senderPubkey === account
-            ? message.recipientPubkeys
-                .filter(pubkey => pubkey !== account)
-                .every(pubkey => friendships.isAccepted(pubkey))
-            : friendships.isAccepted(message.senderPubkey);
+          if (message.senderPubkey === account) {
+            const recipients = message.recipientPubkeys.filter(pubkey => pubkey !== account);
+            return recipients.every(pubkey => isFriendshipAcceptedAt(
+              friendships.getRecord(pubkey),
+              message.createdAt,
+            )) ? "accepted" : "rejected";
+          }
+          return isFriendshipAcceptedAt(
+            friendships.getRecord(message.senderPubkey),
+            message.createdAt,
+          ) ? "accepted" : "rejected";
         },
         processFriendshipMessage: message => friendships.processFriendshipMessage(message),
         processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
