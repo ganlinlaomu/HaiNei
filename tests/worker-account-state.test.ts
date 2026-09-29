@@ -60,6 +60,25 @@ describe("Worker encrypted account snapshots", () => {
     expect(JSON.stringify([...database.rows.values()])).not.toContain("nickname");
   });
 
+  it("omits snapshots whose versions are already known by the client", async () => {
+    const database = new SnapshotD1();
+    const account = "a".repeat(64);
+    await putAccountState(env(database), account, { namespace: "friendships", ciphertext: "friends-v1", expectedVersion: 0 }, 10);
+    await putAccountState(env(database), account, { namespace: "friend_metadata", ciphertext: "metadata-v1", expectedVersion: 0 }, 10);
+    await putAccountState(env(database), account, { namespace: "friend_metadata", ciphertext: "metadata-v2", expectedVersion: 1 }, 11);
+
+    const changed = await getAccountState(
+      env(database),
+      account,
+      ["friendships", "friend_metadata"],
+      { friendships: 1, friend_metadata: 1 },
+    );
+
+    expect(changed.snapshots).toEqual([
+      expect.objectContaining({ namespace: "friend_metadata", version: 2, ciphertext: "metadata-v2" }),
+    ]);
+  });
+
   it("enforces optimistic versions and rejects unknown namespaces", async () => {
     const database = new SnapshotD1();
     const account = "a".repeat(64);
