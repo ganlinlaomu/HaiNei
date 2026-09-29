@@ -102,6 +102,30 @@ beforeEach(() => {
 });
 
 describe("friendship state and message authorization", () => {
+  it("keeps authorization unresolved after a failed friendship load and retries later", async () => {
+    const friendships = useFriendshipsStore();
+    mocks.list.mockRejectedValueOnce(new Error("indexeddb unavailable"));
+
+    await expect(friendships.load(ACCOUNT)).rejects.toThrow("indexeddb unavailable");
+    expect(friendships.loadedFor).toBe(ACCOUNT);
+    expect(friendships.loading).toBe(false);
+    expect(friendships.authorizationReady).toBe(false);
+
+    mocks.list.mockResolvedValueOnce([{
+      accountPubkey: ACCOUNT,
+      peerPubkey: PEER,
+      state: "accepted",
+      acceptedAt: 10,
+      acceptedEventId: "accepted",
+      acceptedWindows: [{ acceptedAt: 10, acceptedEventId: "accepted" }],
+      updatedAt: 10,
+    }]);
+    await friendships.load(ACCOUNT);
+    expect(friendships.authorizationReady).toBe(true);
+    expect(friendships.isAccepted(PEER)).toBe(true);
+    expect(mocks.list).toHaveBeenCalledTimes(2);
+  });
+
   it("uses configured write relays plus deduped bootstrap relays for friendship requests", async () => {
     mocks.getRelaysFromStorage.mockReturnValue(["wss://configured.test", "wss://shared.test"]);
     await useFriendshipsStore().sendRequest(PEER);
