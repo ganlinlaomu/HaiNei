@@ -456,11 +456,9 @@ export default defineComponent({
 .carousel-shell {
   position: relative;
   width: 100%;
-  max-height: 550px;
   margin: 10px 0 0;
   overflow: hidden;
   border-radius: 12px;
-  background: #eef2f6;
 }
 .carousel {
   width: 100%;
@@ -487,7 +485,6 @@ export default defineComponent({
   height: 100%;
   object-fit: contain;
   cursor: pointer;
-  background: #f3f5f7;
 }
 .gallery-state {
   width: 100%;
