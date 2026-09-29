@@ -2,7 +2,7 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 
 export const APP_VERSION = "0.1.5";
-export const DB_VERSION = 12;
+export const DB_VERSION = 13;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -107,6 +107,18 @@ export type DecryptedEventRecord = {
   eventId: string;
   message: unknown;
   decryptedAt: number;
+};
+
+export type DeferredAuthorizationMessageRecord = {
+  accountPubkey: string;
+  id: string;
+  createdAt: number;
+  message: unknown;
+  metadata: {
+    source: string;
+    relayUrl?: string;
+  };
+  deferredAt: number;
 };
 
 export type FriendshipState = "outgoing_pending" | "incoming_pending" | "accepted" | "removed" | "rejected" | "cancelled" | "blocked";
@@ -307,6 +319,7 @@ export class HaiNeiDatabase extends Dexie {
   conversationReadStates!: Table<ConversationReadStateRecord, [string, string]>;
   messageSyncStates!: Table<MessageSyncStateRecord, string>;
   decryptedEvents!: Table<DecryptedEventRecord, [string, string]>;
+  deferredAuthorizationMessages!: Table<DeferredAuthorizationMessageRecord, [string, string]>;
   accountFriendships!: Table<FriendshipRecord, [string, string]>;
   accountProfiles!: Table<AccountProfileRecord, [string, string]>;
   outgoingQueue!: Table<OutgoingQueueRecord, [string, string]>;
@@ -519,6 +532,33 @@ export class HaiNeiDatabase extends Dexie {
       conversationReadStates: "[accountPubkey+conversationId], accountPubkey",
       messageSyncStates: "accountPubkey",
       decryptedEvents: "[accountPubkey+eventId], accountPubkey, [accountPubkey+decryptedAt]",
+      accountFriendships: "[accountPubkey+peerPubkey], accountPubkey, [accountPubkey+state], [accountPubkey+updatedAt]",
+      accountProfiles: "[accountPubkey+ownerPubkey], accountPubkey, [accountPubkey+updatedAt]",
+      outgoingQueue: "[accountPubkey+outgoingId], accountPubkey, [accountPubkey+state], [accountPubkey+nextAttemptAt]",
+      outgoingDmTasks: "[accountPubkey+localId], accountPubkey, [accountPubkey+peerPubkey], [accountPubkey+state], [accountPubkey+updatedAt]",
+      accountBookmarks: "[accountPubkey+messageId], accountPubkey, [accountPubkey+createdAt]",
+      deviceKeyValues: "key, updatedAt",
+      accountStateMirrors: "[accountPubkey+namespace], accountPubkey, [accountPubkey+updatedAt]"
+    });
+
+    // Durable quarantine for messages whose friendship authorization cannot be
+    // decided yet. These rows survive reloads so a later accepted/rejected
+    // friendship snapshot can re-evaluate them without relying on Relay replay.
+    this.version(13).stores({
+      messages: "id, created_at, pubkey",
+      friends: "pubkey, name, group",
+      meta: "key",
+      imageCache: "url, timestamp",
+      accountMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+created_at], [accountPubkey+pubkey], [accountPubkey+pubkey+created_at]",
+      accountFriends: "[accountPubkey+pubkey], accountPubkey, [accountPubkey+name], [accountPubkey+group]",
+      accountMeta: "[accountPubkey+key], accountPubkey",
+      accountImageCache: "[accountPubkey+url], accountPubkey, [accountPubkey+timestamp]",
+      syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+createdAt], [accountPubkey+senderPubkey]",
+      conversationStates: "[accountPubkey+conversationId], accountPubkey, [accountPubkey+lastMessageAt]",
+      conversationReadStates: "[accountPubkey+conversationId], accountPubkey",
+      messageSyncStates: "accountPubkey",
+      decryptedEvents: "[accountPubkey+eventId], accountPubkey, [accountPubkey+decryptedAt]",
+      deferredAuthorizationMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+createdAt], [accountPubkey+deferredAt]",
       accountFriendships: "[accountPubkey+peerPubkey], accountPubkey, [accountPubkey+state], [accountPubkey+updatedAt]",
       accountProfiles: "[accountPubkey+ownerPubkey], accountPubkey, [accountPubkey+updatedAt]",
       outgoingQueue: "[accountPubkey+outgoingId], accountPubkey, [accountPubkey+state], [accountPubkey+nextAttemptAt]",
