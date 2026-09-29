@@ -14,7 +14,7 @@ describe("Home visual polish contract", () => {
     expect(home).toContain(".feed { gap:10px");
 
     expect(card).toContain(".post-card{background:#fff;padding:14px 16px 12px;border:0;border-bottom:1px solid #edf1f5;border-radius:0;box-shadow:none}");
-    expect(card).toContain("@media(min-width:640px){.post-card{padding:16px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}");
+    expect(card).toContain("@media(min-width:640px){.post-card:not(.force-flat){padding:16px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}");
   });
 
   it("moves audience context into author metadata and keeps actions focused", () => {
