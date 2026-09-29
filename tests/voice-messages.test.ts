@@ -511,6 +511,10 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain('aria-label="按住录音"');
     expect(messages).toContain('@touchstart.prevent="handleVoiceTouchStart"');
     expect(messages).toContain('@mousedown.prevent="handleVoiceMouseDown"');
+    expect(messages).toContain("v-if=\"voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImage)\"");
+    expect(messages).toContain(":aria-pressed=\"voiceCaptureOwnsAudioSession\"");
+    expect(messages).not.toContain(':disabled="!accepted || !keys.pkHex || startingRecording"');
+    expect(messages).toContain(':disabled="!accepted || !keys.pkHex || finishingRecording"');
     expect(messages).toContain("松开发送 · ← 取消 · ↑ 锁定");
     expect(messages).toContain("MIN_VOICE_DURATION_SECONDS = 1");
     expect(messages).toContain('ui.addToast("说话时间太短"');
