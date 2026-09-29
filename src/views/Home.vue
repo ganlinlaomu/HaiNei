@@ -665,13 +665,9 @@ async function safeUpdateLocalRefs() {
     await nextTick();
   }
 
-  // ② 如果是评论，强制展开评论区
-  if (iid) {
-    showingComments.value.add(mid);
-    showingComments.value = new Set(showingComments.value);
-  }
-
-  // ③ 等评论 DOM 真正渲染出来（核心）
+  // PostCard/CommentSheet owns opening and focusing the requested comment via
+  // openCommentId. Home only positions the containing post.
+  // ② 等目标 DOM 真正渲染出来
   const targetId = iid ? `comment-${iid}` : `msg-${mid}`;
 
   const waitForElement = async () => {
@@ -877,6 +873,7 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
      if (!keys.pkHex || homeAccountPk === keys.pkHex) return;
      try {
        await initializeHomeRuntime(keys.pkHex);
+       await restoreCurrentHomeScroll();
      } catch (err) {
        logger.error("[account] Home initialization failed", err);
      }
@@ -1027,27 +1024,6 @@ realtimeSessionSince.value = Math.floor(Date.now() / 1000);
   padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
 }
 
-
-.refresh-icon {
-  font-size: 24px;
-  margin-bottom: 8px;
-  transition: transform 0.3s ease;
-}
-
-.refresh-icon.spinning {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.refresh-text {
-  font-size: 14px;
-  color: #64748b;
-  font-weight: 500;
-}
 
 .new-messages-notification {
   position: sticky;
