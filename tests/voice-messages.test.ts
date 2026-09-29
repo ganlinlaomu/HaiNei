@@ -517,8 +517,10 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain("width:calc(100% - 32px)");
     expect(messages).toContain("height:54px;min-height:54px");
     expect(messages).toContain("calc(28px + env(safe-area-inset-bottom))");
-    expect(messages).toContain('v-if="hasAudio(message) && !voiceCaptureOwnsAudioSession"');
-    expect(messages).toContain('v-else-if="hasAudio(message)" class="audio-capture-placeholder"');
+    expect(messages).toContain('v-if="hasAudio(message)"');
+    expect(messages).toContain(':suspended="voiceCaptureOwnsAudioSession"');
+    expect(messages).not.toContain("audio-capture-placeholder");
+    expect(player).toContain('<audio v-if="!suspended"');
     expect(messages).toContain("await nextTick();");
     expect(messages).toContain("await waitForAudioElementsToUnmount();");
     expect(messages).toContain('document.querySelectorAll(".message-list audio, .composer-region audio")');
