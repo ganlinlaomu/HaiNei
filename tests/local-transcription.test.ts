@@ -8,19 +8,16 @@ describe("local Whisper transcription PoC", () => {
     const worker = readFileSync(join(process.cwd(), "src/workers/localWhisper.worker.ts"), "utf8");
     const player = readFileSync(join(process.cwd(), "src/components/DmAudioMessage.vue"), "utf8");
 
-    expect(worker).toContain('MODEL_ID = "onnx-community/whisper-tiny"');
+    expect(worker).toContain('MODEL_ID = "onnx-community/whisper-base"');
     expect(worker).toContain('@huggingface/transformers@3.8.1/dist/transformers.min.js');
     expect(worker).toContain('"automatic-speech-recognition"');
     expect(worker).toContain('dtype: "q8"');
     expect(worker).toContain('task: "transcribe"');
-    expect(worker).toContain("...(language ? { language } : {})");
-    expect(client).toContain('language: TranscriptionLanguage = "chinese"');
-    expect(client).toContain('language === "auto" ? undefined : language');
-    expect(player).toContain('value="chinese">中文');
-    expect(player).toContain('value="japanese">日本語');
-    expect(player).toContain('value="english">English');
-    expect(player).toContain('value="auto">自动');
-    expect(player).toContain('ref<TranscriptionLanguage>("chinese")');
+    expect(worker).toContain('language: "chinese"');
+    expect(client).not.toContain("TranscriptionLanguage");
+    expect(player).not.toContain("transcription-language");
+    expect(player).not.toContain("本机转写 · 语音不上传 · 首次使用会下载模型");
+    expect(player).toContain(">转文字</button>");
     expect(worker).toContain("chunk_length_s: 30");
     expect(client).toContain("decodeAudioData");
     expect(client).toContain("16_000");
@@ -28,8 +25,5 @@ describe("local Whisper transcription PoC", () => {
     expect(client).not.toContain("/audio/transcriptions");
     expect(worker).not.toContain("/audio/transcriptions");
     expect(player).toContain("transcribeAudioLocally");
-    expect(player).toContain("本机转写");
-    expect(player).toContain("语音不上传");
-    expect(player).toContain("首次使用会下载模型");
   });
 });
