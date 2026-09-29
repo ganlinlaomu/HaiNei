@@ -29,6 +29,69 @@ let updateInFlight: Promise<void> | null = null;
 let reloadedForControllerChange = false;
 let initialCheckTimer: number | null = null;
 let updateInterval: number | null = null;
+let expectedBuildId = "";
+const PENDING_BUILD_KEY = "hainei_pending_build_id";
+const BUILD_QUERY_KEY = "_hainei_build";
+
+type BuildInfo = { type: "BUILD_INFO"; version: string; buildId: string };
+
+function requestBuildInfo(worker: ServiceWorker | null, timeoutMs = 1500): Promise<BuildInfo | null> {
+  if (!worker) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const channel = new MessageChannel();
+    const timer = window.setTimeout(() => {
+      channel.port1.onmessage = null;
+      resolve(null);
+    }, timeoutMs);
+    channel.port1.onmessage = event => {
+      window.clearTimeout(timer);
+      const data = event.data as Partial<BuildInfo> | undefined;
+      resolve(data?.type === "BUILD_INFO" && typeof data.buildId === "string"
+        ? data as BuildInfo
+        : null);
+    };
+    worker.postMessage({ type: "GET_BUILD_INFO" }, [channel.port2]);
+  });
+}
+
+async function waitForControllerBuild(buildId: string, timeoutMs = 4000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const info = await requestBuildInfo(navigator.serviceWorker.controller, 500);
+    if (info?.buildId === buildId) return true;
+    await new Promise(resolve => window.setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+function reloadForBuild(buildId: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.set(BUILD_QUERY_KEY, buildId);
+  window.location.replace(url.toString());
+}
+
+async function verifyReloadedBuild() {
+  const pendingBuildId = sessionStorage.getItem(PENDING_BUILD_KEY) || "";
+  if (!pendingBuildId) return;
+
+  const info = await requestBuildInfo(navigator.serviceWorker.controller);
+  if (info?.buildId !== pendingBuildId) {
+    console.warn("[PWA] 页面仍未由目标版本控制", {
+      expected: pendingBuildId,
+      actual: info?.buildId || null
+    });
+    showUpdate.value = true;
+    return;
+  }
+
+  sessionStorage.removeItem(PENDING_BUILD_KEY);
+  const url = new URL(window.location.href);
+  if (url.searchParams.has(BUILD_QUERY_KEY)) {
+    url.searchParams.delete(BUILD_QUERY_KEY);
+    window.history.replaceState(window.history.state, "", url.toString());
+  }
+  console.log("[PWA] 已确认运行目标版本", pendingBuildId);
+}
 
 /**
  * 核心检查逻辑：更灵敏地捕捉等待中的 SW
@@ -84,7 +147,6 @@ const performUpdateCheck = async () => {
  */
 const updateApp = async () => {
   if (!registration?.waiting) {
-    // 兜底逻辑：如果没有 waiting 的，尝试重新检查一次
     await checkForUpdate();
     if (!registration?.waiting) {
       updating.value = false;
@@ -93,14 +155,35 @@ const updateApp = async () => {
   }
 
   updating.value = true;
-  // 发送信号给 sw.js 执行 self.skipWaiting()
-  registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+  const waitingWorker = registration.waiting;
+  const buildInfo = await requestBuildInfo(waitingWorker);
+  expectedBuildId = buildInfo?.buildId || "";
+
+  if (expectedBuildId) {
+    sessionStorage.setItem(PENDING_BUILD_KEY, expectedBuildId);
+    console.log("[PWA] 准备切换到版本", expectedBuildId);
+  } else {
+    console.warn("[PWA] 无法读取等待版本 BUILD_ID，将使用兼容刷新流程");
+  }
+
+  waitingWorker.postMessage({ type: "SKIP_WAITING" });
 };
 
-const handleControllerChange = () => {
+const handleControllerChange = async () => {
   if (reloadedForControllerChange) return;
   reloadedForControllerChange = true;
-  console.log('[PWA] 控制权移交成功，正在刷新应用...');
+
+  const targetBuildId = expectedBuildId || sessionStorage.getItem(PENDING_BUILD_KEY) || "";
+  if (targetBuildId) {
+    const confirmed = await waitForControllerBuild(targetBuildId);
+    if (confirmed) {
+      console.log("[PWA] 新 Service Worker 已接管", targetBuildId);
+      reloadForBuild(targetBuildId);
+      return;
+    }
+    console.warn("[PWA] 新控制器 BUILD_ID 未能确认，执行兼容刷新", targetBuildId);
+  }
+
   window.location.reload();
 };
 
@@ -110,6 +193,8 @@ const handleVisibilityChange = () => {
 
 onMounted(() => {
   if (!('serviceWorker' in navigator)) return;
+
+  void verifyReloadedBuild();
 
   // 延迟检查，避免抢占首屏资源
   initialCheckTimer = window.setTimeout(() => void checkForUpdate(), 1000);
