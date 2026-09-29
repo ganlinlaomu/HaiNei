@@ -254,19 +254,36 @@
           </div>
         </summary>
         <div class="account-panel">
-          <div v-if="biometricSupported && keyStore.isEncrypted" class="account-row biometric-row">
-            <div class="privacy-copy">
-              <strong>{{ biometricLabel }} 快速登录</strong>
-              <span class="small">{{ biometricEnabled ? "已开启，下次可直接验证后进入海内" : "开启后不再需要每次输入本地密码" }}</span>
+          <div class="account-control-card">
+            <div v-if="biometricSupported && keyStore.isEncrypted" class="account-setting-row biometric-row">
+              <div class="privacy-copy">
+                <strong>{{ biometricLabel }} 快速登录</strong>
+                <span class="small">{{ biometricEnabled ? "已开启，下次可直接验证后进入海内" : "开启后不再需要每次输入本地密码" }}</span>
+              </div>
+              <button
+                class="account-inline-action"
+                type="button"
+                :disabled="biometricBusy"
+                @click="toggleBiometricUnlock"
+              >
+                {{ biometricBusy ? "处理中…" : biometricEnabled ? "关闭" : "启用" }}
+              </button>
             </div>
-            <button class="btn btn-secondary" type="button" :disabled="biometricBusy" @click="toggleBiometricUnlock">
-              {{ biometricBusy ? "处理中…" : biometricEnabled ? "关闭" : "启用" }}
-            </button>
-          </div>
-          <div class="account-actions">
-            <button class="btn btn-secondary" type="button" @click="switchAccount">切换账号</button>
-            <button class="btn btn-secondary" type="button" @click="addAccount">添加账号</button>
-            <button class="btn btn-danger" type="button" @click="doLogout">退出登录</button>
+
+            <div class="account-actions-row">
+              <button class="account-action-button account-action-secondary" type="button" @click="switchAccount">
+                切换账号
+              </button>
+              <button class="account-action-button account-action-primary" type="button" @click="addAccount">
+                添加账号
+              </button>
+            </div>
+
+            <div class="account-danger-row">
+              <button class="account-danger-button" type="button" @click="doLogout">
+                退出登录
+              </button>
+            </div>
           </div>
         </div>
       </details>
@@ -871,9 +888,19 @@ h3 {
 .account-heading-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .account-heading-main>div{min-width:0}
 .account-heading-main p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.account-panel{padding:0 0 16px 36px}
-.account-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.account-actions .btn-danger{grid-column:1/-1}
+.account-panel{padding:2px 0 18px 36px}
+.account-control-card{overflow:hidden;border:1px solid #e5eaf0;border-radius:16px;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.025)}
+.account-setting-row{display:flex;min-height:72px;align-items:center;gap:14px;padding:14px 15px}
+.account-inline-action{flex:0 0 auto;min-width:64px;height:36px;padding:0 13px;border:1px solid #d8e0e8;border-radius:10px;background:#f8fafc;color:#334155;font-size:.86rem;font-weight:600;cursor:pointer}
+.account-inline-action:disabled{opacity:.55;cursor:default}
+.account-actions-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px 15px;border-top:1px solid #eef2f6}
+.account-action-button{min-height:48px;border-radius:13px;font-size:.94rem;font-weight:600;cursor:pointer;transition:transform 120ms ease,background 120ms ease,border-color 120ms ease}
+.account-action-button:active,.account-inline-action:active,.account-danger-button:active{transform:scale(.985)}
+.account-action-secondary{border:1px solid #d7dee7;background:#f8fafc;color:#334155}
+.account-action-primary{border:1px solid #475569;background:#475569;color:#fff}
+.account-danger-row{padding:0 15px 14px}
+.account-danger-button{width:100%;min-height:46px;border:1px solid #fecaca;border-radius:13px;background:#fff7f7;color:#dc2626;font-size:.93rem;font-weight:600;cursor:pointer}
+@media(max-width:520px){.account-panel{padding-left:0}.account-actions-row{gap:8px}.account-action-button{min-height:46px}}
 .diagnostics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0 0 14px}
 .diagnostics-grid>span{display:grid;gap:3px;padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc}
 .diagnostics-grid strong{color:#1e293b;font-size:.82rem}
