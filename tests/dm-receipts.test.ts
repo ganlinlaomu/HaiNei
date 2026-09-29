@@ -140,6 +140,7 @@ describe("encrypted DM receipts", () => {
         order.push("persist");
         return { inserted: true, record: {} };
       }),
+      clearDeferredAuthorizationMessage: vi.fn(async () => undefined),
     };
 
     const pipeline = new MessageIngestionPipeline(
