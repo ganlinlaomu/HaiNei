@@ -13,6 +13,14 @@ describe("local Whisper transcription PoC", () => {
     expect(worker).toContain('"automatic-speech-recognition"');
     expect(worker).toContain('dtype: "q8"');
     expect(worker).toContain('task: "transcribe"');
+    expect(worker).toContain("...(language ? { language } : {})");
+    expect(client).toContain('language: TranscriptionLanguage = "chinese"');
+    expect(client).toContain('language === "auto" ? undefined : language');
+    expect(player).toContain('value="chinese">中文');
+    expect(player).toContain('value="japanese">日本語');
+    expect(player).toContain('value="english">English');
+    expect(player).toContain('value="auto">自动');
+    expect(player).toContain('ref<TranscriptionLanguage>("chinese")');
     expect(worker).toContain("chunk_length_s: 30");
     expect(client).toContain("decodeAudioData");
     expect(client).toContain("16_000");
