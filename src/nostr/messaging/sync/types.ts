@@ -9,6 +9,8 @@ export const MAX_FUTURE_SKEW_SECONDS = 5 * 60;
 
 export type MessageSource = "history" | "realtime" | "reconnect" | "resume" | "manual" | "local-migration";
 export type SyncStatus = "idle" | "connecting" | "catching-up" | "live" | "offline" | "error";
+export type MessageAuthorizationDecision = "accepted" | "rejected" | "unresolved";
+export type MessageDeliveryResult = boolean | "defer" | void;
 
 export type MessageIngestionMetadata = {
   source: MessageSource;
@@ -26,7 +28,7 @@ export type MessageSyncOptions = {
   relays: string[];
   authors: string[];
   decodeContext: DecodeContext;
-  onMessage?: (message: CanonicalMessage, metadata: MessageIngestionMetadata) => boolean | void | Promise<boolean | void>;
+  onMessage?: (message: CanonicalMessage, metadata: MessageIngestionMetadata) => MessageDeliveryResult | Promise<MessageDeliveryResult>;
   onPersistedMessage?: (message: CanonicalMessage, metadata: MessageIngestionMetadata, inserted: boolean) => void | Promise<void>;
   onStatus?: (status: SyncStatus) => void;
 };

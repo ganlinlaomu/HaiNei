@@ -30,8 +30,12 @@ export async function reconcileForegroundFriendState(
     if (keys.pkHex.toLowerCase() !== account) return [];
 
     const restored = result.restored;
-    if (restored.includes("friendships")) {
-      await useFriendshipsStore().reloadFromStorage(account);
+    const friendships = useFriendshipsStore();
+    if (restored.includes("friendships")
+      || friendships.loadedFor !== account
+      || !friendships.authorizationReady) {
+      if (friendships.loadedFor === account) await friendships.reloadFromStorage(account);
+      else await friendships.load(account);
     }
     if (restored.includes("friend_metadata")) {
       await useFriendsStore().reloadFromStorage(account);

@@ -19,7 +19,7 @@ import { metaRepository } from "@/repositories/metaRepository";
 import { outgoingDmTaskRepository } from "@/repositories/outgoingDmTaskRepository";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
-import { useFriendshipsStore } from "@/stores/friendships";
+import { isFriendshipAcceptedAt, useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { useSettingsStore } from "@/stores/settings";
@@ -251,15 +251,7 @@ export function isAuthorizedDirectMessage(
   friendship?: FriendshipRecord,
 ) {
   if (item.pubkey === accountPubkey) return true;
-  const windows = friendship?.acceptedWindows || [];
-  if (!windows.length) {
-    if (!friendship?.acceptedAt) return friendship?.state === "accepted";
-    const endedAt = friendship.state === "accepted" ? undefined : friendship.lastControlAt;
-    return item.created_at >= friendship.acceptedAt
-      && (endedAt === undefined || item.created_at <= endedAt);
-  }
-  return windows.some(window => item.created_at >= window.acceptedAt
-    && (window.endedAt === undefined || item.created_at <= window.endedAt));
+  return isFriendshipAcceptedAt(friendship, item.created_at);
 }
 
 export function isAuthorizedCanonicalDirectMessage(

@@ -1,5 +1,5 @@
 import type { CanonicalMessage } from "./protocol";
-import type { MessageIngestionMetadata } from "./sync/types";
+import type { MessageAuthorizationDecision, MessageIngestionMetadata } from "./sync/types";
 import { debugLog } from "@/utils/debugLog";
 import { decodeFriendshipControl, isFriendshipControlMessage } from "@/nostr/messaging/friendshipControl";
 import { isHaiNeiProfileMessage, isHaiNeiProfileRequest } from "@/nostr/messaging/privateProfile";
@@ -22,7 +22,8 @@ export function incomingFriendRequestNotification(message: CanonicalMessage, acc
 export type HomeMessageDelivery = {
   accountPubkey: string;
   currentAccount: () => string;
-  isAcceptedMessage?: (message: CanonicalMessage) => boolean;
+  isAuthorizationReady?: () => boolean;
+  isAcceptedMessage?: (message: CanonicalMessage) => MessageAuthorizationDecision | boolean;
   processFriendshipMessage?: (message: CanonicalMessage) => boolean | Promise<boolean>;
   notifyFriendshipMessage?: (message: CanonicalMessage) => void;
   processProfileMessage?: (message: CanonicalMessage) => boolean | Promise<boolean>;
@@ -46,13 +47,31 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
       source: metadata.source
     };
     if (delivery.currentAccount() !== delivery.accountPubkey) {
-      debugLog("ui", "ui_stale_account_discarded", diagnostic, "warn");
-      return false;
+      debugLog("ui", "ui_stale_account_deferred", diagnostic, "warn");
+      return "defer" as const;
     }
     if (isFriendshipControlMessage(message)) {
       const changed = await delivery.processFriendshipMessage?.(message);
       if (changed) delivery.notifyFriendshipMessage?.(message);
       debugLog("ui", "ui_friendship_control_routed", diagnostic, "info");
+      return false;
+    }
+
+    // Friendship controls are allowed to bootstrap authorization. Every other
+    // private payload must wait until this account's friendship snapshot is
+    // actually loaded; an empty/not-yet-loaded store is not a rejection.
+    if (delivery.isAuthorizationReady && !delivery.isAuthorizationReady()) {
+      debugLog("ui", "ui_authorization_unresolved", diagnostic, "info");
+      return "defer" as const;
+    }
+
+    const authorization = delivery.isAcceptedMessage?.(message);
+    if (authorization === "unresolved") {
+      debugLog("ui", "ui_authorization_unresolved", diagnostic, "info");
+      return "defer" as const;
+    }
+    if (authorization === "rejected" || authorization === false) {
+      debugLog("ui", "ui_non_friend_discarded", diagnostic, "info");
       return false;
     }
     if (isHaiNeiProfileMessage(message)) {
@@ -65,10 +84,6 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
     if (isTombstoneMessage(message)) {
       await delivery.processFeedControlMessage?.(message);
       debugLog("ui", "ui_feed_control_routed", diagnostic, "info");
-      return false;
-    }
-    if (delivery.isAcceptedMessage && !delivery.isAcceptedMessage(message)) {
-      debugLog("ui", "ui_non_friend_discarded", diagnostic, "info");
       return false;
     }
     if (delivery.isReceipt?.(message)) {

@@ -9,11 +9,13 @@ import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { isDmReceiptMessage } from "@/nostr/messaging/dmReceipts";
 import { isAuthorizedCanonicalDirectMessage, useDirectMessagesStore } from "@/stores/directMessages";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
-import { useFriendshipsStore } from "@/stores/friendships";
+import { isFriendshipAcceptedAt, useFriendshipsStore } from "@/stores/friendships";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
 import { useMessagesStore } from "@/stores/messages";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
+import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import { onMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 
 export type AccountSyncKeys = {
   pkHex: string;
@@ -35,6 +37,13 @@ const accountMessageSyncManager = new MessageSyncManager();
 let activeKeys: AccountSyncKeys | null = null;
 let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle" };
 const accountSyncStatusListeners = new Set<(snapshot: AccountMessageSyncSnapshot) => void>();
+
+onMessageAuthorizationChanged(accountPubkey => {
+  if (activeKeys?.pkHex.toLowerCase() !== accountPubkey) return;
+  void accountMessageSyncManager.retryDeferredAuthorization().catch(error => {
+    console.warn("[message-sync] deferred authorization retry failed", error);
+  });
+});
 
 function setAccountMessageSyncStatus(accountPubkey: string, status: SyncStatus) {
   accountSyncSnapshot = { accountPubkey: accountPubkey.toLowerCase(), status };
@@ -63,7 +72,23 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
 
   activeKeys = keys;
   const friendships = useFriendshipsStore();
+  if (friendships.loadedFor !== account || !friendships.authorizationReady) {
+    try {
+      await friendships.load(account);
+    } catch (error) {
+      console.warn("[message-sync] friendship authorization remains unresolved", error);
+    }
+  }
   const profiles = useProfilesStore();
+  const initialSyncState = await syncedMessageRepository.getSyncState(account);
+  let friendshipHistoryComplete = !!initialSyncState.historyBackfillCompletedAt;
+
+  const authorizePeerAt = (peerPubkey: string, createdAt: number) => {
+    const authorized = isFriendshipAcceptedAt(friendships.getRecord(peerPubkey), createdAt);
+    if (authorized) return "accepted" as const;
+    return friendshipHistoryComplete ? "rejected" as const : "unresolved" as const;
+  };
+
   const feedPreferences = useFeedPreferencesStore();
   const interactions = useInteractionsStore();
   const notifications = useNotificationsStore();
@@ -87,22 +112,26 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       onMessage: createHomeMessageHandler({
         accountPubkey: account,
         currentAccount: () => activeKeys?.pkHex || "",
+        isAuthorizationReady: () => friendships.loadedFor === account && friendships.authorizationReady && !friendships.loading,
         isAcceptedMessage: message => {
+          if (friendships.loadedFor !== account || friendships.loading || !friendships.authorizationReady) return "unresolved";
           if (isDirectMessageTags(message.tags)) {
             const peer = message.senderPubkey === account
               ? message.recipientPubkeys.find(pubkey => pubkey !== account) || ""
               : message.senderPubkey;
-            return !!peer && isAuthorizedCanonicalDirectMessage(
-              message,
-              account,
-              friendships.getRecord(peer),
-            );
+            if (!peer) return friendshipHistoryComplete ? "rejected" : "unresolved";
+            if (isAuthorizedCanonicalDirectMessage(message, account, friendships.getRecord(peer))) {
+              return "accepted";
+            }
+            return friendshipHistoryComplete ? "rejected" : "unresolved";
           }
-          return message.senderPubkey === account
-            ? message.recipientPubkeys
-                .filter(pubkey => pubkey !== account)
-                .every(pubkey => friendships.isAccepted(pubkey))
-            : friendships.isAccepted(message.senderPubkey);
+          if (message.senderPubkey === account) {
+            const recipients = message.recipientPubkeys.filter(pubkey => pubkey !== account);
+            const decisions = recipients.map(pubkey => authorizePeerAt(pubkey, message.createdAt));
+            if (decisions.every(decision => decision === "accepted")) return "accepted";
+            return decisions.some(decision => decision === "unresolved") ? "unresolved" : "rejected";
+          }
+          return authorizePeerAt(message.senderPubkey, message.createdAt);
         },
         processFriendshipMessage: message => friendships.processFriendshipMessage(message),
         processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
@@ -139,7 +168,17 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         }),
       }),
       onPersistedMessage: message => directMessages.acknowledgePersistedIncoming(account, message),
-      onStatus: status => setAccountMessageSyncStatus(account, status),
+      onStatus: status => {
+        setAccountMessageSyncStatus(account, status);
+        if (status !== "live" || friendshipHistoryComplete) return;
+        void syncedMessageRepository.getSyncState(account).then(state => {
+          if (activeKeys?.pkHex.toLowerCase() !== account || !state.historyBackfillCompletedAt) return;
+          friendshipHistoryComplete = true;
+          return accountMessageSyncManager.retryDeferredAuthorization();
+        }).catch(error => {
+          console.warn("[message-sync] friendship history readiness check failed", error);
+        });
+      },
     });
     return true;
   } catch (error) {

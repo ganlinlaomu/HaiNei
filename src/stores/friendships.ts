@@ -10,8 +10,22 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
 import { notifyDirectMessageAuthorizationChanged } from "@/services/directMessageStateEvents";
+import { notifyMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
+
+export function isFriendshipAcceptedAt(friendship: FriendshipRecord | undefined, createdAt: number) {
+  if (!friendship) return false;
+  const windows = friendship.acceptedWindows || [];
+  if (!windows.length) {
+    if (!friendship.acceptedAt) return friendship.state === "accepted";
+    const endedAt = friendship.state === "accepted" ? undefined : friendship.lastControlAt;
+    return createdAt >= friendship.acceptedAt
+      && (endedAt === undefined || createdAt <= endedAt);
+  }
+  return windows.some(window => createdAt >= window.acceptedAt
+    && (window.endedAt === undefined || createdAt <= window.endedAt));
+}
 
 const activeFriendshipControls = new Map<string, { action: FriendshipAction; promise: Promise<any> }>();
 
@@ -91,7 +105,7 @@ export function reduceFriendshipControl(
 }
 
 export const useFriendshipsStore = defineStore("friendships", {
-  state: () => ({ records: [] as FriendshipRecord[], loadedFor: "", loading: false }),
+  state: () => ({ records: [] as FriendshipRecord[], loadedFor: "", loading: false, authorizationReady: false }),
   getters: {
     getRecord: state => (peerPubkey: string) => state.records.find(item => item.peerPubkey === normalized(peerPubkey)),
     getState(): (peerPubkey: string) => FriendshipState | undefined {
@@ -107,15 +121,18 @@ export const useFriendshipsStore = defineStore("friendships", {
     async load(accountPubkey?: string) {
       const account = normalized(accountPubkey || useKeyStore().pkHex);
       if (!account) return this.reset();
-      if (this.loadedFor === account && !this.loading) return;
+      if (this.loadedFor === account && !this.loading && this.authorizationReady) return;
       this.records = [];
       this.loadedFor = account;
       this.loading = true;
+      this.authorizationReady = false;
       try {
         const records = await friendshipRepository.list(account);
         if (this.loadedFor === account) {
           this.records = records;
+          this.authorizationReady = true;
           notifyDirectMessageAuthorizationChanged(account);
+          notifyMessageAuthorizationChanged(account);
         }
       } finally {
         if (this.loadedFor === account) this.loading = false;
@@ -127,13 +144,16 @@ export const useFriendshipsStore = defineStore("friendships", {
       const records = await friendshipRepository.list(account);
       if (this.loadedFor !== account) return false;
       this.records = records;
+      this.authorizationReady = true;
       notifyDirectMessageAuthorizationChanged(account);
+      notifyMessageAuthorizationChanged(account);
       return true;
     },
     reset() {
       this.records = [];
       this.loadedFor = "";
       this.loading = false;
+      this.authorizationReady = false;
     },
     async applyControl(peerPubkey: string, event: FriendshipControlEvent) {
       const accountPubkey = this.loadedFor;
@@ -148,6 +168,7 @@ export const useFriendshipsStore = defineStore("friendships", {
       if (index >= 0) this.records[index] = record;
       else this.records.push(record);
       notifyDirectMessageAuthorizationChanged(accountPubkey);
+      notifyMessageAuthorizationChanged(accountPubkey);
       scheduleAccountStateSync(useKeyStore(), "friendships");
       return { changed: true, record };
     },
