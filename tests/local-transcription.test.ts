@@ -20,6 +20,6 @@ describe("local Whisper transcription PoC", () => {
     expect(worker).not.toContain("/audio/transcriptions");
     expect(player).toContain("transcribeAudioLocally");
     expect(player).toContain("本机转写");
-    expect(player).toContain("首次使用会下载本机模型");
+    expect(player).toContain("语音不上传");\n    expect(player).toContain("首次使用会下载模型");
   });
 });
