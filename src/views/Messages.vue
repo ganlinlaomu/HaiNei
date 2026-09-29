@@ -176,22 +176,7 @@
       <p v-if="voiceError" class="voice-error" role="alert">{{ voiceError }}</p>
       <form class="chat-composer" @submit.prevent="submitMessage">
         <input ref="imageInput" class="image-input" type="file" accept="image/*" @change="selectImage" />
-        <div v-if="startingRecording || recording" class="composer-recording" :class="{ locked: voiceLocked, cancelling: voiceGestureHint === 'cancel' }" role="status" aria-live="polite">
-          <span class="recording-dot" aria-hidden="true"></span>
-          <strong>{{ formatVoiceDuration(recordingElapsed) }}</strong>
-          <span class="voice-waveform" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-          <template v-if="finishingRecording">
-            <span class="finishing-label">处理中…</span>
-          </template>
-          <template v-else-if="voiceLocked">
-            <span class="voice-lock-label">已锁定</span>
-            <button type="button" @click="cancelVoiceRecording">取消</button>
-            <button type="button" class="finish-recording" @click="finishVoiceRecording(undefined, true)">发送</button>
-          </template>
-          <span v-else class="voice-gesture-hint">{{ voiceGestureHint === "cancel" ? "松开取消" : voiceGestureHint === "lock" ? "松开锁定" : "松开发送 · ← 取消 · ↑ 锁定" }}</span>
-        </div>
-
-        <div v-else-if="recordedAudio" class="composer-preview">
+        <div v-if="recordedAudio && !voiceCaptureOwnsAudioSession" class="composer-preview">
           <DmAudioMessage class="composer-voice-preview" :preview-url="recordedAudio.preview" :duration="recordedAudio.duration" />
           <button class="composer-icon-button remove-audio" type="button" aria-label="删除录音" @click="clearRecordedAudio">×</button>
           <button class="composer-icon-button send-button" type="submit" aria-label="发送" :disabled="!canSend">
@@ -199,33 +184,57 @@
           </button>
         </div>
 
-        <div v-else class="composer-normal">
-          <button class="composer-icon-button attachment-button" type="button" aria-label="添加图片" :disabled="!accepted || !keys.pkHex" @click="chooseImage">+</button>
-          <input
-            ref="textInput"
-            v-model="draft"
-            type="text"
-            autocomplete="off"
-            :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'"
-            :disabled="!accepted || !keys.pkHex"
-            @focus="handleComposerFocus"
-            @blur="handleComposerBlur"
-          />
-          <button
-            v-if="draft.trim() || selectedImage"
-            class="composer-icon-button send-button"
-            type="submit"
-            aria-label="发送"
-            :disabled="!canSend"
+        <div v-else class="composer-normal" :class="{ 'voice-active': voiceCaptureOwnsAudioSession }">
+          <div
+            v-if="voiceCaptureOwnsAudioSession"
+            class="composer-recording"
+            :class="{ locked: voiceLocked, cancelling: voiceGestureHint === 'cancel' }"
+            role="status"
+            aria-live="polite"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z"/><path d="m12 13 7-8"/></svg>
-          </button>
+            <span class="recording-dot" aria-hidden="true"></span>
+            <strong>{{ formatVoiceDuration(recordingElapsed) }}</strong>
+            <span class="voice-waveform" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+            <template v-if="finishingRecording">
+              <span class="finishing-label">处理中…</span>
+            </template>
+            <template v-else-if="voiceLocked">
+              <span class="voice-lock-label">已锁定</span>
+              <button type="button" @click="cancelVoiceRecording">取消</button>
+              <button type="button" class="finish-recording" @click="finishVoiceRecording(undefined, true)">发送</button>
+            </template>
+            <span v-else class="voice-gesture-hint">{{ voiceGestureHint === "cancel" ? "松开取消" : voiceGestureHint === "lock" ? "松开锁定" : "松开发送 · ← 取消 · ↑ 锁定" }}</span>
+          </div>
+          <template v-else>
+            <button class="composer-icon-button attachment-button" type="button" aria-label="添加图片" :disabled="!accepted || !keys.pkHex" @click="chooseImage">+</button>
+            <input
+              ref="textInput"
+              v-model="draft"
+              type="text"
+              autocomplete="off"
+              :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'"
+              :disabled="!accepted || !keys.pkHex"
+              @focus="handleComposerFocus"
+              @blur="handleComposerBlur"
+            />
+            <button
+              v-if="draft.trim() || selectedImage"
+              class="composer-icon-button send-button"
+              type="submit"
+              aria-label="发送"
+              :disabled="!canSend"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z"/><path d="m12 13 7-8"/></svg>
+            </button>
+          </template>
           <button
-            v-else
+            v-if="voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImage)"
             class="composer-icon-button microphone-button"
+            :class="{ active: voiceCaptureOwnsAudioSession }"
             type="button"
             aria-label="按住录音"
-            :disabled="!accepted || !keys.pkHex || startingRecording"
+            :aria-pressed="voiceCaptureOwnsAudioSession"
+            :disabled="!accepted || !keys.pkHex || finishingRecording"
             @touchstart.prevent="handleVoiceTouchStart"
             @mousedown.prevent="handleVoiceMouseDown"
             @click.prevent
@@ -1211,8 +1220,8 @@ onBeforeUnmount(() => {
 .composer-region{position:relative;z-index:3;width:min(100%,720px);margin:0 auto;padding:4px 0 calc(28px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(255,255,255,0),#fff 22%)}
 .replying-preview{display:flex;min-width:0;align-items:center;gap:10px;margin:0 16px 6px;padding:7px 10px 7px 12px;border-left:3px solid #1687e8;border-radius:10px;background:#f7f9f9}.replying-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}.replying-copy strong,.replying-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.replying-copy strong{color:#0f1419;font-size:12px}.replying-copy span{color:#536471;font-size:12px}.replying-preview>button{width:30px;height:30px;flex:0 0 30px;padding:0;border:0;border-radius:50%;background:transparent;color:#536471;font-size:22px}.replying-preview>button:active{background:#e8ecef}
 .selected-image{position:relative;width:64px;height:64px;margin:0 0 8px 24px}.selected-image img{width:100%;height:100%;object-fit:cover;border:1px solid #e2e8f0;border-radius:12px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}.voice-error{margin:0 24px 6px;color:#dc2626;font-size:12px}
-.chat-composer{position:relative;width:calc(100% - 32px);min-width:0;margin:0 auto;border:1px solid #d8dee5;border-radius:28px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.11)}.composer-normal,.composer-recording,.composer-preview{display:flex;box-sizing:border-box;min-width:0;height:54px;min-height:54px;align-items:center;gap:8px;padding:4px 6px}.composer-normal input[type=text]{min-width:0;height:40px;flex:1;padding:0 5px;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}.image-input{display:none}.composer-icon-button{display:grid;width:40px;height:40px;flex:0 0 40px;padding:0;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.attachment-button{font-size:28px;font-weight:300;line-height:1}.microphone-button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}.microphone-button svg,.send-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.send-button{background:#0f1419;color:#fff}.chat-composer button:disabled{opacity:.36}
-.composer-recording{padding-right:14px;padding-left:14px;touch-action:none}.recording-dot{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#ef4444;animation:recording-pulse 1.2s ease-in-out infinite}.composer-recording.cancelling .recording-dot{animation:none}.composer-recording strong{font-size:14px;font-variant-numeric:tabular-nums}.voice-waveform{display:flex;height:22px;align-items:center;gap:2px}.voice-waveform i{display:block;width:2px;height:8px;border-radius:2px;background:#8b98a5;animation:voice-wave .72s ease-in-out infinite alternate}.voice-waveform i:nth-child(2){animation-delay:-.18s}.voice-waveform i:nth-child(3){animation-delay:-.36s}.voice-waveform i:nth-child(4){animation-delay:-.54s}.voice-waveform i:nth-child(5){animation-delay:-.27s}.voice-gesture-hint{margin-left:auto;color:#657786;font-size:12px;white-space:nowrap}.composer-recording.cancelling .voice-gesture-hint{color:#dc2626}.voice-lock-label{margin-left:auto;color:#657786;font-size:12px}.composer-recording button{min-width:50px;height:38px;border:0;background:transparent;color:#536471;font-weight:600}.composer-recording .finish-recording{color:#1687e8}.finishing-label{margin-left:auto;color:#536471;font-size:14px}.composer-preview{padding-left:10px}.composer-voice-preview{min-width:0;flex:1}.composer-preview :deep(.voice-message){min-width:0;grid-template-columns:34px minmax(70px,1fr) 36px}.remove-audio{font-size:25px;color:#64748b}
+.chat-composer{position:relative;width:calc(100% - 32px);min-width:0;margin:0 auto;border:1px solid #d8dee5;border-radius:28px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.11)}.composer-normal,.composer-preview{display:flex;box-sizing:border-box;min-width:0;height:54px;min-height:54px;align-items:center;gap:8px;padding:4px 6px}.composer-normal.voice-active{padding-left:6px}.composer-normal input[type=text]{min-width:0;height:40px;flex:1;padding:0 5px;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}.image-input{display:none}.composer-icon-button{display:grid;width:40px;height:40px;flex:0 0 40px;padding:0;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.attachment-button{font-size:28px;font-weight:300;line-height:1}.microphone-button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}.microphone-button.active{background:#f1f5f9}.microphone-button svg,.send-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.send-button{background:#0f1419;color:#fff}.chat-composer button:disabled{opacity:.36}
+.composer-recording{display:flex;min-width:0;flex:1;height:46px;align-items:center;gap:8px;padding:0 8px;touch-action:none}.recording-dot{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#ef4444;animation:recording-pulse 1.2s ease-in-out infinite}.composer-recording.cancelling .recording-dot{animation:none}.composer-recording strong{font-size:14px;font-variant-numeric:tabular-nums}.voice-waveform{display:flex;height:22px;align-items:center;gap:2px}.voice-waveform i{display:block;width:2px;height:8px;border-radius:2px;background:#8b98a5;animation:voice-wave .72s ease-in-out infinite alternate}.voice-waveform i:nth-child(2){animation-delay:-.18s}.voice-waveform i:nth-child(3){animation-delay:-.36s}.voice-waveform i:nth-child(4){animation-delay:-.54s}.voice-waveform i:nth-child(5){animation-delay:-.27s}.voice-gesture-hint{margin-left:auto;color:#657786;font-size:12px;white-space:nowrap}.composer-recording.cancelling .voice-gesture-hint{color:#dc2626}.voice-lock-label{margin-left:auto;color:#657786;font-size:12px}.composer-recording button{min-width:50px;height:38px;border:0;background:transparent;color:#536471;font-weight:600}.composer-recording .finish-recording{color:#1687e8}.finishing-label{margin-left:auto;color:#536471;font-size:14px}.composer-preview{padding-left:10px}.composer-voice-preview{min-width:0;flex:1}.composer-preview :deep(.voice-message){min-width:0;grid-template-columns:34px minmax(70px,1fr) 36px}.remove-audio{font-size:25px;color:#64748b}
 @keyframes recording-pulse{50%{opacity:.35}}@keyframes voice-wave{from{height:5px}to{height:19px}}
 @media (min-width:768px){.composer-region{padding-bottom:16px}.message-list{width:min(100%,720px);margin:0 auto}}
 @media (prefers-reduced-motion:reduce){.message-line.message-highlight .message-bubble{animation:none;box-shadow:0 0 0 3px rgba(22,135,232,.16)}}
