@@ -78,6 +78,35 @@ describe("encrypted account-state materialization", () => {
     expect(canStartDirectMessage(ACCOUNT, PEER, useFriendshipsStore().isAccepted)).toBe(true);
   });
 
+  it("skips unchanged snapshots even when an older Worker returns them", async () => {
+    await materializeAccountState(ACCOUNT, "friend_metadata", [{
+      accountPubkey: ACCOUNT,
+      pubkey: PEER,
+      name: "本机备注",
+      updatedAt: 200,
+    }], 2);
+    const testKeys = keys();
+    vi.stubGlobal("window", { location: { origin: "https://app.test" } });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 60 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ snapshots: [{
+        namespace: "friend_metadata",
+        version: 2,
+        ciphertext: envelope("friend_metadata", [{
+          accountPubkey: ACCOUNT,
+          pubkey: PEER,
+          name: "不应重复解密",
+          updatedAt: 200,
+        }]),
+        updatedAt: 200,
+      }] }), { status: 200 })));
+
+    const result = await fetchAndMaterializeAccountState(testKeys, ["friend_metadata"], { onlyNewer: true });
+    expect(result.restored).toEqual([]);
+    expect(testKeys.nip44Decrypt).not.toHaveBeenCalled();
+    expect((await db.accountFriends.get([ACCOUNT, PEER]))?.name).toBe("本机备注");
+  });
+
   it("reconciles only changed friend namespaces on foreground and refreshes live stores", async () => {
     await materializeAccountState(ACCOUNT, "friendships", [friendship("accepted", 20, "accept-old")], 1);
     await materializeAccountState(ACCOUNT, "friend_metadata", [{
