@@ -121,6 +121,15 @@ export const useFriendshipsStore = defineStore("friendships", {
         if (this.loadedFor === account) this.loading = false;
       }
     },
+    async reloadFromStorage(accountPubkey?: string) {
+      const account = normalized(accountPubkey || useKeyStore().pkHex);
+      if (!account || this.loadedFor !== account) return false;
+      const records = await friendshipRepository.list(account);
+      if (this.loadedFor !== account) return false;
+      this.records = records;
+      notifyDirectMessageAuthorizationChanged(account);
+      return true;
+    },
     reset() {
       this.records = [];
       this.loadedFor = "";
