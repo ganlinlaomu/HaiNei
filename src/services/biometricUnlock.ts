@@ -164,13 +164,15 @@ export async function supportsBiometricUnlock() {
     || !window.isSecureContext
     || typeof PublicKeyCredential === "undefined"
     || !navigator.credentials
-    || typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable !== "function"
+    || typeof navigator.credentials.create !== "function"
+    || typeof navigator.credentials.get !== "function"
   ) return false;
-  try {
-    return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-  } catch {
-    return false;
-  }
+
+  // Do not hide Face ID solely because UVPAA reports false or throws.
+  // iOS/WebKit can report a conservative preflight result in installed PWA
+  // contexts even when a platform WebAuthn ceremony can still succeed.
+  // The real create/get ceremony remains the source of truth.
+  return true;
 }
 
 export async function enrollBiometricUnlock(pubkey: string, skHex: string) {
