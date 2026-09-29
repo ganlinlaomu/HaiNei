@@ -121,7 +121,7 @@ export const useFriendshipsStore = defineStore("friendships", {
     async load(accountPubkey?: string) {
       const account = normalized(accountPubkey || useKeyStore().pkHex);
       if (!account) return this.reset();
-      if (this.loadedFor === account && !this.loading) return;
+      if (this.loadedFor === account && !this.loading && this.authorizationReady) return;
       this.records = [];
       this.loadedFor = account;
       this.loading = true;
