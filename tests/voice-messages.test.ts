@@ -532,7 +532,7 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain("await nextTick();");
     expect(messages).toContain("await waitForAudioElementsToUnmount();");
     expect(messages).toContain('document.querySelectorAll(".message-list audio, .composer-region audio")');
-    expect(messages.indexOf("await waitForAudioElementsToUnmount();")).toBeLessThan(messages.indexOf("const session = await createVoiceRecordingSession();"));
+    expect(messages.indexOf("await waitForAudioElementsToUnmount();")).toBeLessThan(messages.indexOf("const session = await createVoiceRecordingSession({"));
     expect(player).toContain('preload="none"');
     expect(player).toContain('props.suspended ? ""');
     expect(player).toContain("audio.value.removeAttribute");
