@@ -320,12 +320,52 @@ function endEmptyDrag() {
   endDrag();
 }
 
-function focusTarget() {
-  void nextTick(() => {
-    dialog.value?.focus();
-    const target = props.targetCommentId ? document.getElementById(`comment-${props.targetCommentId}`) : null;
-    target?.scrollIntoView({ block: "center" });
+let targetFocusGeneration = 0;
+
+function nextFrame() {
+  return new Promise<void>(resolve => {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
+    else setTimeout(resolve, 16);
   });
+}
+
+function centerTargetInCommentBody(target: HTMLElement) {
+  const body = commentBody.value;
+  if (!body) return;
+  const bodyRect = body.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const targetTopInBody = body.scrollTop + targetRect.top - bodyRect.top;
+  const centeredTop = targetTopInBody - Math.max(0, (body.clientHeight - targetRect.height) / 2);
+  body.scrollTo({ top: Math.max(0, centeredTop), behavior: "auto" });
+}
+
+async function focusTarget() {
+  const targetCommentId = props.targetCommentId;
+  const generation = ++targetFocusGeneration;
+  await nextTick();
+  if (generation !== targetFocusGeneration || !props.visible) return;
+
+  dialog.value?.focus();
+  if (!targetCommentId) return;
+
+  // Expand the exact root/reply first, then resolve the target after Vue has
+  // rendered that branch. A couple of animation frames is enough for layout
+  // without the old multi-second polling.
+  revealTargetComment(targetCommentId);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await nextTick();
+    await nextFrame();
+    if (generation !== targetFocusGeneration || !props.visible) return;
+    const target = document.getElementById(`comment-${targetCommentId}`);
+    if (!target) continue;
+    centerTargetInCommentBody(target);
+    // One layout correction keeps the target centered if expanding a reply
+    // changes heights during the same render cycle.
+    await nextFrame();
+    if (generation !== targetFocusGeneration || !props.visible) return;
+    centerTargetInCommentBody(target);
+    return;
+  }
 }
 watch(() => props.visible, visible => {
   ui.setBlockingOverlay(overlayId, visible);
@@ -333,7 +373,7 @@ watch(() => props.visible, visible => {
     commentsExpanded.value = false;
     expandedReplyRoots.value = new Set();
     revealTargetComment(props.targetCommentId);
-    focusTarget();
+    void focusTarget();
   }
   else {
     replyTarget.value = null;
@@ -343,7 +383,7 @@ watch(() => props.visible, visible => {
 }, { immediate: true });
 watch([threads, () => props.targetCommentId], ([, targetCommentId]) => {
   revealTargetComment(targetCommentId);
-  if (props.visible) focusTarget();
+  if (props.visible) void focusTarget();
 });
 onBeforeUnmount(() => {
   ui.setBlockingOverlay(overlayId, false);
