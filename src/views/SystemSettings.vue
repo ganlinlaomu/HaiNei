@@ -255,10 +255,10 @@
         </summary>
         <div class="account-panel">
           <div class="account-control-card">
-            <div v-if="biometricSupported && keyStore.isEncrypted" class="account-setting-row biometric-row">
+            <div v-if="keyStore.isEncrypted" class="account-setting-row biometric-row">
               <div class="privacy-copy">
                 <strong>{{ biometricLabel }} 快速登录</strong>
-                <span class="small">{{ biometricEnabled ? "已开启，下次可直接验证后进入海内" : "开启后不再需要每次输入本地密码" }}</span>
+                <span class="small">{{ biometricEnabled ? "已开启，下次可直接验证后进入海内" : biometricSupported ? "开启后不再需要每次输入本地密码" : "当前环境未通过预检，仍可尝试启用" }}</span>
               </div>
               <button
                 class="account-inline-action"
