@@ -293,10 +293,12 @@ describe("direct-message navigation and UI contract", () => {
 
   it("uses card feed surfaces for Home and flat full-width list surfaces for messaging", () => {
     const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const postCard = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     const notifications = readFileSync(join(process.cwd(), "src/views/Notifications.vue"), "utf8");
-    expect(home).toContain(".post-card {");
-    expect(home).toContain("border-radius: 14px");
+    expect(home).toContain("<PostCard");
+    expect(postCard).toContain(".post-card{");
+    expect(postCard).toContain("border-radius:14px");
     expect(conversations).toContain("background:#fff");
     expect(conversations).toContain(".conversation-list{display:flex;width:100%");
     expect(notifications).toContain("background: #fff");
@@ -379,12 +381,13 @@ describe("direct-message navigation and UI contract", () => {
     expect(preferences).toContain("revision: 0");
   });
 
-  it("surfaces key action failures through the shared toast store", () => {
-    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+  it("surfaces key action failures in the owning component", () => {
+    const postCard = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const commentSheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     const messages = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
-    expect(home).toContain('ui.addToast("评论发送失败，请稍后重试"');
-    expect(home).toContain('ui.addToast("操作失败，请稍后重试"');
+    expect(postCard).toContain('ui.addToast("操作失败，请重试"');
+    expect(commentSheet).toContain('"发送失败，草稿已保留，可重试"');
     expect(messages).toContain("ui.addToast(");
     expect(conversations).toContain('ui.addToast("隐藏失败，请稍后重试"');
     expect(conversations).toContain('ui.addToast("删除失败，请稍后重试"');
