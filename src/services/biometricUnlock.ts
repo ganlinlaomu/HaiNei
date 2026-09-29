@@ -40,7 +40,7 @@ function randomBytes(length = RANDOM_LENGTH) {
   return crypto.getRandomValues(new Uint8Array(length));
 }
 
-function bytesToBase64Url(input: BufferSource) {
+function bytesToBase64Url(input: ArrayBuffer | Uint8Array) {
   const bytes = new Uint8Array(copyBuffer(input));
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
