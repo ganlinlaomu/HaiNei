@@ -3,7 +3,7 @@ const MODEL_ID = "onnx-community/whisper-tiny";
 
 type Pipeline = (
   audio: Float32Array,
-  options?: { task?: string; chunk_length_s?: number; stride_length_s?: number },
+  options?: { task?: string; language?: string; chunk_length_s?: number; stride_length_s?: number },
 ) => Promise<{ text?: string } | Array<{ text?: string }>>;
 
 type TransformersModule = {
@@ -44,8 +44,8 @@ async function getTranscriber(id: number) {
   return transcriberPromise;
 }
 
-async function run(message: { id: number; audio: Float32Array }) {
-  const { id, audio } = message;
+async function run(message: { id: number; audio: Float32Array; language?: string }) {
+  const { id, audio, language } = message;
   activeRequestId = id;
   try {
     const transcriber = await getTranscriber(id);
@@ -53,6 +53,7 @@ async function run(message: { id: number; audio: Float32Array }) {
     const started = performance.now();
     const output = await transcriber(audio, {
       task: "transcribe",
+      ...(language ? { language } : {}),
       chunk_length_s: 30,
       stride_length_s: 5,
     });
@@ -70,6 +71,6 @@ async function run(message: { id: number; audio: Float32Array }) {
   }
 }
 
-self.onmessage = (event: MessageEvent<{ id: number; audio: Float32Array }>) => {
+self.onmessage = (event: MessageEvent<{ id: number; audio: Float32Array; language?: string }>) => {
   queue = queue.then(() => run(event.data)).catch(() => undefined);
 };
