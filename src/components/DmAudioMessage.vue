@@ -25,7 +25,7 @@
       >
         {{ transcript ? (transcriptVisible ? "收起文字" : "展开文字") : transcribing ? transcriptionStatus : "转文字" }}
       </button>
-      <span v-if="!transcript && !transcribing && !transcriptionError" class="transcription-note">本机转写 · 首次使用会下载本机模型</span>
+      <span v-if="!transcript && !transcribing && !transcriptionError" class="transcription-note">本机转写 · 语音不上传 · 首次使用会下载模型</span>
       <span v-if="transcriptionError" class="transcription-error">{{ transcriptionError }}</span>
       <p v-if="transcript && transcriptVisible" class="transcript-text">{{ transcript }}</p>
       <span v-if="transcript && transcriptVisible && transcriptionElapsedMs" class="transcription-meta">本机完成 · {{ (transcriptionElapsedMs / 1000).toFixed(1) }} 秒</span>
