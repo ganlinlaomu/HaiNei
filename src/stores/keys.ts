@@ -256,8 +256,9 @@ export const useKeyStore = defineStore("keys", {
       return "unlock" as const;
     },
 
-    hasBiometricUnlock(pubkey = this.pkHex) {
-      return !!pubkey && hasBiometricUnlock(pubkey);
+    hasBiometricUnlock(pubkey?: string) {
+      const target = pubkey || this.pkHex;
+      return !!target && hasBiometricUnlock(target);
     },
 
     async supportsBiometricUnlock() {
@@ -269,9 +270,10 @@ export const useKeyStore = defineStore("keys", {
       await enrollBiometricUnlock(this.pkHex, this.skHex);
     },
 
-    async disableBiometricUnlock(pubkey = this.pkHex) {
-      if (!pubkey) return;
-      await removeBiometricUnlock(pubkey);
+    async disableBiometricUnlock(pubkey?: string) {
+      const target = pubkey || this.pkHex;
+      if (!target) return;
+      await removeBiometricUnlock(target);
     },
 
     async unlockWithBiometric() {
