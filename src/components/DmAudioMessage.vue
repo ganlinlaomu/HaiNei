@@ -49,17 +49,6 @@
     ></audio>
 
     <button v-if="error" class="voice-retry" type="button" @click="toggle">重试</button>
-
-    <div class="voice-transcription">
-      <button
-        type="button"
-        class="transcription-toggle"
-        :disabled="transcribing || suspended"
-        @click="transcribe"
-      >转文字</button>
-      <span v-if="transcriptionError" class="transcription-error">{{ transcriptionError }}</span>
-      <p v-if="transcript" class="transcript-text">{{ transcript }}</p>
-    </div>
   </div>
 </template>
 
@@ -67,8 +56,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { PrivateAudioMedia } from "@/nostr/messaging/privateMedia";
 import { decryptDmAudio } from "@/utils/encryptedDmAudio";
-import { transcribeAudioLocally } from "@/utils/localTranscription";
-import { getCachedTranscript, setCachedTranscript } from "@/utils/localTranscriptCache";
 
 const WAVEFORM_BAR_COUNT = 32;
 
@@ -77,7 +64,7 @@ const props = withDefaults(defineProps<{
   previewUrl?: string;
   duration?: number;
   accountPubkey?: string;
-  transcriptKey?: string;
+  waveformKey?: string;
   suspended?: boolean;
   own?: boolean;
 }>(), {
@@ -85,7 +72,7 @@ const props = withDefaults(defineProps<{
   previewUrl: "",
   duration: 0,
   accountPubkey: "",
-  transcriptKey: "",
+  waveformKey: "",
   suspended: false,
   own: false,
 });
@@ -98,16 +85,13 @@ const playing = ref(false);
 const played = ref(false);
 const currentTime = ref(0);
 const playDuration = ref(0);
-const transcribing = ref(false);
-const transcriptionError = ref("");
-const transcript = ref(getCachedTranscript(props.transcriptKey));
 let decryptedBlob: Blob | null = null;
 let controller: AbortController | null = null;
 
 const sourceUrl = computed(() => props.suspended ? "" : (props.previewUrl || decryptedUrl.value));
 
 const waveformSeed = computed(() =>
-  props.transcriptKey
+  props.waveformKey
   || props.media?.encryptedRef
   || props.previewUrl
   || `voice:${props.duration}`
@@ -229,32 +213,11 @@ function handleEnded() {
   played.value = true;
 }
 
-async function transcribe() {
-  if (transcribing.value || props.suspended) return;
-  transcribing.value = true;
-  transcriptionError.value = "";
-  try {
-    const blob = await ensureAudioBlob();
-    const result = await transcribeAudioLocally(blob);
-    transcript.value = result.text || "未识别到清晰语音";
-    setCachedTranscript(props.transcriptKey, transcript.value);
-  } catch (cause) {
-    transcriptionError.value = cause instanceof Error ? cause.message : "本机转写失败";
-  } finally {
-    transcribing.value = false;
-  }
-}
-
-function restoreTranscription() {
-  transcript.value = getCachedTranscript(props.transcriptKey);
-  transcriptionError.value = "";
-}
 
 watch(
-  () => [props.media?.encryptedRef, props.previewUrl, props.accountPubkey, props.transcriptKey],
+  () => [props.media?.encryptedRef, props.previewUrl, props.accountPubkey, props.waveformKey],
   () => {
     releaseRuntimeAudio();
-    restoreTranscription();
   }
 );
 
@@ -380,36 +343,6 @@ onBeforeUnmount(releaseRuntimeAudio);
   color:#dc2626;
   font-size:11px;
   text-align:left
-}
-.voice-transcription{
-  display:flex;
-  min-width:0;
-  flex-wrap:wrap;
-  align-items:center;
-  gap:5px 8px;
-  padding:0 4px
-}
-.transcription-toggle{
-  padding:0;
-  border:0;
-  background:transparent;
-  color:#1687e8;
-  font-size:11px;
-  font-weight:650
-}
-.transcription-toggle:disabled{opacity:.5}
-.transcription-error{color:#dc2626;font-size:10px}
-.transcript-text{
-  width:100%;
-  margin:2px 0 0;
-  padding:8px 9px;
-  border-radius:9px;
-  background:rgba(255,255,255,.62);
-  color:#334155;
-  font-size:13px;
-  line-height:1.45;
-  white-space:pre-wrap;
-  overflow-wrap:anywhere
 }
 @media(max-width:420px){
   .voice-message{min-width:208px;max-width:270px}
