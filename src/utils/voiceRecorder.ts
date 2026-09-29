@@ -41,6 +41,29 @@ export function selectVoiceRecordingMime(recorderType: { isTypeSupported?: (type
   return AUDIO_MIME_CANDIDATES.find(type => recorderType.isTypeSupported?.(type)) || "";
 }
 
+type BrowserAudioSession = { type: string };
+
+function browserAudioSession(): BrowserAudioSession | undefined {
+  if (typeof navigator === "undefined") return undefined;
+  return (navigator as Navigator & { audioSession?: BrowserAudioSession }).audioSession;
+}
+
+function setAudioSessionType(type: string) {
+  const audioSession = browserAudioSession();
+  if (!audioSession) return;
+  try {
+    audioSession.type = type;
+    console.info("[voice-recorder]", { timestamp: new Date().toISOString(), event: "audio-session", type });
+  } catch {}
+}
+
+function resetAudioSessionAfterCapture() {
+  // WebKit can leave AVAudioSession in play-and-record after a capture ends.
+  // Kicking it through playback -> auto releases that state before the next recording.
+  setAudioSessionType("playback");
+  setAudioSessionType("auto");
+}
+
 export async function createVoiceRecordingSession(options: {
   mediaDevices?: Pick<MediaDevices, "getUserMedia">;
   Recorder?: typeof MediaRecorder;
@@ -55,8 +78,13 @@ export async function createVoiceRecordingSession(options: {
 
   let stream: MediaStream;
   try {
+    // Reset any playback/capture route left by the previous voice message before
+    // asking WebKit for a fresh microphone stream.
+    setAudioSessionType("auto");
     stream = await mediaDevices.getUserMedia({ audio: true });
+    setAudioSessionType("play-and-record");
   } catch {
+    resetAudioSessionAfterCapture();
     throw new Error("无法使用麦克风，请检查权限设置");
   }
 
@@ -75,10 +103,13 @@ export async function createVoiceRecordingSession(options: {
       tracks: tracks.map(track => ({ readyState: track.readyState, muted: track.muted })),
     });
   };
-  const stopTracks = (reason: string) => stream.getTracks().forEach((track, index) => {
-    diagnose("app-track-stop", `${reason}:${index}`);
-    try { track.stop(); } catch {}
-  });
+  const stopTracks = (reason: string) => {
+    stream.getTracks().forEach((track, index) => {
+      diagnose("app-track-stop", `${reason}:${index}`);
+      try { track.stop(); } catch {}
+    });
+    resetAudioSessionAfterCapture();
+  };
   if (!tracks.length || tracks.every(track => track.readyState === "ended")) {
     stopTracks("no-live-audio-track");
     throw new Error("未检测到可用的麦克风");
