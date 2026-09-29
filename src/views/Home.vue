@@ -68,30 +68,21 @@ import { defineComponent, ref, onMounted, onBeforeUnmount, onActivated, onDeacti
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
-import { getRelaysFromStorage } from "@/nostr/relays";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
-import { useSettingsStore } from "@/stores/settings";
 import { logger } from "@/utils/logger";
 import PostCard from "@/components/PostCard.vue";
 import { useRoute, useRouter } from "vue-router";
 import { usePullToRefresh } from "@/components/usePullToRefresh";
 import { getLastSeenCreatedAt, updateLastSeenToNewest } from "@/utils/lastSeen";
 import { useRealtimeInboxReconcile } from "@/components/useRealtimeInboxReconcile";
-import type { CanonicalMessage } from "@/nostr/messaging/protocol";
-import { accountMessageSyncManager } from "@/services/accountMessageSync";
-import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
-import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
-import { useNotificationsStore } from "@/stores/notifications";
+import { getAccountMessageSyncStatus, markAccountConversationRead, onAccountMessageSyncStatus, resumeAccountMessageSync } from "@/services/accountMessageSync";
 import { useUIStore } from "@/stores/ui";
 import type { SyncStatus } from "@/nostr/messaging/sync/types";
-import { useProfilesStore } from "@/stores/profiles";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
-import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
-import { isAuthorizedCanonicalDirectMessage, useDirectMessagesStore } from "@/stores/directMessages";
 import { buildHeightPrefix, resolveVirtualRange, updateHeightPrefix } from "@/utils/virtualFeed";
 import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
 
@@ -118,12 +109,8 @@ export default defineComponent({
     const friendships = useFriendshipsStore();
     const keys = useKeyStore();
     const msgs = useMessagesStore();
-    const directMessages = useDirectMessagesStore();
     const interactions = useInteractionsStore();
-    const settings = useSettingsStore();
-    const notifications = useNotificationsStore();
     const ui = useUIStore();
-    const profiles = useProfilesStore();
     const feedPreferences = useFeedPreferencesStore();
     const readyForPending = ref(false);
     const route = useRoute();
@@ -138,8 +125,7 @@ export default defineComponent({
     const visibleInbox = () => msgs.inbox.filter(message => isHomeRenderable(message) && feedPreferences.isVisible(message));
 
     let homeAccountPk = "";
-    let homeSyncGeneration = 0;
-    const messageSync = accountMessageSyncManager;
+    let stopSyncStatusListener: (() => void) | null = null;
 
     const messagesRef = ref([] as InboxItem[]);
     const displayedMessages = ref([] as InboxItem[]);
@@ -338,6 +324,22 @@ export default defineComponent({
       return "";
     });
 
+    function applyAccountSyncStatus(snapshot = getAccountMessageSyncStatus()) {
+      if (!keys.pkHex || snapshot.accountPubkey !== keys.pkHex.toLowerCase()) return;
+      const wasStartupSyncing = startupSyncing.value;
+      homeSyncStatus.value = snapshot.status;
+      if (snapshot.status === "connecting" || snapshot.status === "catching-up") {
+        startupSyncing.value = true;
+        return;
+      }
+      if (snapshot.status === "live" || snapshot.status === "error") {
+        if (wasStartupSyncing && readyForPending.value) reconcileStartupSnapshot(true);
+        startupSyncing.value = false;
+        return;
+      }
+      if (snapshot.status === "idle") startupSyncing.value = false;
+    }
+
     // 分页相关状态
     const PAGE_SIZE = 20; // 每页显示 20 条
     const hasMore = computed(() => {
@@ -348,16 +350,6 @@ export default defineComponent({
     const autoLoadSupported = ref(typeof IntersectionObserver !== "undefined");
     let loadMoreObserver: IntersectionObserver | null = null;
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
-    const acceptedAuthorsSignature = computed(() => acceptedFriends.value
-      .map(friend => friend.pubkey)
-      .filter(Boolean)
-      .sort()
-      .join("|"));
-
-    function closeHomeSubscriptions(stopSession = true) {
-      homeSyncGeneration++;
-      if (stopSession) messageSync.stop();
-    }
 
     function clearHomeRuntimeState() {
       messagesRef.value = [];
@@ -465,7 +457,7 @@ export default defineComponent({
           pendingMessages.value.map(message => message.conversationId).filter(Boolean)
         );
         for (const conversationId of visibleConversations) {
-          void messageSync.markConversationRead(String(conversationId));
+          void markAccountConversationRead(String(conversationId));
         }
         
         const newestPendingId = sortedPending[0]?.id || "";
@@ -633,28 +625,11 @@ async function safeUpdateLocalRefs() {
        refreshing
     } = usePullToRefresh({
       onRefresh: async () => {
-        await messageSync.resume("manual");
+        await resumeAccountMessageSync("manual");
         safeUpdateLocalRefs();     // UI 刷新
       }
     });
 
-    function mirrorSyncedMessage(message: CanonicalMessage) {
-  msgs.addInbox({
-    id: message.id,
-    pubkey: message.senderPubkey,
-    created_at: message.createdAt,
-    content: message.plaintext || "",
-    protocol: message.protocol,
-    transportKind: message.transportKind,
-    transportEventId: message.transportEventId,
-    rumorId: message.rumorId,
-    recipientPubkeys: message.recipientPubkeys,
-    conversationId: message.conversationId,
-    replyTo: message.replyTo,
-    rootId: message.rootId,
-    tags: message.tags
-  });
-}
 
     // Helper to check if query has notification params
     function hasNotificationParams(query: any): boolean {
@@ -755,131 +730,9 @@ async function safeUpdateLocalRefs() {
   }
 
 
-
-  async function startSub() {
-      try {
-        logger.info("开始订阅流程");
-        if (!keys.isLoggedIn) {
-          messageSync.stop();
-          logger.warn("[startSub] skip: not logged in");
-          return;
-        }
-        const accountPk = keys.pkHex;
-        if (homeAccountPk !== accountPk) {
-          const initialized = await initializeHomeRuntime(accountPk);
-          if (!initialized) return;
-        }
-        try {
-          await Promise.all([
-            friends.load(accountPk),
-            friendships.load(accountPk),
-            profiles.load(accountPk)
-          ]);
-        } catch (error) {
-          logger.warn("[message-sync] friend list unavailable; continuing receive sync", {
-            account: accountPk.slice(0, 12),
-            reason: error instanceof Error ? error.name || "Error" : "unknown_error"
-          });
-        }
-        if (!accountPk || keys.pkHex !== accountPk) {
-          logger.warn(`[account] subscription bootstrap discarded account=${accountPk?.slice(0, 8) || "none"}`);
-          return;
-        }
-        const knownAuthors = friends.loadedFor === accountPk && friendships.loadedFor === accountPk
-          ? acceptedFriends.value.map(friend => friend.pubkey)
-          : [];
-        logger.info(`已确认好友加载完成: ${knownAuthors.length} 个好友`);
-        const relays = getRelaysFromStorage("read");
-        logger.info(`使用中继: ${relays.join(', ')}`);
-        await startRealtimeSubscription(knownAuthors, relays);
-      } catch (e) {
-        logger.error("startSub failed", e);
-      }
-    }
-    
-    // 阶段2：启动实时订阅
-    async function startRealtimeSubscription(knownAuthors: string[], relays: string[]) {
-      const accountAtStart = keys.pkHex;
-      if (!accountAtStart) return;
-      registerOutgoingPushSigner(accountAtStart, keys.signEvent.bind(keys));
-      const syncGeneration = ++homeSyncGeneration;
-      try {
-        startupSyncing.value = true;
-        await messageSync.start({
-          accountPubkey: accountAtStart,
-          relays,
-          authors: [...new Set([...knownAuthors, accountAtStart])],
-          decodeContext: {
-            accountPubkey: accountAtStart,
-            nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined
-          },
-          onMessage: createHomeMessageHandler({
-            accountPubkey: accountAtStart,
-            currentAccount: () => keys.pkHex,
-            isAcceptedMessage: message => {
-              if (isDirectMessageTags(message.tags)) {
-                const peer = message.senderPubkey === accountAtStart
-                  ? message.recipientPubkeys.find(pubkey => pubkey !== accountAtStart) || ""
-                  : message.senderPubkey;
-                return !!peer && isAuthorizedCanonicalDirectMessage(
-                  message,
-                  accountAtStart,
-                  friendships.getRecord(peer),
-                );
-              }
-              return message.senderPubkey === accountAtStart
-                ? message.recipientPubkeys
-                    .filter(pubkey => pubkey !== accountAtStart)
-                    .every(pubkey => friendships.isAccepted(pubkey))
-                : friendships.isAccepted(message.senderPubkey);
-            },
-            processFriendshipMessage: message => friendships.processFriendshipMessage(message),
-            processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
-            processFeedControlMessage: message => feedPreferences.processTombstone(
-              message,
-              friendships.isAccepted,
-              messageId => msgs.inbox.find(item => item.id === messageId)?.pubkey
-            ),
-            notifyFriendshipMessage: message => {
-              const notification = incomingFriendRequestNotification(message, accountAtStart);
-              if (notification) {
-                notifications.addNotification(notification);
-                return;
-              }
-              const control = decodeFriendshipControl(message);
-              if (control && control.action !== "request") notifications.resolveFriendRequests(message.senderPubkey);
-            },
-            isReceipt: isDmReceiptMessage,
-            processReceipt: message => directMessages.processReceipt(message),
-            isInteraction: isInteractionMessage,
-            processInteraction: message => interactions.processCanonicalInteraction(message, accountAtStart),
-            mirrorMessage: mirrorSyncedMessage
-          }),
-          onPersistedMessage: message => directMessages.acknowledgePersistedIncoming(accountAtStart, message),
-          onStatus: syncStatus => {
-            if (keys.pkHex !== accountAtStart || syncGeneration !== homeSyncGeneration) return;
-            homeSyncStatus.value = syncStatus;
-            if (syncStatus === "live" || syncStatus === "error") {
-              reconcileStartupSnapshot(true);
-              startupSyncing.value = false;
-            }
-            if (syncStatus === "offline") logger.info("[Home] sync offline");
-            if (syncStatus === "error") logger.warn("[Home] sync retrying");
-          }
-        });
-        
-      } catch (e) {
-        if (keys.pkHex === accountAtStart && syncGeneration === homeSyncGeneration) homeSyncStatus.value = "error";
-        logger.error("startRealtimeSubscription failed", e);
-      } finally {
-        if (keys.pkHex === accountAtStart && syncGeneration === homeSyncGeneration && startupSyncing.value) {
-          reconcileStartupSnapshot(true);
-          startupSyncing.value = false;
-        }
-      }
-    }
-    
    onMounted(async () => {
+     stopSyncStatusListener = onAccountMessageSyncStatus(applyAccountSyncStatus);
+     applyAccountSyncStatus();
      attachVirtualScroll();
      await nextTick();
      attachLoadMoreObserver();
@@ -896,7 +749,8 @@ async function safeUpdateLocalRefs() {
      saveCurrentHomeScroll();
      detachLoadMoreObserver();
      detachVirtualScroll();
-     closeHomeSubscriptions(false);
+     stopSyncStatusListener?.();
+     stopSyncStatusListener = null;
      clearHomeRuntimeState();
    });
    onActivated(() => {
@@ -917,22 +771,6 @@ async function safeUpdateLocalRefs() {
       debug: true,
     });
 
-   watch(
-  () => keys.isLoggedIn,
-  (loggedIn) => {
-    if (!loggedIn) {
-      closeHomeSubscriptions();
-      clearHomeRuntimeState();
-      return;
-    }
-
-    logger.info("[Home] keys ready → startSub()");
-    startSub().catch((e) => {
-      logger.error("startSub failed", e);
-    });
-  },
-  { immediate: true }
-);
    watch(displayedMessages, () => {
      rebuildHeightIndex();
      void nextTick(() => {
@@ -943,16 +781,19 @@ async function safeUpdateLocalRefs() {
    watch(
      () => keys.pkHex,
      async (accountPk, previousPk) => {
-       if (!accountPk || !previousPk || accountPk === previousPk) return;
-       if (scrollContainer) saveHomeScroll(previousPk, scrollContainer.scrollTop);
-       closeHomeSubscriptions();
+       if (accountPk === previousPk) return;
+       if (previousPk && scrollContainer) saveHomeScroll(previousPk, scrollContainer.scrollTop);
        clearHomeRuntimeState();
-       logger.info(`[account] Home account switch ${previousPk.slice(0, 8)} -> ${accountPk.slice(0, 8)}`);
+       if (!accountPk) return;
+       homeSyncStatus.value = "idle";
+       startupSyncing.value = false;
+       applyAccountSyncStatus();
+       logger.info(`[account] Home account switch ${previousPk?.slice(0, 8) || "none"} -> ${accountPk.slice(0, 8)}`);
        try {
-         await startSub();
+         await initializeHomeRuntime(accountPk);
          await restoreCurrentHomeScroll();
        } catch (e) {
-         logger.error("[account] switched account start failed", e);
+         logger.error("[account] switched account initialization failed", e);
        }
      }
    );
@@ -976,30 +817,6 @@ async function safeUpdateLocalRefs() {
   },
   { flush: "post" }
 );
-   
-   watch(acceptedAuthorsSignature, (signature, previousSignature) => {
-     if (signature === previousSignature || isInitialLoad.value || !keys.isLoggedIn) return;
-     logger.info("已确认好友列表变化，重新启动订阅");
-     startSub().catch(e => logger.error("Failed to restart subscription after accepted-friends change", e));
-   });
-
-   // Settings sync is intentionally non-blocking. A fresh device initially
-   // starts on bootstrap relays, then receives the account's relay set. Restart
-   // Home whenever that effective read-relay set changes so the synced settings
-   // actually affect content retrieval in the same session.
-   watch(
-     () => settings.activeRelays
-       .filter(relay => relay.read && relay.enabled && !relay.deleted)
-       .map(relay => relay.url)
-       .sort()
-       .join("|"),
-     (relaySignature, previousSignature) => {
-       if (!keys.isLoggedIn || !homeAccountPk || relaySignature === previousSignature) return;
-       logger.info("首页 Relay 配置已更新，重新同步内容");
-       startSub().catch(error => logger.error("Failed to restart subscription after relay change", error));
-     }
-   );
-   
    
     // Watch for route query changes to handle notification jump state
     watch(() => route.path, path => {
