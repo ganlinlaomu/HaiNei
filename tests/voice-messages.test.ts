@@ -543,5 +543,15 @@ describe("encrypted private audio messages", () => {
     expect(player).toContain("decryptDmAudio");
     expect(player).toContain("URL.revokeObjectURL");
     expect(player).not.toContain("localStorage");
+    expect(messages).toContain(':own="isOwn(message)"');
+    expect(player).toContain("WAVEFORM_BAR_COUNT = 32");
+    expect(player).toContain("waveformBars");
+    expect(player).toContain("playedBarCount");
+    expect(player).toContain("voice-waveform");
+    expect(player).toContain(".voice-message.own");
+    expect(player).toContain(".voice-message.peer");
+    expect(player).toContain(".voice-duration.played");
+    expect(player).toContain(".voice-toggle.playing");
+    expect(player).not.toContain('class="voice-progress"');
   });
 });
