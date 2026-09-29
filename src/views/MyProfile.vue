@@ -96,7 +96,7 @@ async function save() {
       bio: bioAtSave,
       avatar: previous?.avatar
     }, updatedAt);
-    ui.addToast("资料已保存，正在私密同步", 2_000, "success");
+    ui.addToast("已保存，正在同步", 1_600, "success");
 
     let finalProfile = local;
     let avatarError: unknown;
@@ -126,7 +126,7 @@ async function save() {
         const reason = avatarError instanceof Error ? avatarError.message : "头像上传失败";
         ui.addToast(`昵称和简介已同步，头像未更新：${reason}`, 3_000, "error");
       } else {
-        ui.addToast("资料已同步", 2_000, "success");
+        ui.addToast("同步完成", 1_600, "success");
       }
     }
   } catch (error) {

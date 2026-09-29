@@ -21,7 +21,7 @@
       @keyup.enter="showPendingMessages"
       @keyup.space.prevent="showPendingMessages"
     >
-      <span class="notification-icon">↓</span>
+      <span class="notification-icon">↑</span>
       <span class="notification-text">{{ pendingMessages.length }} 条新动态</span>
     </div>
 
@@ -1023,23 +1023,26 @@ async function safeUpdateLocalRefs() {
   top: 0;
   left: 50%;
   transform: translateX(-50%);
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 10px 20px;
-  border-radius: 20px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  z-index: 999;
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: 12px;
-  animation: slideDown 0.3s ease;
-  transition: all 0.2s;
   width: fit-content;
   max-width: calc(100% - 24px);
+  min-height: 34px;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 6px 11px;
+  border: 1px solid #dbe3ea;
+  border-radius: 999px;
+  background: rgba(255,255,255,.96);
+  color: #334155;
+  box-shadow: 0 4px 14px rgba(15,23,42,.09);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  z-index: 999;
+  font-size: 13px;
+  font-weight: 600;
+  animation: slideDown .22s ease;
+  transition: transform .15s ease, box-shadow .15s ease;
 }
 
 @media (max-width: 767px) {
@@ -1053,12 +1056,12 @@ async function safeUpdateLocalRefs() {
 }
 
 .new-messages-notification:hover {
-  transform: translateX(-50%) scale(1.02);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+  transform: translateX(-50%);
+  box-shadow: 0 5px 16px rgba(15,23,42,.11);
 }
 
 .new-messages-notification:active {
-  transform: translateX(-50%) scale(0.98);
+  transform: translateX(-50%) scale(.98);
 }
 
 @keyframes slideDown {
@@ -1072,25 +1075,14 @@ async function safeUpdateLocalRefs() {
   }
 }
 
-.notification-icon {
-  font-size: 16px;
-  animation: bounce 1s ease infinite;
-}
-
-@keyframes bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
-}
-
-.notification-text {
-  font-size: 14px;
-}
+.notification-icon { font-size:14px; line-height:1; color:#2563eb }
+.notification-text { font-size:13px }
 
 .feed {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 0 8px 20px;
+  gap: 0;
+  padding: 0 0 20px;
 }
 .highlight {
   animation: flash 1.5s ease;
@@ -1128,26 +1120,21 @@ async function safeUpdateLocalRefs() {
 }
 
 .load-more-btn {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  border: none;
-  padding: 12px 24px;
-  border-radius: 20px;
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1px solid #dbe3ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #536471;
   cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-  transition: all 0.2s;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: none;
+  transition: background .15s ease, border-color .15s ease;
 }
 
-.load-more-btn:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
-}
-
-.load-more-btn:active:not(:disabled) {
-  transform: translateY(0);
-}
+.load-more-btn:hover:not(:disabled) { background:#f7f9f9;border-color:#cbd5e1 }
+.load-more-btn:active:not(:disabled) { background:#eef2f6 }
 
 .load-more-btn:disabled {
   opacity: 0.6;
@@ -1161,13 +1148,11 @@ async function safeUpdateLocalRefs() {
 }
 
 @media (min-width: 640px) {
-  .feed { padding-right: 0; padding-left: 0; }
-  .post-card { padding: 16px; }
+  .feed { gap:10px;padding-right:0;padding-left:0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .new-messages-notification,
-  .notification-icon,
   .highlight,
   :deep(.post-card.home-new-highlight) { animation: none; }
 }

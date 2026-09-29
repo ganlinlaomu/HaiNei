@@ -889,7 +889,7 @@ export default defineComponent({
             }
           });
           pendingPostRetry.value = null;
-          ui.addToast("发送成功", 1200, "success");
+          ui.addToast("已发布", 1_400, "success");
           clearPersistentDraft(accountAtSend);
           onClose();
           setTimeout(()=>{ router.push('/'); }, 220);
@@ -999,7 +999,7 @@ export default defineComponent({
           }
         });
 
-        ui.addToast("发送成功", 1200, "success");
+        ui.addToast("已发布", 1_400, "success");
         clearPersistentDraft(accountAtSend);
         onClose();
         // Navigate to home page after modal close animation completes (220ms matches the slide-up-leave-active transition)
