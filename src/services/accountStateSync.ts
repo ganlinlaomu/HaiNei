@@ -190,12 +190,24 @@ export async function materializeAccountState(account: string, namespace: Accoun
   await accountStateRepository.put({ accountPubkey: account, namespace, version, data: materializedData, updatedAt: Date.now() });
 }
 
-export async function fetchAndMaterializeAccountState(keys: AccountStateKeys, namespaces = ACCOUNT_STATE_NAMESPACES) {
+export async function fetchAndMaterializeAccountState(
+  keys: AccountStateKeys,
+  namespaces = ACCOUNT_STATE_NAMESPACES,
+  options: { onlyNewer?: boolean } = {},
+) {
   const account = keys.pkHex.toLowerCase();
   if (!account || !keys.supportsNip44 || typeof indexedDB === "undefined") {
     return { available: false, restored: [] as AccountStateNamespace[] };
   }
-  const response = await authenticatedPost(keys, "/api/account-state/get", { namespaces });
+  const knownVersions = options.onlyNewer
+    ? Object.fromEntries((await accountStateRepository.list(account))
+        .filter(record => namespaces.includes(record.namespace))
+        .map(record => [record.namespace, record.version]))
+    : undefined;
+  const response = await authenticatedPost(keys, "/api/account-state/get", {
+    namespaces,
+    ...(knownVersions ? { knownVersions } : {}),
+  });
   const restored: AccountStateNamespace[] = [];
   let settingsNeedRewrite = false;
   for (const snapshot of (response?.snapshots || []) as RemoteSnapshot[]) {

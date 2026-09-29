@@ -13,6 +13,10 @@ import {
   type AccountStateEnvelope,
   type AccountStateKeys,
 } from "@/services/accountStateSync";
+import {
+  reconcileForegroundFriendState,
+  resetForegroundFriendStateSyncForTests,
+} from "@/services/foregroundFriendStateSync";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useFriendsStore } from "@/stores/friends";
 import { canStartDirectMessage } from "@/nostr/messaging/directMessages";
@@ -45,6 +49,7 @@ function keys(): AccountStateKeys {
 }
 
 beforeEach(async () => {
+  resetForegroundFriendStateSyncForTests();
   await db.open();
   await Promise.all([
     db.accountFriendships.clear(), db.accountFriends.clear(), db.accountProfiles.clear(),
@@ -71,6 +76,63 @@ describe("encrypted account-state materialization", () => {
     expect(useFriendshipsStore().isAccepted(PEER)).toBe(true);
     expect(useFriendsStore().sortedList.map(item => item.pubkey)).toEqual([PEER]);
     expect(canStartDirectMessage(ACCOUNT, PEER, useFriendshipsStore().isAccepted)).toBe(true);
+  });
+
+  it("reconciles only changed friend namespaces on foreground and refreshes live stores", async () => {
+    await materializeAccountState(ACCOUNT, "friendships", [friendship("accepted", 20, "accept-old")], 1);
+    await materializeAccountState(ACCOUNT, "friend_metadata", [{
+      accountPubkey: ACCOUNT,
+      pubkey: PEER,
+      name: "旧备注",
+      groups: ["同学"],
+      updatedAt: 100,
+    }], 1);
+    await useFriendshipsStore().load(ACCOUNT);
+    await useFriendsStore().load(ACCOUNT);
+
+    const requestBodies: any[] = [];
+    vi.stubGlobal("window", { location: { origin: "https://app.test" } });
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/api/auth/challenge") {
+        return new Response(JSON.stringify({ challenge: "foreground", expiresAt: Math.floor(Date.now() / 1000) + 60 }), { status: 201 });
+      }
+      const body = JSON.parse(String(init?.body || "{}"));
+      requestBodies.push(body);
+      return new Response(JSON.stringify({ snapshots: [
+        {
+          namespace: "friendships",
+          version: 2,
+          ciphertext: envelope("friendships", [friendship("removed", 30, "remove-new")]),
+          updatedAt: 30,
+        },
+        {
+          namespace: "friend_metadata",
+          version: 2,
+          ciphertext: envelope("friend_metadata", [{
+            accountPubkey: ACCOUNT,
+            pubkey: PEER,
+            name: "新备注",
+            groups: ["家人"],
+            updatedAt: 200,
+          }]),
+          updatedAt: 30,
+        },
+      ] }), { status: 200 });
+    }));
+
+    const restored = await reconcileForegroundFriendState(keys(), { force: true, now: 100_000 });
+    expect(restored.sort()).toEqual(["friend_metadata", "friendships"]);
+    expect(requestBodies[0].knownVersions).toEqual({ friendships: 1, friend_metadata: 1 });
+    expect(useFriendshipsStore().getState(PEER)).toBe("removed");
+    expect(useFriendsStore().list.find(item => item.pubkey === PEER)).toMatchObject({
+      name: "新备注",
+      groups: ["家人"],
+    });
+
+    const callsAfterFirstCheck = vi.mocked(fetch).mock.calls.length;
+    await reconcileForegroundFriendState(keys(), { now: 100_001 });
+    expect(vi.mocked(fetch).mock.calls.length).toBe(callsAfterFirstCheck);
   });
 
   it("never lets a stale snapshot resurrect a newer Relay removal", () => {

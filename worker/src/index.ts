@@ -42,7 +42,7 @@ export async function handleRequest(request: Request, env: Env) {
     if (path === "/api/account-state/get") {
       const payload = await body(request);
       const pubkey = await verifyAndConsumeChallenge(env, payload.challenge, payload.event, undefined, "hainei_account_state");
-      return json(await getAccountState(env, pubkey, payload.namespaces));
+      return json(await getAccountState(env, pubkey, payload.namespaces, payload.knownVersions));
     }
     if (path === "/api/account-state/put") {
       const payload = await body(request);
