@@ -46,6 +46,17 @@ export const useFriendsStore = defineStore("friends", {
       const records = await friendRepository.list(account);
       if (this.loadedFor === account) this.list = records.filter(record => !record.deleted).map(record => normalized({ ...record, name: record.name || `${record.pubkey.slice(0, 8)}…` }));
     },
+    async reloadFromStorage(accountPubkey?: string) {
+      const account = (accountPubkey || useKeyStore().pkHex).toLowerCase();
+      if (!account || this.loadedFor !== account) return false;
+      const records = await friendRepository.list(account);
+      if (this.loadedFor !== account) return false;
+      this.list = records
+        .filter(record => !record.deleted)
+        .map(record => normalized({ ...record, name: record.name || `${record.pubkey.slice(0, 8)}…` }));
+      this.version++;
+      return true;
+    },
     reset(_removeFromStorage = false) {
       this.list = [];
       this.loadedFor = "";
