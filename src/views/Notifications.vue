@@ -304,7 +304,14 @@ function go(n: any) {
     router.push({ path: "/friends", query: { section: "incoming" } });
     return;
   }
-  router.push({ path: "/", query: { mid: n.messageId, iid: n.commentId, rid: n.replyId } });
+  const targetCommentId = n.replyId || n.commentId;
+  router.push({
+    path: "/",
+    query: {
+      mid: n.messageId,
+      ...(targetCommentId ? { iid: targetCommentId } : {}),
+    },
+  });
 }
 
 /* ---------- 评论/回复/点赞内容 ---------- */
