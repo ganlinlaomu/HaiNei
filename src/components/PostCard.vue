@@ -4,7 +4,16 @@
       <button class="profile-link avatar-link" type="button" :aria-label="`查看 ${displayName(message.pubkey)} 的资料`" @click="openAuthor(message.pubkey, $event)">
         <ProfileAvatar :pubkey="message.pubkey" :local-name="localName(message.pubkey)" :size="38" />
       </button>
-      <div class="author-copy"><button class="profile-link name-link" type="button" @click="openAuthor(message.pubkey, $event)">{{ displayName(message.pubkey) }}</button><time :datetime="new Date(message.created_at * 1000).toISOString()">{{ formatRelativeTime(message.created_at) }}</time></div>
+      <div class="author-copy">
+        <button class="profile-link name-link" type="button" @click="openAuthor(message.pubkey, $event)">{{ displayName(message.pubkey) }}</button>
+        <div class="author-meta">
+          <time :datetime="new Date(message.created_at * 1000).toISOString()">{{ formatRelativeTime(message.created_at) }}</time>
+          <template v-if="isOwn && message._localMeta?.groupCount">
+            <span class="meta-separator" aria-hidden="true">·</span>
+            <button class="audience-link" type="button" :aria-expanded="metaOpen" @click="toggleMeta">{{ visibilityLabel }}</button>
+          </template>
+        </div>
+      </div>
       <div class="overflow-wrap">
         <button class="overflow-button" type="button" aria-label="动态操作" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">•••</button>
         <div v-if="menuOpen" class="overflow-menu">
@@ -16,8 +25,7 @@
       </div>
     </header>
     <div v-if="cleanText" class="message-text">
-      {{ displayedText }}
-      <button v-if="isLong" class="text-button" type="button" @click="expanded = !expanded">{{ expanded ? "收起" : "全文" }}</button>
+      <span>{{ displayedText }}</span><button v-if="isLong" class="text-button" type="button" @click="expanded = !expanded">{{ expanded ? "收起" : "全文" }}</button>
     </div>
     <PostImagePreview v-if="message.content" :content="message.content" :show-all="true" @double-like="likeFromImage" />
     <VideoPlayer v-if="video" :video-data="video" />
@@ -30,7 +38,6 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.5 9.6 9.6 0 0 1-4-.9L3 21l1.7-4.2A8.2 8.2 0 0 1 3 11.5a8.5 8.5 0 0 1 9-8.5 8.5 8.5 0 0 1 9 8.5Z"/></svg>
         <span v-if="commentCount">{{ commentCount }}</span>
       </button>
-      <button v-if="isOwn && message._localMeta?.groupCount" class="action visibility" type="button" :aria-expanded="metaOpen" @click="toggleMeta">{{ visibilityLabel }}</button>
       <button class="action icon-action bookmark" :class="{ saved: bookmarked }" type="button" :aria-label="bookmarked ? '取消收藏' : '收藏'" :aria-pressed="bookmarked" @click="toggleBookmark">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg>
       </button>
@@ -152,10 +159,12 @@ onBeforeUnmount(() => observer?.disconnect());
 </script>
 
 <style scoped>
-.post-card{background:#fff;padding:14px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}
-.post-author{display:flex;align-items:center;gap:10px;position:relative}.author-copy{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:2px}.author-copy time,.muted{color:#94a3b8;font-size:12px}.profile-link,.comment-author{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.avatar-link{display:grid;place-items:center;min-width:44px;min-height:44px;margin:-3px}.name-link{min-height:24px;font-size:14px;font-weight:700;text-align:left}.comment-author{min-height:28px;font-weight:700}.profile-link:focus-visible,.comment-author:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}.overflow-wrap{position:relative;align-self:flex-start}.overflow-button{min-width:40px;min-height:40px;border:0;border-radius:8px;background:transparent;color:#64748b;font-weight:700;letter-spacing:1px}.overflow-menu{position:absolute;z-index:20;top:38px;right:0;min-width:160px;padding:5px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-shadow:0 10px 28px rgba(15,23,42,.16)}.overflow-menu button{display:block;width:100%;min-height:42px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:#334155;text-align:left}.overflow-menu button:active{background:#f1f5f9}
-.message-text{margin-top:10px;color:#202938;font-size:15px;line-height:1.62;white-space:pre-wrap;overflow-wrap:anywhere}.text-button{display:block;min-height:34px;padding:4px 0 0;border:0;background:transparent;color:#2563eb;font:inherit;font-size:13px}
-.actions{display:flex;align-items:center;gap:8px;margin-top:7px;padding-top:6px;border-top:1px solid #f1f5f9}.action{min-width:36px;min-height:36px;padding:5px 6px;border:0;border-radius:8px;background:transparent;color:#334155;font-size:12px}.icon-action{display:inline-flex;align-items:center;justify-content:center;gap:3px}.icon-action svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.action span{font-size:11px;color:#64748b}.action.liked{color:#ef4444}.action.liked svg{fill:currentColor}.action.bookmark.saved{color:#60A5FA}.action.bookmark.saved svg{fill:currentColor}.visibility{margin-left:auto;color:#475569}.bookmark{margin-left:auto}.visibility+.bookmark{margin-left:0}
-.panel{margin-top:10px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f8fafc}.meta-row{display:flex;justify-content:space-between;margin-top:6px;font-size:13px}
-@media(min-width:640px){.post-card{padding:16px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+.post-card{background:#fff;padding:14px 16px 12px;border:0;border-bottom:1px solid #edf1f5;border-radius:0;box-shadow:none}
+.post-author{display:flex;align-items:center;gap:10px;position:relative}.author-copy{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:1px}.author-meta{display:flex;min-width:0;align-items:center;gap:4px;color:#8b98a5;font-size:12px;line-height:1.25}.author-copy time,.muted{color:#8b98a5;font-size:12px}.meta-separator{color:#b0bac4}.audience-link{max-width:160px;padding:0;border:0;background:transparent;color:#8b98a5;font:inherit;font-size:12px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}.audience-link:active{color:#475569}
+.profile-link,.comment-author{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.avatar-link{display:grid;place-items:center;min-width:44px;min-height:44px;margin:-3px}.name-link{min-height:23px;font-size:14px;font-weight:700;text-align:left}.comment-author{min-height:28px;font-weight:700}.profile-link:focus-visible,.comment-author:focus-visible,.audience-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}.overflow-wrap{position:relative;align-self:flex-start}.overflow-button{min-width:40px;min-height:40px;border:0;border-radius:8px;background:transparent;color:#64748b;font-weight:700;letter-spacing:1px}.overflow-menu{position:absolute;z-index:20;top:38px;right:0;min-width:160px;padding:5px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-shadow:0 10px 28px rgba(15,23,42,.16)}.overflow-menu button{display:block;width:100%;min-height:42px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:#334155;text-align:left}.overflow-menu button:active{background:#f1f5f9}
+.message-text{margin-top:9px;color:#202938;font-size:15px;line-height:1.58;white-space:pre-wrap;overflow-wrap:anywhere}.text-button{display:inline-flex;min-height:28px;align-items:center;margin-left:3px;padding:0 3px;border:0;background:transparent;color:#2563eb;font:inherit;font-size:13px;vertical-align:baseline;cursor:pointer}
+.actions{display:flex;align-items:center;gap:10px;margin-top:6px;padding-top:3px;border-top:0}.action{min-width:42px;min-height:42px;padding:7px 8px;border:0;border-radius:9px;background:transparent;color:#334155;font-size:12px}.icon-action{display:inline-flex;align-items:center;justify-content:center;gap:4px}.icon-action svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.action span{font-size:11px;color:#64748b}.action.liked{color:#ef4444}.action.liked svg{fill:currentColor}.action.bookmark.saved{color:#60A5FA}.action.bookmark.saved svg{fill:currentColor}.bookmark{margin-left:auto}
+.panel{margin-top:8px;padding:9px 11px;border:1px solid #e5e7eb;border-radius:10px;background:#f8fafc}.meta-row{display:flex;justify-content:space-between;margin-top:5px;font-size:12px}
+@media(min-width:640px){.post-card{padding:16px;border:1px solid #e8edf3;border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}.actions{padding-top:6px;border-top:1px solid #f1f5f9}.message-text{line-height:1.62}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 </style>
