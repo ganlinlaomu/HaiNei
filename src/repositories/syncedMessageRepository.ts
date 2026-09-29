@@ -161,6 +161,39 @@ export class SyncedMessageRepository {
     await this.database.decryptedEvents.put({ accountPubkey: account, eventId, message, decryptedAt: Date.now() });
   }
 
+  async deferAuthorizationMessage(
+    accountPubkey: string,
+    message: CanonicalMessage,
+    metadata: { source: string; relayUrl?: string },
+    nowMs = Date.now(),
+  ) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    await this.database.deferredAuthorizationMessages.put({
+      accountPubkey: account,
+      id: message.id,
+      createdAt: message.createdAt,
+      message,
+      metadata: {
+        source: metadata.source,
+        ...(metadata.relayUrl ? { relayUrl: metadata.relayUrl } : {}),
+      },
+      deferredAt: nowMs,
+    });
+  }
+
+  async listDeferredAuthorizationMessages(accountPubkey: string) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    return this.database.deferredAuthorizationMessages
+      .where("[accountPubkey+createdAt]")
+      .between([account, Dexie.minKey], [account, Dexie.maxKey])
+      .toArray();
+  }
+
+  async clearDeferredAuthorizationMessage(accountPubkey: string, messageId: string) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    await this.database.deferredAuthorizationMessages.delete([account, messageId]);
+  }
+
   async list(accountPubkey: string, limit?: number) {
     const account = normalizeAccountPubkey(accountPubkey);
     const query = this.database.syncedMessages
