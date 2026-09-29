@@ -16,6 +16,20 @@
     <span class="voice-duration">{{ formatDuration(playing || currentTime ? currentTime : (playDuration || duration)) }}</span>
     <audio v-if="!suspended" ref="audio" :src="sourceUrl" preload="none" @timeupdate="syncPlayback" @loadedmetadata="syncMetadata" @ended="playing = false"></audio>
     <button v-if="error" class="voice-retry" type="button" @click="toggle">重试</button>
+    <div class="voice-transcription">
+      <button
+        type="button"
+        class="transcription-toggle"
+        :disabled="transcribing || suspended"
+        @click="toggleTranscription"
+      >
+        {{ transcript ? (transcriptVisible ? "收起文字" : "展开文字") : transcribing ? transcriptionStatus : "转文字" }}
+      </button>
+      <span v-if="!transcript && !transcribing && !transcriptionError" class="transcription-note">本机转写 · 首次使用会下载本机模型</span>
+      <span v-if="transcriptionError" class="transcription-error">{{ transcriptionError }}</span>
+      <p v-if="transcript && transcriptVisible" class="transcript-text">{{ transcript }}</p>
+      <span v-if="transcript && transcriptVisible && transcriptionElapsedMs" class="transcription-meta">本机完成 · {{ (transcriptionElapsedMs / 1000).toFixed(1) }} 秒</span>
+    </div>
   </div>
 </template>
 
@@ -23,6 +37,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { PrivateAudioMedia } from "@/nostr/messaging/privateMedia";
 import { decryptDmAudio } from "@/utils/encryptedDmAudio";
+import { transcribeAudioLocally, type TranscriptionProgress } from "@/utils/localTranscription";
 
 const props = withDefaults(defineProps<{
   media?: PrivateAudioMedia | null;
@@ -39,6 +54,13 @@ const error = ref("");
 const playing = ref(false);
 const currentTime = ref(0);
 const playDuration = ref(0);
+const transcribing = ref(false);
+const transcriptionStatus = ref("准备本机转写…");
+const transcriptionError = ref("");
+const transcript = ref("");
+const transcriptVisible = ref(false);
+const transcriptionElapsedMs = ref(0);
+let decryptedBlob: Blob | null = null;
 let controller: AbortController | null = null;
 const sourceUrl = computed(() => props.suspended ? "" : (props.previewUrl || decryptedUrl.value));
 
@@ -55,18 +77,31 @@ function releaseRuntimeAudio() {
   playDuration.value = 0;
   if (decryptedUrl.value) URL.revokeObjectURL(decryptedUrl.value);
   decryptedUrl.value = "";
+  decryptedBlob = null;
+}
+async function ensureAudioBlob() {
+  if (decryptedBlob) return decryptedBlob;
+  if (props.previewUrl) {
+    const response = await fetch(props.previewUrl);
+    if (!response.ok) throw new Error("语音读取失败");
+    decryptedBlob = await response.blob();
+    return decryptedBlob;
+  }
+  if (!props.media?.encryptedRef || !props.accountPubkey) throw new Error("语音暂不可用");
+  const account = props.accountPubkey;
+  controller = new AbortController();
+  const blob = await decryptDmAudio(props.media.encryptedRef, controller.signal);
+  if (controller.signal.aborted || props.accountPubkey !== account) throw new DOMException("Aborted", "AbortError");
+  decryptedBlob = blob;
+  return blob;
 }
 async function ensureSource() {
   if (sourceUrl.value) return true;
-  if (!props.media?.encryptedRef || !props.accountPubkey) return false;
   loading.value = true;
   error.value = "";
-  const account = props.accountPubkey;
-  controller = new AbortController();
   try {
-    const blob = await decryptDmAudio(props.media.encryptedRef, controller.signal);
-    if (controller.signal.aborted || props.accountPubkey !== account) return false;
-    decryptedUrl.value = URL.createObjectURL(blob);
+    const blob = await ensureAudioBlob();
+    if (!props.previewUrl) decryptedUrl.value = URL.createObjectURL(blob);
     await nextTick();
     return true;
   } catch (cause) {
@@ -95,7 +130,46 @@ function seek(event: Event) {
   syncPlayback();
 }
 
-watch(() => [props.media?.encryptedRef, props.previewUrl, props.accountPubkey], releaseRuntimeAudio);
+function updateTranscriptionProgress(progress: TranscriptionProgress) {
+  if (progress.stage === "decoding") transcriptionStatus.value = "正在读取语音…";
+  else if (progress.stage === "transcribing") transcriptionStatus.value = "正在本机转写…";
+  else if (typeof progress.progress === "number" && progress.progress > 0 && progress.progress < 100) {
+    transcriptionStatus.value = `下载模型 ${Math.round(progress.progress)}%`;
+  } else transcriptionStatus.value = "正在加载本机模型…";
+}
+async function toggleTranscription() {
+  if (transcript.value) {
+    transcriptVisible.value = !transcriptVisible.value;
+    return;
+  }
+  if (transcribing.value || props.suspended) return;
+  transcribing.value = true;
+  transcriptionError.value = "";
+  transcriptionStatus.value = "准备本机转写…";
+  try {
+    const blob = await ensureAudioBlob();
+    const result = await transcribeAudioLocally(blob, updateTranscriptionProgress);
+    transcript.value = result.text || "未识别到清晰语音";
+    transcriptionElapsedMs.value = result.elapsedMs;
+    transcriptVisible.value = true;
+  } catch (cause) {
+    transcriptionError.value = cause instanceof Error ? cause.message : "本机转写失败";
+  } finally {
+    transcribing.value = false;
+  }
+}
+function resetTranscription() {
+  transcript.value = "";
+  transcriptVisible.value = false;
+  transcriptionElapsedMs.value = 0;
+  transcriptionError.value = "";
+  transcriptionStatus.value = "准备本机转写…";
+}
+
+watch(() => [props.media?.encryptedRef, props.previewUrl, props.accountPubkey], () => {
+  releaseRuntimeAudio();
+  resetTranscription();
+});
 watch(() => props.suspended, suspended => {
   if (!suspended) return;
   releaseRuntimeAudio();
@@ -108,5 +182,5 @@ onBeforeUnmount(releaseRuntimeAudio);
 </script>
 
 <style scoped>
-.voice-message{display:grid;grid-template-columns:34px minmax(100px,180px) 36px;align-items:center;gap:7px;min-width:210px}.voice-toggle{display:grid;width:34px;height:34px;padding:0;place-items:center;border:0;border-radius:50%;background:#1d9bf0;color:#fff;font-size:13px}.voice-toggle:disabled{opacity:.55}.voice-progress{width:100%;height:3px;margin:0;accent-color:#1d9bf0}.voice-duration{color:#536471;font-size:11px;text-align:right}.voice-message audio{display:none}.voice-retry{grid-column:2 / 4;padding:0;border:0;background:transparent;color:#dc2626;font-size:11px;text-align:left}
+.voice-message{display:grid;grid-template-columns:34px minmax(100px,180px) 36px;align-items:center;gap:7px;min-width:210px}.voice-toggle{display:grid;width:34px;height:34px;padding:0;place-items:center;border:0;border-radius:50%;background:#1d9bf0;color:#fff;font-size:13px}.voice-toggle:disabled{opacity:.55}.voice-progress{width:100%;height:3px;margin:0;accent-color:#1d9bf0}.voice-duration{color:#536471;font-size:11px;text-align:right}.voice-message audio{display:none}.voice-retry{grid-column:2 / 4;padding:0;border:0;background:transparent;color:#dc2626;font-size:11px;text-align:left}.voice-transcription{grid-column:1 / -1;display:flex;min-width:0;flex-wrap:wrap;align-items:center;gap:5px 8px;padding-top:2px}.transcription-toggle{padding:0;border:0;background:transparent;color:#1687e8;font-size:11px;font-weight:650}.transcription-toggle:disabled{opacity:.5}.transcription-note,.transcription-meta{color:#8b98a5;font-size:10px}.transcription-error{color:#dc2626;font-size:10px}.transcript-text{width:100%;margin:2px 0 0;padding:8px 9px;border-radius:9px;background:rgba(255,255,255,.62);color:#334155;font-size:13px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
 </style>
