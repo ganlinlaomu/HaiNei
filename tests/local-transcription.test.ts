@@ -9,11 +9,11 @@ describe("local Whisper transcription PoC", () => {
     const player = readFileSync(join(process.cwd(), "src/components/DmAudioMessage.vue"), "utf8");
 
     expect(worker).toContain('MODEL_ID = "onnx-community/whisper-base"');
-    expect(worker).toContain('@huggingface/transformers@3.8.1/dist/transformers.min.js');
+    expect(worker).toContain('@huggingface/transformers@4.3.0/dist/transformers.min.js');
     expect(worker).toContain('"automatic-speech-recognition"');
     expect(worker).toContain('dtype: "q8"');
     expect(worker).toContain('task: "transcribe"');
-    expect(worker).toContain('language: "chinese"');
+    expect(worker).toContain('language: "zh"');
     expect(client).not.toContain("TranscriptionLanguage");
     expect(player).not.toContain("transcription-language");
     expect(player).not.toContain("本机转写 · 语音不上传 · 首次使用会下载模型");
