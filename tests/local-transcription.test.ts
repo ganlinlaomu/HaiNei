@@ -9,7 +9,7 @@ describe("local Whisper transcription PoC", () => {
     const player = readFileSync(join(process.cwd(), "src/components/DmAudioMessage.vue"), "utf8");
 
     expect(worker).toContain('MODEL_ID = "onnx-community/whisper-tiny"');
-    expect(worker).toContain('@huggingface/transformers@3.8.1/+esm');
+    expect(worker).toContain('@huggingface/transformers@3.8.1/dist/transformers.min.js');
     expect(worker).toContain('"automatic-speech-recognition"');
     expect(worker).toContain('task: "transcribe"');
     expect(worker).toContain("chunk_length_s: 30");
