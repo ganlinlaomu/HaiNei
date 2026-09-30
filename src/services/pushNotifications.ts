@@ -2,6 +2,7 @@ import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { deviceStorage } from "@/services/deviceStorage";
 import { debugLog } from "@/utils/debugLog";
 import { signWorkerRequest } from "@/services/workerAuth";
+import { DEFAULT_HAINEI_WORKER_URL, haineiWorkerBaseUrl, resolveHaiNeiWorkerBaseUrl } from "@/services/workerUrl";
 
 const PUSH_ACTION = "hainei_push";
 const SERVICE_WORKER_TIMEOUT_MS = 10_000;
@@ -11,24 +12,14 @@ const FETCH_TIMEOUT_MS = 15_000;
 type SignEvent = (event: EventTemplate) => Promise<VerifiedEvent>;
 export type PushCategory = "message" | "activity";
 
-export const DEFAULT_HAINEI_WORKER_URL = "https://hainei-media.noster.workers.dev";
+export { DEFAULT_HAINEI_WORKER_URL };
 
-export function resolvePushWorkerBaseUrl(
-  configuredUrl: string | undefined,
-  pageOrigin: string,
-  isProduction: boolean,
-) {
-  const configured = String(configuredUrl || "").trim();
-  const fallback = isProduction ? DEFAULT_HAINEI_WORKER_URL : pageOrigin;
-  return String(configured || fallback).trim().replace(/\/+$/, "");
+export function resolvePushWorkerBaseUrl(configuredUrl: string | undefined, pageOrigin: string, isProduction: boolean) {
+  return resolveHaiNeiWorkerBaseUrl(configuredUrl, pageOrigin, isProduction);
 }
 
 function baseUrl() {
-  return resolvePushWorkerBaseUrl(
-    import.meta.env.VITE_HAINEI_WORKER_URL,
-    window.location.origin,
-    import.meta.env.PROD,
-  );
+  return haineiWorkerBaseUrl();
 }
 
 async function responseJson(response: Response, fallback: string) {

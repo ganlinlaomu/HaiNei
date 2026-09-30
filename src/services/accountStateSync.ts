@@ -10,6 +10,7 @@ import { accountStateRepository } from "@/repositories/accountStateRepository";
 import { deviceStorage } from "@/services/deviceStorage";
 import { migrateConnectionSettings, SETTINGS_VERSION } from "@/services/connectionSettings";
 import { signWorkerRequest } from "@/services/workerAuth";
+import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 
 export const ACCOUNT_STATE_NAMESPACES: AccountStateNamespace[] = [
   "friendships", "friend_metadata", "own_profile", "settings", "bookmarks",
@@ -37,7 +38,7 @@ export type AccountStateKeys = {
 type RemoteSnapshot = { namespace: AccountStateNamespace; version: number; ciphertext: string; updatedAt: number; deviceId?: string };
 
 function baseUrl() {
-  return String(import.meta.env.VITE_HAINEI_WORKER_URL || window.location.origin).trim().replace(/\/+$/, "");
+  return haineiWorkerBaseUrl();
 }
 
 async function responseJson(response: Response) {

@@ -25,6 +25,7 @@ import {
   onAndroidUpdateAvailable,
   type AndroidUpdateManifest,
 } from "@/services/androidUpdater";
+import { onAppResume } from "@/services/appResumeCoordinator";
 
 const update = ref<AndroidUpdateManifest | null>(null);
 const dismissed = ref(false);
@@ -32,6 +33,7 @@ const updating = ref(false);
 const statusText = ref("");
 let initialTimer: number | null = null;
 let unsubscribe: (() => void) | null = null;
+let stopAppResume: (() => void) | null = null;
 
 async function refresh() {
   if (!isNativeAndroidApp()) return;
@@ -61,10 +63,6 @@ async function startUpdate() {
   }
 }
 
-function handleVisibilityChange() {
-  if (document.visibilityState === "visible") void refresh();
-}
-
 onMounted(() => {
   if (!isNativeAndroidApp()) return;
   unsubscribe = onAndroidUpdateAvailable(next => {
@@ -73,17 +71,14 @@ onMounted(() => {
     statusText.value = "";
   });
   initialTimer = window.setTimeout(() => void refresh(), 1_500);
-  window.addEventListener("focus", refresh);
-  window.addEventListener("online", refresh);
-  document.addEventListener("visibilitychange", handleVisibilityChange);
+  stopAppResume = onAppResume(() => refresh());
 });
 
 onBeforeUnmount(() => {
   if (initialTimer !== null) window.clearTimeout(initialTimer);
   unsubscribe?.();
-  window.removeEventListener("focus", refresh);
-  window.removeEventListener("online", refresh);
-  document.removeEventListener("visibilitychange", handleVisibilityChange);
+  stopAppResume?.();
+  stopAppResume = null;
 });
 </script>
 

@@ -11,6 +11,7 @@ import { runPagedCatchup, type SubscribeForCatchup } from "./catchup";
 import { MessageIngestionPipeline, type DecodeMessage } from "./ingestion";
 import { calculateCatchupSince } from "./sorting";
 import { retryOutgoingQueue } from "@/nostr/messaging/service";
+import { onAppResume } from "@/services/appResumeCoordinator";
 import {
   INITIAL_HISTORY_MAX_BATCHES,
   type MessageSource,
@@ -49,8 +50,7 @@ export class MessageSyncManager {
   private catchupRunning = false;
   private catchupSessionId = "";
   private catchupPending: MessageSource | null = null;
-  private foregroundHandler: (() => void) | null = null;
-  private lastForegroundResumeAt = 0;
+  private removeForegroundResume: (() => void) | null = null;
   private connectedRelays = new Set<string>();
   private activeCatchupSubscriptions = new Set<SubscriptionLike>();
   private abortController: AbortController | null = null;
@@ -354,23 +354,12 @@ export class MessageSyncManager {
   }
 
   private installForegroundHandlers() {
-    if (typeof window === "undefined" || typeof document === "undefined") return;
-    this.foregroundHandler = () => {
-      if (document.visibilityState === "hidden") return;
-      const now = this.now();
-      // Face ID / app switching can emit several foreground lifecycle events
-      // within milliseconds. Coalesce that burst so it cannot repeatedly
-      // reconnect relays, retry outgoing work, and start catch-up passes.
-      if (this.lastForegroundResumeAt && now - this.lastForegroundResumeAt < 1_500) return;
-      this.lastForegroundResumeAt = now;
+    this.removeForegroundResume?.();
+    this.removeForegroundResume = onAppResume(() => {
       this.resumeRelays(this.activeReadRelays());
       if (this.options) void this.retryOutgoing(this.options.accountPubkey);
       void this.resume("resume");
-    };
-    document.addEventListener("visibilitychange", this.foregroundHandler);
-    window.addEventListener("focus", this.foregroundHandler);
-    window.addEventListener("pageshow", this.foregroundHandler);
-    window.addEventListener("online", this.foregroundHandler);
+    });
   }
 
   stop() {
@@ -383,14 +372,8 @@ export class MessageSyncManager {
     this.activeCatchupSubscriptions.clear();
     this.removeRelayObserver?.();
     this.removeRelayObserver = null;
-    if (this.foregroundHandler && typeof window !== "undefined" && typeof document !== "undefined") {
-      document.removeEventListener("visibilitychange", this.foregroundHandler);
-      window.removeEventListener("focus", this.foregroundHandler);
-      window.removeEventListener("pageshow", this.foregroundHandler);
-      window.removeEventListener("online", this.foregroundHandler);
-    }
-    this.foregroundHandler = null;
-    this.lastForegroundResumeAt = 0;
+    this.removeForegroundResume?.();
+    this.removeForegroundResume = null;
     this.connectedRelays.clear();
     this.catchupRunning = false;
     this.catchupSessionId = "";

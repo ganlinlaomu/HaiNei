@@ -14,6 +14,7 @@ import {
 } from "@/services/deviceStorage";
 import { installBackgroundLock } from "@/services/autoLock";
 import { timedJsonFetch } from "@/utils/timedFetch";
+import { onAppResume, resetAppResumeCoordinatorForTests } from "@/services/appResumeCoordinator";
 
 it("requires unlock before new protected writes, including after reopen", async () => {
   const account = "12".repeat(32),
@@ -206,6 +207,38 @@ it("times out a stalled JSON response body, not only the initial headers", async
     await failure;
   } finally {
     fetcher.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
+
+it("coalesces an iOS foreground event burst into one shared resume dispatch", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
+  const win = new EventTarget();
+  const doc = new EventTarget() as Document;
+  Object.defineProperty(doc, "visibilityState", { configurable: true, value: "visible", writable: true });
+  vi.stubGlobal("window", win);
+  vi.stubGlobal("document", doc);
+  resetAppResumeCoordinatorForTests();
+  const handler = vi.fn();
+  const stop = onAppResume(handler);
+  try {
+    win.dispatchEvent(new Event("focus"));
+    win.dispatchEvent(new Event("pageshow"));
+    doc.dispatchEvent(new Event("visibilitychange"));
+    win.dispatchEvent(new Event("online"));
+    await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    win.dispatchEvent(new Event("online"));
+    await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(2);
+  } finally {
+    stop();
+    resetAppResumeCoordinatorForTests();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   }
 });

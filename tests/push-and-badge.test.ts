@@ -23,6 +23,7 @@ import {
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { pushCategoryForMessage, shouldTriggerGenericPush } from "@/nostr/messaging/service";
 import { signWorkerRequest } from "@/services/workerAuth";
+import { resolveHaiNeiWorkerBaseUrl } from "@/services/workerUrl";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -330,13 +331,19 @@ describe("privacy-preserving push and badge", () => {
     });
   }
 
-  it("uses the deployed Worker when a production Pages build omits the Worker env var", () => {
+  it("uses one Worker URL policy for push, account state, and media sessions", () => {
     expect(resolvePushWorkerBaseUrl(undefined, "https://app.example", true))
+      .toBe("https://hainei-media.noster.workers.dev");
+    expect(resolveHaiNeiWorkerBaseUrl(undefined, "https://app.example", true))
       .toBe("https://hainei-media.noster.workers.dev");
     expect(resolvePushWorkerBaseUrl("", "https://app.example", false))
       .toBe("https://app.example");
     expect(resolvePushWorkerBaseUrl("https://custom.worker.dev/", "https://app.example", true))
       .toBe("https://custom.worker.dev");
+
+    for (const file of ["src/services/pushNotifications.ts", "src/services/accountStateSync.ts", "src/services/mediaSession.ts"]) {
+      expect(readFileSync(file, "utf8")).toContain("haineiWorkerBaseUrl");
+    }
   });
 
   it("serves the POST public-key route and reports missing VAPID config explicitly", async () => {

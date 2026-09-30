@@ -590,8 +590,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).not.toContain("sendError");
     expect(chat).not.toContain("sending.value");
     const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
-    expect(store).toContain('window.addEventListener("online", resume)');
-    expect(store).toContain('window.addEventListener("pageshow", resume)');
+    expect(store).toContain('onAppResume(() => {');
+    expect(store).not.toContain('window.addEventListener("pageshow", resume)');
     expect(store).toContain("resumePending(true)");
   });
 });

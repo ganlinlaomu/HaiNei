@@ -31,6 +31,7 @@ import { scheduleAccountStateSync } from "@/services/accountStateSync";
 import { useNotificationsStore } from "@/stores/notifications";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { registerDirectMessageStateOwner } from "@/services/directMessageStateEvents";
+import { onAppResume } from "@/services/appResumeCoordinator";
 
 type MessageCursor = { lastReadCreatedAt: number; lastReadMessageId: string };
 export type PeerReceiptState = {
@@ -67,7 +68,7 @@ const activeOutgoingTasks = new Map<string, Promise<void>>();
 const taskPreviewUrls = new Map<string, string>();
 const pendingReceiptCursors = new Map<string, DmReceiptCursor>();
 const receiptTimers = new Map<string, ReturnType<typeof setTimeout>>();
-let resumeListenersInstalled = false;
+let stopResumeListener: (() => void) | null = null;
 
 function taskKey(accountPubkey: string, localId: string) { return `${accountPubkey}:${localId}`; }
 function receiptQueueKey(accountPubkey: string, peerPubkey: string, status: DmReceiptStatus) {
@@ -227,16 +228,10 @@ function canonicalInboxItem(result: PublishedMessage): InboxItem {
   };
 }
 function ensureResumeListeners() {
-  if (resumeListenersInstalled || typeof window === "undefined" || typeof document === "undefined") return;
-  const resume = () => {
-    if (document.visibilityState === "hidden") return;
+  if (stopResumeListener) return;
+  stopResumeListener = onAppResume(() => {
     void useDirectMessagesStore().resumePending(true);
-  };
-  document.addEventListener("visibilitychange", resume);
-  window.addEventListener("focus", resume);
-  window.addEventListener("pageshow", resume);
-  window.addEventListener("online", resume);
-  resumeListenersInstalled = true;
+  });
 }
 function cursor(createdAt?: number, messageId?: string) {
   return createdAt === undefined ? undefined : { lastReadCreatedAt: createdAt, lastReadMessageId: messageId || "" };
@@ -607,24 +602,23 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         this.recomputeUnreadWithoutIndexedDb(conversationId);
         return;
       }
-      const messages = useMessagesStore();
       const friendships = useFriendshipsStore();
       const cursors = this.readCursors;
       const preferences = this.preferencesByPeer;
       const records = friendships.records;
-      // listRecent() includes the latest direct message for every durable
-      // conversation, so this covers the complete DM set even though Home keeps
-      // only a bounded recent-message window.
-      const durableConversationIds = [...new Set(messages.inbox
-        .filter(item => isDirectMessageTags(item.tags))
-        .map(item => item.conversationId)
-        .filter((value): value is string => !!value))];
-      const ids = conversationId ? [conversationId] : durableConversationIds;
-      const counts = await Promise.all(ids.map(async id => {
-        const item = messages.inbox.find(message => message.conversationId === id && isDirectMessageTags(message.tags));
-        const peer = item && directMessagePeer({
-          senderPubkey: item.pubkey,
-          recipientPubkeys: item.recipientPubkeys || [],
+      const durableHeads = await syncedMessageRepository.listDirectConversationHeads(account, conversationId);
+      if (conversationId && durableHeads.length === 0) {
+        if (this.loadedFor === account && this.readCursors === cursors && this.preferencesByPeer === preferences
+          && friendships.records === records) {
+          this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: 0 };
+        }
+        return;
+      }
+      const counts = await Promise.all(durableHeads.map(async head => {
+        const id = head.conversationId;
+        const peer = directMessagePeer({
+          senderPubkey: head.senderPubkey,
+          recipientPubkeys: head.recipientPubkeys || [],
         }, account);
         if (!peer || !friendships.isAccepted(peer) || preferences[peer]?.hidden) return [id, 0] as const;
         const friendship = friendships.getRecord(peer);

@@ -64,9 +64,10 @@ import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { preloadBottomTabViews } from "@/router/lazyViews";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useDirectMessagesStore } from "@/stores/directMessages";
-import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
+import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appBadge";
 import { installBackgroundLock } from "@/services/autoLock";
 import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
+import { onAppResume } from "@/services/appResumeCoordinator";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
 
@@ -76,6 +77,7 @@ export default defineComponent({
     const route = useRoute();
     const router = useRouter();
     let stopAutoLock: (() => void) | undefined;
+    let stopForegroundResume: (() => void) | undefined;
     const ui = useUIStore();
     const keys = useKeyStore();
     const notifications = useNotificationsStore();
@@ -165,11 +167,19 @@ export default defineComponent({
         // Before session restoration finishes, an empty store is not a logout.
         // Keep the persisted push scope so a cold-start race cannot suppress it.
         if (!account && !restored) return;
-        // Locking protects private data, but generic push notifications still
-        // belong to the remembered account. Only an actual logout clears scope.
-        const badgeAccount = unlocked ? account : "";
+        // Locking protects private data, but it must not erase the last known
+        // numeric unread badge. Keep routing bound to the remembered account;
+        // only an actual logout clears the count and scope.
+        if (!account) {
+          void syncAppBadge(0, undefined, "").catch(() => undefined);
+          return;
+        }
+        if (!unlocked) {
+          void syncAppBadgeScope(account).catch(() => undefined);
+          return;
+        }
         void syncAppBadge(
-          accountBadgeCount(badgeAccount, loadedFor, unreadCount, directLoadedFor, directUnread), undefined, account,
+          accountBadgeCount(account, loadedFor, unreadCount, directLoadedFor, directUnread), undefined, account,
         ).catch(() => undefined);
       },
       { immediate: true }
@@ -201,15 +211,11 @@ export default defineComponent({
     onMounted(() => {
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked,lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
-      document.addEventListener("visibilitychange", reconcileFriendStateOnForeground);
-      window.addEventListener("pageshow", reconcileFriendStateOnForeground);
-      window.addEventListener("online", reconcileFriendStateOnForeground);
+      stopForegroundResume = onAppResume(() => reconcileFriendStateOnForeground());
     });
     onBeforeUnmount(() => {
       stopAutoLock?.();
-      document.removeEventListener("visibilitychange", reconcileFriendStateOnForeground);
-      window.removeEventListener("pageshow", reconcileFriendStateOnForeground);
-      window.removeEventListener("online", reconcileFriendStateOnForeground);
+      stopForegroundResume?.();
       disposed = true;
       if (idleHandle !== null) {
         const cancelIdle = (window as any).cancelIdleCallback as undefined | ((handle: number) => void);
