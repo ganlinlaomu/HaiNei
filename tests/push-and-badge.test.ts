@@ -747,7 +747,9 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 })));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 })));
 
     await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
 
@@ -771,7 +773,9 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 })));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 })));
 
     await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
 
@@ -789,7 +793,9 @@ describe("privacy-preserving push and badge", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
@@ -810,7 +816,9 @@ describe("privacy-preserving push and badge", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockImplementationOnce(() => subscribeResponse);
+      .mockImplementationOnce(() => subscribeResponse)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const enabling = enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
