@@ -314,6 +314,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
   state: () => ({
     loadedFor: "",
     unreadByConversation: {} as Record<string, number>,
+    authoritativeUnreadPendingFor: "",
     unreadHydratingFor: "",
     readCursors: {} as Record<string, MessageCursor | undefined>,
     persistedReadCursors: {} as Record<string, MessageCursor | undefined>,
@@ -324,7 +325,12 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     outgoingTasks: [] as OutgoingDmTaskRecord[],
   }),
   getters: {
-    unreadCount: state => Object.values(state.unreadByConversation).reduce((sum, value) => sum + value, 0),
+    unreadCount: state => state.authoritativeUnreadPendingFor === state.loadedFor
+      ? 0
+      : Object.values(state.unreadByConversation).reduce((sum, value) => sum + value, 0),
+    visibleUnreadByConversation: state => state.authoritativeUnreadPendingFor === state.loadedFor
+      ? {}
+      : state.unreadByConversation,
   },
   actions: {
     peerMessages(peerPubkey: string) {
@@ -731,6 +737,15 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       }
       await this.reconcileDurableUnread();
+    },
+    beginAuthoritativeUnreadRestore(accountPubkey: string) {
+      const account = accountPubkey.toLowerCase();
+      if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      this.authoritativeUnreadPendingFor = account;
+    },
+    finishAuthoritativeUnreadRestore(accountPubkey: string) {
+      const account = accountPubkey.toLowerCase();
+      if (this.authoritativeUnreadPendingFor === account) this.authoritativeUnreadPendingFor = "";
     },
     beginUnreadHydration(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
@@ -1345,6 +1360,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
       this.loadedFor = "";
       this.unreadByConversation = {};
+      this.authoritativeUnreadPendingFor = "";
       this.unreadHydratingFor = "";
       this.readCursors = {};
       this.persistedReadCursors = {};
