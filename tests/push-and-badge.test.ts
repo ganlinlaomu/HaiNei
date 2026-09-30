@@ -74,7 +74,7 @@ class MemoryStorage implements Storage {
 
 class PushD1 {
   challenges = new Map<string, { expires_at: number; used_at: number | null; pubkey: string | null }>();
-  subscriptions = new Map<string, { account_pubkey: string; endpoint: string; p256dh: string; auth: string }>();
+  subscriptions = new Map<string, { account_pubkey: string; endpoint: string; p256dh: string; auth: string; created_at?: number; updated_at?: number }>();
   authorizations = new Map<string, { recipient_pubkey: string; sender_pubkey: string; expires_at: number; updated_at: number }>();
   deliveries = new Map<string, { status: "sending" | "sent"; updated_at: number }>();
   rateLimits = new Map<string, number>();
@@ -157,13 +157,37 @@ class PushD1 {
         if (sql.startsWith("INSERT INTO hainei_push_subscriptions")) {
           const account = String(values[0]);
           const endpoint = String(values[1]);
-          this.subscriptions.set(`${account}|${endpoint}`, {
+          const key = `${account}|${endpoint}`;
+          const current = this.subscriptions.get(key);
+          this.subscriptions.set(key, {
             account_pubkey: account,
             endpoint,
             p256dh: String(values[2]),
             auth: String(values[3]),
+            created_at: current?.created_at ?? Number(values[4]),
+            updated_at: Number(values[5]),
           });
           return { meta: { changes: 1 } };
+        }
+        if (sql.startsWith("DELETE FROM hainei_push_subscriptions") && sql.includes("endpoint NOT IN")) {
+          const account = String(values[0]);
+          const limit = Number(values[2]);
+          const rows = [...this.subscriptions.values()]
+            .filter(row => row.account_pubkey === account)
+            .sort((left, right) =>
+              Number(right.updated_at || 0) - Number(left.updated_at || 0)
+              || Number(right.created_at || 0) - Number(left.created_at || 0)
+              || right.endpoint.localeCompare(left.endpoint)
+            );
+          const keep = new Set(rows.slice(0, limit).map(row => row.endpoint));
+          let changes = 0;
+          for (const [key, row] of [...this.subscriptions.entries()]) {
+            if (row.account_pubkey === account && !keep.has(row.endpoint)) {
+              this.subscriptions.delete(key);
+              changes += 1;
+            }
+          }
+          return { meta: { changes } };
         }
         if (sql.startsWith("DELETE FROM hainei_push_subscriptions")) {
           const removed = this.subscriptions.delete(`${values[0]}|${values[1]}`);
@@ -353,6 +377,43 @@ describe("privacy-preserving push and badge", () => {
     }), env);
     expect(unsubscribed.status).toBe(200);
     expect(db.subscriptions.size).toBe(0);
+  });
+
+  it("recycles the oldest stale push subscription when the device limit is reached", async () => {
+    const db = new PushD1();
+    const env = pushEnv(db);
+    const secret = generateSecretKey();
+    const account = getPublicKey(secret);
+
+    for (let index = 0; index < 8; index += 1) {
+      const endpoint = `https://web.push.apple.com/old-${index}`;
+      db.subscriptions.set(`${account}|${endpoint}`, {
+        account_pubkey: account,
+        endpoint,
+        p256dh: subscriptionPublicKey,
+        auth: subscriptionAuth,
+        created_at: 100 + index,
+        updated_at: 100 + index,
+      });
+    }
+
+    const subscription = {
+      endpoint: "https://web.push.apple.com/current-device",
+      keys: { p256dh: subscriptionPublicKey, auth: subscriptionAuth },
+    };
+    const subscribeBody = await authenticatedBody(env, secret, "/api/push/subscribe", { subscription });
+    const subscribed = await handleRequest(new Request("https://worker.test/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(subscribeBody),
+    }), env);
+
+    expect(subscribed.status).toBe(201);
+    const accountRows = [...db.subscriptions.values()].filter(row => row.account_pubkey === account);
+    expect(accountRows).toHaveLength(8);
+    expect(accountRows.some(row => row.endpoint.endsWith("/old-0"))).toBe(false);
+    expect(accountRows.some(row => row.endpoint.endsWith("/old-7"))).toBe(true);
+    expect(accountRows.some(row => row.endpoint.endsWith("/current-device"))).toBe(true);
   });
 
   it("uses only the fixed privacy-safe private-message payload", () => {
