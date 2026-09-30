@@ -13,18 +13,8 @@ export async function storeImageInCache(
   blob: Blob,
   mime: string
 ): Promise<void> {
-  try {
-    const cacheEntry = {
-      url,
-      blob,
-      timestamp: Date.now(),
-      mime
-    };
-    await imageCacheRepository.put(accountPubkey, cacheEntry);
-    logger.debug(`Cached image: ${url.slice(0, 50)}...`);
-  } catch (e) {
-    logger.warn("Failed to store image in cache", e);
-  }
+  // Decrypted images are kept only in component memory and revoked on unmount.
+  void accountPubkey; void url; void blob; void mime;
 }
 
 /**
@@ -34,27 +24,8 @@ export async function getImageFromCache(
   accountPubkey: string,
   url: string
 ): Promise<{ blob: Blob; mime: string } | null> {
-  try {
-    const cacheEntry = await imageCacheRepository.get(accountPubkey, url);
-    if (!cacheEntry) {
-      return null;
-    }
-
-    // Check if cache is expired
-    const age = Date.now() - cacheEntry.timestamp;
-    if (age > CACHE_EXPIRATION_MS) {
-      // Cache expired, delete it
-      await imageCacheRepository.delete(accountPubkey, url);
-      logger.debug(`Cache expired for: ${url.slice(0, 50)}...`);
-      return null;
-    }
-
-    logger.debug(`Cache hit for: ${url.slice(0, 50)}...`);
-    return { blob: cacheEntry.blob, mime: cacheEntry.mime };
-  } catch (e) {
-    logger.warn("Failed to get image from cache", e);
-    return null;
-  }
+  void accountPubkey; void url;
+  return null;
 }
 
 /**

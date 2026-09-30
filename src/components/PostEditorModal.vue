@@ -179,6 +179,7 @@
 </template>
 
 <script lang="ts">
+import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { defineComponent, ref, onBeforeUnmount, watch, nextTick, computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
@@ -286,6 +287,12 @@ export default defineComponent({
       });
     }
 
+    const stopBeforeLock = onBeforeAccountLock(account => {
+      if (draftAccount !== account) return;
+      persistDraft(account);
+      draftPersistenceEnabled = false;
+      ui.closePostEditor();
+    });
     const canSend = computed(() => {
       const hasText = content.value.trim().length > 0;
       const hasUploadedImages = uploads.value.some(u => u.status === 'done' && u.encryptedRef);
@@ -850,6 +857,7 @@ export default defineComponent({
     });
 
     onBeforeUnmount(()=>{
+      stopBeforeLock();
       openGeneration += 1;
       persistDraft();
       if (dismissTimer !== null) window.clearTimeout(dismissTimer);

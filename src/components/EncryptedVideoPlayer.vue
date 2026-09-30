@@ -33,6 +33,7 @@
 </template>
 
 <script lang="ts">
+import { downloadMedia } from "@/utils/mediaSafety";
 import { defineComponent, ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, PropType, watch } from 'vue';
 import { decryptVideoToBlob, importKeyFromBase64 } from '@/utils/videoCrypto';
 import type { EncryptedVideoMetadata } from '@/utils/encryptedVideoRef';
@@ -70,12 +71,7 @@ export default defineComponent({
 
       try {
         // Fetch the encrypted video from Blossom
-        const response = await fetch(props.metadata.url, { signal: controller.signal });
-        if (!response.ok) {
-          throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`);
-        }
-
-        const encryptedBytes = new Uint8Array(await response.arrayBuffer());
+        const encryptedBytes = new Uint8Array(await downloadMedia(props.metadata.url, 32 * 1024 * 1024, controller.signal));
 
         // Import the decryption key
         const key = await importKeyFromBase64(props.metadata.key);

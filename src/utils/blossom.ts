@@ -272,7 +272,7 @@ export async function uploadImageToBlossom(
     if (!serverBaseUrl || !options.accountPubkey || typeof options.signEvent !== "function") {
       throw makeDetailedError("HaiNei 默认媒体服务需要已登录的 Nostr 账号");
     }
-    const record = await getMediaSession(serverBaseUrl, options.accountPubkey, options.signEvent, false, size);
+    const record = await getMediaSession(serverBaseUrl, options.accountPubkey, options.signEvent, false, size, shaHex);
     bearerAuthorizationHeaderValue = ["Bearer", record.token].join(" ");
     baseHeaders["Authorization"] = bearerAuthorizationHeaderValue;
   }
@@ -286,7 +286,7 @@ export async function uploadImageToBlossom(
   if (head.status === 401 && !uploadToken && typeof options?.signEvent === "function") {
     if (options.managedHaiNeiServer && bearerAuthorizationHeaderValue && serverBaseUrl && options.accountPubkey) {
       clearMediaSession(serverBaseUrl, options.accountPubkey);
-      const refreshed = await getMediaSession(serverBaseUrl, options.accountPubkey, options.signEvent, true, size);
+      const refreshed = await getMediaSession(serverBaseUrl, options.accountPubkey, options.signEvent, true, size, shaHex);
       bearerAuthorizationHeaderValue = ["Bearer", refreshed.token].join(" ");
       const refreshedHeadHeaders = { ...baseHeaders, Authorization: bearerAuthorizationHeaderValue };
       head = await headProbe(uploadUrl, refreshedHeadHeaders);
@@ -436,7 +436,7 @@ export async function uploadImageToBlossom(
       && typeof options?.signEvent === "function"
     ) {
       clearMediaSession(serverBaseUrl, options.accountPubkey);
-      const refreshed = await getMediaSession(serverBaseUrl, options.accountPubkey, options.signEvent, true, size);
+      const refreshed = await getMediaSession(serverBaseUrl, options.accountPubkey, options.signEvent, true, size, shaHex);
       effectiveAuthorizationHeaderValue = ["Bearer", refreshed.token].join(" ");
       const retryHead = await headProbe(uploadUrl, { ...baseHeaders, Authorization: effectiveAuthorizationHeaderValue });
       if (!retryHead.ok) {

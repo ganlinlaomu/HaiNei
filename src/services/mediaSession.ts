@@ -1,3 +1,4 @@
+import { timedJsonFetch } from "@/utils/timedFetch";
 import { signWorkerRequest } from "@/services/workerAuth";
 const SESSION_SCOPE = "upload";
 const EXPIRY_SKEW_SECONDS = 5;
@@ -61,18 +62,19 @@ export async function getMediaSession(
   signEvent: (event: any) => Promise<any> | any,
   forceRefresh = false,
   fileSize?: number,
+  contentHash?: string,
 ): Promise<MediaSession> {
   const pubkey = normalizedPubkey(accountPubkey);
   if (!/^[0-9a-f]{64}$/.test(pubkey)) throw new Error("当前 Nostr 账号公钥无效");
-  const key = cacheKey(serverUrl, pubkey);
+  const key = `${cacheKey(serverUrl, pubkey)}|${contentHash || ""}`;
   const cached = cache.get(key);
-  if (!forceRefresh && usable(cached)) return cached!;
+  // Upload capabilities are single-use: never reuse a settled token.
   if (!usable(cached)) cache.delete(key);
-  if (!forceRefresh && inflight.has(key)) return inflight.get(key)!;
+
 
   const pending = (async () => {
     const base = workerBaseUrl();
-    const challengeResponse = await fetch(`${base}/api/auth/challenge`, {
+    const challengeResponse = await timedJsonFetch(`${base}/api/auth/challenge`, {
       method: "POST",
       headers: { Accept: "application/json" },
     });
@@ -84,7 +86,7 @@ export async function getMediaSession(
     }
 
     const url = `${base}/api/media/session`;
-    const payload = { ...(fileSize === undefined ? {} : { fileSize }) };
+    const payload = { ...(fileSize === undefined ? {} : { fileSize }), ...(contentHash === undefined ? {} : { contentHash }) };
     const event = await signWorkerRequest(signEvent, pubkey, {
       action: "hainei_media_session",
       challenge,
@@ -94,7 +96,7 @@ export async function getMediaSession(
       payload,
       content: "Authorize HaiNei media session",
     });
-    const sessionResponse = await fetch(url, {
+    const sessionResponse = await timedJsonFetch(url, {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({ ...payload, challenge, event }),
@@ -109,7 +111,7 @@ export async function getMediaSession(
     if (!session.token || session.pubkey !== pubkey || session.scope !== SESSION_SCOPE || !usable(session)) {
       throw new Error("HaiNei Worker 返回了无效媒体会话");
     }
-    cache.set(key, session);
+
     return session;
   })();
 

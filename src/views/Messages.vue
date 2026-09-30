@@ -250,6 +250,7 @@
 </template>
 
 <script setup lang="ts">
+import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PostImagePreview from "@/components/PostImagePreview.vue";
@@ -708,6 +709,11 @@ function flushDraft(account: string = keys.pkHex, peer: string = peerPubkey.valu
   if (!draftReady || suppressDraftPersistence || !account || !peer) return;
   return directMessages.saveDraft(peer, { text: draft.value, replyTo: replyingToId.value || undefined }, account);
 }
+const stopBeforeLock = onBeforeAccountLock(async account => {
+  if (account !== keys.pkHex) return;
+  await flushDraft(account);
+  draftReady = false;
+});
 async function restoreDraft(account: string, peer: string) {
   draftReady = false;
   clearDraftSaveTimer();
@@ -1200,6 +1206,7 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
   }
 });
 onBeforeUnmount(() => {
+  stopBeforeLock();
   disposed = true;
   flushDraft();
   draftReady = false;

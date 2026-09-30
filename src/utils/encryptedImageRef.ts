@@ -1,3 +1,4 @@
+import { validEncryptedMedia } from "./mediaSafety";
 import { bytesToBase64, base64ToBytes } from "@/nostr/crypto";
 
 /**
@@ -20,7 +21,7 @@ export interface EncryptedImageMetadata extends EncryptedImageVariant {
 
 function isVariant(value: unknown): value is EncryptedImageVariant {
   const item = value as Partial<EncryptedImageVariant> | null;
-  return !!item && !!item.url && !!item.mime && item.alg === "AES-GCM" && !!item.iv && !!item.key;
+  return validEncryptedMedia(item);
 }
 
 export function variantToEncryptedImageRef(variant: EncryptedImageVariant): string {
@@ -43,7 +44,7 @@ export function encodeEncryptedImageRef(metadata: EncryptedImageMetadata): strin
  * Returns null if the format is invalid
  */
 export function decodeEncryptedImageRef(ref: string): EncryptedImageMetadata | null {
-  if (!ref || !ref.startsWith("blossom+aesgcm:")) {
+  if (typeof ref !== "string" || ref.length > 16384 || !ref.startsWith("blossom+aesgcm:")) {
     return null;
   }
   

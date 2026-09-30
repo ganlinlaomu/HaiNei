@@ -63,7 +63,8 @@
               <strong>{{ shortPubkey(account.pubkey) }}</strong>
               <small>{{ account.hasEncryptedKey ? "私钥 · 已加密保存" : "私钥 · 需重新输入" }}</small>
             </button>
-            <button type="button" class="remove-account" :disabled="loading" @click="removeAccount(account.pubkey)">从设备移除</button>
+            <button type="button" class="remove-account" :disabled="loading" @click="removeAccount(account.pubkey)">忘记此账号</button>
+            <button type="button" class="remove-account" :disabled="loading" @click="deleteDeviceData(account.pubkey)">删除本机资料</button>
           </div>
         </div>
 
@@ -391,6 +392,14 @@ async function selectAccount(pubkey: string) {
     autoBiometricAccount.value = "";
     await presentUnlockMethod();
   }
+}
+
+async function deleteDeviceData(pubkey: string) {
+  if (loading.value || !window.confirm("删除此账号在本机的私信、草稿、待发消息、缓存和解锁设置？其他账号及云端资料不会被删除。本机未发送的草稿无法恢复。")) return;
+  loading.value = true;
+  try { await ks.deleteAccountDeviceData(pubkey); }
+  catch { errorMessage.value = "本机资料删除失败，请重试"; }
+  finally { loading.value = false; }
 }
 
 async function removeAccount(pubkey: string) {

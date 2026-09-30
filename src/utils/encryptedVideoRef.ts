@@ -1,3 +1,4 @@
+import { validEncryptedMedia } from "./mediaSafety";
 import { bytesToBase64, base64ToBytes } from "@/nostr/crypto";
 
 /**
@@ -31,7 +32,7 @@ export function encodeEncryptedVideoRef(metadata: EncryptedVideoMetadata): strin
  * Returns null if the format is invalid
  */
 export function decodeEncryptedVideoRef(ref: string): EncryptedVideoMetadata | null {
-  if (!ref || !ref.startsWith("blossom+aesgcm+video:")) {
+  if (typeof ref !== "string" || ref.length > 16384 || !ref.startsWith("blossom+aesgcm+video:")) {
     return null;
   }
   
@@ -44,11 +45,7 @@ export function decodeEncryptedVideoRef(ref: string): EncryptedVideoMetadata | n
     // Basic validation
     if (
       metadata.v !== 1 ||
-      !metadata.url ||
-      !metadata.mime ||
-      metadata.alg !== "AES-GCM" ||
-      !metadata.iv ||
-      !metadata.key
+      !validEncryptedMedia(metadata) || !metadata.mime.startsWith("video/")
     ) {
       console.error("Invalid encrypted video metadata", { reason: "schema_validation_failed" });
       return null;

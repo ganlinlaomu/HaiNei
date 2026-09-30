@@ -68,13 +68,15 @@ describe("HaiNei Worker media sessions", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ token, pubkey, scope: "upload", expiresAt }), { status: 201 }));
   }
 
-  it("creates a signed Worker session and reuses its account-scoped cache", async () => {
+  it("creates a fresh single-use Worker session for each upload", async () => {
     queueSession(A, "imgbed_upload_one");
     const sign = signer(A);
     const first = await getMediaSession("https://media.example", A, sign);
+    queueSession(A,"imgbed_upload_two");
     const second = await getMediaSession("https://media.example", A, sign);
-    expect(second).toEqual(first);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(second.token).toBe("imgbed_upload_two");
+    expect(second.token).not.toBe(first.token);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls[0][0]).toBe("https://app.example/api/auth/challenge");
     expect(fetchMock.mock.calls[1][0]).toBe("https://app.example/api/media/session");
     expect(sign.mock.calls[0][0]).toMatchObject({
