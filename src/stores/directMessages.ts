@@ -320,6 +320,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     loadedFor: "",
     unreadByConversation: {} as Record<string, number>,
     readCursors: {} as Record<string, MessageCursor | undefined>,
+    persistedReadCursors: {} as Record<string, MessageCursor | undefined>,
     preferencesByPeer: {} as Record<string, ConversationPreference | undefined>,
     receiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
     sentReceiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
@@ -868,19 +869,31 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       ensureResumeListeners();
       void this.resumePending(false);
     },
-    async markPeerRead(peerPubkey: string) {
-      return this.markPeerReadInternal(peerPubkey, true);
+    async markPeerRead(peerPubkey: string, readThrough?: InboxItem) {
+      return this.markPeerReadInternal(peerPubkey, true, readThrough);
     },
-    async markPeerReadInternal(peerPubkey: string, emitReceipt: boolean) {
+    async markPeerReadInternal(peerPubkey: string, emitReceipt: boolean, readThrough?: InboxItem) {
       const account = useKeyStore().pkHex.toLowerCase();
-      if (!account || this.loadedFor !== account) await this.refresh(account);
+      if (!account) return;
+      if (this.loadedFor !== account) await this.refresh(account);
+      if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       const peer = peerPubkey.toLowerCase();
       const items = this.peerMessages(peer);
-      const latestIncoming = items.filter(item => item.pubkey !== account).at(-1);
-      if (!latestIncoming?.conversationId) return;
-      const conversationId = latestIncoming.conversationId;
+      // The chat has its own paged history, independent of the bounded home
+      // cache. Persist the position actually shown at the bottom of that chat.
+      // A canonical outgoing message also covers earlier incoming messages.
+      const readable = (item: InboxItem) => !item.outgoing || item.outgoing.state === "sent";
+      const latest = readThrough
+        ? directMessagesForPeer([readThrough], account, peer, {
+          friendship: useFriendshipsStore().getRecord(peer),
+          preference: this.preferencesByPeer[peer],
+          enforceAuthorization: true,
+        }).filter(readable).at(-1)
+        : items.filter(readable).at(-1);
+      if (!latest?.conversationId) return;
+      const conversationId = latest.conversationId;
       const previous = this.readCursors[conversationId];
-      const candidate = { lastReadCreatedAt: latestIncoming.created_at, lastReadMessageId: latestIncoming.id };
+      const candidate = { lastReadCreatedAt: latest.created_at, lastReadMessageId: latest.id };
       const advanced = isMessageAfter({ id: candidate.lastReadMessageId, createdAt: candidate.lastReadCreatedAt }, previous);
 
       // A new device can restore a read cursor that is newer than the subset of
@@ -888,6 +901,11 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // the newest message merely present on this device, otherwise later
       // backfill is incorrectly counted as unread again.
       const read = advanced || !previous ? candidate : previous;
+      const persisted = this.persistedReadCursors[conversationId];
+      // Scroll events at the bottom can fire repeatedly. Once both writes have
+      // succeeded, the same position needs no more writes or account sync.
+      if (persisted && !isMessageAfter({ id: read.lastReadMessageId, createdAt: read.lastReadCreatedAt }, persisted)
+        && !this.unreadByConversation[conversationId]) return;
 
       // Foreground read state owns the icon badge. Update memory immediately so
       // a previously delivered Push badge cannot linger while IndexedDB/D1 work
@@ -917,17 +935,34 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           console.warn("[dm] durable read-state persistence failed", error instanceof Error ? error.message : "unknown error");
         }
       }
+      let mirrorReady = false;
       try {
         await metaRepository.put(account, readKey(conversationId), read);
+        mirrorReady = true;
       } catch (error) {
         console.warn("[dm] read-state mirror persistence failed", error instanceof Error ? error.message : "unknown error");
       }
+      if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      if (durableReady && mirrorReady) {
+        const saved = this.persistedReadCursors[conversationId];
+        if (!saved || isMessageAfter({ id: read.lastReadMessageId, createdAt: read.lastReadCreatedAt }, saved)) {
+          this.persistedReadCursors = { ...this.persistedReadCursors, [conversationId]: read };
+        }
+      }
       if (durableReady) scheduleAccountStateSync(useKeyStore(), "read_state");
 
-      if (advanced && emitReceipt && /^[0-9a-f]{64}$/i.test(candidate.lastReadMessageId)) {
+      // Receipts acknowledge only peer messages, even if the local read position
+      // advanced through our own later message.
+      const latestIncoming = [...items, ...(readThrough ? [readThrough] : [])]
+        .filter(item => item.pubkey !== account && readable(item)
+          && item.conversationId === conversationId
+          && !isMessageAfter({ id: item.id, createdAt: item.created_at }, candidate))
+        .sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)).at(-1);
+      if (emitReceipt && latestIncoming && /^[0-9a-f]{64}$/i.test(latestIncoming.id)
+        && isMessageAfter({ id: latestIncoming.id, createdAt: latestIncoming.created_at }, previous)) {
         this.scheduleReceipt(peer, "read", {
-          createdAt: candidate.lastReadCreatedAt,
-          messageId: candidate.lastReadMessageId,
+          createdAt: latestIncoming.created_at,
+          messageId: latestIncoming.id,
         });
       }
     },
@@ -1272,6 +1307,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.loadedFor = "";
       this.unreadByConversation = {};
       this.readCursors = {};
+      this.persistedReadCursors = {};
       this.preferencesByPeer = {};
       this.receiptStateByPeer = {};
       this.sentReceiptStateByPeer = {};

@@ -799,6 +799,12 @@ async function prependOlderMessages() {
   });
 }
 
+function markVisibleMessagesRead() {
+  const latest = messages.value.filter(message => !message.outgoing || message.outgoing.state === "sent").at(-1);
+  if (!latest) return Promise.resolve();
+  return directMessages.markPeerRead(peerPubkey.value, latest);
+}
+
 function handleMessageScroll() {
   const list = messageList.value;
   if (!list) return;
@@ -813,7 +819,7 @@ function handleMessageScroll() {
   if (isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD)) {
     showJumpToLatest.value = false;
     pendingTailCount.value = 0;
-    if (!loadingConversation) void directMessages.markPeerRead(peerPubkey.value);
+    if (!loadingConversation) void markVisibleMessagesRead();
   } else if (list.scrollHeight > list.clientHeight + BOTTOM_FOLLOW_THRESHOLD) {
     showJumpToLatest.value = true;
   }
@@ -822,7 +828,7 @@ function handleMessageScroll() {
 function jumpToLatest() {
   exitSearchContext();
   scrollToBottom();
-  void nextTick(() => directMessages.markPeerRead(peerPubkey.value));
+  void nextTick(() => markVisibleMessagesRead());
 }
 
 async function load() {
@@ -845,7 +851,7 @@ async function load() {
     resetMessageWindow();
     await nextTick();
     setMessageListToBottom();
-    await directMessages.markPeerRead(peerPubkey.value);
+    await markVisibleMessagesRead();
     if (generation !== loadGeneration || account !== keys.pkHex) return;
   } finally {
     if (generation === loadGeneration) loadingConversation = false;
@@ -1199,7 +1205,7 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
     list.scrollTop = scrollTopAfterNewMessages(previousMetrics, list.scrollHeight, BOTTOM_FOLLOW_THRESHOLD);
     showJumpToLatest.value = false;
     pendingTailCount.value = 0;
-    await directMessages.markPeerRead(peerPubkey.value);
+    await markVisibleMessagesRead();
   } else if (hasNewTail) {
     showJumpToLatest.value = true;
     pendingTailCount.value += newTailCount;

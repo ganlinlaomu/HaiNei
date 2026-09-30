@@ -177,7 +177,11 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       }),
       onPersistedMessage: async (message, metadata) => {
         await homeHandler(message, {...metadata,durable:true});
-        await directMessages.acknowledgePersistedIncoming(account, message);
+        // Restoring cached messages is not a new delivery. Their persisted
+        // receipt state already survives the session; avoid per-message work.
+        if (metadata.source !== "local-migration") {
+          await directMessages.acknowledgePersistedIncoming(account, message);
+        }
       },
       onStatus: status => {
         setAccountMessageSyncStatus(account, status);

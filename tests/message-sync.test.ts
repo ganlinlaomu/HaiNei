@@ -391,6 +391,8 @@ describe("message sync session", () => {
       };
     };
     const manager = new MessageSyncManager({
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
       repository: repo,
       subscribe: subscribeFake,
       observeRelays: () => () => undefined,
@@ -435,6 +437,7 @@ describe("message sync session", () => {
       };
     };
     const manager = new MessageSyncManager({
+      retryOutgoing: () => {},
       repository: repo,
       subscribe: subscribeFake,
       observeRelays: listener => { relayObserver = listener; return () => { relayObserver = undefined; }; },
@@ -550,6 +553,7 @@ describe("message sync session", () => {
     };
 
     const manager = new MessageSyncManager({
+      retryOutgoing: () => {},
       repository: repo,
       subscribe: subscribeFake,
       observeRelays: () => () => undefined,
@@ -594,6 +598,8 @@ describe("message sync session", () => {
     };
     const visible: string[] = [];
     const manager = new MessageSyncManager({
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
       repository: repo,
       subscribe: subscribeFake,
       observeRelays: listener => { relayObserver = listener; return () => { relayObserver = undefined; }; },
