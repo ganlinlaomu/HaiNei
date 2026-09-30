@@ -1,6 +1,7 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { deviceStorage } from "@/services/deviceStorage";
 import { debugLog } from "@/utils/debugLog";
+import { signWorkerRequest } from "@/services/workerAuth";
 
 const PUSH_ACTION = "hainei_push";
 const SERVICE_WORKER_TIMEOUT_MS = 10_000;
@@ -71,19 +72,17 @@ async function authenticatedPost(path: string, payload: Record<string, unknown>,
   const challengeBody = await responseJson(challengeResponse, "获取推送授权失败");
   const challenge = String(challengeBody?.challenge || "");
   const expiresAt = Number(challengeBody?.expiresAt || 0);
-  const now = Math.floor(Date.now() / 1000);
-  const event = await signEvent({
-    kind: 27235,
-    created_at: now,
+  const url = `${baseUrl()}${path}`;
+  const event = await signWorkerRequest(signEvent, pubkey, {
+    action: PUSH_ACTION,
+    challenge,
+    expiresAt,
+    url,
+    method: "POST",
+    payload,
     content: "Authorize HaiNei push action",
-    tags: [
-      ["t", PUSH_ACTION],
-      ["challenge", challenge],
-      ["expiration", String(Math.min(expiresAt, now + 300))],
-    ],
   });
-  if (event.pubkey.toLowerCase() !== pubkey.toLowerCase()) throw new Error("推送授权账号不匹配");
-  const response = await pushFetch(`${baseUrl()}${path}`, {
+  const response = await pushFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, challenge, event }),
@@ -193,10 +192,15 @@ export async function triggerGenericPush(
   pubkey: string,
   signEvent: SignEvent,
   type: PushCategory = "activity",
+  messageId?: string,
 ) {
   if (type !== "message") return;
   const recipients = [...new Set(recipientPubkeys.map(value => value.toLowerCase()))]
     .filter(value => value !== pubkey.toLowerCase());
   if (!recipients.length) return;
-  await authenticatedPost("/api/push/trigger", { recipientPubkeys: recipients, type }, pubkey, signEvent);
+  await authenticatedPost("/api/push/trigger", {
+    recipientPubkeys: recipients,
+    type,
+    ...(messageId ? { messageId } : {}),
+  }, pubkey, signEvent);
 }
