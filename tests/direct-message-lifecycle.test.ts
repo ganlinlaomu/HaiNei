@@ -97,7 +97,9 @@ describe("direct-message authorization and conversation lifecycle", () => {
     for (const file of ["src/components/HeaderBar.vue", "src/views/Conversations.vue", "src/views/Messages.vue"]) {
       expect(readFileSync(join(process.cwd(), file), "utf8")).not.toContain("directMessages.refresh(");
     }
-    expect(readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8")).toContain("useDirectMessagesStore().refresh(pk)");
+    const keys = readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8");
+    expect(keys).toContain("const directMessages = useDirectMessagesStore()");
+    expect(keys).toContain("await directMessages.refresh(pk)");
   });
 
   it("keeps text/reply drafts isolated by account and peer and protects newer drafts", async () => {
@@ -137,6 +139,22 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(context.direct.unreadCount).toBe(1);
     expect(reconcile).toHaveBeenCalledWith(CONVERSATION);
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("hides provisional cross-device unread until authoritative account state is restored", async () => {
+    const context = seed([dm("first", 5)], relationship("accepted"));
+    await context.direct.refresh(ACCOUNT);
+    context.direct.unreadByConversation = { [CONVERSATION]: 151 };
+
+    context.direct.beginAuthoritativeUnreadRestore(ACCOUNT);
+    expect(context.direct.authoritativeUnreadPendingFor).toBe(ACCOUNT);
+    expect(context.direct.unreadCount).toBe(0);
+    expect(context.direct.visibleUnreadByConversation).toEqual({});
+
+    context.direct.finishAuthoritativeUnreadRestore(ACCOUNT);
+    expect(context.direct.authoritativeUnreadPendingFor).toBe("");
+    expect(context.direct.unreadCount).toBe(151);
+    expect(context.direct.visibleUnreadByConversation).toEqual({ [CONVERSATION]: 151 });
   });
 
   it("keeps unread stable while startup Relay history is hydrating", async () => {

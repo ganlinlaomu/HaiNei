@@ -11,14 +11,26 @@ describe("account relay startup ordering", () => {
     expect(warmup).toBeGreaterThan(settingsLoad);
   });
 
-  it("restores authoritative DM read state before starting Relay history", () => {
+  it("returns from local restore without waiting for remote critical state, but gates Relay history on authoritative unread", () => {
     const source = readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8");
-    const criticalRestore = source.indexOf("fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false");
-    const directRefresh = source.indexOf("await useDirectMessagesStore().refresh(pk)");
-    const relayStart = source.indexOf("void startAccountMessageSync(this)");
-    expect(criticalRestore).toBeGreaterThan(-1);
-    expect(directRefresh).toBeGreaterThan(criticalRestore);
-    expect(relayStart).toBeGreaterThan(directRefresh);
+    const criticalRequest = source.indexOf("fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false");
+    const localRefresh = source.indexOf("await directMessages.refresh(pk)");
+    const pendingUnread = source.indexOf("directMessages.beginAuthoritativeUnreadRestore(pk)");
+    const remoteWait = source.indexOf("const criticalState = await criticalStateRestore");
+    const authoritativeRefresh = source.indexOf("await directMessages.refresh(pk)", localRefresh + 1);
+    const finishUnread = source.indexOf("directMessages.finishAuthoritativeUnreadRestore(pk)");
+    const relayStart = source.indexOf("await startAccountMessageSync(this)");
+
+    expect(criticalRequest).toBeGreaterThan(-1);
+    expect(localRefresh).toBeGreaterThan(criticalRequest);
+    expect(pendingUnread).toBeGreaterThan(localRefresh);
+    expect(remoteWait).toBeGreaterThan(pendingUnread);
+    expect(authoritativeRefresh).toBeGreaterThan(remoteWait);
+    expect(finishUnread).toBeGreaterThan(authoritativeRefresh);
+    expect(relayStart).toBeGreaterThan(finishUnread);
+
+    const beforeNetworkPhase = source.slice(source.indexOf("// Local-first phase:"), source.indexOf("// Network phase:"));
+    expect(beforeNetworkPhase).not.toContain("await criticalStateRestore");
     expect(source).not.toContain('["direct messages", () => useDirectMessagesStore().refresh(pk)]');
   });
 

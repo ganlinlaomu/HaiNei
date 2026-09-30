@@ -138,55 +138,68 @@ export const useKeyStore = defineStore("keys", {
         ["interactions", () => useInteractionsStore().load(pk)],
         ["notifications", () => useNotificationsStore().load(pk)],
       ];
-      const [, criticalState] = await Promise.all([
-        Promise.all(accountLoads.map(async ([label, load]) => {
-          try {
-            await load();
-          } catch (e) {
-            console.error(`[account] ${label} load failed account=${account}`, e);
-          }
-        })),
-        criticalStateRestore,
-      ]);
+      // Local-first phase: finish the local IndexedDB/vault restore before
+      // returning to Login.vue. Do not make navigation wait for Worker/network
+      // account-state restoration.
+      await Promise.all(accountLoads.map(async ([label, load]) => {
+        try {
+          await load();
+        } catch (e) {
+          console.error(`[account] ${label} load failed account=${account}`, e);
+        }
+      }));
       if (!isCurrent()) return;
 
-      // Re-read authorization after the merged snapshot, then derive DM unread
-      // exactly once from the finalized read cursors before Relay subscriptions
-      // are allowed to replay any history.
-      if (criticalState.restored.includes("friendships")) {
-        await useFriendshipsStore().reloadFromStorage(pk);
+      const directMessages = useDirectMessagesStore();
+      await directMessages.refresh(pk);
+      if (!isCurrent()) return;
+      // A new device may have an old/empty local read cursor. Hide that
+      // provisional unread count until cross-device read_state + friendships
+      // have converged, rather than flashing a large false unread badge.
+      directMessages.beginAuthoritativeUnreadRestore(pk);
+
+      // Network phase: runs after local login has completed. Relay history must
+      // still wait for this phase so historical events cannot race an older
+      // read cursor or stale friendship authorization.
+      void (async () => {
+        const criticalState = await criticalStateRestore;
         if (!isCurrent()) return;
-      }
-      await useDirectMessagesStore().refresh(pk);
-      if (!isCurrent()) return;
 
-      if (this.supportsNip44) {
-        const backgroundNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
-          namespace => !criticalStateNamespaces.includes(namespace)
-        );
-        void fetchAndMaterializeAccountState(this, backgroundNamespaces, { onlyNewer: true, isCurrent })
-          .then(async () => {
-            if (!isCurrent()) return;
-            await useSettingsStore().load(pk, true);
-            if (!isCurrent()) return;
-            await Promise.all([useFriendsStore().reloadFromStorage(pk), useProfilesStore().load(pk, true), useBookmarksStore().load(pk, true)]);
-            if (!isCurrent()) return;
-            const { pushEnabledForAccount, syncPushAuthorizationPolicy } = await import("@/services/pushNotifications");
-            if (pushEnabledForAccount(pk)) await syncPushAuthorizationPolicy(pk, useFriendshipsStore().records.filter(r => r.state === "accepted").map(r => r.peerPubkey), this.signEvent.bind(this));
-          }).catch(() => debugLog("account", "background_restore_unavailable", {}, "warn"));
-      }
-      // Relay history starts only after read_state has been restored/merged and
-      // direct-message unread has been derived from that authoritative cursor.
-      void startAccountMessageSync(this)
-        .then(async () => {
-          if (!this.supportsNip44 || this.pkHex !== pk) return;
-          const syncState = await syncedMessageRepository.getSyncState(pk);
-          const namespaces = syncState.historyBackfillCompletedAt
-            ? ACCOUNT_STATE_NAMESPACES
-            : ACCOUNT_STATE_NAMESPACES.filter(namespace => namespace !== "friendships");
-          await Promise.allSettled(namespaces.map(namespace => syncAccountStateNamespace(this, namespace)));
-        })
-        .catch(e => console.warn(`[account] Relay history bootstrap unavailable account=${account}`, e));
+        if (criticalState.restored.includes("friendships")) {
+          await useFriendshipsStore().reloadFromStorage(pk);
+          if (!isCurrent()) return;
+        }
+        await directMessages.refresh(pk);
+        if (!isCurrent()) return;
+        directMessages.finishAuthoritativeUnreadRestore(pk);
+
+        if (this.supportsNip44) {
+          const backgroundNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
+            namespace => !criticalStateNamespaces.includes(namespace)
+          );
+          void fetchAndMaterializeAccountState(this, backgroundNamespaces, { onlyNewer: true, isCurrent })
+            .then(async () => {
+              if (!isCurrent()) return;
+              await useSettingsStore().load(pk, true);
+              if (!isCurrent()) return;
+              await Promise.all([useFriendsStore().reloadFromStorage(pk), useProfilesStore().load(pk, true), useBookmarksStore().load(pk, true)]);
+              if (!isCurrent()) return;
+              const { pushEnabledForAccount, syncPushAuthorizationPolicy } = await import("@/services/pushNotifications");
+              if (pushEnabledForAccount(pk)) await syncPushAuthorizationPolicy(pk, useFriendshipsStore().records.filter(r => r.state === "accepted").map(r => r.peerPubkey), this.signEvent.bind(this));
+            }).catch(() => debugLog("account", "background_restore_unavailable", {}, "warn"));
+        }
+
+        await startAccountMessageSync(this);
+        if (!isCurrent() || !this.supportsNip44) return;
+        const syncState = await syncedMessageRepository.getSyncState(pk);
+        const namespaces = syncState.historyBackfillCompletedAt
+          ? ACCOUNT_STATE_NAMESPACES
+          : ACCOUNT_STATE_NAMESPACES.filter(namespace => namespace !== "friendships");
+        await Promise.allSettled(namespaces.map(namespace => syncAccountStateNamespace(this, namespace)));
+      })().catch(error => {
+        if (isCurrent()) directMessages.finishAuthoritativeUnreadRestore(pk);
+        console.warn(`[account] background account bootstrap unavailable account=${account}`, error instanceof Error ? error.message : "unknown");
+      });
     },
 
     resetAccountStores(currentPk: string) {
