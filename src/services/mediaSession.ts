@@ -1,3 +1,4 @@
+import { signWorkerRequest } from "@/services/workerAuth";
 const SESSION_SCOPE = "upload";
 const EXPIRY_SKEW_SECONDS = 5;
 
@@ -44,19 +45,6 @@ async function json(response: Response, fallback: string) {
   return body;
 }
 
-function challengeEvent(challenge: string, expiresAt: number) {
-  const now = Math.floor(Date.now() / 1000);
-  return {
-    kind: 27235,
-    created_at: now,
-    content: "Authorize HaiNei media session",
-    tags: [
-      ["t", "hainei_media_session"],
-      ["challenge", challenge],
-      ["expiration", String(Math.min(expiresAt, now + 300))],
-    ],
-  };
-}
 
 export function clearMediaSession(serverUrl: string, pubkey: string) {
   cache.delete(cacheKey(serverUrl, pubkey));
@@ -95,14 +83,21 @@ export async function getMediaSession(
       throw new Error("HaiNei Worker 返回了无效 challenge");
     }
 
-    const event = await signEvent(challengeEvent(challenge, challengeExpiresAt));
-    if (!event || normalizedPubkey(event.pubkey) !== pubkey || !event.sig) {
-      throw new Error("签名身份与当前 Nostr 账号不一致");
-    }
-    const sessionResponse = await fetch(`${base}/api/media/session`, {
+    const url = `${base}/api/media/session`;
+    const payload = { ...(fileSize === undefined ? {} : { fileSize }) };
+    const event = await signWorkerRequest(signEvent, pubkey, {
+      action: "hainei_media_session",
+      challenge,
+      expiresAt: challengeExpiresAt,
+      url,
+      method: "POST",
+      payload,
+      content: "Authorize HaiNei media session",
+    });
+    const sessionResponse = await fetch(url, {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ challenge, event, fileSize }),
+      body: JSON.stringify({ ...payload, challenge, event }),
     });
     const body = await json(sessionResponse, "获取媒体上传会话失败");
     const session: MediaSession = {
