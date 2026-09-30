@@ -28,3 +28,22 @@ export function runAfterFirstPaint(task: () => void) {
   const handle = setTimeout(task, 0);
   return () => clearTimeout(handle);
 }
+
+
+export function runWhenIdle(task: () => void, timeoutMs = 1_000) {
+  const requestIdle = (globalThis as typeof globalThis & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+    cancelIdleCallback?: (handle: number) => void;
+  }).requestIdleCallback;
+  const cancelIdle = (globalThis as typeof globalThis & {
+    cancelIdleCallback?: (handle: number) => void;
+  }).cancelIdleCallback;
+
+  if (typeof requestIdle === "function") {
+    const handle = requestIdle(task, { timeout: timeoutMs });
+    return () => cancelIdle?.(handle);
+  }
+
+  const handle = setTimeout(task, Math.min(160, timeoutMs));
+  return () => clearTimeout(handle);
+}

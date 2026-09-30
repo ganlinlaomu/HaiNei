@@ -151,7 +151,9 @@ describe("direct-message navigation and UI contract", () => {
     const saved = readFileSync(join(process.cwd(), "src/views/Saved.vue"), "utf8");
     const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
     const secondaryHeader = readFileSync(join(process.cwd(), "src/components/SecondaryPageHeader.vue"), "utf8");
-    expect(settings).toContain("router.push('/settings/system')");
+    expect(settings).toContain("openSystemSettings");
+    expect(settings).toContain('router.push("/settings/system")');
+    expect(settings).toContain("loadSystemSettingsView");
     expect(settings).toContain('<section v-else class="settings-card">');
     expect(settings).toContain("background:#fff;color:#0f1419");
     expect(settings).toContain("border-top:1px solid #eff1f3;background:#fff");

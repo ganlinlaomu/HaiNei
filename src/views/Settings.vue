@@ -15,13 +15,13 @@
       <button class="top-level-row" type="button" @click="openOwnProfile"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><strong>我的资料</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @click="router.push('/settings/saved')"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg></span><strong>已收藏</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @click="router.push('/friends')"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 15.5a5 5 0 0 1 7 4.5"/></svg></span><strong>好友 / 好友分组</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
-      <button class="top-level-row" type="button" @click="router.push('/settings/system')"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></span><strong>设置</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
+      <button class="top-level-row" type="button" @pointerdown="preloadSystemSettings" @focus="preloadSystemSettings" @click="openSystemSettings"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></span><strong>设置</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
     </section>
     <MyQrCodeSheet :open="showMyQr" :pubkey="keyStore.pkHex" :nickname="nickname" @close="showMyQr = false" />
   </main>
 </template>
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MyQrCodeSheet from "@/components/MyQrCodeSheet.vue";
@@ -29,6 +29,8 @@ import { useKeyStore } from "@/stores/keys";
 import { useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { pubkeyToNpub, shortNpub } from "@/utils/nostrQr";
+import { loadSystemSettingsView } from "@/router/lazyViews";
+import { runAfterFirstPaint } from "@/utils/bottomTabActivation";
 
 const keyStore = useKeyStore();
 const profiles = useProfilesStore();
@@ -40,9 +42,24 @@ const hasAccount = computed(() => !!keyStore.pkHex);
 const nickname = computed(() => profiles.getProfile(keyStore.pkHex)?.nickname?.trim() || "未设置昵称");
 const shortPk = computed(() => shortNpub(keyStore.pkHex));
 
+function preloadSystemSettings() {
+  void loadSystemSettingsView();
+}
+
+function openSystemSettings() {
+  preloadSystemSettings();
+  void router.push("/settings/system");
+}
+
 function openOwnProfile() {
   if (keyStore.pkHex) void router.push(`/profile/${keyStore.pkHex}`);
 }
+
+onMounted(() => {
+  // The Settings hub is already local. Warm the deeper settings chunk after
+  // the first paint so tapping "设置" never waits on a cold network request.
+  runAfterFirstPaint(preloadSystemSettings);
+});
 
 async function copyPubkey() {
   if (!keyStore.pkHex) return;
