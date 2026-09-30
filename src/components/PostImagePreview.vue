@@ -92,8 +92,12 @@ type DecryptPriority = 0 | 1 | 2;
 type DecryptJob = { priority: DecryptPriority; order: number; run: () => void };
 const decryptQueue: DecryptJob[] = [];
 let decryptOrder = 0;
-const inFlightDecrypts = new Map<string, Promise<Blob>>();
-const decryptControllers = new Map<string, AbortController>();
+type SharedDecryptJob = {
+  controller: AbortController;
+  promise: Promise<Blob>;
+  consumers: number;
+};
+const inFlightDecrypts = new Map<string, SharedDecryptJob>();
 
 function drainDecryptQueue() {
   while (activeDecrypts < MAX_DECRYPT_CONCURRENCY && decryptQueue.length) {
@@ -121,43 +125,89 @@ function withDecryptSlot<T>(task: () => Promise<T>, priority: DecryptPriority): 
 
 function cancelAccountDecrypts(account: string) {
   if (!account) return;
-  for (const [key, controller] of decryptControllers) {
-    if (key.startsWith(`${account}:`)) controller.abort();
+  for (const [key, job] of inFlightDecrypts) {
+    if (key.startsWith(`${account}:`)) job.controller.abort();
   }
 }
 
-function getDecryptedBlob(account: string, encryptedRef: string, priority: DecryptPriority = 1): Promise<Blob> {
-  const taskKey = `${account}:${encryptedRef}`;
-  const existing = inFlightDecrypts.get(taskKey);
-  if (existing) return existing;
-
-  const controller = new AbortController();
-  decryptControllers.set(taskKey, controller);
-  const task = withDecryptSlot(async () => {
-    if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-    const cached = await getImageFromCache(account, encryptedRef);
-    if (cached) return cached.blob;
-
-    const metadata = decodeEncryptedImageRef(encryptedRef);
-    if (!metadata) throw new Error("Invalid encrypted image reference");
-    const encryptedBytes = new Uint8Array(await downloadMedia(metadata.url, 16 * 1024 * 1024, controller.signal));
-    const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
-    const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },
-      key,
-      encryptedBytes
+function consumeDecryptJob(taskKey: string, job: SharedDecryptJob, signal?: AbortSignal): Promise<Blob> {
+  job.consumers += 1;
+  return new Promise<Blob>((resolve, reject) => {
+    let released = false;
+    const release = (abortIfUnused: boolean) => {
+      if (released) return;
+      released = true;
+      signal?.removeEventListener("abort", onAbort);
+      job.consumers = Math.max(0, job.consumers - 1);
+      if (abortIfUnused && job.consumers === 0 && inFlightDecrypts.get(taskKey) === job) {
+        job.controller.abort();
+      }
+    };
+    const onAbort = () => {
+      release(true);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    job.promise.then(
+      blob => {
+        if (released) return;
+        release(false);
+        resolve(blob);
+      },
+      error => {
+        if (released) return;
+        release(false);
+        reject(error);
+      },
     );
-    if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-    const blob = new Blob([decrypted], { type: metadata.mime });
-    await storeImageInCache(account, encryptedRef, blob, metadata.mime);
-    return blob;
-  }, priority).finally(() => {
-    inFlightDecrypts.delete(taskKey);
-    decryptControllers.delete(taskKey);
   });
+}
 
-  inFlightDecrypts.set(taskKey, task);
-  return task;
+function getDecryptedBlob(
+  account: string,
+  encryptedRef: string,
+  priority: DecryptPriority = 1,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  const taskKey = `${account}:${encryptedRef}`;
+  let job = inFlightDecrypts.get(taskKey);
+  if (!job) {
+    const controller = new AbortController();
+    const shared: SharedDecryptJob = {
+      controller,
+      consumers: 0,
+      promise: Promise.resolve(new Blob()),
+    };
+    shared.promise = withDecryptSlot(async () => {
+      if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const cached = await getImageFromCache(account, encryptedRef);
+      if (cached) return cached.blob;
+
+      const metadata = decodeEncryptedImageRef(encryptedRef);
+      if (!metadata) throw new Error("Invalid encrypted image reference");
+      const encryptedBytes = new Uint8Array(await downloadMedia(metadata.url, 16 * 1024 * 1024, controller.signal));
+      const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },
+        key,
+        encryptedBytes
+      );
+      if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const blob = new Blob([decrypted], { type: metadata.mime });
+      await storeImageInCache(account, encryptedRef, blob, metadata.mime);
+      return blob;
+    }, priority).finally(() => {
+      if (inFlightDecrypts.get(taskKey) === shared) inFlightDecrypts.delete(taskKey);
+    });
+    job = shared;
+    inFlightDecrypts.set(taskKey, job);
+  }
+  return consumeDecryptJob(taskKey, job, signal);
 }
 
 export default defineComponent({
@@ -187,6 +237,7 @@ export default defineComponent({
     const viewerImageUrls = ref<string[]>([]);
     const viewerAnchorIndex = ref<number | null>(null);
     const heartVisible = ref(false);
+    let loadController = new AbortController();
     const heartAnimationKey = ref(0);
     const carouselAspectStyle = computed(() => {
       const item = images.value[0];
@@ -223,7 +274,7 @@ export default defineComponent({
         return;
       }
       try {
-        const blob = await getDecryptedBlob(accountAtStart, item.sourceUrl, priority);
+        const blob = await getDecryptedBlob(accountAtStart, item.sourceUrl, priority, loadController.signal);
         if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
         const objectUrl = URL.createObjectURL(blob);
         objectUrls.add(objectUrl);
@@ -260,7 +311,7 @@ export default defineComponent({
       if (!accountAtStart) { item.originalStatus = "error"; return; }
       item.originalStatus = "loading";
       try {
-        const blob = await getDecryptedBlob(accountAtStart, item.originalSourceUrl, 2);
+        const blob = await getDecryptedBlob(accountAtStart, item.originalSourceUrl, 2, loadController.signal);
         if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
         const objectUrl = URL.createObjectURL(blob);
         objectUrls.add(objectUrl);
@@ -376,6 +427,8 @@ export default defineComponent({
 
     function resetImages() {
       loadGeneration.value += 1;
+      loadController.abort();
+      loadController = new AbortController();
       closeViewer();
       viewerImageUrls.value = [];
       revokeObjectUrls();
@@ -434,6 +487,7 @@ export default defineComponent({
       visibilityObserver?.disconnect();
       visibilityObserver = null;
       loadGeneration.value += 1;
+      loadController.abort();
       if (scrollFrame) cancelAnimationFrame(scrollFrame);
       if (tapTimer) clearTimeout(tapTimer);
       if (heartTimer) clearTimeout(heartTimer);

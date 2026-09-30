@@ -1,5 +1,11 @@
 const MIME =
   /^(?:image\/(?:jpeg|png|webp|gif|avif)|video\/(?:mp4|webm|quicktime)|audio\/(?:webm|mp4|mpeg|ogg|wav|x-m4a))(?:;\s*codecs=[a-zA-Z0-9.,\s"'-]+)?$/;
+export function hasOnlyObjectKeys(value: unknown, allowed: readonly string[]) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value as Record<string, unknown>);
+  return keys.every(key => allowed.includes(key));
+}
+
 export function safeMediaUrl(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 2048) return false;
   try {

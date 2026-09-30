@@ -184,6 +184,19 @@ export class MessageIngestionPipeline {
       return { inserted: false, discarded: true, deferred: false };
     }
     const result = await this.ingestCanonicalMessage(message, metadata);
+    if (result.discarded) {
+      decryptedEventCache.delete(cacheKey);
+      eventCache.delete(eventId);
+      try {
+        await this.repository.deleteDecryptedEvent(this.accountPubkey, eventId);
+      } catch (error) {
+        debugLog("storage", "rejected_decrypted_cache_cleanup_failed", {
+          account: this.accountPubkey.slice(0, 12),
+          eventId: eventId.slice(0, 12),
+          reason: error instanceof Error ? error.name || "Error" : "storage_error",
+        }, "warn");
+      }
+    }
     if (this.isSessionCurrent()) this.finalizeTransport(message, eventId);
     return result;
   }

@@ -50,6 +50,7 @@ const avatarStyle = computed(() => ({
 
 let objectUrl = "";
 let generation = 0;
+let controller: AbortController | null = null;
 function clearObjectUrl() {
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = "";
@@ -57,6 +58,8 @@ function clearObjectUrl() {
 
 watch([() => keys.pkHex, () => props.pubkey, () => privateProfile.value?.avatar], async ([account, _pubkey, avatar]) => {
   const current = ++generation;
+  controller?.abort();
+  controller = null;
   clearObjectUrl();
   picture.value = "";
   imageLoaded.value = false;
@@ -64,13 +67,18 @@ watch([() => keys.pkHex, () => props.pubkey, () => privateProfile.value?.avatar]
   if (!account) return;
   if (profiles.loadedFor !== account) await profiles.load(account);
   if (!avatar || current !== generation || keys.pkHex !== account) return;
+  const requestController = new AbortController();
+  controller = requestController;
   try {
-    const blob = await loadPrivateProfileAvatar(account, avatar);
-    if (current !== generation || keys.pkHex !== account) return;
+    const blob = await loadPrivateProfileAvatar(account, avatar, requestController.signal);
+    if (requestController.signal.aborted || current !== generation || keys.pkHex !== account) return;
     objectUrl = URL.createObjectURL(blob);
     picture.value = objectUrl;
-  } catch {
+  } catch (error) {
+    if (requestController.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
     if (current === generation) imageFailed.value = true;
+  } finally {
+    if (controller === requestController) controller = null;
   }
 }, { immediate: true });
 
@@ -78,7 +86,7 @@ function handleImageError() {
   imageLoaded.value = false;
   imageFailed.value = true;
 }
-onBeforeUnmount(() => { generation++; clearObjectUrl(); });
+onBeforeUnmount(() => { generation++; controller?.abort(); controller = null; clearObjectUrl(); });
 </script>
 
 <style scoped>

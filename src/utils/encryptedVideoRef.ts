@@ -1,4 +1,4 @@
-import { validEncryptedMedia } from "./mediaSafety";
+import { hasOnlyObjectKeys, validEncryptedMedia } from "./mediaSafety";
 import { bytesToBase64, base64ToBytes } from "@/nostr/crypto";
 
 /**
@@ -45,6 +45,7 @@ export function decodeEncryptedVideoRef(ref: string): EncryptedVideoMetadata | n
     // Basic validation
     if (
       metadata.v !== 1 ||
+      !hasOnlyObjectKeys(metadata, ["v", "url", "mime", "alg", "iv", "key", "size", "duration"]) ||
       !validEncryptedMedia(metadata) || !metadata.mime.startsWith("video/")
     ) {
       console.error("Invalid encrypted video metadata", { reason: "schema_validation_failed" });
