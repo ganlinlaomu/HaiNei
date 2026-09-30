@@ -708,7 +708,7 @@ describe("privacy-preserving push and badge", () => {
     expect(memoryClear).toBeGreaterThan(-1);
     expect(badgeSync).toBeGreaterThan(memoryClear);
     expect(persistence).toBeGreaterThan(badgeSync);
-    expect(method).toContain('console.warn("[dm] read-state persistence failed"');
+    expect(method).toContain('console.warn("[dm] durable read-state persistence failed"');
   });
 
   it("keeps push opt-in state isolated across account switches", () => {
