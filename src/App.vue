@@ -64,7 +64,7 @@ import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { preloadBottomTabViews } from "@/router/lazyViews";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useDirectMessagesStore } from "@/stores/directMessages";
-import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
+import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appBadge";
 import { installBackgroundLock } from "@/services/autoLock";
 import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
 
@@ -165,11 +165,19 @@ export default defineComponent({
         // Before session restoration finishes, an empty store is not a logout.
         // Keep the persisted push scope so a cold-start race cannot suppress it.
         if (!account && !restored) return;
-        // Locking protects private data, but generic push notifications still
-        // belong to the remembered account. Only an actual logout clears scope.
-        const badgeAccount = unlocked ? account : "";
+        // Locking protects private data, but it must not erase the last known
+        // numeric unread badge. Keep routing bound to the remembered account;
+        // only an actual logout clears the count and scope.
+        if (!account) {
+          void syncAppBadge(0, undefined, "").catch(() => undefined);
+          return;
+        }
+        if (!unlocked) {
+          void syncAppBadgeScope(account).catch(() => undefined);
+          return;
+        }
         void syncAppBadge(
-          accountBadgeCount(badgeAccount, loadedFor, unreadCount, directLoadedFor, directUnread), undefined, account,
+          accountBadgeCount(account, loadedFor, unreadCount, directLoadedFor, directUnread), undefined, account,
         ).catch(() => undefined);
       },
       { immediate: true }
