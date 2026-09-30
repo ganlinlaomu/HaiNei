@@ -208,7 +208,11 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
         pushSigner,
         pushCategory === "message" ? pushCategory : "message",
         message.id,
-      ).catch(() => undefined);
+      ).catch(error => {
+        debugLog("system", "push_trigger_failed", {
+          reason: error instanceof Error ? error.message : "unknown_error",
+        }, "warn");
+      });
     }
     return queuedResult(sent!);
   })().finally(() => activePublishes.delete(key));

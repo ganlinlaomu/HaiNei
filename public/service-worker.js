@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.5"; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.6"; // ⚠️ 更新代码时同步修改此版本号
 const BUILD_ID = "2026-09-30T05:40:41.370Z"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
@@ -90,10 +90,22 @@ async function scopedPushHint(payload) {
   const stateUrl = new URL('/__hainei_push_state__', self.location.origin).href;
   let state = {};
   try { state = await (await cache.match(stateUrl))?.json() || {}; } catch {}
-  if (!payload.notificationId || !payload.accountScope || state.scope !== payload.accountScope) return false;
-  const seen = state.seen || [];
+  if (!payload.notificationId || !payload.accountScope) return false;
+
+  // A fresh/recreated service worker can receive a valid push before the app has
+  // had a chance to post SYNC_APP_BADGE. Bootstrap that missing scope from the
+  // recipient-bound push itself. Once a scope has been explicitly stored
+  // (including the empty logged-out scope), mismatched accounts stay suppressed.
+  const hasStoredScope = Object.prototype.hasOwnProperty.call(state, 'scope');
+  if (hasStoredScope && state.scope !== payload.accountScope) return false;
+
+  const seen = Array.isArray(state.seen) ? state.seen : [];
   if (seen.includes(payload.notificationId)) return false;
-  state.seen = [...seen, payload.notificationId].slice(-256);
+  state = {
+    ...state,
+    scope: hasStoredScope ? state.scope : payload.accountScope,
+    seen: [...seen, payload.notificationId].slice(-256)
+  };
   await cache.put(stateUrl, new Response(JSON.stringify(state)));
   const windows = await self.clients.matchAll({type:'window',includeUncontrolled:true});
   if (!windows.some(client => client.visibilityState === 'visible')) {

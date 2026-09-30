@@ -144,9 +144,6 @@ it("deduplicates push across worker restarts and ignores inactive account scope"
     };
   }
   let send = worker();
-  await send("message", {
-    data: { type: "SYNC_APP_BADGE", count: 0, accountScope: "A" },
-  });
   const push = {
     data: {
       text: () =>
@@ -157,16 +154,25 @@ it("deduplicates push across worker restarts and ignores inactive account scope"
         }),
     },
   };
+
+  // A recreated/fresh worker may receive the push before App.vue can post the
+  // active account scope. The recipient-bound push is allowed to bootstrap it.
   await send("push", push);
   send = worker();
   await send("push", push);
+
+  // Once the app explicitly switches account scope, old-account pushes remain
+  // suppressed even though the browser subscription still exists.
+  await send("message", {
+    data: { type: "SYNC_APP_BADGE", count: 0, accountScope: "B" },
+  });
   await send("push", {
     data: {
       text: () =>
         JSON.stringify({
           type: "message",
-          notificationId: "other",
-          accountScope: "B",
+          notificationId: "old-account",
+          accountScope: "A",
         }),
     },
   });

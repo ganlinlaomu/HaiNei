@@ -187,9 +187,39 @@ export async function syncPushAuthorizationPolicy(
   signEvent: SignEvent,
 ) {
   if (!pushEnabledForAccount(pubkey)) return false;
+  if (!supportsPushNotifications() || Notification.permission !== "granted") return false;
+
+  // The local opt-in flag can outlive a Worker/D1 redeploy. Re-register the
+  // browser's existing subscription before refreshing the recipient policy so
+  // a valid iOS PWA subscription repairs a missing server-side row automatically.
+  const enabledKey = `hainei_push_enabled_${pubkey.toLowerCase()}`;
+  let registration: ServiceWorkerRegistration;
+  try {
+    registration = await withTimeout(
+      navigator.serviceWorker.ready,
+      SERVICE_WORKER_TIMEOUT_MS,
+      "service worker 未就绪",
+    );
+  } catch (error) {
+    throw new Error("service worker 未就绪", { cause: error });
+  }
+  const subscription = await withTimeout(
+    registration.pushManager.getSubscription(),
+    PUSH_SUBSCRIBE_TIMEOUT_MS,
+    "browser push subscription 失败",
+  );
+  if (!subscription) {
+    deviceStorage.removeItem(enabledKey);
+    debugLog("system", "push_subscription_missing", {}, "warn");
+    return false;
+  }
+
+  await authenticatedPost("/api/push/subscribe", { subscription: subscription.toJSON() }, pubkey, signEvent);
+  debugLog("system", "push_worker_resubscribe_ok");
   await authenticatedPost("/api/push/policy", {
     senderPubkeys: [...new Set(senderPubkeys.map(value => value.toLowerCase()))],
   }, pubkey, signEvent);
+  debugLog("system", "push_policy_resync_ok");
   return true;
 }
 
