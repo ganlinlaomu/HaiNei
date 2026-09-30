@@ -750,18 +750,3 @@ export function restoreRelayConnections(relays = getRelaysFromStorage("read")) {
   }
 }
 
-if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-  const restoreActiveRelayConnections = () => restoreRelayConnections(
-    Object.entries(relaysMap)
-      .filter(([, conn]) => conn.subs.size > 0 || conn.okHandlers.size > 0 || conn.queue.length > 0)
-      .map(([url]) => url)
-  );
-  window.addEventListener("online", restoreActiveRelayConnections);
-  window.addEventListener("pageshow", restoreActiveRelayConnections);
-  window.addEventListener("focus", restoreActiveRelayConnections);
-  if (typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") restoreActiveRelayConnections();
-    });
-  }
-}
