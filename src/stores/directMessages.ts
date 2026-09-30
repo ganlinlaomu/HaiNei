@@ -299,6 +299,7 @@ export function buildDirectConversationSummaries(
     const peer = directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, accountPubkey);
     if (!peer || options.preferencesByPeer?.[peer]?.hidden) continue;
     const friendship = friendshipByPeer?.get(peer);
+    if (friendshipByPeer && friendship?.state !== "accepted") continue;
     if (friendshipByPeer && !isAuthorizedDirectMessage(item, accountPubkey, friendship)) continue;
     if (!afterDeletion(item, options.preferencesByPeer?.[peer])) continue;
     const current = latestByPeer.get(peer);
