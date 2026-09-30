@@ -334,7 +334,7 @@ export const useKeyStore = defineStore("keys", {
       if (!this.pkHex) throw new Error("未找到公钥信息");
       const skHex = await unlockPrivateKeyWithBiometric(this.pkHex);
       const pk = await safeGetPublicKey(skHex);
-      if (pk !== this.pkHex) throw new Error("Face ID 解锁的私钥与当前账号不匹配");
+      if (pk !== this.pkHex) throw new Error("通行密钥解锁的私钥与当前账号不匹配");
 
       this.skHex = skHex;
       this.isUnlocked = true;
