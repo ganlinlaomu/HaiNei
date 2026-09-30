@@ -50,13 +50,13 @@ export function decodeEncryptedVideoRef(ref: string): EncryptedVideoMetadata | n
       !metadata.iv ||
       !metadata.key
     ) {
-      console.error("Invalid encrypted video metadata:", metadata);
+      console.error("Invalid encrypted video metadata", { reason: "schema_validation_failed" });
       return null;
     }
     
     return metadata;
   } catch (e) {
-    console.error("Failed to decode encrypted video reference:", ref, e);
+    console.error("Failed to decode encrypted video reference", { reason: e instanceof Error ? e.name : "decode_failed" });
     return null;
   }
 }
