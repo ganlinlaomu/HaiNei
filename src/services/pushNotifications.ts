@@ -77,6 +77,7 @@ export function pushServiceErrorMessage(status: number, code: unknown, fallback:
   const error = typeof code === "string" ? code : "";
   if (status === 404 || error === "not_found") return "推送服务尚未部署，请更新 HaiNei Worker";
   if (error === "push_not_configured") return "推送服务尚未配置 VAPID";
+  if (error === "push_subscription_limit") return "推送设备记录已达上限，请重新开启推送";
   if (error === "push_storage_unavailable" || error === "internal_error") {
     return "推送服务数据库尚未准备好，请检查 Worker 部署和 D1 迁移";
   }

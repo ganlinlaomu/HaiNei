@@ -262,15 +262,29 @@ export async function savePushSubscription(env: Env, accountPubkey: string, valu
   const existing = await env.DB.prepare(`
     SELECT endpoint FROM hainei_push_subscriptions WHERE account_pubkey = ? AND endpoint = ?
   `).bind(accountPubkey, subscription.endpoint).first<{ endpoint: string }>();
-  if (!existing) {
-    const count = await env.DB.prepare(`
-      SELECT COUNT(*) AS count FROM hainei_push_subscriptions WHERE account_pubkey = ?
-    `).bind(accountPubkey).first<{ count: number }>();
-    if (Number(count?.count || 0) >= MAX_PUSH_SUBSCRIPTIONS_PER_ACCOUNT) {
-      throw new HttpError(429, "push_subscription_limit");
-    }
-  }
   const now = Math.floor(Date.now() / 1000);
+
+  if (!existing) {
+    // Keep the newest devices and make room for this endpoint. Old PWA
+    // subscriptions can survive reinstalls / cleared browser data and would
+    // otherwise permanently block a valid current device at the hard limit.
+    await env.DB.prepare(`
+      DELETE FROM hainei_push_subscriptions
+      WHERE account_pubkey = ?
+        AND endpoint NOT IN (
+          SELECT endpoint
+          FROM hainei_push_subscriptions
+          WHERE account_pubkey = ?
+          ORDER BY updated_at DESC, created_at DESC, endpoint DESC
+          LIMIT ?
+        )
+    `).bind(
+      accountPubkey,
+      accountPubkey,
+      MAX_PUSH_SUBSCRIPTIONS_PER_ACCOUNT - 1,
+    ).run();
+  }
+
   await env.DB.prepare(`
     INSERT INTO hainei_push_subscriptions
       (account_pubkey, endpoint, p256dh, auth, created_at, updated_at)
