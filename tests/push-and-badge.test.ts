@@ -16,6 +16,7 @@ import {
   enablePushNotifications,
   pushEnabledForAccount,
   pushServiceErrorMessage,
+  resolvePushWorkerBaseUrl,
   syncPushAuthorizationPolicy,
   triggerGenericPush as triggerFrontendPush,
 } from "@/services/pushNotifications";
@@ -301,6 +302,15 @@ describe("privacy-preserving push and badge", () => {
       updated_at: Math.floor(Date.now() / 1000),
     });
   }
+
+  it("uses the deployed Worker when a production Pages build omits the Worker env var", () => {
+    expect(resolvePushWorkerBaseUrl(undefined, "https://app.example", true))
+      .toBe("https://hainei-media.noster.workers.dev");
+    expect(resolvePushWorkerBaseUrl("", "https://app.example", false))
+      .toBe("https://app.example");
+    expect(resolvePushWorkerBaseUrl("https://custom.worker.dev/", "https://app.example", true))
+      .toBe("https://custom.worker.dev");
+  });
 
   it("serves the POST public-key route and reports missing VAPID config explicitly", async () => {
     const configured = await handleRequest(new Request("https://worker.test/api/push/public-key", { method: "POST" }), pushEnv());
