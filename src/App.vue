@@ -67,6 +67,7 @@ import { useDirectMessagesStore } from "@/stores/directMessages";
 import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appBadge";
 import { installBackgroundLock } from "@/services/autoLock";
 import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
+import { onAppResume } from "@/services/appResumeCoordinator";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
 
@@ -76,6 +77,7 @@ export default defineComponent({
     const route = useRoute();
     const router = useRouter();
     let stopAutoLock: (() => void) | undefined;
+    let stopForegroundResume: (() => void) | undefined;
     const ui = useUIStore();
     const keys = useKeyStore();
     const notifications = useNotificationsStore();
@@ -209,15 +211,11 @@ export default defineComponent({
     onMounted(() => {
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked,lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
-      document.addEventListener("visibilitychange", reconcileFriendStateOnForeground);
-      window.addEventListener("pageshow", reconcileFriendStateOnForeground);
-      window.addEventListener("online", reconcileFriendStateOnForeground);
+      stopForegroundResume = onAppResume(() => reconcileFriendStateOnForeground());
     });
     onBeforeUnmount(() => {
       stopAutoLock?.();
-      document.removeEventListener("visibilitychange", reconcileFriendStateOnForeground);
-      window.removeEventListener("pageshow", reconcileFriendStateOnForeground);
-      window.removeEventListener("online", reconcileFriendStateOnForeground);
+      stopForegroundResume?.();
       disposed = true;
       if (idleHandle !== null) {
         const cancelIdle = (window as any).cancelIdleCallback as undefined | ((handle: number) => void);
