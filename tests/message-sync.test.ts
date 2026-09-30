@@ -114,6 +114,26 @@ describe("reliable message persistence", () => {
     expect(await repo.getTotalUnread(ACCOUNT_A)).toBe(2);
   });
 
+  it("persists an exact read cursor even before Relay history is stored locally", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const conversationId = `conversation:${PEER}`;
+
+    await expect(repo.advanceReadState(ACCOUNT_A, conversationId, {
+      lastReadCreatedAt: 20,
+      lastReadMessageId: "m20",
+    })).resolves.toBe(true);
+
+    await expect(repo.advanceReadState(ACCOUNT_A, conversationId, {
+      lastReadCreatedAt: 10,
+      lastReadMessageId: "m10",
+    })).resolves.toBe(false);
+
+    expect(await repo.getReadState(ACCOUNT_A, conversationId)).toMatchObject({
+      lastReadCreatedAt: 20,
+      lastReadMessageId: "m20",
+    });
+  });
+
   it("persists account-scoped read state across restart and rebuilds derived conversations", async () => {
     const db = database();
     const repo = new SyncedMessageRepository(db);

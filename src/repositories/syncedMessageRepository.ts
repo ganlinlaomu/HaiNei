@@ -357,6 +357,24 @@ export class SyncedMessageRepository {
     return this.database.conversationReadStates.get([account, conversationId]);
   }
 
+  async advanceReadState(
+    accountPubkey: string,
+    conversationId: string,
+    cursor: { lastReadCreatedAt: number; lastReadMessageId: string },
+  ) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const current = await this.getReadState(account, conversationId);
+    if (!isMessageAfter({ id: cursor.lastReadMessageId, createdAt: cursor.lastReadCreatedAt }, current)) return false;
+    await this.database.conversationReadStates.put({
+      accountPubkey: account,
+      conversationId,
+      lastReadMessageId: cursor.lastReadMessageId,
+      lastReadCreatedAt: cursor.lastReadCreatedAt,
+      updatedAt: Date.now()
+    });
+    return true;
+  }
+
   async markRead(accountPubkey: string, conversationId: string, message?: SyncedMessageRecord) {
     const account = normalizeAccountPubkey(accountPubkey);
     const messages = message ? [message] : await this.database.syncedMessages
@@ -367,15 +385,10 @@ export class SyncedMessageRepository {
       .filter(item => item.senderPubkey !== account)
       .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
       .at(-1);
-    if (!latestIncoming) return;
-    const current = await this.getReadState(account, conversationId);
-    if (!isMessageAfter({ id: latestIncoming.id, createdAt: latestIncoming.createdAt }, current)) return;
-    await this.database.conversationReadStates.put({
-      accountPubkey: account,
-      conversationId,
-      lastReadMessageId: latestIncoming.id,
+    if (!latestIncoming) return false;
+    return this.advanceReadState(account, conversationId, {
       lastReadCreatedAt: latestIncoming.createdAt,
-      updatedAt: Date.now()
+      lastReadMessageId: latestIncoming.id,
     });
   }
 

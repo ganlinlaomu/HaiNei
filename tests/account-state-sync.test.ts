@@ -254,6 +254,36 @@ describe("encrypted account-state materialization", () => {
     expect(await db.accountProfiles.where("accountPubkey").equals(OTHER).count()).toBe(0);
   });
 
+  it("never moves a newer local DM read cursor backwards when restoring stale account state", async () => {
+    const conversationId = `conversation:${PEER}`;
+    await db.conversationReadStates.put({
+      accountPubkey: ACCOUNT,
+      conversationId,
+      lastReadCreatedAt: 20,
+      lastReadMessageId: "m20",
+      updatedAt: 200,
+    });
+
+    await materializeAccountState(ACCOUNT, "read_state", [{
+      conversationId,
+      lastReadCreatedAt: 10,
+      lastReadMessageId: "m10",
+      updatedAt: 100,
+    }], 7);
+
+    expect(await db.conversationReadStates.get([ACCOUNT, conversationId])).toMatchObject({
+      lastReadCreatedAt: 20,
+      lastReadMessageId: "m20",
+    });
+    expect((await db.accountStateMirrors.get([ACCOUNT, "read_state"]))?.data).toEqual([
+      expect.objectContaining({
+        conversationId,
+        lastReadCreatedAt: 20,
+        lastReadMessageId: "m20",
+      }),
+    ]);
+  });
+
   it("merges a 409 conflict instead of overwriting another device bookmark", async () => {
     await db.accountBookmarks.put({ accountPubkey: ACCOUNT, messageId: "local", createdAt: 2, updatedAt: 2 });
     await db.accountStateMirrors.put({ accountPubkey: ACCOUNT, namespace: "bookmarks", version: 1, data: [], updatedAt: 1 });

@@ -891,8 +891,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
 
       try {
         await metaRepository.put(account, readKey(latestIncoming.conversationId), read);
-        if (typeof syncedMessageRepository.markRead === "function" && typeof indexedDB !== "undefined") {
-          await syncedMessageRepository.markRead(account, latestIncoming.conversationId);
+        if (typeof indexedDB !== "undefined") {
+          await syncedMessageRepository.advanceReadState(account, latestIncoming.conversationId, read);
         }
         scheduleAccountStateSync(useKeyStore(), "read_state");
         if (emitReceipt && /^[0-9a-f]{64}$/i.test(latestIncoming.id)) {
