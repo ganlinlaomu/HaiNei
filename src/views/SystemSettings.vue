@@ -342,7 +342,7 @@ import {
   type RelayConfig,
   type RelaySource
 } from "@/services/connectionSettings";
-import { isAccountResourceStale, runAfterFirstPaint } from "@/utils/bottomTabActivation";
+import { isAccountResourceStale, runAfterFirstPaint, runWhenIdle } from "@/utils/bottomTabActivation";
 import {
   checkAndroidUpdate,
   getCurrentAndroidVersion,
@@ -435,6 +435,8 @@ let cacheStatsAccount = "";
 let cacheStatsUpdatedAt = 0;
 let cacheRefresh: { account: string; promise: Promise<void> } | null = null;
 let cancelScheduledCacheRefresh: (() => void) | null = null;
+let cancelDeferredRuntimeRefresh: (() => void) | null = null;
+let viewActive = false;
 const CACHE_STATS_MAX_AGE_MS = 5 * 60_000;
 
 function relaySourceLabel(source: RelaySource) {
@@ -601,6 +603,18 @@ function stopStatusPolling() {
   statusInterval = null;
   statusUnsubscribe?.();
   statusUnsubscribe = null;
+}
+
+function scheduleDeferredRuntimeRefresh() {
+  if (!viewActive || cancelDeferredRuntimeRefresh) return;
+  cancelDeferredRuntimeRefresh = runWhenIdle(() => {
+    cancelDeferredRuntimeRefresh = null;
+    if (!viewActive || !keyStore.pkHex) return;
+    startStatusPolling();
+    scheduleCacheStatsRefresh();
+    void refreshBiometricSupport();
+    if (isNativeAndroid) void refreshAndroidVersion();
+  }, 1_000);
 }
 
 async function refreshCacheStats(force = false) {
@@ -813,29 +827,37 @@ watch(() => keyStore.pkHex, async pk => {
     return;
   }
   if (cacheStatsAccount !== pk) Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
+  backgroundLock.value = deviceStorage.getItem(autoLockKey(pk)) === "1";
   pushEnabled.value = pushEnabledForAccount(pk);
   if (settings.loadedFor !== pk) await settings.load(pk);
   if (keyStore.pkHex !== pk || settings.loadedFor !== pk) return;
-  scheduleCacheStatsRefresh();
-  void refreshDiagnostics();
+
+  // Relay state is already in memory, so this is safe for first paint.
+  refreshStatuses();
+  scheduleDeferredRuntimeRefresh();
 }, { immediate: true });
 
 onMounted(() => {
-  startStatusPolling();
-  void refreshBiometricSupport();
-  if (isNativeAndroid) void refreshAndroidVersion();
+  viewActive = true;
+  scheduleDeferredRuntimeRefresh();
 });
 onActivated(() => {
-  startStatusPolling();
-  scheduleCacheStatsRefresh();
+  viewActive = true;
+  scheduleDeferredRuntimeRefresh();
 });
 onDeactivated(() => {
+  viewActive = false;
   stopStatusPolling();
+  cancelDeferredRuntimeRefresh?.();
+  cancelDeferredRuntimeRefresh = null;
   cancelScheduledCacheRefresh?.();
   cancelScheduledCacheRefresh = null;
 });
 onBeforeUnmount(() => {
+  viewActive = false;
   stopStatusPolling();
+  cancelDeferredRuntimeRefresh?.();
+  cancelDeferredRuntimeRefresh = null;
   cancelScheduledCacheRefresh?.();
 });
 </script>
