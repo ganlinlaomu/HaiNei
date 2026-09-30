@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { isAccountResourceStale, loadAccountStoresOnce } from "@/utils/bottomTabActivation";
+import { isAccountResourceStale, loadAccountStoresOnce, runWhenIdle } from "@/utils/bottomTabActivation";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -43,19 +43,50 @@ describe("bottom-tab activation loading", () => {
     expect(isAccountResourceStale(OTHER, ACCOUNT, now - 1_000, maxAge, now)).toBe(true);
   });
 
-  it("wires activations to deduped loads, stale cache checks, and idle chunk preload", () => {
+  it("defers non-critical work until after the interaction path", async () => {
+    vi.useFakeTimers();
+    const originalRequestIdle = (globalThis as any).requestIdleCallback;
+    const originalCancelIdle = (globalThis as any).cancelIdleCallback;
+    delete (globalThis as any).requestIdleCallback;
+    delete (globalThis as any).cancelIdleCallback;
+    const task = vi.fn();
+    try {
+      runWhenIdle(task, 1_000);
+      expect(task).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(159);
+      expect(task).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(task).toHaveBeenCalledOnce();
+    } finally {
+      if (originalRequestIdle) (globalThis as any).requestIdleCallback = originalRequestIdle;
+      if (originalCancelIdle) (globalThis as any).cancelIdleCallback = originalCancelIdle;
+      vi.useRealTimers();
+    }
+  });
+
+  it("preloads and keeps system settings local-first while deferring diagnostics", () => {
     const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     const systemSettings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
     const routes = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
+    const lazyViews = readFileSync(join(process.cwd(), "src/router/lazyViews.ts"), "utf8");
 
     expect(conversations).toContain("loadAccountStoresOnce(account, [messages, friendships, friends, profiles])");
     expect(systemSettings).toContain("isAccountResourceStale(");
-    expect(systemSettings).toContain("scheduleCacheStatsRefresh();");
+    expect(systemSettings).toContain("scheduleDeferredRuntimeRefresh()");
+    expect(systemSettings).toContain("runWhenIdle(");
     expect(systemSettings).toContain('@click="refreshCacheStats(true)"');
+    expect(systemSettings).not.toContain("onMounted(() => {\n  startStatusPolling();");
+    expect(settings).toContain("loadSystemSettingsView");
+    expect(settings).toContain('@pointerdown="preloadSystemSettings"');
     expect(app).toContain("void preloadBottomTabViews()");
+    expect(app).toContain("'SystemSettings'");
     expect(routes).toContain("component: loadConversationsView");
     expect(routes).toContain("component: loadNotificationsView");
     expect(routes).toContain("component: loadSettingsView");
+    expect(routes).toContain("component: loadSystemSettingsView");
+    expect(lazyViews).toContain("loadSystemSettingsView()");
+    expect(lazyViews).toContain('import("@/views/SystemSettings.vue")');
   });
 });
