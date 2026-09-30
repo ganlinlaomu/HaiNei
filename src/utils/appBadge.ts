@@ -24,12 +24,15 @@ async function accountScopeForBadge(account: string) {
 }
 
 export async function syncAppBadgeScope(account: string, target: BadgeNavigator = navigator as BadgeNavigator) {
+  const current = ++generation;
   const serviceWorker = target.serviceWorker;
   if (!serviceWorker) return;
   try {
     const registration = await serviceWorker.ready;
     const worker = serviceWorker.controller || registration.active;
-    worker?.postMessage({ type: "SYNC_APP_BADGE_SCOPE", accountScope: await accountScopeForBadge(account) });
+    const accountScope = await accountScopeForBadge(account);
+    if (current !== generation) return;
+    worker?.postMessage({ type: "SYNC_APP_BADGE_SCOPE", accountScope });
   } catch {}
 }
 
