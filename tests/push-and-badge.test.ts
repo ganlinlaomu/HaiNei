@@ -698,7 +698,7 @@ describe("privacy-preserving push and badge", () => {
 
   it("clears foreground DM unread before read-state persistence can delay the icon badge", () => {
     const source = readFileSync(new URL("../src/stores/directMessages.ts", import.meta.url), "utf8");
-    const methodStart = source.indexOf("async markPeerRead(peerPubkey: string)");
+    const methodStart = source.indexOf("async markPeerRead(peerPubkey: string,");
     const methodEnd = source.indexOf("async hideConversation(peerPubkey: string)", methodStart);
     const method = source.slice(methodStart, methodEnd);
     const memoryClear = method.indexOf("this.unreadByConversation = { ...this.unreadByConversation");

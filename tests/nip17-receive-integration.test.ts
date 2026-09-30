@@ -89,6 +89,10 @@ async function startReceiver(options: {
     repository: options.repository,
     subscribe: options.relay.subscribe,
     observeRelays: () => () => {},
+    // All relay delivery is handled by RelayHarness; never open test URLs.
+    resumeRelays: () => {},
+    retryOutgoing: () => {},
+    activeReadRelays: () => RELAYS,
     now: () => 1_700_000_100_000
   });
   managers.push(manager);
