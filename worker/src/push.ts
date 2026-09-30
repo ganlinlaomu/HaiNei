@@ -416,8 +416,10 @@ export async function triggerGenericPush(
   if (!EVENT_ID.test(messageId)) throw new HttpError(400, "invalid_push_message_id");
 
   const senderLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_SENDER, 60, 5, 600);
+  const globalLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_GLOBAL, 1000, 50, 10000);
   const now = Math.floor(Date.now() / 1000);
   await consumeRateLimit(env, `push:sender:${senderPubkey}`, senderLimit, 60, now);
+  await consumeRateLimit(env, "push:global", globalLimit, 60, now);
 
   const placeholders = recipients.map(() => "?").join(",");
   const rows = await env.DB.prepare(`
@@ -442,6 +444,11 @@ export async function triggerGenericPush(
     try {
       // Re-validate persisted data in case an older deployment stored unsafe rows.
       validatedPushEndpoint(env, row.endpoint);
+      const recipientLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_RECIPIENT, 30, 5, 600);
+      const deviceLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_DEVICE, 30, 5, 600);
+      const endpointFingerprint = (await sha256Hex(row.endpoint)).slice(0, 24);
+      await consumeRateLimit(env, `push:recipient:${row.account_pubkey}`, recipientLimit, 60, now);
+      await consumeRateLimit(env, `push:device:${endpointFingerprint}`, deviceLimit, 60, now);
       reservation = await reservePushDelivery(env, senderPubkey, row.account_pubkey, messageId, row.endpoint, now);
       if (!reservation.reserved) return;
 
