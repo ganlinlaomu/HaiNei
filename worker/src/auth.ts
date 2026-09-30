@@ -18,6 +18,33 @@ function tagValues(event: Event, name: string) {
   return event.tags.filter(tag => tag[0] === name).map(tag => tag[1]);
 }
 
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, child]) => child !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, stableValue(child)]),
+    );
+  }
+  return value;
+}
+
+function stableJson(value: unknown) {
+  return JSON.stringify(stableValue(value));
+}
+
+async function payloadHash(payload: Record<string, unknown>) {
+  return sha256(stableJson(payload));
+}
+
+export type WorkerAuthBinding = {
+  url: string;
+  method: string;
+  payload: Record<string, unknown>;
+};
+
 export async function createChallenge(env: Env, now = Math.floor(Date.now() / 1000)) {
   const challenge = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
   const expiresAt = now + integerSetting(env.AUTH_CHALLENGE_TTL_SECONDS, 300, 60, 600);
@@ -35,6 +62,7 @@ export async function verifyAndConsumeChallenge(
   eventValue: unknown,
   now = Math.floor(Date.now() / 1000),
   expectedAction = "hainei_media_session",
+  binding?: WorkerAuthBinding,
 ) {
   const challenge = typeof challengeValue === "string" ? challengeValue.trim().toLowerCase() : "";
   if (!CHALLENGE.test(challenge)) throw new HttpError(400, "invalid_challenge");
@@ -56,6 +84,18 @@ export async function verifyAndConsumeChallenge(
   }
   if (expirations.length !== 1 || !/^\d+$/.test(expirations[0]) || Number(expirations[0]) <= now) {
     throw new HttpError(401, "auth_event_expired");
+  }
+
+  if (binding) {
+    const urls = tagValues(event, "u");
+    const methods = tagValues(event, "method");
+    const payloads = tagValues(event, "payload");
+    const expectedUrl = binding.url;
+    const expectedMethod = binding.method.toUpperCase();
+    const expectedPayload = await payloadHash(binding.payload);
+    if (urls.length !== 1 || urls[0] !== expectedUrl) throw new HttpError(401, "auth_url_mismatch");
+    if (methods.length !== 1 || methods[0]?.toUpperCase() !== expectedMethod) throw new HttpError(401, "auth_method_mismatch");
+    if (payloads.length !== 1 || payloads[0] !== expectedPayload) throw new HttpError(401, "auth_payload_mismatch");
   }
 
   const challengeHash = await sha256(challenge);
