@@ -135,7 +135,7 @@ export const useKeyStore = defineStore("keys", {
       if (!isCurrent()) return;
       if (this.supportsNip44) {
         void fetchAndMaterializeAccountState(this, ACCOUNT_STATE_NAMESPACES, { onlyNewer: true, isCurrent })
-          .then(async () => {
+          .then(async restoredState => {
             if (!isCurrent()) return;
             await useFriendshipsStore().reloadFromStorage(pk);
             if (!isCurrent()) return;
@@ -143,6 +143,10 @@ export const useKeyStore = defineStore("keys", {
             if (!isCurrent()) return;
             await Promise.all([useFriendsStore().reloadFromStorage(pk), useProfilesStore().load(pk, true), useBookmarksStore().load(pk, true)]);
             if (!isCurrent()) return;
+            if (restoredState.restored.includes("read_state") || restoredState.restored.includes("friendships")) {
+              await useDirectMessagesStore().refresh(pk);
+              if (!isCurrent()) return;
+            }
             const { pushEnabledForAccount, syncPushAuthorizationPolicy } = await import("@/services/pushNotifications");
             if (pushEnabledForAccount(pk)) await syncPushAuthorizationPolicy(pk, useFriendshipsStore().records.filter(r => r.state === "accepted").map(r => r.peerPubkey), this.signEvent.bind(this));
           }).catch(() => debugLog("account", "background_restore_unavailable", {}, "warn"));
