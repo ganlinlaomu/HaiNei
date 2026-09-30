@@ -319,6 +319,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
   state: () => ({
     loadedFor: "",
     unreadByConversation: {} as Record<string, number>,
+    unreadHydratingFor: "",
     readCursors: {} as Record<string, MessageCursor | undefined>,
     persistedReadCursors: {} as Record<string, MessageCursor | undefined>,
     preferencesByPeer: {} as Record<string, ConversationPreference | undefined>,
@@ -567,7 +568,13 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const account=this.loadedFor;
       if(!account)return;
       const cursors = this.readCursors;
-      const keys=Object.keys(this.unreadByConversation).filter(id=>!conversationId || id===conversationId);
+      const visibleConversationIds = useMessagesStore().inbox
+        .filter(item => isDirectMessageTags(item.tags))
+        .map(item => item.conversationId)
+        .filter((value): value is string => !!value);
+      const keys = conversationId
+        ? [conversationId]
+        : [...new Set([...Object.keys(this.unreadByConversation), ...visibleConversationIds])];
       const preferences = this.preferencesByPeer;
       const records = useFriendshipsStore().records;
       const counts = await Promise.all(keys.map(async id => {
@@ -697,7 +704,12 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       await this.unhideForNewCanonicalMessages(account, peer);
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
-      if (item.conversationId) this.recomputeUnreadFromMemory(item.conversationId);
+      // During initial Relay history hydration, keep the login badge frozen.
+      // The final count is reconciled once from durable history against the
+      // restored read cursor when startup catch-up reaches live state.
+      if (item.conversationId && this.unreadHydratingFor !== account) {
+        this.recomputeUnreadFromMemory(item.conversationId);
+      }
       await this.relinkOutgoingTask(account, item);
     },
     async reconcileAuthorization(accountPubkey: string) {
@@ -708,6 +720,23 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       }
       this.recomputeUnreadFromMemory();
+    },
+    beginUnreadHydration(accountPubkey: string) {
+      const account = accountPubkey.toLowerCase();
+      if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      this.unreadHydratingFor = account;
+    },
+    async finishUnreadHydration(accountPubkey: string) {
+      const account = accountPubkey.toLowerCase();
+      if (!account || this.unreadHydratingFor !== account) return;
+      if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) {
+        this.unreadHydratingFor = "";
+        return;
+      }
+      await this.reconcileDurableUnread();
+      if (this.loadedFor === account && useKeyStore().pkHex.toLowerCase() === account) {
+        this.unreadHydratingFor = "";
+      }
     },
     claimDerivedStateOwnership() {
       registerDirectMessageStateOwner({
@@ -1313,6 +1342,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
       this.loadedFor = "";
       this.unreadByConversation = {};
+      this.unreadHydratingFor = "";
       this.readCursors = {};
       this.persistedReadCursors = {};
       this.preferencesByPeer = {};
