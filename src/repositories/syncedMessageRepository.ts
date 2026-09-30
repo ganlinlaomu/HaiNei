@@ -179,6 +179,11 @@ export class SyncedMessageRepository {
     await this.database.decryptedEvents.put({ accountPubkey: account, eventId, message, decryptedAt: Date.now() });
   }
 
+  async deleteDecryptedEvent(accountPubkey: string, eventId: string) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    await this.database.decryptedEvents.delete([account, eventId]);
+  }
+
   async deferAuthorizationMessage(
     accountPubkey: string,
     message: CanonicalMessage,
