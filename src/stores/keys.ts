@@ -114,6 +114,22 @@ export const useKeyStore = defineStore("keys", {
       // an account switch can briefly reconnect using the previous account's Relay mirror.
       if (!isCurrent()) return;
       warmReadRelaysForSession(this);
+      // Read state and friendship authorization are startup-critical for DMs.
+      // Do not let Relay history race ahead of them: otherwise old history is
+      // temporarily counted as unread and the badge oscillates during login.
+      const criticalStateNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
+        namespace => namespace === "read_state" || namespace === "friendships"
+      );
+      const criticalStateRestore = this.supportsNip44
+        ? fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false, isCurrent })
+            .catch(error => {
+              debugLog("account", "critical_state_restore_unavailable", {
+                reason: error instanceof Error ? error.name : "unknown",
+              }, "warn");
+              return { available: false, restored: [] };
+            })
+        : Promise.resolve({ available: false, restored: [] });
+
       const accountLoads: Array<[string, () => unknown | Promise<unknown>]> = [
         ["friends", () => useFriendsStore().load(pk)],
         ["friendships", () => useFriendshipsStore().load(pk)],
@@ -121,38 +137,48 @@ export const useKeyStore = defineStore("keys", {
         ["feed preferences", () => useFeedPreferencesStore().load(pk)],
         ["bookmarks", () => useBookmarksStore().load(pk)],
         ["messages", () => useMessagesStore().load(pk)],
-        ["direct messages", () => useDirectMessagesStore().refresh(pk)],
         ["interactions", () => useInteractionsStore().load(pk)],
         ["notifications", () => useNotificationsStore().load(pk)],
       ];
-      await Promise.all(accountLoads.map(async ([label, load]) => {
-        try {
-          await load();
-        } catch (e) {
-          console.error(`[account] ${label} load failed account=${account}`, e);
-        }
-      }));
+      const [, criticalState] = await Promise.all([
+        Promise.all(accountLoads.map(async ([label, load]) => {
+          try {
+            await load();
+          } catch (e) {
+            console.error(`[account] ${label} load failed account=${account}`, e);
+          }
+        })),
+        criticalStateRestore,
+      ]);
       if (!isCurrent()) return;
+
+      // Re-read authorization after the merged snapshot, then derive DM unread
+      // exactly once from the finalized read cursors before Relay subscriptions
+      // are allowed to replay any history.
+      if (criticalState.restored.includes("friendships")) {
+        await useFriendshipsStore().reloadFromStorage(pk);
+        if (!isCurrent()) return;
+      }
+      await useDirectMessagesStore().refresh(pk);
+      if (!isCurrent()) return;
+
       if (this.supportsNip44) {
-        void fetchAndMaterializeAccountState(this, ACCOUNT_STATE_NAMESPACES, { onlyNewer: true, isCurrent })
-          .then(async restoredState => {
-            if (!isCurrent()) return;
-            await useFriendshipsStore().reloadFromStorage(pk);
+        const backgroundNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
+          namespace => !criticalStateNamespaces.includes(namespace)
+        );
+        void fetchAndMaterializeAccountState(this, backgroundNamespaces, { onlyNewer: true, isCurrent })
+          .then(async () => {
             if (!isCurrent()) return;
             await useSettingsStore().load(pk, true);
             if (!isCurrent()) return;
             await Promise.all([useFriendsStore().reloadFromStorage(pk), useProfilesStore().load(pk, true), useBookmarksStore().load(pk, true)]);
             if (!isCurrent()) return;
-            if (restoredState.restored.includes("read_state") || restoredState.restored.includes("friendships")) {
-              await useDirectMessagesStore().refresh(pk);
-              if (!isCurrent()) return;
-            }
             const { pushEnabledForAccount, syncPushAuthorizationPolicy } = await import("@/services/pushNotifications");
             if (pushEnabledForAccount(pk)) await syncPushAuthorizationPolicy(pk, useFriendshipsStore().records.filter(r => r.state === "accepted").map(r => r.peerPubkey), this.signEvent.bind(this));
           }).catch(() => debugLog("account", "background_restore_unavailable", {}, "warn"));
       }
-      // Account-level UI is ready from IndexedDB/D1 now. Relay history repair
-      // continues in the session service and checkpoints only after reconciliation.
+      // Relay history starts only after read_state has been restored/merged and
+      // direct-message unread has been derived from that authoritative cursor.
       void startAccountMessageSync(this)
         .then(async () => {
           if (!this.supportsNip44 || this.pkHex !== pk) return;
