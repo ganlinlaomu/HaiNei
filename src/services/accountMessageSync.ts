@@ -107,6 +107,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   }
 
   try {
+    let homeHandler: ReturnType<typeof createHomeMessageHandler>;
     await accountMessageSyncManager.start({
       accountPubkey: account,
       relays: getRelaysFromStorage("read"),
@@ -115,7 +116,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         accountPubkey: account,
         nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined,
       },
-      onMessage: createHomeMessageHandler({
+      onMessage: homeHandler = createHomeMessageHandler({
+        deferUntilDurable: true,
         accountPubkey: account,
         currentAccount: () => activeKeys?.pkHex || "",
         isAuthorizationReady: () => friendships.loadedFor === account && friendships.authorizationReady && !friendships.loading,
@@ -173,7 +175,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
           tags: message.tags,
         }),
       }),
-      onPersistedMessage: message => directMessages.acknowledgePersistedIncoming(account, message),
+      onPersistedMessage: async (message, metadata) => {
+        await homeHandler(message, {...metadata,durable:true});
+        await directMessages.acknowledgePersistedIncoming(account, message);
+      },
       onStatus: status => {
         setAccountMessageSyncStatus(account, status);
         if (status !== "live" || friendshipHistoryComplete) return;

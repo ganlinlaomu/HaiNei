@@ -10,10 +10,10 @@ export const useBookmarksStore = defineStore("bookmarks", {
     isBookmarked: state => (messageId: string) => state.records.some(item => item.messageId === messageId)
   },
   actions: {
-    async load(accountPubkey?: string) {
+    async load(accountPubkey?: string, force = false) {
       const account = (accountPubkey || useKeyStore().pkHex).toLowerCase();
       if (!account) return this.reset();
-      if (this.loadedFor === account) return;
+      if (this.loadedFor === account && !force) return;
       this.reset();
       this.loadedFor = account;
       const records = await bookmarkRepository.list(account);

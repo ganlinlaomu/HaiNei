@@ -2,7 +2,7 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 
 export const APP_VERSION = "0.1.5";
-export const DB_VERSION = 13;
+export const DB_VERSION = 14;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -46,6 +46,7 @@ export type SyncedMessageRecord = {
   senderPubkey: string;
   recipientPubkeys: string[];
   conversationId: string;
+  messageClass?: "direct" | "other";
   plaintext?: string;
   ciphertext?: string;
   createdAt: number;
@@ -61,6 +62,8 @@ export type SyncedMessageRecord = {
 };
 
 export type ConversationStateRecord = {
+  visibleUnreadCache?: { policy: string; count: number };
+  unreadCache?: { cursor: string; count: number; directCount: number };
   accountPubkey: string;
   conversationId: string;
   lastMessageId: string;
@@ -567,6 +570,12 @@ export class HaiNeiDatabase extends Dexie {
       deviceKeyValues: "key, updatedAt",
       accountStateMirrors: "[accountPubkey+namespace], accountPubkey, [accountPubkey+updatedAt]"
     });
+    this.version(14).stores({
+      syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+conversationId+createdAt+id], [accountPubkey+createdAt+id], [accountPubkey+conversationId+messageClass+createdAt+id], [accountPubkey+createdAt], [accountPubkey+senderPubkey]"
+    }).upgrade(transaction => transaction.table("syncedMessages").toCollection().modify(record => {
+      record.messageClass = record.tags?.some((tag: string[]) => tag[0] === "t" && tag[1] === "hainei-dm") ? "direct" : "other";
+    }));
+
   }
 }
 

@@ -25,10 +25,10 @@ export const useProfilesStore = defineStore("profiles", {
       state.records.find(profile => profile.ownerPubkey === normalized(ownerPubkey))
   },
   actions: {
-    async load(accountPubkey?: string) {
+    async load(accountPubkey?: string, force = false) {
       const account = normalized(accountPubkey || useKeyStore().pkHex);
       if (!account) return this.reset();
-      if (this.loadedFor === account) return;
+      if (this.loadedFor === account && !force) return;
       this.records = [];
       this.loadedFor = account;
       this.loading = true;

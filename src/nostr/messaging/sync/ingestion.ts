@@ -1,3 +1,4 @@
+import { BoundedSet } from "@/utils/boundedSet";
 import type { NostrEvent } from "nostr-tools";
 import { decodeMessageEvent, type CanonicalMessage, type DecodeContext } from "@/nostr/messaging/protocol";
 import { syncedMessageRepository, type SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -34,9 +35,9 @@ const MAX_PERSISTENCE_RETRY_ATTEMPTS = 3;
 const PERSISTENCE_RETRY_DELAY_MS = 500;
 
 export class MessageIngestionPipeline {
-  private readonly deliveredLogicalIds = new Set<string>();
-  private readonly discardedLogicalIds = new Set<string>();
-  private readonly finalizedTransportIds = new Set<string>();
+  private readonly deliveredLogicalIds = new BoundedSet<string>();
+  private readonly discardedLogicalIds = new BoundedSet<string>();
+  private readonly finalizedTransportIds = new BoundedSet<string>();
   private readonly logicalFlights = new Map<string, Promise<{ inserted: boolean; discarded: boolean; deferred: boolean }>>();
   private readonly pendingPersistenceRetries = new Map<string, {
     message: CanonicalMessage;
@@ -161,7 +162,6 @@ export class MessageIngestionPipeline {
           return { inserted: false, discarded: true, deferred: false };
         }
         decryptedEventCache.set(cacheKey, message);
-        if (message) void this.repository.putDecryptedEvent(this.accountPubkey, eventId, message).catch(() => {});
       }
     } catch (e) {
       debugLog("sync", "decode_null", {
@@ -353,8 +353,12 @@ export class MessageIngestionPipeline {
   retryDeferredAuthorization() {
     if (this.retryDeferredFlight) return this.retryDeferredFlight;
     const run = (async () => {
-      const records = await this.repository.listDeferredAuthorizationMessages(this.accountPubkey);
       let finalized = 0;
+      let afterId: string | undefined;
+      // The account queue is capped at 500. Stable IDs let every sender get a
+      // turn even when unresolved rows update their deferred timestamp.
+      for (let page = 0; page < 10 && this.isSessionCurrent(); page++) {
+      const records = await this.repository.listDeferredAuthorizationMessages(this.accountPubkey, afterId);
       for (const record of records) {
         if (!this.isSessionCurrent()) break;
         const message = record.message as CanonicalMessage;
@@ -368,6 +372,9 @@ export class MessageIngestionPipeline {
         } satisfies MessageIngestionMetadata;
         const result = await this.ingestCanonicalMessage(message, metadata);
         if (!result.deferred) finalized++;
+      }
+      if (records.length < 50) break;
+      afterId = records.at(-1)?.id;
       }
       return finalized;
     })().finally(() => {

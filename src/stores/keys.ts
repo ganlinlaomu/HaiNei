@@ -67,6 +67,7 @@ export const useKeyStore = defineStore("keys", {
     pkHex: "" as string,
     loginMethod: "" as "private-key" | "",
     accounts: listDeviceAccounts() as DeviceAccount[],
+    sessionGeneration: 0,
     loginTimestamp: 0 as number, // Unix timestamp when user logged in
     isEncrypted: false as boolean, // Whether the current login uses encrypted storage
     isUnlocked: false as boolean, // Whether the encrypted key has been unlocked
@@ -88,14 +89,10 @@ export const useKeyStore = defineStore("keys", {
   actions: {
     async loadAccountStores(pk: string) {
       if (this.pkHex && this.pkHex !== pk) clearAccountScopedCaches(this.pkHex);
+      const generation = ++this.sessionGeneration;
+      const isCurrent = () => this.pkHex === pk && this.sessionGeneration === generation && this.isUnlocked;
+      if (!isCurrent()) return;
       const account = pk.slice(0, 8);
-      if (this.supportsNip44) {
-        try {
-          await fetchAndMaterializeAccountState(this);
-        } catch (e) {
-          console.warn(`[account] encrypted snapshot restore unavailable account=${account}`, e);
-        }
-      }
       // Settings must load first so no later store can use the previous account's
       // relay or Blossom mirrors during an account switch.
       try {
@@ -105,6 +102,7 @@ export const useKeyStore = defineStore("keys", {
       }
       // Warm only after this account's settings have been materialized, otherwise
       // an account switch can briefly reconnect using the previous account's Relay mirror.
+      if (!isCurrent()) return;
       warmReadRelaysForSession(this);
       const accountLoads: Array<[string, () => unknown | Promise<unknown>]> = [
         ["friends", () => useFriendsStore().load(pk)],
@@ -124,6 +122,21 @@ export const useKeyStore = defineStore("keys", {
           console.error(`[account] ${label} load failed account=${account}`, e);
         }
       }));
+      if (!isCurrent()) return;
+      if (this.supportsNip44) {
+        void fetchAndMaterializeAccountState(this, ACCOUNT_STATE_NAMESPACES, { onlyNewer: true, isCurrent })
+          .then(async () => {
+            if (!isCurrent()) return;
+            await useFriendshipsStore().reloadFromStorage(pk);
+            if (!isCurrent()) return;
+            await useSettingsStore().load(pk, true);
+            if (!isCurrent()) return;
+            await Promise.all([useFriendsStore().reloadFromStorage(pk), useProfilesStore().load(pk, true), useBookmarksStore().load(pk, true)]);
+            if (!isCurrent()) return;
+            const { pushEnabledForAccount, syncPushAuthorizationPolicy } = await import("@/services/pushNotifications");
+            if (pushEnabledForAccount(pk)) await syncPushAuthorizationPolicy(pk, useFriendshipsStore().records.filter(r => r.state === "accepted").map(r => r.peerPubkey), this.signEvent.bind(this));
+          }).catch(() => debugLog("account", "background_restore_unavailable", {}, "warn"));
+      }
       // Account-level UI is ready from IndexedDB/D1 now. Relay history repair
       // continues in the session service and checkpoints only after reconciliation.
       void startAccountMessageSync(this)
@@ -139,6 +152,7 @@ export const useKeyStore = defineStore("keys", {
     },
 
     resetAccountStores(currentPk: string) {
+      this.sessionGeneration++;
       stopAccountMessageSync();
       clearAccountScopedCaches(currentPk);
       cancelOutgoingWorkForAccount(currentPk);
@@ -229,7 +243,7 @@ export const useKeyStore = defineStore("keys", {
 
     async clearActiveSession() {
       const currentPk = this.pkHex;
-      if (currentPk) this.resetAccountStores(currentPk);
+      if (currentPk) { this.resetAccountStores(currentPk); }
       this.skHex = "";
       this.pkHex = "";
       this.loginMethod = "";
@@ -245,7 +259,7 @@ export const useKeyStore = defineStore("keys", {
       if (!account.hasEncryptedKey || !hasEncryptedKey(account.pubkey)) {
         throw new Error("该私钥账号未在本机加密保存，请重新输入私钥");
       }
-      if (this.pkHex && this.pkHex !== account.pubkey) this.resetAccountStores(this.pkHex);
+      if (this.pkHex) { this.resetAccountStores(this.pkHex); }
       this.skHex = "";
       this.pkHex = account.pubkey;
       this.loginMethod = "private-key";
@@ -340,7 +354,7 @@ export const useKeyStore = defineStore("keys", {
     },
     async loginWithSk(sk: string) {
       const previousPubkey = this.pkHex;
-      if (previousPubkey) this.resetAccountStores(previousPubkey);
+      if (previousPubkey) { this.resetAccountStores(previousPubkey); }
       await this.clearPersistedSession();
 
       this.skHex = sk;
@@ -401,7 +415,7 @@ export const useKeyStore = defineStore("keys", {
         if (password && password.trim()) {
           const encrypted = await encryptPrivateKey(skHex, password);
           await storeEncryptedKey(pk, encrypted);
-          if (previousPubkey) this.resetAccountStores(previousPubkey);
+          if (previousPubkey) { this.resetAccountStores(previousPubkey); }
           
           this.skHex = skHex;
           this.pkHex = pk;

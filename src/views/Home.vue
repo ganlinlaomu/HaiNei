@@ -68,7 +68,7 @@ import { defineComponent, ref, onMounted, onBeforeUnmount, onActivated, onDeacti
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
-import { useMessagesStore, type InboxItem } from "@/stores/messages";
+import { isHomeControl, useMessagesStore, type InboxItem } from "@/stores/messages";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
 import { logger } from "@/utils/logger";
 import PostCard from "@/components/PostCard.vue";
@@ -119,10 +119,13 @@ export default defineComponent({
     const lastSeenCreatedAt = ref(0); // Track the watermark for filtering pending messages
     const inboxRevision = computed(() => msgs.inboxRevision);
     const feedPreferenceRevision = computed(() => feedPreferences.revision);
-    const isHomeRenderable = (message: InboxItem) => !isDirectMessageTags(message.tags)
+    const isHomeRenderable = (message: InboxItem) => !isHomeControl(message.tags, message.content) && !isDirectMessageTags(message.tags)
       && !isDmReceiptMessage({ tags: message.tags })
       && !isDmReceiptPayload(message.content);
-    const visibleInbox = () => msgs.inbox.filter(message => isHomeRenderable(message) && feedPreferences.isVisible(message));
+    const storedHistory = ref<InboxItem[]>([]);
+    let historyCursor: {createdAt:number;id:string} | undefined;
+    const historyExhausted = ref(false);
+    const visibleInbox = () => [...new Map([...storedHistory.value,...msgs.inbox].map(m=>[m.id,m])).values()].filter(message => isHomeRenderable(message) && feedPreferences.isVisible(message));
 
     let homeAccountPk = "";
     let stopSyncStatusListener: (() => void) | null = null;
@@ -343,7 +346,7 @@ export default defineComponent({
     // 分页相关状态
     const PAGE_SIZE = 20; // 每页显示 20 条
     const hasMore = computed(() => {
-      return messagesRef.value.length > displayedMessages.value.length;
+      return !historyExhausted.value || messagesRef.value.length > displayedMessages.value.length;
     });
     const isLoadingMore = ref(false);
     const loadMoreSentinel = ref<HTMLElement | null>(null);
@@ -352,6 +355,7 @@ export default defineComponent({
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
 
     function clearHomeRuntimeState() {
+      storedHistory.value=[]; historyCursor=undefined; historyExhausted.value=false;
       messagesRef.value = [];
       displayedMessages.value = [];
       pendingMessages.value = [];
@@ -581,23 +585,24 @@ async function safeUpdateLocalRefs() {
   });
 }
     // 加载更多消息
-    function loadMoreMessages() {
+    async function loadMoreMessages() {
       if (isLoadingMore.value || !hasMore.value) return;
-      
-      isLoadingMore.value = true;
-      
-      const appendPage = () => {
-        const startIndex = displayedMessages.value.length;
-        const endIndex = Math.min(startIndex + PAGE_SIZE, messagesRef.value.length);
-        const newMessages = messagesRef.value.slice(startIndex, endIndex);
-
-        displayedMessages.value = [...displayedMessages.value, ...newMessages];
-        isLoadingMore.value = false;
-
-        logger.info(`加载了 ${newMessages.length} 条消息，总共显示 ${displayedMessages.value.length} 条`);
-      };
-      if (typeof requestAnimationFrame === "function") requestAnimationFrame(appendPage);
-      else appendPage();
+      isLoadingMore.value=true;
+      const account=keys.pkHex;
+      try {
+        if (messagesRef.value.length <= displayedMessages.value.length + PAGE_SIZE && !historyExhausted.value) {
+          const records=await syncedMessageRepository.listHistoryPage(account,historyCursor);
+          if(keys.pkHex!==account)return;
+          historyExhausted.value=records.length<100;
+          const last=records.at(-1);
+          if(last)historyCursor={createdAt:last.createdAt,id:last.id};
+          const restored=records.map(syncedRecordToInbox).filter((item):item is InboxItem=>!!item);
+          storedHistory.value=[...storedHistory.value,...restored];
+          rebuildVisibleInbox();
+        }
+        displayedMessages.value=messagesRef.value.slice(0,displayedMessages.value.length+PAGE_SIZE);
+      } catch { ui.addToast("历史消息加载失败，请重试",1800,"error"); }
+      finally {isLoadingMore.value=false;}
     }
 
     function attachLoadMoreObserver() {

@@ -309,20 +309,21 @@ export async function replacePushAuthorizationPolicy(
   const ttl = integerSetting(env.PUSH_AUTHORIZATION_TTL_SECONDS, 30 * 24 * 60 * 60, 3600, 90 * 24 * 60 * 60);
   const expiresAt = now + ttl;
 
-  // Delete first: a partial failure can suppress notifications, but cannot leave
-  // a sender authorized after the recipient has removed it from the policy.
-  await env.DB.prepare("DELETE FROM hainei_push_authorizations WHERE recipient_pubkey = ?")
-    .bind(recipientPubkey).run();
+  // D1 executes the replacement as one transaction; concurrent refreshes
+  // cannot interleave a removed sender back into another request's policy.
+  const statements = [env.DB.prepare("DELETE FROM hainei_push_authorizations WHERE recipient_pubkey = ?")
+    .bind(recipientPubkey)];
   for (const senderPubkey of senders) {
-    await env.DB.prepare(`
+    statements.push(env.DB.prepare(`
       INSERT INTO hainei_push_authorizations
         (recipient_pubkey, sender_pubkey, expires_at, updated_at)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(recipient_pubkey, sender_pubkey) DO UPDATE SET
         expires_at = excluded.expires_at,
         updated_at = excluded.updated_at
-    `).bind(recipientPubkey, senderPubkey, expiresAt, now).run();
+    `).bind(recipientPubkey, senderPubkey, expiresAt, now));
   }
+  await env.DB.batch(statements);
   return { accepted: true, expiresAt };
 }
 
@@ -435,10 +436,11 @@ export async function triggerGenericPush(
   if (!rows.results.length) return diagnostics;
 
   const config = pushConfig(env);
-  const payload = JSON.stringify(pushPayload);
   const timeoutMs = integerSetting(env.PUSH_FETCH_TIMEOUT_MS, 8000, 1000, 30000);
 
+  const deadline = Date.now() + 20_000;
   await mapWithConcurrency(rows.results, 4, async row => {
+    if (Date.now() >= deadline) return;
     const host = endpointHost(row.endpoint);
     let reservation: { reserved: boolean; endpointHash: string } | undefined;
     try {
@@ -453,7 +455,7 @@ export async function triggerGenericPush(
       if (!reservation.reserved) return;
 
       const [body, vapidHeaders] = await Promise.all([
-        encryptPushPayload(payload, row.p256dh, row.auth),
+        encryptPushPayload(JSON.stringify({ ...pushPayload, accountScope: await sha256Hex(row.account_pubkey), notificationId: await sha256Hex(`${row.auth}:${senderPubkey}:${messageId}`) }), row.p256dh, row.auth),
         createVapidHeaders(config, row.endpoint),
       ]);
       const controller = new AbortController();

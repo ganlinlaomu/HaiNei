@@ -101,7 +101,7 @@ export class MessageSyncManager {
     this.resumeRelays(options.relays);
     const purged = await this.repository.purgeUnsupportedMessages(accountPubkey);
     if (purged > 0) logger.info(`[message-sync] removed ${purged} unsupported cached messages`);
-    const localMessages = (await this.repository.list(accountPubkey))
+    const localMessages = (await this.repository.listRecent(accountPubkey))
       .filter(record => record.protocol === "nip17" && record.transportKind === 1059);
     for (const record of localMessages) {
       if (!isCurrent()) return;

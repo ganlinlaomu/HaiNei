@@ -289,7 +289,20 @@ const peerPubkey = computed(() => String(route.params.pubkey || "").trim().toLow
 const accepted = computed(() => friendships.loadedFor === keys.pkHex && friendships.isAccepted(peerPubkey.value));
 const localName = computed(() => friends.list.find(friend => friend.pubkey === peerPubkey.value)?.name);
 const displayName = computed(() => privateProfileDisplayName(profiles.getProfile(peerPubkey.value)?.nickname, peerPubkey.value, localName.value));
-const messages = computed(() => directMessages.peerMessages(peerPubkey.value));
+const historyMessages = ref<InboxItem[]>([]);
+const historyCursor = ref<{createdAt:number;id:string}>();
+const historyExhausted = ref(false);
+const messages = computed(() => [...new Map([...historyMessages.value,...directMessages.peerMessages(peerPubkey.value)].map(m=>[m.id,m])).values()].sort((a,b)=>a.created_at-b.created_at || a.id.localeCompare(b.id)));
+async function fetchOlderPage(reset = false) {
+  if (!reset && historyExhausted.value) return;
+  const account=keys.pkHex, peer=peerPubkey.value;
+  const page=await directMessages.loadPeerHistoryPage(peer,reset ? undefined : historyCursor.value);
+  if(account!==keys.pkHex || peer!==peerPubkey.value) return;
+  if(reset) historyMessages.value=[];
+  historyMessages.value=[...page.items,...historyMessages.value];
+  historyCursor.value=page.cursor;
+  historyExhausted.value=page.exhausted;
+}
 const searchContextMessages = ref<InboxItem[]>([]);
 const searchContextActive = ref(false);
 const windowStart = ref(initialMessageWindowStart(messages.value.length));
@@ -599,7 +612,7 @@ function statusLabel(message: InboxItem) {
   switch (statusKind(message)) {
     case "uploading": return "上传中…";
     case "sending": return "发送中…";
-    case "sent": return "✓ 已发送";
+    case "sent": return "✓ Relay 已接受";
     case "delivered": return "✓✓ 已送达";
     case "read": return "✓✓ 已读";
     case "upload_failed": return "上传失败 ·";
@@ -693,7 +706,7 @@ function scheduleDraftSave() {
 function flushDraft(account: string = keys.pkHex, peer: string = peerPubkey.value) {
   clearDraftSaveTimer();
   if (!draftReady || suppressDraftPersistence || !account || !peer) return;
-  void directMessages.saveDraft(peer, { text: draft.value, replyTo: replyingToId.value || undefined }, account);
+  return directMessages.saveDraft(peer, { text: draft.value, replyTo: replyingToId.value || undefined }, account);
 }
 async function restoreDraft(account: string, peer: string) {
   draftReady = false;
@@ -754,14 +767,15 @@ function resetMessageWindow() {
 
 async function prependOlderMessages() {
   const list = messageList.value;
+  if (!list || prependingOlder || (windowStart.value === 0 && historyExhausted.value)) return;
   const nextStart = prependMessageWindowStart(windowStart.value, OLDER_MESSAGE_BATCH);
-  if (!list || prependingOlder || nextStart === windowStart.value) return;
 
   prependingOlder = true;
   const peerAtStart = peerPubkey.value;
   const previousScrollTop = list.scrollTop;
   const previousScrollHeight = list.scrollHeight;
   list.style.overflowAnchor = "none";
+  if (windowStart.value === 0) await fetchOlderPage();
   windowStart.value = nextStart;
   await nextTick();
   if (disposed || peerAtStart !== peerPubkey.value) {
@@ -819,6 +833,7 @@ async function load() {
   try {
     await Promise.all([messageStore.load(account), friendships.load(account), friends.load(account), profiles.load(account)]);
     if (generation !== loadGeneration || account !== keys.pkHex) return;
+    await fetchOlderPage(true);
     await restoreDraft(account, peerPubkey.value);
     if (generation !== loadGeneration || account !== keys.pkHex) return;
     resetMessageWindow();
