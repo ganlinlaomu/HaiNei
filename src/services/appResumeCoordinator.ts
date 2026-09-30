@@ -6,14 +6,12 @@ const COALESCE_MS = 1_000;
 let installed = false;
 let lastDispatchAt = 0;
 
-function canDispatch(reason: AppResumeReason) {
-  if (typeof document === "undefined") return true;
-  if (reason === "online") return document.visibilityState !== "hidden";
-  return document.visibilityState !== "hidden";
+function canDispatch() {
+  return typeof document === "undefined" || document.visibilityState !== "hidden";
 }
 
 function dispatch(reason: AppResumeReason) {
-  if (!canDispatch(reason)) return;
+  if (!canDispatch()) return;
   const now = Date.now();
   if (lastDispatchAt && now - lastDispatchAt < COALESCE_MS) return;
   lastDispatchAt = now;
@@ -31,23 +29,44 @@ function dispatch(reason: AppResumeReason) {
 function visibilityHandler() {
   if (document.visibilityState === "visible") dispatch("visibilitychange");
 }
+function focusHandler() { dispatch("focus"); }
+function pageShowHandler() { dispatch("pageshow"); }
+function onlineHandler() { dispatch("online"); }
 
 function install() {
   if (installed || typeof window === "undefined" || typeof document === "undefined") return;
   installed = true;
+  lastDispatchAt = 0;
   document.addEventListener("visibilitychange", visibilityHandler);
-  window.addEventListener("focus", () => dispatch("focus"));
-  window.addEventListener("pageshow", () => dispatch("pageshow"));
-  window.addEventListener("online", () => dispatch("online"));
+  window.addEventListener("focus", focusHandler);
+  window.addEventListener("pageshow", pageShowHandler);
+  window.addEventListener("online", onlineHandler);
+}
+
+function uninstall() {
+  if (!installed || typeof window === "undefined" || typeof document === "undefined") {
+    installed = false;
+    lastDispatchAt = 0;
+    return;
+  }
+  document.removeEventListener("visibilitychange", visibilityHandler);
+  window.removeEventListener("focus", focusHandler);
+  window.removeEventListener("pageshow", pageShowHandler);
+  window.removeEventListener("online", onlineHandler);
+  installed = false;
+  lastDispatchAt = 0;
 }
 
 export function onAppResume(handler: AppResumeHandler) {
   handlers.add(handler);
   install();
-  return () => handlers.delete(handler);
+  return () => {
+    handlers.delete(handler);
+    if (handlers.size === 0) uninstall();
+  };
 }
 
 export function resetAppResumeCoordinatorForTests() {
   handlers.clear();
-  lastDispatchAt = 0;
+  uninstall();
 }
