@@ -145,9 +145,9 @@ async function evaluatePrf(credentialId: string, salt: Uint8Array, rpId: string)
   } as unknown as PublicKeyCredentialRequestOptions;
 
   const credential = await navigator.credentials.get({ publicKey: request });
-  if (!(credential instanceof PublicKeyCredential)) throw new Error("Face ID 验证失败");
+  if (!(credential instanceof PublicKeyCredential)) throw new Error("通行密钥验证失败");
   const output = prfOutput(credential);
-  if (!output) throw new Error("此设备暂不支持 Face ID 私钥解锁");
+  if (!output) throw new Error("此设备暂不支持通行密钥私钥解锁");
   return output;
 }
 
@@ -168,7 +168,7 @@ export async function supportsBiometricUnlock() {
     || typeof navigator.credentials.get !== "function"
   ) return false;
 
-  // Do not hide Face ID solely because UVPAA reports false or throws.
+  // Do not hide passkey unlock solely because UVPAA reports false or throws.
   // iOS/WebKit can report a conservative preflight result in installed PWA
   // contexts even when a platform WebAuthn ceremony can still succeed.
   // The real create/get ceremony remains the source of truth.
@@ -176,9 +176,9 @@ export async function supportsBiometricUnlock() {
 }
 
 export async function enrollBiometricUnlock(pubkey: string, skHex: string) {
-  if (!(await supportsBiometricUnlock())) throw new Error("此设备暂不支持 Face ID 登录");
+  if (!(await supportsBiometricUnlock())) throw new Error("此设备暂不支持通行密钥登录");
   const rpId = currentRpId();
-  if (!rpId) throw new Error("Face ID 登录需要安全的 HTTPS 环境");
+  if (!rpId) throw new Error("通行密钥登录需要安全的 HTTPS 环境");
 
   const salt = randomBytes();
   const challenge = randomBytes();
@@ -210,7 +210,7 @@ export async function enrollBiometricUnlock(pubkey: string, skHex: string) {
   } as unknown as PublicKeyCredentialCreationOptions;
 
   const created = await navigator.credentials.create({ publicKey: creation });
-  if (!(created instanceof PublicKeyCredential)) throw new Error("无法创建 Face ID 登录凭证");
+  if (!(created instanceof PublicKeyCredential)) throw new Error("无法创建通行密钥登录凭证");
 
   const credentialId = bytesToBase64Url(created.rawId);
   let secret = prfOutput(created);
@@ -230,15 +230,15 @@ export async function enrollBiometricUnlock(pubkey: string, skHex: string) {
 
 export async function unlockPrivateKeyWithBiometric(pubkey: string) {
   const record = readRecord(pubkey);
-  if (!record) throw new Error("尚未启用 Face ID 登录");
+  if (!record) throw new Error("尚未启用通行密钥登录");
   const rpId = currentRpId();
-  if (!rpId || record.rpId !== rpId) throw new Error("Face ID 登录只可在原绑定地址使用");
+  if (!rpId || record.rpId !== rpId) throw new Error("通行密钥登录只可在原绑定地址使用");
   const salt = new Uint8Array(copyBuffer(base64UrlToBytes(record.prfSalt)));
   const secret = await evaluatePrf(record.credentialId, salt, rpId);
   try {
     return await decryptPrivateKey(record, secret);
   } catch {
-    throw new Error("Face ID 解锁数据失败，请使用本地密码登录");
+    throw new Error("通行密钥解锁数据失败，请使用本地密码登录");
   }
 }
 
