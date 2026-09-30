@@ -6,6 +6,7 @@ import {
   replacePushAuthorizationPolicy,
   savePushSubscription,
   triggerGenericPush,
+  testOwnPush,
 } from "./push";
 import { HttpError, integerSetting, type Env } from "./types";
 import { enforceChallengeRateLimit, readJsonBody } from "./requestGuards";
@@ -93,6 +94,13 @@ export async function handleRequest(request: Request, env: Env) {
       );
       return json(await replacePushAuthorizationPolicy(env, pubkey, payload.senderPubkeys));
     }
+    if (path === "/api/push/test") {
+      const payload = await body(request, env, 8 * 1024);
+      const pubkey = await verifyAndConsumeChallenge(
+        env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
+      );
+      return json(await testOwnPush(env, pubkey, payload.endpoint));
+    }
     if (path === "/api/push/trigger") {
       const payload = await body(request, env, 32 * 1024);
       const pubkey = await verifyAndConsumeChallenge(
@@ -100,6 +108,7 @@ export async function handleRequest(request: Request, env: Env) {
       );
       const diagnostics = await triggerGenericPush(env, pubkey, payload.recipientPubkeys, payload.type, payload.messageId);
       console.info({ ...diagnostics, message: "push trigger processed" });
+      if (diagnostics.failed > 0) return json({ error: "push_delivery_failed" }, 503);
       return json({ accepted: true }, 202);
     }
     return json({ error: "not_found" }, 404);

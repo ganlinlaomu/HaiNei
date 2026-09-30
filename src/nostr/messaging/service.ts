@@ -83,7 +83,7 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
   const accountGeneration = accountGenerations.get(accountPubkey) || 0;
   registerOutgoingPushSigner(accountPubkey, options.context.signEvent);
   const now = Date.now();
-  const queued = await outgoingQueueRepository.putIfAbsent({
+  await outgoingQueueRepository.putIfAbsent({
     accountPubkey,
     outgoingId: encoded.message.id,
     state: "pending",
@@ -95,7 +95,6 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
     updatedAt: now
   });
   await options.onQueued?.(encoded.message.id);
-  if (queued.state === "sent") return queuedResult(queued);
   const published = await publishQueuedOutgoing(accountPubkey, encoded.message.id, options.pushCategory);
   if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");
   return published;
@@ -148,14 +147,17 @@ function queuedResult(record: OutgoingQueueRecord): PublishedMessage {
   };
 }
 
-export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: string, pushCategory?: PushCategory): Promise<PublishedMessage> {
+export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: string, _pushCategory?: PushCategory): Promise<PublishedMessage> {
   const key = `${accountPubkey}:${outgoingId}`;
   const existing = activePublishes.get(key);
   if (existing) return existing;
   const task = (async () => {
     const record = await outgoingQueueRepository.get(accountPubkey, outgoingId);
     if (!record) throw new Error("待发送项目不存在");
-    if (record.state === "sent") return queuedResult(record);
+    if (record.state === "sent") {
+      await deliverQueuedPush(record);
+      return queuedResult(record);
+    }
     const offline = typeof navigator !== "undefined" && navigator.onLine === false;
     if (offline) {
       await outgoingQueueRepository.update(accountPubkey, outgoingId, {
@@ -195,29 +197,44 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
       if (state === "waiting_network") scheduleRetry(accountPubkey, delay);
       throw new Error(`消息发布失败：${failedRequiredEvents.length}/${requiredEvents.length} 个收件人副本未被任何 relay 接收`);
     }
+    const needsPush = shouldTriggerGenericPush((record.message as CanonicalMessage).tags);
     const sent = await outgoingQueueRepository.update(accountPubkey, outgoingId, {
-      state: "sent", relayResults, nextAttemptAt: undefined, lastError: undefined, updatedAt: Date.now()
+      state: "sent", relayResults, nextAttemptAt: undefined, lastError: undefined, updatedAt: Date.now(),
+      ...(needsPush ? { pushState: "pending", pushAttempts: 0, pushExpiresAt: Date.now() + 24 * 60 * 60 * 1000 } : {}),
     });
-    const message = record.message as CanonicalMessage;
-    const pushSigner = pushSigners.get(accountPubkey);
-    if (pushSigner && shouldTriggerGenericPush(message.tags)) {
-      const recipients = [...new Set(events.map(eventTarget).filter((value): value is string => !!value))];
-      void triggerGenericPush(
-        recipients,
-        accountPubkey,
-        pushSigner,
-        pushCategory === "message" ? pushCategory : "message",
-        message.id,
-      ).catch(error => {
-        debugLog("system", "push_trigger_failed", {
-          reason: error instanceof Error ? error.message : "unknown_error",
-        }, "warn");
-      });
-    }
+    if (sent) await deliverQueuedPush(sent);
     return queuedResult(sent!);
   })().finally(() => activePublishes.delete(key));
   activePublishes.set(key, task);
   return task;
+}
+
+async function deliverQueuedPush(record: OutgoingQueueRecord) {
+  if (record.pushState !== "pending" || (record.pushExpiresAt || 0) <= Date.now()) return;
+  const signer = pushSigners.get(record.accountPubkey);
+  // Keep pending work on disk until the account is unlocked again.
+  if (!signer || (typeof navigator !== "undefined" && navigator.onLine === false)) return;
+  if ((record.pushNextAttemptAt || 0) > Date.now()) {
+    scheduleRetry(record.accountPubkey, record.pushNextAttemptAt! - Date.now());
+    return;
+  }
+  const attempts = (record.pushAttempts || 0) + 1;
+  const delay = Math.min(15 * 60_000, 2 ** Math.min(attempts, 10) * 1_000);
+  await outgoingQueueRepository.update(record.accountPubkey, record.outgoingId, {
+    pushAttempts: attempts, pushNextAttemptAt: Date.now() + delay,
+  });
+  try {
+    const recipients = [...new Set((record.events as NostrEvent[]).map(eventTarget).filter((value): value is string => !!value))];
+    await triggerGenericPush(recipients, record.accountPubkey, signer, "message", (record.message as CanonicalMessage).id);
+    await outgoingQueueRepository.update(record.accountPubkey, record.outgoingId, {
+      pushState: "accepted", pushNextAttemptAt: undefined,
+    });
+  } catch (error) {
+    debugLog("system", "push_trigger_failed", {
+      reason: error instanceof Error ? error.message : "unknown_error",
+    }, "warn");
+    if (pushSigners.has(record.accountPubkey)) scheduleRetry(record.accountPubkey, delay);
+  }
 }
 
 export async function retryOutgoingQueue(accountPubkey: string, includeFailed = false) {

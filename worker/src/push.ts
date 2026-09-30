@@ -435,12 +435,41 @@ export async function triggerGenericPush(
   diagnostics.subscriptionsFound = rows.results.length;
   if (!rows.results.length) return diagnostics;
 
+  return deliverPushRows(env, senderPubkey, messageId, rows.results, diagnostics, now);
+}
+
+// The authenticated account can inspect delivery only to its own browser endpoint.
+export async function testOwnPush(env: Env, accountPubkey: string, endpointValue: unknown) {
+  const endpoint = validatedPushEndpoint(env, endpointValue);
+  const now = Math.floor(Date.now() / 1000);
+  await consumeRateLimit(env, `push:test:${accountPubkey}`, 5, 60, now);
+  const row = await env.DB.prepare(`
+    SELECT account_pubkey, endpoint, p256dh, auth FROM hainei_push_subscriptions
+    WHERE account_pubkey = ? AND endpoint = ?
+  `).bind(accountPubkey, endpoint).first<PushSubscriptionRow>();
+  const diagnostics: PushDiagnostics = {
+    requested: 1, subscriptionsFound: row ? 1 : 0, sent: 0, failed: 0, expired: 0,
+  };
+  if (!row) return diagnostics;
+  const messageId = await sha256Hex(crypto.randomUUID());
+  return deliverPushRows(env, accountPubkey, messageId, [row], diagnostics, now);
+}
+
+async function deliverPushRows(
+  env: Env,
+  senderPubkey: string,
+  messageId: string,
+  rows: PushSubscriptionRow[],
+  diagnostics: PushDiagnostics,
+  now: number,
+) {
+  const pushPayload = MESSAGE_PUSH_PAYLOAD;
   const config = pushConfig(env);
   const timeoutMs = integerSetting(env.PUSH_FETCH_TIMEOUT_MS, 8000, 1000, 30000);
 
   const deadline = Date.now() + 20_000;
-  await mapWithConcurrency(rows.results, 4, async row => {
-    if (Date.now() >= deadline) return;
+  await mapWithConcurrency(rows, 4, async row => {
+    if (Date.now() >= deadline) { diagnostics.failed += 1; return; }
     const host = endpointHost(row.endpoint);
     let reservation: { reserved: boolean; endpointHash: string } | undefined;
     try {

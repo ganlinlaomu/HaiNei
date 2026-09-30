@@ -22,9 +22,16 @@ async function syncServiceWorkerBadgeState(count: number, target: BadgeNavigator
 export async function syncAppBadge(count: number, target: BadgeNavigator = navigator as BadgeNavigator, account = "") {
   const current = ++generation;
   const normalized = Math.max(0, Math.floor(count));
-  if (normalized > 0) await target.setAppBadge?.(normalized);
-  else await target.clearAppBadge?.();
-  await syncServiceWorkerBadgeState(normalized, target, account, current);
+  // Notification account routing must not depend on optional badge permission.
+  await Promise.all([
+    syncServiceWorkerBadgeState(normalized, target, account, current),
+    (async () => {
+      try {
+        if (normalized > 0) await target.setAppBadge?.(normalized);
+        else await target.clearAppBadge?.();
+      } catch { /* Badge APIs may reject while push permission remains valid. */ }
+    })(),
+  ]);
 }
 
 export function accountBadgeCount(

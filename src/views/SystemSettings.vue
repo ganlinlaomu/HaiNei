@@ -206,7 +206,9 @@
             {{ pushBusy ? "处理中…" : pushEnabled ? "关闭推送" : "开启推送" }}
           </button>
           <span v-else class="pill pending">原生 Push 待启用</span>
+          <button v-if="!isNativeApp && pushEnabled" class="btn btn-secondary" type="button" :disabled="pushBusy" @click="testCurrentPush">测试本机推送</button>
         </div>
+        <p v-if="pushTestResult" class="section-detail" role="status">{{ pushTestResult }}</p>
       </details>
 
       <details class="technical-section">
@@ -324,7 +326,8 @@ import {
   disablePushNotifications,
   enablePushNotifications,
   pushEnabledForAccount,
-  supportsPushNotifications
+  supportsPushNotifications,
+  testPushNotification
 } from "@/services/pushNotifications";
 import {
   DEFAULT_RELAY_URLS,
@@ -364,6 +367,7 @@ const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0 });
 const loadingCache = ref(false);
 const clearingCache = ref(false);
 const pushBusy = ref(false);
+const pushTestResult = ref("");
 const retryingQueue = ref(false);
 const pushEnabled = ref(false);
 const biometricSupported = ref(false);
@@ -700,6 +704,21 @@ function addAccount() {
 async function doLogout() {
   await keyStore.logout();
   location.href = "/#/login";
+}
+
+async function testCurrentPush() {
+  const account = keyStore.pkHex;
+  if (!account || pushBusy.value) return;
+  pushBusy.value = true;
+  pushTestResult.value = "正在检查本机订阅并发送测试通知…";
+  try {
+    const result = await testPushNotification(account, event => keyStore.signEvent(event));
+    if (keyStore.pkHex === account) pushTestResult.value = result;
+  } catch (error) {
+    if (keyStore.pkHex === account) pushTestResult.value = error instanceof Error ? error.message : "测试推送失败";
+  } finally {
+    pushBusy.value = false;
+  }
 }
 
 async function togglePush() {

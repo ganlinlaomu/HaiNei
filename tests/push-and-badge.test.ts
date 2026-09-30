@@ -98,6 +98,9 @@ class PushD1 {
       bind: (...next: unknown[]) => this.bound(sql, next),
       first: async () => {
         if (sql.includes("FROM hainei_auth_challenges")) return this.challenges.get(String(values[0])) || null;
+        if (sql.startsWith("SELECT account_pubkey, endpoint, p256dh, auth FROM hainei_push_subscriptions")) {
+          return this.subscriptions.get(`${values[0]}|${values[1]}`) || null;
+        }
         if (sql.startsWith("SELECT endpoint FROM hainei_push_subscriptions")) {
           const row = this.subscriptions.get(`${values[0]}|${values[1]}`);
           return row ? { endpoint: row.endpoint } : null;
@@ -613,6 +616,56 @@ describe("privacy-preserving push and badge", () => {
     expect(sender).not.toBe(OTHER);
     expect(response.status).toBe(202);
     expect(await response.json()).toEqual({ accepted: true });
+  });
+
+  it("returns a retryable error when a provider rejects a private-message push", async () => {
+    const db = new PushD1();
+    const env = pushEnv(db);
+    const secret = generateSecretKey();
+    addSubscription(db);
+    authorize(db, getPublicKey(secret));
+    const payload = { recipientPubkeys: [OTHER], type: "message", messageId: MESSAGE_ID };
+    const signedBody = await authenticatedBody(env, secret, "/api/push/trigger", payload);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
+    const response = await handleRequest(new Request("https://worker.test/api/push/trigger", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(signedBody),
+    }), env);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "push_delivery_failed" });
+  });
+
+  it("tests only an authenticated account's own endpoint without requiring self-authorization", async () => {
+    const db = new PushD1();
+    const env = pushEnv(db);
+    const secret = generateSecretKey();
+    const account = getPublicKey(secret);
+    const otherRow = addSubscription(db);
+    const ownRow = { ...otherRow, account_pubkey: account, endpoint: "https://web.push.apple.com/own-test" };
+    db.subscriptions.set(`${account}|${ownRow.endpoint}`, ownRow);
+    const request = async (endpoint: string) => {
+      const signedBody = await authenticatedBody(env, secret, "/api/push/test", { endpoint });
+      return handleRequest(new Request("https://worker.test/api/push/test", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(signedBody),
+      }), env);
+    };
+    const send = vi.fn().mockResolvedValue(new Response(null, { status: 201 }));
+    vi.stubGlobal("fetch", send);
+    expect(await (await request(otherRow.endpoint)).json()).toMatchObject({ subscriptionsFound: 0, sent: 0 });
+    expect(send).not.toHaveBeenCalled();
+    expect(await (await request(ownRow.endpoint)).json()).toEqual({ requested: 1, subscriptionsFound: 1, sent: 1, failed: 0, expired: 0 });
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0][0]).toBe(ownRow.endpoint);
+    send.mockResolvedValueOnce(new Response(null, { status: 410 }));
+    expect(await (await request(ownRow.endpoint)).json()).toMatchObject({ sent: 0, expired: 1 });
+    expect(db.subscriptions.has(`${account}|${ownRow.endpoint}`)).toBe(false);
+  });
+
+  it("rejects unauthenticated push tests", async () => {
+    const response = await handleRequest(new Request("https://worker.test/api/push/test", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: "https://web.push.apple.com/test" }),
+    }), pushEnv());
+    expect(response.status).toBe(400);
   });
 
   it("reports no subscription without attempting delivery", async () => {
