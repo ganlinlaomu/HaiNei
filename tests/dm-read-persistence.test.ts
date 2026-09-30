@@ -75,6 +75,19 @@ describe("reading paged DM history with an encrypted database", () => {
     expect(direct.unreadCount).toBe(151);
   });
 
+  it("enumerates durable unread conversations even when Home memory is empty", async () => {
+    for (let i = 1; i <= 151; i++) await save(item(i));
+    const direct = await restore();
+    expect(direct.unreadCount).toBe(151);
+
+    useMessagesStore().inbox = [];
+    direct.unreadByConversation = {};
+    await direct.reconcileDurableUnread();
+
+    expect(direct.unreadCount).toBe(151);
+    expect(direct.unreadByConversation[CONVERSATION]).toBe(151);
+  });
+
   it("does not persist a sent optimistic task as the conversation read cursor", async () => {
     for (let i = 1; i <= 151; i++) await save(item(i));
     let direct = await restore();
