@@ -99,6 +99,35 @@ describe("durable outgoing queue", () => {
     expect(await outgoingQueueRepository.get(ACCOUNT, "logical-1")).toMatchObject({ state: "sent" });
   });
 
+  it("replaces a long push retry timer with an earlier relay retry deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
+    try {
+      const now = Date.now();
+      registerOutgoingPushSigner(ACCOUNT, vi.fn());
+      await outgoingQueueRepository.putIfAbsent({
+        ...queued(ACCOUNT, "push-wait", "sent"),
+        pushState: "pending",
+        pushExpiresAt: now + 60 * 60_000,
+        pushNextAttemptAt: now + 15 * 60_000,
+      });
+      await publishQueuedOutgoing(ACCOUNT, "push-wait");
+      expect(triggerPush).not.toHaveBeenCalled();
+
+      await outgoingQueueRepository.putIfAbsent(queued(ACCOUNT, "relay-wait", "pending"));
+      publish.mockRejectedValueOnce(new Error("relay down"));
+      await expect(publishQueuedOutgoing(ACCOUNT, "relay-wait")).rejects.toThrow("relay down");
+
+      publish.mockResolvedValue([{ relay: "wss://relay.test", ok: true, ts: 1 }]);
+      await vi.advanceTimersByTimeAsync(2_100);
+      expect((await outgoingQueueRepository.get(ACCOUNT, "relay-wait"))?.state).toBe("sent");
+      expect(publish).toHaveBeenCalledTimes(2);
+    } finally {
+      cancelOutgoingWorkForAccount(ACCOUNT);
+      vi.useRealTimers();
+    }
+  });
+
   it("manually retries failed work and keeps accounts isolated", async () => {
     await outgoingQueueRepository.putIfAbsent(queued(ACCOUNT, "failed", "failed"));
     await outgoingQueueRepository.putIfAbsent(queued(OTHER, "other", "failed"));
