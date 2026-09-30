@@ -607,6 +607,13 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const preferences = this.preferencesByPeer;
       const records = friendships.records;
       const durableHeads = await syncedMessageRepository.listDirectConversationHeads(account, conversationId);
+      if (conversationId && durableHeads.length === 0) {
+        if (this.loadedFor === account && this.readCursors === cursors && this.preferencesByPeer === preferences
+          && friendships.records === records) {
+          this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: 0 };
+        }
+        return;
+      }
       const counts = await Promise.all(durableHeads.map(async head => {
         const id = head.conversationId;
         const peer = directMessagePeer({
