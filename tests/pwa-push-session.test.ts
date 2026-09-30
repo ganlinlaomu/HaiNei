@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { reactive, watch as vueWatch, nextTick } from "vue";
-import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
+import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appBadge";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -33,25 +33,30 @@ function harness() {
   const postMessage = (data: unknown) => handlers.get("message")!({ data, waitUntil: (promise: Promise<unknown>) => pending.push(promise) });
   const target = { clearAppBadge: vi.fn(async () => {}), setAppBadge: vi.fn(async () => {}),
     serviceWorker: { controller: { postMessage }, ready: Promise.resolve({ active: { postMessage } }) } } as any;
-  return { target, pending, showNotification, push: (payload: unknown) => {
+  return { target, pending, showNotification, backgroundSetAppBadge: self.navigator.setAppBadge, push: (payload: unknown) => {
     handlers.get("push")!({ data: { text: () => JSON.stringify(payload) }, waitUntil: (promise: Promise<unknown>) => pending.push(promise) });
   }, settle: async () => {
     await nextTick();
     while (pending.length) await Promise.all(pending.splice(0));
   } };
 }
-function watchApp(keys: { pkHex: string; isUnlocked: boolean; isRestored: boolean }, worker: ReturnType<typeof harness>) {
+function watchApp(keys: { pkHex: string; isUnlocked: boolean; isRestored: boolean }, worker: ReturnType<typeof harness>, unread = 0) {
   const app = readFileSync("src/App.vue", "utf8");
   const start = app.indexOf("    watch(\n      () => [");
   const end = app.indexOf("\n    watch(", start + 1);
   let stop = () => {};
   runInNewContext(app.slice(start, end).replace("] as const", "]"), {
     keys,
-    notifications: { loadedFor: ACCOUNT, unreadCount: 0 },
+    notifications: { loadedFor: ACCOUNT, unreadCount: unread },
     directMessages: { loadedFor: ACCOUNT, unreadCount: 0 },
     accountBadgeCount,
     syncAppBadge: (count: number, _target: unknown, account: string) => {
       const result = syncAppBadge(count, worker.target, account);
+      worker.pending.push(result);
+      return result;
+    },
+    syncAppBadgeScope: (account: string) => {
+      const result = syncAppBadgeScope(account, worker.target);
       worker.pending.push(result);
       return result;
     },
@@ -92,14 +97,17 @@ describe("PWA push across account lock and restore", () => {
   it("still shows the generic push while the remembered account is locked", async () => {
     const worker = harness();
     const keys = reactive({ pkHex: ACCOUNT, isUnlocked: true, isRestored: true });
-    const stop = watchApp(keys, worker);
+    const stop = watchApp(keys, worker, 5);
     try {
       await worker.settle();
+      expect(worker.target.setAppBadge).toHaveBeenLastCalledWith(5);
       keys.isUnlocked = false;
       await worker.settle();
+      expect(worker.target.clearAppBadge).not.toHaveBeenCalled();
       worker.push({ type: "message", accountScope: await scope(ACCOUNT), notificationId: "locked-message" });
       await worker.settle();
       expect(worker.showNotification).toHaveBeenCalledWith("HaiNei", expect.objectContaining({ body: "你有新的私信消息" }));
+      expect(worker.backgroundSetAppBadge).toHaveBeenLastCalledWith(6);
     } finally { stop(); }
   });
 
