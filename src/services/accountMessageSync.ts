@@ -36,6 +36,7 @@ export type AccountMessageSyncSnapshot = {
 // but they never receive the manager instance or start/stop subscriptions.
 const accountMessageSyncManager = new MessageSyncManager();
 let activeKeys: AccountSyncKeys | null = null;
+let accountSyncGeneration = 0;
 let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle" };
 const accountSyncStatusListeners = new Set<(snapshot: AccountMessageSyncSnapshot) => void>();
 
@@ -71,7 +72,26 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   const account = keys.pkHex.toLowerCase();
   if (!account || !keys.isLoggedIn) return false;
 
+  const generation = ++accountSyncGeneration;
   activeKeys = keys;
+  const isCurrent = () =>
+    generation === accountSyncGeneration
+    && activeKeys === keys
+    && keys.isLoggedIn
+    && keys.pkHex.toLowerCase() === account;
+  const assertCurrentSigner = async (event: EventTemplate) => {
+    if (!isCurrent()) throw new Error("account_sync_cancelled");
+    const signed = await keys.signEvent(event);
+    if (!isCurrent() || signed.pubkey.toLowerCase() !== account) throw new Error("account_sync_cancelled");
+    return signed;
+  };
+  const decryptForCurrentSession = async (peer: string, ciphertext: string) => {
+    if (!isCurrent()) throw new Error("account_sync_cancelled");
+    const plaintext = await keys.nip44Decrypt(peer, ciphertext);
+    if (!isCurrent()) throw new Error("account_sync_cancelled");
+    return plaintext;
+  };
+
   const friendships = useFriendshipsStore();
   if (friendships.loadedFor !== account || !friendships.authorizationReady) {
     try {
@@ -80,8 +100,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       console.warn("[message-sync] friendship authorization remains unresolved", error);
     }
   }
+  if (!isCurrent()) return false;
   const profiles = useProfilesStore();
   const initialSyncState = await syncedMessageRepository.getSyncState(account);
+  if (!isCurrent()) return false;
   let friendshipHistoryComplete = !!initialSyncState.historyBackfillCompletedAt;
 
   const authorizePeerAt = (peerPubkey: string, createdAt: number) => {
@@ -100,9 +122,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
     .filter(record => record.state === "accepted")
     .map(record => record.peerPubkey);
 
-  registerOutgoingPushSigner(account, keys.signEvent.bind(keys));
+  if (!isCurrent()) return false;
+  registerOutgoingPushSigner(account, assertCurrentSigner);
   if (pushEnabledForAccount(account)) {
-    void syncPushAuthorizationPolicy(account, accepted, keys.signEvent.bind(keys)).catch(error => {
+    void syncPushAuthorizationPolicy(account, accepted, assertCurrentSigner).catch(error => {
       console.warn("[push] authorization policy refresh failed", error instanceof Error ? error.message : "unknown");
     });
   }
@@ -115,7 +138,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       authors: [...new Set([...accepted, account])],
       decodeContext: {
         accountPubkey: account,
-        nip44Decrypt: keys.supportsNip44 ? keys.nip44Decrypt.bind(keys) : undefined,
+        nip44Decrypt: keys.supportsNip44 ? decryptForCurrentSession : undefined,
       },
       onMessage: homeHandler = createHomeMessageHandler({
         deferUntilDurable: true,
@@ -185,6 +208,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         }
       },
       onStatus: status => {
+        if (!isCurrent()) return;
         setAccountMessageSyncStatus(account, status);
         if (status === "live") {
           void directMessages.finishUnreadHydration(account).catch(error => {
@@ -201,9 +225,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         });
       },
     });
+    if (!isCurrent()) return false;
     return true;
   } catch (error) {
-    if (activeKeys?.pkHex.toLowerCase() === account) {
+    if (isCurrent()) {
       setAccountMessageSyncStatus(account, "error");
       void directMessages.finishUnreadHydration(account).catch(() => undefined);
     }
@@ -230,6 +255,7 @@ export async function markAccountConversationRead(conversationId: string) {
 
 export function stopAccountMessageSync() {
   const account = activeKeys?.pkHex.toLowerCase() || accountSyncSnapshot.accountPubkey;
+  accountSyncGeneration++;
   activeKeys = null;
   accountMessageSyncManager.stop();
   setAccountMessageSyncStatus(account, "idle");
