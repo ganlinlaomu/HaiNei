@@ -363,16 +363,19 @@ export class SyncedMessageRepository {
     cursor: { lastReadCreatedAt: number; lastReadMessageId: string },
   ) {
     const account = normalizeAccountPubkey(accountPubkey);
-    const current = await this.getReadState(account, conversationId);
-    if (!isMessageAfter({ id: cursor.lastReadMessageId, createdAt: cursor.lastReadCreatedAt }, current)) return false;
-    await this.database.conversationReadStates.put({
-      accountPubkey: account,
-      conversationId,
-      lastReadMessageId: cursor.lastReadMessageId,
-      lastReadCreatedAt: cursor.lastReadCreatedAt,
-      updatedAt: Date.now()
+    // Serialize read/compare/write with concurrent foreground reads and restore.
+    return this.database.transaction("rw", this.database.conversationReadStates, async () => {
+      const current = await this.getReadState(account, conversationId);
+      if (!isMessageAfter({ id: cursor.lastReadMessageId, createdAt: cursor.lastReadCreatedAt }, current)) return false;
+      await this.database.conversationReadStates.put({
+        accountPubkey: account,
+        conversationId,
+        lastReadMessageId: cursor.lastReadMessageId,
+        lastReadCreatedAt: cursor.lastReadCreatedAt,
+        updatedAt: Date.now()
+      });
+      return true;
     });
-    return true;
   }
 
   async markRead(accountPubkey: string, conversationId: string, message?: SyncedMessageRecord) {
