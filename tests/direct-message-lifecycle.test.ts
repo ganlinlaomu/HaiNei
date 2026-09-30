@@ -127,11 +127,15 @@ describe("direct-message authorization and conversation lifecycle", () => {
     await context.direct.refresh(ACCOUNT);
     await context.direct.hideConversation(PEER);
     const refresh = vi.spyOn(context.direct, "refresh");
+    const reconcile = vi.spyOn(context.direct, "reconcileDurableUnread").mockImplementation(async conversationId => {
+      if (conversationId === CONVERSATION) context.direct.unreadByConversation = { [CONVERSATION]: 1 };
+    });
 
     context.messageStore.addInbox(dm("new", 6));
 
     await vi.waitFor(() => expect(summaries().map(item => item.latest.id)).toEqual(["new"]));
     expect(context.direct.unreadCount).toBe(1);
+    expect(reconcile).toHaveBeenCalledWith(CONVERSATION);
     expect(refresh).not.toHaveBeenCalled();
   });
 
@@ -209,11 +213,15 @@ describe("direct-message authorization and conversation lifecycle", () => {
     await context.direct.refresh(ACCOUNT);
     expect(context.direct.unreadCount).toBe(0);
     const refresh = vi.spyOn(context.direct, "refresh");
+    const reconcile = vi.spyOn(context.direct, "reconcileDurableUnread").mockImplementation(async () => {
+      context.direct.unreadByConversation = { [CONVERSATION]: 2 };
+    });
 
     context.friendships.records = [relationship("accepted")];
     notifyDirectMessageAuthorizationChanged(ACCOUNT);
 
     await vi.waitFor(() => expect(context.direct.unreadCount).toBe(2));
+    expect(reconcile).toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
   });
 
