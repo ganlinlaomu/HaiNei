@@ -144,6 +144,10 @@ self.addEventListener('message', (event) => {
   }
   if (event.data?.type === 'SYNC_APP_BADGE') {
     event.waitUntil(queueBadgeSync(event.data.count, event.data.accountScope || ""));
+    return;
+  }
+  if (event.data?.type === 'SYNC_APP_BADGE_SCOPE') {
+    event.waitUntil(setBadgeScope(event.data.accountScope || ""));
   }
 });
 
