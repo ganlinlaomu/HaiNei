@@ -111,6 +111,7 @@ export function pushCategoryForMessage(tags: string[][] | undefined): "message" 
 const activePublishes = new Map<string, Promise<PublishedMessage>>();
 const accountGenerations = new Map<string, number>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const retryDeadlines = new Map<string, number>();
 const pushSigners = new Map<string, SendDirectMessageOptions["context"]["signEvent"]>();
 
 export function registerOutgoingPushSigner(
@@ -127,16 +128,25 @@ export function cancelOutgoingWorkForAccount(accountPubkey: string) {
   const timer = retryTimers.get(account);
   if (timer) clearTimeout(timer);
   retryTimers.delete(account);
+  retryDeadlines.delete(account);
 }
 
 function scheduleRetry(accountPubkey: string, delay: number) {
-  if (retryTimers.has(accountPubkey)) return;
+  const account = accountPubkey.toLowerCase();
+  const normalizedDelay = Math.max(0, Math.floor(delay));
+  const dueAt = Date.now() + normalizedDelay;
+  const existingDueAt = retryDeadlines.get(account);
+  if (existingDueAt !== undefined && existingDueAt <= dueAt) return;
+  const existing = retryTimers.get(account);
+  if (existing) clearTimeout(existing);
   const timer = setTimeout(() => {
-    retryTimers.delete(accountPubkey);
-    void retryOutgoingQueue(accountPubkey);
-  }, delay);
+    retryTimers.delete(account);
+    retryDeadlines.delete(account);
+    void retryOutgoingQueue(account);
+  }, normalizedDelay);
   (timer as any).unref?.();
-  retryTimers.set(accountPubkey, timer);
+  retryTimers.set(account, timer);
+  retryDeadlines.set(account, dueAt);
 }
 
 function queuedResult(record: OutgoingQueueRecord): PublishedMessage {
