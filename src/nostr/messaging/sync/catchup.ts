@@ -130,6 +130,7 @@ export async function runPagedCatchup(options: {
     exhaustedHistory: naturalEnd && !incomplete,
     naturalEnd,
     hitMaxBatches,
+    nextUntil: currentUntil,
     timedOut,
     aborted,
     incomplete,
