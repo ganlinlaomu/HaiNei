@@ -139,6 +139,22 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it("hides provisional cross-device unread until authoritative account state is restored", async () => {
+    const context = seed([dm("first", 5)], relationship("accepted"));
+    await context.direct.refresh(ACCOUNT);
+    context.direct.unreadByConversation = { [CONVERSATION]: 151 };
+
+    context.direct.beginAuthoritativeUnreadRestore(ACCOUNT);
+    expect(context.direct.authoritativeUnreadPendingFor).toBe(ACCOUNT);
+    expect(context.direct.unreadCount).toBe(0);
+    expect(context.direct.visibleUnreadByConversation).toEqual({});
+
+    context.direct.finishAuthoritativeUnreadRestore(ACCOUNT);
+    expect(context.direct.authoritativeUnreadPendingFor).toBe("");
+    expect(context.direct.unreadCount).toBe(151);
+    expect(context.direct.visibleUnreadByConversation).toEqual({ [CONVERSATION]: 151 });
+  });
+
   it("keeps unread stable while startup Relay history is hydrating", async () => {
     const context = seed([dm("first", 5)], relationship("accepted"));
     await context.direct.refresh(ACCOUNT);
