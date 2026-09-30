@@ -3,6 +3,7 @@ import { createMediaSession } from "./media";
 import {
   getPushPublicKey,
   removePushSubscription,
+  replacePushAuthorizationPolicy,
   savePushSubscription,
   triggerGenericPush,
 } from "./push";
@@ -84,6 +85,13 @@ export async function handleRequest(request: Request, env: Env) {
         env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
       );
       return json(await removePushSubscription(env, pubkey, payload.endpoint));
+    }
+    if (path === "/api/push/policy") {
+      const payload = await body(request, env, 32 * 1024);
+      const pubkey = await verifyAndConsumeChallenge(
+        env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
+      );
+      return json(await replacePushAuthorizationPolicy(env, pubkey, payload.senderPubkeys));
     }
     if (path === "/api/push/trigger") {
       const payload = await body(request, env, 32 * 1024);
