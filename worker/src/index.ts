@@ -99,7 +99,7 @@ export async function handleRequest(request: Request, env: Env) {
         env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
       );
       const diagnostics = await triggerGenericPush(env, pubkey, payload.recipientPubkeys, payload.type, payload.messageId);
-      console.info({ senderPubkey: pubkey.slice(0, 12), ...diagnostics, message: "push trigger processed" });
+      console.info({ ...diagnostics, message: "push trigger processed" });
       return json({ accepted: true }, 202);
     }
     return json({ error: "not_found" }, 404);
