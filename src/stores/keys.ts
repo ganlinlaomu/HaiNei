@@ -44,6 +44,7 @@ import {
 } from "@/services/biometricUnlock";
 
 let restoreSessionFlight: Promise<void> | null = null;
+let accountLoadGeneration = 0;
 
 async function safeGetPublicKey(skHex: string): Promise<string> {
   return nostr.getPublicKey(nostr.utils.hexToBytes(skHex));
@@ -87,35 +88,32 @@ export const useKeyStore = defineStore("keys", {
   },
   actions: {
     async loadAccountStores(pk: string) {
-      if (this.pkHex && this.pkHex !== pk) clearAccountScopedCaches(this.pkHex);
-      const account = pk.slice(0, 8);
-      if (this.supportsNip44) {
-        try {
-          await fetchAndMaterializeAccountState(this);
-        } catch (e) {
-          console.warn(`[account] encrypted snapshot restore unavailable account=${account}`, e);
-        }
-      }
-      // Settings must load first so no later store can use the previous account's
-      // relay or Blossom mirrors during an account switch.
+      const targetPk = pk.toLowerCase();
+      const generation = ++accountLoadGeneration;
+      const isCurrent = () => accountLoadGeneration === generation && this.pkHex.toLowerCase() === targetPk;
+      if (this.pkHex && this.pkHex.toLowerCase() !== targetPk) clearAccountScopedCaches(this.pkHex);
+      const account = targetPk.slice(0, 8);
+
+      // Local-first startup: an unavailable Worker must never block already
+      // decrypted local settings/history from becoming usable.
       try {
-        await useSettingsStore().load(pk);
+        await useSettingsStore().load(targetPk);
       } catch (e) {
         console.error(`[account] settings load failed account=${account}`, e);
       }
-      // Warm only after this account's settings have been materialized, otherwise
-      // an account switch can briefly reconnect using the previous account's Relay mirror.
+      if (!isCurrent()) return;
+
       warmReadRelaysForSession(this);
       const accountLoads: Array<[string, () => unknown | Promise<unknown>]> = [
-        ["friends", () => useFriendsStore().load(pk)],
-        ["friendships", () => useFriendshipsStore().load(pk)],
-        ["profiles", () => useProfilesStore().load(pk)],
-        ["feed preferences", () => useFeedPreferencesStore().load(pk)],
-        ["bookmarks", () => useBookmarksStore().load(pk)],
-        ["messages", () => useMessagesStore().load(pk)],
-        ["direct messages", () => useDirectMessagesStore().refresh(pk)],
-        ["interactions", () => useInteractionsStore().load(pk)],
-        ["notifications", () => useNotificationsStore().load(pk)],
+        ["friends", () => useFriendsStore().load(targetPk)],
+        ["friendships", () => useFriendshipsStore().load(targetPk)],
+        ["profiles", () => useProfilesStore().load(targetPk)],
+        ["feed preferences", () => useFeedPreferencesStore().load(targetPk)],
+        ["bookmarks", () => useBookmarksStore().load(targetPk)],
+        ["messages", () => useMessagesStore().load(targetPk)],
+        ["direct messages", () => useDirectMessagesStore().refresh(targetPk)],
+        ["interactions", () => useInteractionsStore().load(targetPk)],
+        ["notifications", () => useNotificationsStore().load(targetPk)],
       ];
       await Promise.all(accountLoads.map(async ([label, load]) => {
         try {
@@ -124,21 +122,91 @@ export const useKeyStore = defineStore("keys", {
           console.error(`[account] ${label} load failed account=${account}`, e);
         }
       }));
-      // Account-level UI is ready from IndexedDB/D1 now. Relay history repair
-      // continues in the session service and checkpoints only after reconciliation.
+      if (!isCurrent()) return;
+
+      const supportsCloudState = this.supportsNip44;
+      const accountStateKeys = {
+        pkHex: targetPk,
+        supportsNip44: supportsCloudState,
+        nip44Encrypt: async (peer: string, plaintext: string) => {
+          if (!isCurrent()) throw new Error("stale_account_state_session");
+          return this.nip44Encrypt(peer, plaintext);
+        },
+        nip44Decrypt: async (peer: string, ciphertext: string) => {
+          if (!isCurrent()) throw new Error("stale_account_state_session");
+          return this.nip44Decrypt(peer, ciphertext);
+        },
+        signEvent: async (event: EventTemplate) => {
+          if (!isCurrent()) throw new Error("stale_account_state_session");
+          return this.signEvent(event);
+        },
+      };
+
+      // Remote account-state recovery is deliberately background-only. On
+      // success, reload only the stores whose persisted namespace changed.
+      const cloudRestore = supportsCloudState ? (async () => {
+        try {
+          const result = await fetchAndMaterializeAccountState(accountStateKeys);
+          if (!isCurrent() || !result.restored.length) return result;
+
+          const restored = new Set(result.restored);
+          if (restored.has("settings")) {
+            useSettingsStore().reset();
+            await useSettingsStore().load(targetPk);
+            if (!isCurrent()) return result;
+            warmReadRelaysForSession(this);
+          }
+          if (restored.has("friendships")) await useFriendshipsStore().reloadFromStorage(targetPk);
+          if (restored.has("friend_metadata")) await useFriendsStore().reloadFromStorage(targetPk);
+          if (restored.has("own_profile")) {
+            useProfilesStore().reset();
+            await useProfilesStore().load(targetPk);
+          }
+          if (restored.has("feed_preferences")) {
+            useFeedPreferencesStore().reset();
+            await useFeedPreferencesStore().load(targetPk);
+          }
+          if (restored.has("bookmarks")) {
+            useBookmarksStore().reset();
+            await useBookmarksStore().load(targetPk);
+          }
+          if (restored.has("notification_state")) {
+            useNotificationsStore().reset(false);
+            await useNotificationsStore().load(targetPk);
+          }
+          if (restored.has("read_state") && isCurrent()) {
+            await useDirectMessagesStore().refresh(targetPk);
+          }
+          return result;
+        } catch (e) {
+          if (isCurrent()) {
+            console.warn(`[account] encrypted snapshot restore unavailable account=${account}`,
+              e instanceof Error ? e.message : "unknown");
+          }
+          return { available: false, restored: [] as typeof ACCOUNT_STATE_NAMESPACES };
+        }
+      })() : Promise.resolve({ available: false, restored: [] as typeof ACCOUNT_STATE_NAMESPACES });
+
+      // Relay history repair can begin immediately from local state. Uploading
+      // account-state waits for the bounded background restore so we do not race
+      // an older remote snapshot with a just-opened local session.
       void startAccountMessageSync(this)
         .then(async () => {
-          if (!this.supportsNip44 || this.pkHex !== pk) return;
-          const syncState = await syncedMessageRepository.getSyncState(pk);
+          await cloudRestore;
+          if (!isCurrent() || !supportsCloudState) return;
+          const syncState = await syncedMessageRepository.getSyncState(targetPk);
           const namespaces = syncState.historyBackfillCompletedAt
             ? ACCOUNT_STATE_NAMESPACES
             : ACCOUNT_STATE_NAMESPACES.filter(namespace => namespace !== "friendships");
-          await Promise.allSettled(namespaces.map(namespace => syncAccountStateNamespace(this, namespace)));
+          await Promise.allSettled(namespaces.map(namespace => syncAccountStateNamespace(accountStateKeys, namespace)));
         })
-        .catch(e => console.warn(`[account] Relay history bootstrap unavailable account=${account}`, e));
+        .catch(e => {
+          if (isCurrent()) console.warn(`[account] Relay history bootstrap unavailable account=${account}`, e);
+        });
     },
 
     resetAccountStores(currentPk: string) {
+      accountLoadGeneration++;
       stopAccountMessageSync();
       clearAccountScopedCaches(currentPk);
       cancelOutgoingWorkForAccount(currentPk);
@@ -228,6 +296,7 @@ export const useKeyStore = defineStore("keys", {
     },
 
     async clearActiveSession() {
+      accountLoadGeneration++;
       const currentPk = this.pkHex;
       if (currentPk) this.resetAccountStores(currentPk);
       this.skHex = "";
