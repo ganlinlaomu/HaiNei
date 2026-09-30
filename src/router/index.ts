@@ -2,7 +2,7 @@ import { createRouter, createWebHashHistory, RouteRecordRaw } from "vue-router";
 import { nextTick } from "vue";
 import Login from "@/views/Login.vue";
 import Home from "@/views/Home.vue";
-import { loadConversationsView, loadNotificationsView, loadSettingsView } from "@/router/lazyViews";
+import { loadConversationsView, loadNotificationsView, loadSettingsView, loadSystemSettingsView } from "@/router/lazyViews";
 // Lazy load less frequently accessed views
 const Friends = () => import("@/views/Friends.vue");
 const MyProfile = () => import("@/views/MyProfile.vue");
@@ -10,7 +10,6 @@ const Profile = () => import("@/views/Profile.vue");
 const Messages = () => import("@/views/Messages.vue");
 const Debug = () => import("@/views/Debug.vue");
 const Saved = () => import("@/views/Saved.vue");
-const SystemSettings = () => import("@/views/SystemSettings.vue");
 import { useKeyStore } from "@/stores/keys";
 import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
 
@@ -73,7 +72,7 @@ const routes: Array<RouteRecordRaw> = [
   {
     path: "/settings/system",
     name: "SystemSettings",
-    component: SystemSettings,
+    component: loadSystemSettingsView,
     meta: { requiresAuth: true }
   },
   {
