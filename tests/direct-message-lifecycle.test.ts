@@ -180,7 +180,7 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(isAuthorizedDirectMessage(dm("after", 11), ACCOUNT, legacyRemoved)).toBe(false);
   });
 
-  it("shows and counts accepted incoming DMs but excludes nonaccepted new DMs", async () => {
+  it("shows only current friends in the conversation list while retaining removed-friend history", async () => {
     let context = seed([dm("accepted-message", 5)], relationship("accepted"));
     await context.direct.refresh(ACCOUNT);
     expect(summaries()).toHaveLength(1);
@@ -189,7 +189,8 @@ describe("direct-message authorization and conversation lifecycle", () => {
     setActivePinia(createPinia());
     context = seed([dm("historical", 5), dm("unauthorized", 20)], relationship("removed", 10));
     await context.direct.refresh(ACCOUNT);
-    expect(summaries().map(item => item.latest.id)).toEqual(["historical"]);
+    expect(summaries()).toHaveLength(0);
+    expect(context.direct.peerMessages(PEER).map(item => item.id)).toEqual(["historical"]);
     expect(context.direct.unreadCount).toBe(0);
   });
 
