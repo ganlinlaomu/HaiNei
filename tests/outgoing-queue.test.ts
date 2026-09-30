@@ -100,8 +100,6 @@ describe("durable outgoing queue", () => {
   });
 
   it("replaces a long push retry timer with an earlier relay retry deadline", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
     try {
       const now = Date.now();
       registerOutgoingPushSigner(ACCOUNT, vi.fn());
@@ -119,14 +117,13 @@ describe("durable outgoing queue", () => {
       await expect(publishQueuedOutgoing(ACCOUNT, "relay-wait")).rejects.toThrow("relay down");
 
       publish.mockResolvedValue([{ relay: "wss://relay.test", ok: true, ts: 1 }]);
-      await vi.advanceTimersByTimeAsync(2_100);
+      await new Promise(resolve => setTimeout(resolve, 2_300));
       expect((await outgoingQueueRepository.get(ACCOUNT, "relay-wait"))?.state).toBe("sent");
       expect(publish).toHaveBeenCalledTimes(2);
     } finally {
       cancelOutgoingWorkForAccount(ACCOUNT);
-      vi.useRealTimers();
     }
-  });
+  }, 6_000);
 
   it("manually retries failed work and keeps accounts isolated", async () => {
     await outgoingQueueRepository.putIfAbsent(queued(ACCOUNT, "failed", "failed"));
