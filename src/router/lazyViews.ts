@@ -1,6 +1,7 @@
 export const loadConversationsView = () => import("@/views/Conversations.vue");
 export const loadNotificationsView = () => import("@/views/Notifications.vue");
 export const loadSettingsView = () => import("@/views/Settings.vue");
+export const loadSystemSettingsView = () => import("@/views/SystemSettings.vue");
 
 let bottomTabPreload: Promise<unknown> | null = null;
 
@@ -9,6 +10,7 @@ export function preloadBottomTabViews() {
     loadConversationsView(),
     loadNotificationsView(),
     loadSettingsView(),
+    loadSystemSettingsView(),
   ]);
   return bottomTabPreload;
 }
