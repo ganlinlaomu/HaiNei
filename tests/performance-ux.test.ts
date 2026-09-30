@@ -67,7 +67,7 @@ describe("friend request notifications", () => {
 });
 
 describe("encrypted image metadata", () => {
-  const variant = { url: "https://media.test/image.enc", mime: "image/jpeg", alg: "AES-GCM", iv: "aXY=", key: "a2V5" };
+  const variant = { url: "https://media.test/image.enc", mime: "image/jpeg", alg: "AES-GCM", iv: btoa("i".repeat(12)), key: btoa("k".repeat(32)) };
   it("keeps old single-reference posts compatible", () => {
     expect(decodeEncryptedImageRef(encodeEncryptedImageRef({ v: 1, ...variant })))
       .toMatchObject({ v: 1, url: variant.url });

@@ -22,7 +22,7 @@ export async function assertUserAndQuota(env: Env, pubkey: string, requestedByte
 
   const policy = quotaPolicy(env);
   const size = requestedBytes === undefined ? 0 : Number(requestedBytes);
-  if (!Number.isSafeInteger(size) || size < 0) throw new HttpError(400, "invalid_file_size");
+  if (!Number.isSafeInteger(size) || size <= 0) throw new HttpError(400, "invalid_file_size");
   if (size > policy.maxFileSize) throw new HttpError(413, "file_too_large");
 
   const usageDate = new Date(now * 1000).toISOString().slice(0, 10);

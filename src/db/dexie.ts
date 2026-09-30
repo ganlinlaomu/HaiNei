@@ -1,3 +1,4 @@
+import { installLocalVault } from "@/services/localVault";
 import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 
@@ -331,7 +332,7 @@ export class HaiNeiDatabase extends Dexie {
   deviceKeyValues!: Table<DeviceKeyValueRecord, string>;
   accountStateMirrors!: Table<AccountStateMirrorRecord, [string, AccountStateNamespace]>;
 
-  constructor(name = DATABASE_NAME) {
+  constructor(name = DATABASE_NAME, requireVault = import.meta.env.MODE !== "test") {
     super(name);
 
     this.version(1).stores({
@@ -570,6 +571,7 @@ export class HaiNeiDatabase extends Dexie {
       deviceKeyValues: "key, updatedAt",
       accountStateMirrors: "[accountPubkey+namespace], accountPubkey, [accountPubkey+updatedAt]"
     });
+    installLocalVault(this, requireVault);
     this.version(14).stores({
       syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+conversationId+createdAt+id], [accountPubkey+createdAt+id], [accountPubkey+conversationId+messageClass+createdAt+id], [accountPubkey+createdAt], [accountPubkey+senderPubkey]"
     }).upgrade(transaction => transaction.table("syncedMessages").toCollection().modify(record => {

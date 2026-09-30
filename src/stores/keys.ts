@@ -1,3 +1,8 @@
+import { clearAccountDeviceData } from "@/services/accountDeviceData";
+import { prepareAccountLock } from "@/services/accountLifecycle";
+import { flushDeviceWrites } from "@/services/deviceStorage";
+import { unlockLocalVault, lockLocalVault, migrateLocalVault } from "@/services/localVault";
+import { db } from "@/db/dexie";
 import { defineStore } from "pinia";
 import * as nostr from "nostr-tools";
 import { useRouter } from "vue-router";
@@ -25,7 +30,7 @@ import { debugLog } from "@/utils/debugLog";
 import { clearAccountScopedCaches } from "@/services/nostrCache";
 import { cancelOutgoingWorkForAccount } from "@/nostr/messaging/service";
 import { ACCOUNT_STATE_NAMESPACES, fetchAndMaterializeAccountState, syncAccountStateNamespace } from "@/services/accountStateSync";
-import { deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/deviceStorage";
+import { hydratePrivateDeviceValues, clearPrivateDeviceValues, deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/deviceStorage";
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { startAccountMessageSync, stopAccountMessageSync } from "@/services/accountMessageSync";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -91,6 +96,11 @@ export const useKeyStore = defineStore("keys", {
       if (this.pkHex && this.pkHex !== pk) clearAccountScopedCaches(this.pkHex);
       const generation = ++this.sessionGeneration;
       const isCurrent = () => this.pkHex === pk && this.sessionGeneration === generation && this.isUnlocked;
+      await unlockLocalVault(pk, this.skHex, isCurrent);
+      if (!isCurrent()) return;
+      await migrateLocalVault(db, pk);
+      if (!isCurrent()) return;
+      await hydratePrivateDeviceValues(pk);
       if (!isCurrent()) return;
       const account = pk.slice(0, 8);
       // Settings must load first so no later store can use the previous account's
@@ -154,6 +164,8 @@ export const useKeyStore = defineStore("keys", {
     resetAccountStores(currentPk: string) {
       this.sessionGeneration++;
       stopAccountMessageSync();
+      lockLocalVault(currentPk);
+      clearPrivateDeviceValues(currentPk);
       clearAccountScopedCaches(currentPk);
       cancelOutgoingWorkForAccount(currentPk);
       const account = currentPk.slice(0, 8) || "none";
@@ -243,7 +255,7 @@ export const useKeyStore = defineStore("keys", {
 
     async clearActiveSession() {
       const currentPk = this.pkHex;
-      if (currentPk) { this.resetAccountStores(currentPk); }
+      if (currentPk) { await prepareAccountLock(currentPk); await flushDeviceWrites(); this.resetAccountStores(currentPk); }
       this.skHex = "";
       this.pkHex = "";
       this.loginMethod = "";
@@ -259,7 +271,7 @@ export const useKeyStore = defineStore("keys", {
       if (!account.hasEncryptedKey || !hasEncryptedKey(account.pubkey)) {
         throw new Error("该私钥账号未在本机加密保存，请重新输入私钥");
       }
-      if (this.pkHex) { this.resetAccountStores(this.pkHex); }
+      if (this.pkHex) { await prepareAccountLock(this.pkHex); await flushDeviceWrites(); this.resetAccountStores(this.pkHex); }
       this.skHex = "";
       this.pkHex = account.pubkey;
       this.loginMethod = "private-key";
@@ -302,6 +314,13 @@ export const useKeyStore = defineStore("keys", {
       await this.persistActiveSession();
       await this.rememberCurrentAccount();
       await this.loadAccountStores(this.pkHex);
+    },
+
+    async deleteAccountDeviceData(pubkey: string) {
+      const account = pubkey.toLowerCase();
+      if (this.pkHex === account) await this.clearActiveSession();
+      await clearAccountDeviceData(account);
+      await this.removeAccountFromDevice(account);
     },
 
     async removeAccountFromDevice(pubkey: string) {
@@ -354,7 +373,7 @@ export const useKeyStore = defineStore("keys", {
     },
     async loginWithSk(sk: string) {
       const previousPubkey = this.pkHex;
-      if (previousPubkey) { this.resetAccountStores(previousPubkey); }
+      if (previousPubkey) { await prepareAccountLock(previousPubkey); await flushDeviceWrites(); this.resetAccountStores(previousPubkey); }
       await this.clearPersistedSession();
 
       this.skHex = sk;
@@ -415,7 +434,7 @@ export const useKeyStore = defineStore("keys", {
         if (password && password.trim()) {
           const encrypted = await encryptPrivateKey(skHex, password);
           await storeEncryptedKey(pk, encrypted);
-          if (previousPubkey) { this.resetAccountStores(previousPubkey); }
+          if (previousPubkey) { await prepareAccountLock(previousPubkey); await flushDeviceWrites(); this.resetAccountStores(previousPubkey); }
           
           this.skHex = skHex;
           this.pkHex = pk;

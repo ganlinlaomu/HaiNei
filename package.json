@@ -11,6 +11,7 @@
     "deploy:cf:pages": "npm run build && node scripts/deploy-cloudflare-pages.js"
   },
   "dependencies": {
+    "@noble/ciphers": "0.5.3",
     "@zxing/browser": "0.1.5",
     "@zxing/library": "0.21.3",
     "dexie": "^3.2.2",

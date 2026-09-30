@@ -55,7 +55,7 @@ export async function handleRequest(request: Request, env: Env) {
       const pubkey = await verifyAndConsumeChallenge(
         env, payload.challenge, payload.event, undefined, "hainei_media_session", authBinding(request, payload),
       );
-      return json(await createMediaSession(env, pubkey, payload.fileSize), 201);
+      return json(await createMediaSession(env, pubkey, payload.fileSize, payload.contentHash), 201);
     }
     if (path === "/api/account-state/get") {
       const payload = await body(request, env, 32 * 1024);

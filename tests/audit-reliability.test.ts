@@ -4,6 +4,7 @@ import { runInNewContext } from "node:vm";
 import { readFileSync } from "node:fs";
 import { HaiNeiDatabase } from "@/db/dexie";
 import { SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import { downloadMedia, validEncryptedMedia } from "@/utils/mediaSafety";
 
 it("pages same-second messages without gaps or duplicates and caches unread summaries", async () => {
   const db = new HaiNeiDatabase("audit-page");
@@ -63,6 +64,45 @@ it("limits deferred sender queues without removing committed messages", async ()
   } finally {
     await db.delete();
   }
+});
+it("aborts oversized streaming media and never sends credentials", async () => {
+  let cancelled = false;
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (_url, init) => {
+      expect(init).toMatchObject({
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        redirect: "error",
+      });
+      return new Response(
+        new ReadableStream({
+          pull(c) {
+            c.enqueue(new Uint8Array(4));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+      );
+    });
+  try {
+    await expect(
+      downloadMedia("https://media.example/file", 5),
+    ).rejects.toThrow("media_too_large");
+    expect(cancelled).toBe(true);
+  } finally {
+    fetcher.mockRestore();
+  }
+  expect(
+    validEncryptedMedia({
+      url: "https://media.example/x",
+      mime: "image/jpeg",
+      alg: "AES-GCM",
+      key: "bad",
+      iv: "bad",
+    }),
+  ).toBe(false);
 });
 it("deduplicates push across worker restarts and ignores inactive account scope", async () => {
   const entries = new Map<string, Response>();

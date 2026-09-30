@@ -1,3 +1,4 @@
+import { downloadMedia } from "./mediaSafety";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
 import { base64ToBytes, bytesToBase64 } from "@/nostr/crypto";
 import { uploadImageToBlossomWithFallback } from "@/utils/blossom";
@@ -53,13 +54,12 @@ export async function uploadPreparedEncryptedDmAudio(
 export async function decryptDmAudio(encryptedRef: string, signal?: AbortSignal) {
   const metadata = decodeEncryptedImageRef(encryptedRef);
   if (!metadata || !metadata.mime.startsWith("audio/")) throw new Error("无效的加密语音引用");
-  const response = await fetch(metadata.url, { signal });
-  if (!response.ok) throw new Error(`语音下载失败 (${response.status})`);
+  const encryptedBytes = await downloadMedia(metadata.url, 16 * 1024 * 1024, signal);
   const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
   const decrypted = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },
     key,
-    await response.arrayBuffer(),
+    encryptedBytes,
   );
   return new Blob([decrypted], { type: metadata.mime });
 }

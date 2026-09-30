@@ -57,6 +57,7 @@
 </template>
 
 <script lang="ts">
+import { downloadMedia } from "@/utils/mediaSafety";
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ImageViewer from "@/components/ImageViewer.vue";
 import { useKeyStore } from "@/stores/keys";
@@ -139,9 +140,7 @@ function getDecryptedBlob(account: string, encryptedRef: string, priority: Decry
 
     const metadata = decodeEncryptedImageRef(encryptedRef);
     if (!metadata) throw new Error("Invalid encrypted image reference");
-    const response = await fetch(metadata.url, { signal: controller.signal });
-    if (!response.ok) throw new Error(`Encrypted image request failed (${response.status})`);
-    const encryptedBytes = new Uint8Array(await response.arrayBuffer());
+    const encryptedBytes = new Uint8Array(await downloadMedia(metadata.url, 16 * 1024 * 1024, controller.signal));
     const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
     const decrypted = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },

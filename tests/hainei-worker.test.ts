@@ -193,12 +193,13 @@ describe("HaiNei Worker authentication and quota", () => {
     const pubkey = "b".repeat(64);
     const fetch = vi.fn(async (request: Request) => {
       expect(request.headers.get("Authorization")).toBe("Bearer server-only-service-token");
-      expect(await request.json()).toEqual({ subject: pubkey, ttl: 3600 });
+      expect(await request.json()).toEqual({ subject: pubkey, ttl: 3600, contentHash: "c".repeat(64), maxBytes: 10 });
       return new Response(JSON.stringify({
+        bindingVersion: 1, singleUse: true, contentHash: "c".repeat(64), maxBytes: 10,
         token: "imgbed_upload_user", subject: pubkey, scope: "upload", expiresAt: 9999,
       }), { status: 201 });
     });
-    const result = await createMediaSession({ ...baseEnv(db), BLOSSOM: { fetch } }, pubkey, 10);
+    const result = await createMediaSession({ ...baseEnv(db), BLOSSOM: { fetch } }, pubkey, 10, "c".repeat(64));
     expect(result).toEqual({ token: "imgbed_upload_user", pubkey, scope: "upload", expiresAt: 9999 });
     expect(fetch).toHaveBeenCalledOnce();
   });
