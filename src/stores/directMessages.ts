@@ -880,16 +880,23 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const peer = peerPubkey.toLowerCase();
       const items = this.peerMessages(peer);
       // The chat has its own paged history, independent of the bounded home
-      // cache. Persist the position actually shown at the bottom of that chat.
-      // A canonical outgoing message also covers earlier incoming messages.
-      const readable = (item: InboxItem) => !item.outgoing || item.outgoing.state === "sent";
-      const latest = readThrough
+      // cache. Persist only a canonical position actually stored for this
+      // conversation. A "sent" optimistic task still uses local:* ids until the
+      // Relay echo is matched, so it must never become a durable read cursor.
+      const readable = (item: InboxItem) => (!item.outgoing || item.outgoing.state === "sent")
+        && !item.id.startsWith("local:")
+        && !item.conversationId?.startsWith("local:");
+      const requestedReadThrough = readThrough
         ? directMessagesForPeer([readThrough], account, peer, {
           friendship: useFriendshipsStore().getRecord(peer),
           preference: this.preferencesByPeer[peer],
           enforceAuthorization: true,
         }).filter(readable).at(-1)
-        : items.filter(readable).at(-1);
+        : undefined;
+      // If the UI tail is an optimistic sent task, fall back to the newest
+      // canonical message instead of returning without persisting the real read
+      // position. This is what makes the cursor survive lock/login cycles.
+      const latest = requestedReadThrough || items.filter(readable).at(-1);
       if (!latest?.conversationId) return;
       const conversationId = latest.conversationId;
       const previous = this.readCursors[conversationId];
