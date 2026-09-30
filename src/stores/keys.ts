@@ -2,7 +2,7 @@ import { clearAccountDeviceData } from "@/services/accountDeviceData";
 import { prepareAccountLock } from "@/services/accountLifecycle";
 import { flushDeviceWrites } from "@/services/deviceStorage";
 import { unlockLocalVault, lockLocalVault, migrateLocalVault } from "@/services/localVault";
-import { db } from "@/db/dexie";
+import { db, type AccountStateNamespace } from "@/db/dexie";
 import { defineStore } from "pinia";
 import * as nostr from "nostr-tools";
 import { useRouter } from "vue-router";
@@ -117,10 +117,8 @@ export const useKeyStore = defineStore("keys", {
       // Read state and friendship authorization are startup-critical for DMs.
       // Do not let Relay history race ahead of them: otherwise old history is
       // temporarily counted as unread and the badge oscillates during login.
-      const criticalStateNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
-        namespace => namespace === "read_state" || namespace === "friendships"
-      );
-      const criticalStateRestore = this.supportsNip44
+      const criticalStateNamespaces: AccountStateNamespace[] = ["read_state", "friendships"];
+      const criticalStateRestore: Promise<{ available: boolean; restored: AccountStateNamespace[] }> = this.supportsNip44
         ? fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false, isCurrent })
             .catch(error => {
               debugLog("account", "critical_state_restore_unavailable", {
