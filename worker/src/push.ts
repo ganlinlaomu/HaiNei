@@ -479,7 +479,7 @@ export async function triggerGenericPush(
       if (response.ok) {
         await completePushDelivery(env, senderPubkey, row.account_pubkey, messageId, reservation.endpointHash, true, now);
         diagnostics.sent += 1;
-        console.info({ recipientPubkey: row.account_pubkey.slice(0, 12), endpointHost: host, status: response.status, message: "push sent" });
+        console.info({ endpointHost: host, status: response.status, message: "push sent" });
         return;
       }
 
@@ -493,7 +493,6 @@ export async function triggerGenericPush(
         diagnostics.failed += 1;
       }
       console.error({
-        recipientPubkey: row.account_pubkey.slice(0, 12),
         endpointHost: host,
         status: response.status,
         message: "push request failed",
@@ -504,7 +503,6 @@ export async function triggerGenericPush(
       }
       diagnostics.failed += 1;
       console.error({
-        recipientPubkey: row.account_pubkey.slice(0, 12),
         endpointHost: host,
         message: safePushErrorMessage(error, [row.endpoint, row.p256dh, row.auth, config.privateKey]),
       });
