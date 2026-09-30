@@ -8,6 +8,7 @@ import { calculateCatchupSince, compareMessages } from "@/nostr/messaging/sync/s
 import { fetchCatchupPage, runPagedCatchup } from "@/nostr/messaging/sync/catchup";
 import { SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { MessageSyncManager } from "@/nostr/messaging/sync/MessageSyncManager";
+import { decryptedEventCache, eventCache, scopedKey } from "@/services/nostrCache";
 
 const ACCOUNT_A = "a".repeat(64);
 const ACCOUNT_B = "b".repeat(64);
@@ -291,6 +292,35 @@ describe("reliable message persistence", () => {
     expect(await pipeline.ingestCanonicalMessage(first, { source: "realtime" })).toMatchObject({ discarded: true });
     expect(await pipeline.ingestCanonicalMessage(second, { source: "realtime" })).toMatchObject({ discarded: true });
     expect(rejected).toHaveBeenCalledTimes(1);
+    expect(await repo.list(ACCOUNT_A)).toEqual([]);
+  });
+
+  it("purges rejected decrypted events from memory and legacy durable cache", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const transportId = "wrap-rejected-cache";
+    const rejectedMessage = message("rejected-cache", 100, { transportEventId: transportId });
+    await repo.putDecryptedEvent(ACCOUNT_A, transportId, rejectedMessage);
+    decryptedEventCache.set(scopedKey(ACCOUNT_A, transportId), rejectedMessage);
+    eventCache.set(transportId, { id: transportId } as any);
+
+    const pipeline = new MessageIngestionPipeline(
+      ACCOUNT_A,
+      { accountPubkey: ACCOUNT_A },
+      () => true,
+      () => false,
+      repo,
+      async () => rejectedMessage,
+    );
+
+    const result = await pipeline.ingestNostrEvent(
+      { id: transportId, kind: 1059, created_at: 100 } as any,
+      { source: "realtime" },
+    );
+
+    expect(result).toMatchObject({ discarded: true });
+    expect(decryptedEventCache.has(scopedKey(ACCOUNT_A, transportId))).toBe(false);
+    expect(eventCache.has(transportId)).toBe(false);
+    expect(await repo.getDecryptedEvent(ACCOUNT_A, transportId)).toBeNull();
     expect(await repo.list(ACCOUNT_A)).toEqual([]);
   });
 
