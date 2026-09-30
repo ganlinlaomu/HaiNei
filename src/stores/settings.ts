@@ -199,7 +199,7 @@ export const useSettingsStore = defineStore("settings", {
       }
     },
 
-    async load(pk?: string) {
+    async load(pk?: string, force = false) {
       const keyStore = useKeyStore();
       const targetPk = typeof (pk ?? keyStore.pkHex) === "string"
         ? String(pk ?? keyStore.pkHex).trim().toLowerCase()
@@ -208,7 +208,7 @@ export const useSettingsStore = defineStore("settings", {
         this.reset();
         return;
       }
-      if (this.loadedFor === targetPk) return;
+      if (this.loadedFor === targetPk && !force) return;
 
       const canUseGlobalLegacy = !this.loadedFor
         && (deviceStorage.getItem("pkHex") || "").trim().toLowerCase() === targetPk;

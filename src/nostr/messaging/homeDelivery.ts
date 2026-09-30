@@ -21,6 +21,7 @@ export function incomingFriendRequestNotification(message: CanonicalMessage, acc
 
 export type HomeMessageDelivery = {
   accountPubkey: string;
+  deferUntilDurable?: boolean;
   currentAccount: () => string;
   isAuthorizationReady?: () => boolean;
   isAcceptedMessage?: (message: CanonicalMessage) => MessageAuthorizationDecision | boolean;
@@ -91,6 +92,7 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
       debugLog("ui", "ui_dm_receipt_routed", diagnostic, "info");
       return false;
     }
+    if (delivery.deferUntilDurable && !metadata.durable) return true;
     if (delivery.isInteraction(message)) {
       try {
         await delivery.processInteraction(message);

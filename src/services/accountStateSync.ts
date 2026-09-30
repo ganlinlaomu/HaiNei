@@ -1,3 +1,4 @@
+import { timedJsonFetch } from "@/utils/timedFetch";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import {
   db,
@@ -26,6 +27,7 @@ export type AccountStateEnvelope = {
 
 export type AccountStateKeys = {
   pkHex: string;
+  sessionGeneration?: number;
   supportsNip44: boolean;
   nip44Encrypt(peer: string, plaintext: string): Promise<string>;
   nip44Decrypt(peer: string, ciphertext: string): Promise<string>;
@@ -49,10 +51,12 @@ async function responseJson(response: Response) {
   return body;
 }
 
-async function authenticatedPost(keys: AccountStateKeys, path: string, payload: Record<string, unknown>) {
-  const challengeResponse = await fetch(`${baseUrl()}/api/auth/challenge`, { method: "POST" });
+async function authenticatedPost(keys: AccountStateKeys, path: string, payload: Record<string, unknown>, isCurrent: () => boolean = () => true) {
+  const signingAccount = keys.pkHex;
+  const challengeResponse = await timedJsonFetch(`${baseUrl()}/api/auth/challenge`, { method: "POST" });
   const challengeBody = await responseJson(challengeResponse);
   const challenge = String(challengeBody?.challenge || "");
+  if (keys.pkHex !== signingAccount || !isCurrent()) throw new Error("stale_account_session");
   const url = `${baseUrl()}${path}`;
   const event = await signWorkerRequest(keys.signEvent.bind(keys), keys.pkHex, {
     action: ACCOUNT_STATE_ACTION,
@@ -63,7 +67,8 @@ async function authenticatedPost(keys: AccountStateKeys, path: string, payload: 
     payload,
     content: "Authorize HaiNei encrypted account state",
   });
-  return responseJson(await fetch(url, {
+  if (keys.pkHex !== signingAccount || !isCurrent()) throw new Error("stale_account_session");
+  return responseJson(await timedJsonFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, challenge, event }),
@@ -158,15 +163,18 @@ async function encryptEnvelope(keys: AccountStateKeys, namespace: AccountStateNa
   return keys.nip44Encrypt(keys.pkHex, JSON.stringify(envelope));
 }
 
-export async function materializeAccountState(account: string, namespace: AccountStateNamespace, data: any, version: number) {
+export async function materializeAccountState(account: string, namespace: AccountStateNamespace, data: any, version: number, isCurrent: () => boolean = () => true) {
+  if (!isCurrent()) return;
   let materializedData = namespace === "settings"
     ? migrateConnectionSettings(data, { deviceId: "account-state" })
     : data;
   if (namespace === "friendships") {
     const existing = await db.accountFriendships.where("accountPubkey").equals(account).toArray();
+    if (!isCurrent()) return;
     await db.accountFriendships.bulkPut(mergeFriendshipSnapshots(existing, materializedData || []).map(record => ({ ...record, accountPubkey: account })));
   } else if (namespace === "friend_metadata") {
     const existing = await db.accountFriends.where("accountPubkey").equals(account).toArray();
+    if (!isCurrent()) return;
     materializedData = mergeByKey(
       existing,
       materializedData || [],
@@ -186,15 +194,18 @@ export async function materializeAccountState(account: string, namespace: Accoun
   } else if (namespace === "notification_state") {
     await db.accountMeta.put({ accountPubkey: account, key: "notification_state", value: materializedData });
   }
+  if (!isCurrent()) return;
   await accountStateRepository.put({ accountPubkey: account, namespace, version, data: materializedData, updatedAt: Date.now() });
 }
 
 export async function fetchAndMaterializeAccountState(
   keys: AccountStateKeys,
   namespaces = ACCOUNT_STATE_NAMESPACES,
-  options: { onlyNewer?: boolean } = {},
+  options: { onlyNewer?: boolean; isCurrent?: () => boolean } = {},
 ) {
   const account = keys.pkHex.toLowerCase();
+  const generation = keys.sessionGeneration;
+  const isCurrent = () => keys.pkHex.toLowerCase() === account && keys.sessionGeneration === generation && keys.supportsNip44;
   if (!account || !keys.supportsNip44 || typeof indexedDB === "undefined") {
     return { available: false, restored: [] as AccountStateNamespace[] };
   }
@@ -206,12 +217,13 @@ export async function fetchAndMaterializeAccountState(
   const response = await authenticatedPost(keys, "/api/account-state/get", {
     namespaces,
     ...(knownVersions ? { knownVersions } : {}),
-  });
+  }, () => isCurrent() && (!options.isCurrent || options.isCurrent()));
   const restored: AccountStateNamespace[] = [];
   let settingsNeedRewrite = false;
   for (const snapshot of (response?.snapshots || []) as RemoteSnapshot[]) {
     try {
       if (options.onlyNewer && snapshot.version <= Number(knownVersions?.[snapshot.namespace] || 0)) continue;
+      if (!isCurrent() || (options.isCurrent && !options.isCurrent())) return {available:false,restored};
       const envelope = await decryptSnapshot(keys, snapshot);
       const local = await accountStateRepository.get(account, snapshot.namespace);
       const merged = local ? mergeNamespaceData(snapshot.namespace, local.data, envelope.data) : envelope.data;
@@ -221,13 +233,14 @@ export async function fetchAndMaterializeAccountState(
       if (snapshot.namespace === "settings" && JSON.stringify(data) !== JSON.stringify(envelope.data)) {
         settingsNeedRewrite = true;
       }
-      await materializeAccountState(account, snapshot.namespace, data, snapshot.version);
+      if (!isCurrent() || (options.isCurrent && !options.isCurrent())) return { available: false, restored };
+      await materializeAccountState(account, snapshot.namespace, data, snapshot.version, () => isCurrent() && (!options.isCurrent || options.isCurrent()));
       restored.push(snapshot.namespace);
     } catch (error) {
       console.warn("[account-state] ignored unreadable namespace", snapshot.namespace, error instanceof Error ? error.message : "unknown");
     }
   }
-  if (settingsNeedRewrite) {
+  if (settingsNeedRewrite && isCurrent() && (!options.isCurrent || options.isCurrent())) {
     await syncAccountStateNamespace(keys, "settings").catch(error => {
       console.warn("[account-state] settings cleanup sync failed", error instanceof Error ? error.message : "unknown");
     });
@@ -249,25 +262,30 @@ export async function localNamespaceData(account: string, namespace: AccountStat
 
 export async function syncAccountStateNamespace(keys: AccountStateKeys, namespace: AccountStateNamespace, deviceId?: string) {
   const account = keys.pkHex.toLowerCase();
+  const generation = keys.sessionGeneration;
+  const isCurrent = () => keys.pkHex.toLowerCase() === account && keys.sessionGeneration === generation && keys.supportsNip44;
   if (!account || !keys.supportsNip44 || typeof indexedDB === "undefined") return false;
   let mirror = await accountStateRepository.get(account, namespace);
   let data = await localNamespaceData(account, namespace);
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (!isCurrent()) return false;
     const encrypted = await encryptEnvelope(keys, namespace, data);
     try {
       const result = await authenticatedPost(keys, "/api/account-state/put", {
         namespace, ciphertext: encrypted, expectedVersion: mirror?.version || 0, deviceId,
-      });
+      }, isCurrent);
+      if (!isCurrent()) return false;
       await accountStateRepository.put({ accountPubkey: account, namespace, version: Number(result.version), data, updatedAt: Date.now() });
       return true;
     } catch (error: any) {
       if (error?.status !== 409 || attempt > 0) throw error;
-      const response = await authenticatedPost(keys, "/api/account-state/get", { namespaces: [namespace] });
+      const response = await authenticatedPost(keys, "/api/account-state/get", { namespaces: [namespace] }, isCurrent);
       const remote = (response?.snapshots || [])[0] as RemoteSnapshot | undefined;
       if (!remote) { mirror = undefined; continue; }
       const envelope = await decryptSnapshot(keys, remote);
+      if (!isCurrent()) return false;
       data = mergeNamespaceData(namespace, data, envelope.data);
-      await materializeAccountState(account, namespace, data, remote.version);
+      await materializeAccountState(account, namespace, data, remote.version, isCurrent);
       mirror = await accountStateRepository.get(account, namespace);
     }
   }
@@ -277,11 +295,14 @@ export async function syncAccountStateNamespace(keys: AccountStateKeys, namespac
 const timers = new Map<string, number>();
 export function scheduleAccountStateSync(keys: AccountStateKeys, namespace: AccountStateNamespace, deviceId?: string) {
   if (!keys.supportsNip44 || typeof window === "undefined" || typeof indexedDB === "undefined") return;
+  const scheduledAccount = keys.pkHex;
+  const scheduledGeneration = keys.sessionGeneration;
   const id = `${keys.pkHex}:${namespace}`;
   const existing = timers.get(id);
   if (existing) window.clearTimeout(existing);
   timers.set(id, window.setTimeout(() => {
     timers.delete(id);
+    if (keys.pkHex !== scheduledAccount || keys.sessionGeneration !== scheduledGeneration || !keys.supportsNip44) return;
     void syncAccountStateNamespace(keys, namespace, deviceId).catch(error => {
       console.warn("[account-state] sync failed", namespace, error instanceof Error ? error.message : "unknown");
     });

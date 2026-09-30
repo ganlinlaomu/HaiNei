@@ -1,3 +1,4 @@
+import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import Dexie from "dexie";
 import {
   db,
@@ -23,6 +24,7 @@ function toRecord(accountPubkey: string, message: CanonicalMessage, nowMs: numbe
     senderPubkey: message.senderPubkey.toLowerCase(),
     recipientPubkeys: message.recipientPubkeys.map(value => value.toLowerCase()),
     conversationId: message.conversationId || message.id,
+    messageClass: isDirectMessageTags(message.tags) ? "direct" : "other",
     plaintext: message.plaintext,
     ciphertext: message.ciphertext,
     createdAt: message.createdAt,
@@ -39,6 +41,7 @@ function toRecord(accountPubkey: string, message: CanonicalMessage, nowMs: numbe
 }
 
 export class SyncedMessageRepository {
+  private visiblePolicies = new Map<string, { policy: string; test: (message: SyncedMessageRecord) => boolean }>();
   private pending = new Map<string, {
     account: string;
     message: CanonicalMessage;
@@ -84,6 +87,7 @@ export class SyncedMessageRepository {
         "rw",
         this.database.syncedMessages,
         this.database.conversationStates,
+        this.database.conversationReadStates,
         this.database.messageSyncStates,
         async () => {
           for (const [, waiters] of batch) {
@@ -108,6 +112,7 @@ export class SyncedMessageRepository {
       "rw",
       this.database.syncedMessages,
       this.database.conversationStates,
+        this.database.conversationReadStates,
       this.database.messageSyncStates,
       async () => {
         const key: [string, string] = [account, message.id];
@@ -121,16 +126,29 @@ export class SyncedMessageRepository {
         await this.database.syncedMessages.add(incoming);
         const conversationKey: [string, string] = [account, incoming.conversationId];
         const current = await this.database.conversationStates.get(conversationKey);
+        const read = await this.getReadState(account,incoming.conversationId);
+        const cursorKey = JSON.stringify([read?.lastReadCreatedAt || 0,read?.lastReadMessageId || ""]);
+        const unread = incoming.senderPubkey !== account && isMessageAfter({id:incoming.id,createdAt:incoming.createdAt},read);
+        const previousCache = current?.unreadCache?.cursor === cursorKey ? current.unreadCache : !current ? {cursor:cursorKey,count:0,directCount:0} : undefined;
+        const visiblePolicy = this.visiblePolicies.get(JSON.stringify(conversationKey));
+        const visibleUnreadCache = current?.visibleUnreadCache && visiblePolicy?.policy === current.visibleUnreadCache.policy
+          ? { policy: visiblePolicy.policy, count: current.visibleUnreadCache.count + Number(incoming.senderPubkey !== account && isDirectMessageTags(incoming.tags) && visiblePolicy.test(incoming)) }
+          : undefined;
+        const unreadCache = previousCache ? {...previousCache,count:previousCache.count + Number(unread),directCount:previousCache.directCount + Number(unread && isDirectMessageTags(incoming.tags))} : undefined;
         if (!current || incoming.createdAt > current.lastMessageAt ||
           (incoming.createdAt === current.lastMessageAt && incoming.id.localeCompare(current.lastMessageId) > 0)) {
           await this.database.conversationStates.put({
             accountPubkey: account,
             conversationId: incoming.conversationId,
+            unreadCache,
+            visibleUnreadCache,
             lastMessageId: incoming.id,
             lastMessageAt: incoming.createdAt,
             lastMessageSenderPubkey: incoming.senderPubkey,
             updatedAt: nowMs
           });
+        } else {
+          await this.database.conversationStates.update(conversationKey,{unreadCache, visibleUnreadCache});
         }
 
         const nowSeconds = Math.floor(nowMs / 1000);
@@ -168,7 +186,16 @@ export class SyncedMessageRepository {
     nowMs = Date.now(),
   ) {
     const account = normalizeAccountPubkey(accountPubkey);
-    await this.database.deferredAuthorizationMessages.put({
+    if (new TextEncoder().encode(JSON.stringify(message)).length > 65536) throw new Error("deferred_message_too_large");
+    await this.database.transaction("rw", this.database.deferredAuthorizationMessages, async () => {
+      const table = this.database.deferredAuthorizationMessages;
+      await table.where("[accountPubkey+deferredAt]").between([account,0],[account,nowMs-7*86400000],true,true).delete();
+      const existing = await table.get([account,message.id]);
+      if (!existing) {
+        const records = await table.where("accountPubkey").equals(account).limit(501).toArray();
+        if (records.length >= 500 || records.filter(r => (r.message as CanonicalMessage).senderPubkey === message.senderPubkey).length >= 25) throw new Error("deferred_queue_full");
+      }
+      await table.put({
       accountPubkey: account,
       id: message.id,
       createdAt: message.createdAt,
@@ -177,15 +204,17 @@ export class SyncedMessageRepository {
         source: metadata.source,
         ...(metadata.relayUrl ? { relayUrl: metadata.relayUrl } : {}),
       },
-      deferredAt: nowMs,
+      deferredAt: existing?.deferredAt ?? nowMs,
+    });
     });
   }
 
-  async listDeferredAuthorizationMessages(accountPubkey: string) {
+  async listDeferredAuthorizationMessages(accountPubkey: string, afterId?: string) {
     const account = normalizeAccountPubkey(accountPubkey);
     return this.database.deferredAuthorizationMessages
-      .where("[accountPubkey+createdAt]")
-      .between([account, Dexie.minKey], [account, Dexie.maxKey])
+      .where("[accountPubkey+id]")
+      .between([account, afterId || ""], [account, "\uffff"], !afterId, true)
+      .limit(50)
       .toArray();
   }
 
@@ -202,6 +231,25 @@ export class SyncedMessageRepository {
     return (limit === undefined ? query : query.limit(limit)).toArray();
   }
 
+  async listHistoryPage(accountPubkey: string, before?: {createdAt:number;id:string}) {
+    const account=normalizeAccountPubkey(accountPubkey);
+    return this.database.syncedMessages.where("[accountPubkey+createdAt+id]")
+      .between([account,0,""],[account,before?.createdAt ?? Number.MAX_SAFE_INTEGER,before?.id ?? "\uffff"],true,!before)
+      .reverse().limit(100).toArray();
+  }
+  async listRecent(accountPubkey: string, limit = 200) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const recent = await this.database.syncedMessages.where("[accountPubkey+createdAt]")
+      .between([account,Dexie.minKey],[account,Dexie.maxKey]).reverse().limit(limit).toArray();
+    const summaries = await this.database.conversationStates.where("accountPubkey").equals(account).toArray();
+    const latest = await this.database.syncedMessages.bulkGet(summaries.map(s=>[account,s.lastMessageId]));
+    const latestDirect = await Promise.all(summaries.map(summary => this.database.syncedMessages
+      .where("[accountPubkey+conversationId+messageClass+createdAt+id]")
+      .between([account, summary.conversationId, "direct", 0, ""], [account, summary.conversationId, "direct", Number.MAX_SAFE_INTEGER, "\uffff"])
+      .reverse().first()));
+    return [...new Map([...recent,...latest.filter((m):m is SyncedMessageRecord=>!!m), ...latestDirect.filter((m):m is SyncedMessageRecord=>!!m)].map(m=>[m.id,m])).values()];
+  }
+
   async purgeUnsupportedMessages(accountPubkey: string) {
     const account = normalizeAccountPubkey(accountPubkey);
     const keys = await this.database.syncedMessages
@@ -215,12 +263,18 @@ export class SyncedMessageRepository {
     return keys.length;
   }
 
-  async listConversation(accountPubkey: string, conversationId: string) {
+  async listConversationPage(accountPubkey: string, conversationId: string, before?: {createdAt:number;id:string}, limit = 50) {
     const account = normalizeAccountPubkey(accountPubkey);
-    return this.database.syncedMessages
-      .where("[accountPubkey+conversationId+createdAt]")
-      .between([account, conversationId, Dexie.minKey], [account, conversationId, Dexie.maxKey])
-      .toArray();
+    return (await this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
+      .between([account,conversationId,0,""],
+        [account,conversationId,before?.createdAt ?? Number.MAX_SAFE_INTEGER,before?.id ?? "\uffff"],true,!before)
+      .reverse().limit(Math.max(1,Math.min(limit,100))).toArray()).reverse();
+  }
+  async listConversation(accountPubkey: string, conversationId: string) {
+    // Compatibility for explicit full-history operations (search/rebuild).
+    const account = normalizeAccountPubkey(accountPubkey);
+    return this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt]")
+      .between([account,conversationId,Dexie.minKey],[account,conversationId,Dexie.maxKey]).toArray();
   }
 
   async listConversationAround(accountPubkey: string, conversationId: string, messageId: string, radius = 20) {
@@ -228,19 +282,24 @@ export class SyncedMessageRepository {
     const target = await this.database.syncedMessages.get([account, messageId]);
     if (!target || target.conversationId !== conversationId) return [] as SyncedMessageRecord[];
     const index = this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt]");
-    const [before, sameTimestamp, after] = await Promise.all([
+    const [before, sameTimestamp, sameTimestampAfter, after] = await Promise.all([
       index
         .between([account, conversationId, Dexie.minKey], [account, conversationId, target.createdAt], true, false)
         .reverse()
         .limit(radius)
         .toArray(),
-      index.equals([account, conversationId, target.createdAt]).toArray(),
+      this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
+        .between([account, conversationId, target.createdAt, ""], [account, conversationId, target.createdAt, target.id], true, true)
+        .reverse().limit(radius + 1).toArray(),
+      this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
+        .between([account, conversationId, target.createdAt, target.id], [account, conversationId, target.createdAt, "\uffff"], false, true)
+        .limit(radius).toArray(),
       index
         .between([account, conversationId, target.createdAt], [account, conversationId, Dexie.maxKey], false, true)
         .limit(radius)
         .toArray(),
     ]);
-    const byId = new Map([...before, ...sameTimestamp, ...after].map(record => [record.id, record]));
+    const byId = new Map([...before, ...sameTimestamp, ...sameTimestampAfter, ...after].map(record => [record.id, record]));
     const ordered = [...byId.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
     const targetIndex = ordered.findIndex(record => record.id === messageId);
     if (targetIndex < 0) return [] as SyncedMessageRecord[];
@@ -300,7 +359,10 @@ export class SyncedMessageRepository {
 
   async markRead(accountPubkey: string, conversationId: string, message?: SyncedMessageRecord) {
     const account = normalizeAccountPubkey(accountPubkey);
-    const messages = message ? [message] : await this.listConversation(account, conversationId);
+    const messages = message ? [message] : await this.database.syncedMessages
+      .where("[accountPubkey+conversationId+createdAt+id]")
+      .between([account, conversationId, 0, ""], [account, conversationId, Number.MAX_SAFE_INTEGER, "\uffff"])
+      .reverse().filter(item => item.senderPubkey !== account).limit(1).toArray();
     const latestIncoming = messages
       .filter(item => item.senderPubkey !== account)
       .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
@@ -325,13 +387,48 @@ export class SyncedMessageRepository {
     await this.database.conversationReadStates.put(seed);
   }
 
-  async getUnreadCount(accountPubkey: string, conversationId: string) {
+  async getUnreadCount(accountPubkey: string, conversationId: string, directOnly = false) {
     const account = normalizeAccountPubkey(accountPubkey);
-    const [messages, cursor] = await Promise.all([
-      this.listConversation(account, conversationId),
-      this.getReadState(account, conversationId)
-    ]);
-    return messages.filter(message => message.senderPubkey !== account && isMessageAfter({ id: message.id, createdAt: message.createdAt }, cursor)).length;
+    return this.database.transaction("rw",this.database.syncedMessages,this.database.conversationStates,this.database.conversationReadStates,async()=>{
+      const cursor = await this.getReadState(account,conversationId);
+      const key:[string,string]=[account,conversationId];
+      const summary=await this.database.conversationStates.get(key);
+      const cursorKey=JSON.stringify([cursor?.lastReadCreatedAt || 0,cursor?.lastReadMessageId || ""]);
+      if(summary?.unreadCache?.cursor === cursorKey) return directOnly ? summary.unreadCache.directCount : summary.unreadCache.count;
+      let count=0,directCount=0;
+      await this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
+        .between([account,conversationId,cursor?.lastReadCreatedAt || 0,cursor?.lastReadMessageId || ""],
+          [account,conversationId,Number.MAX_SAFE_INTEGER,"\uffff"],false,true)
+        .each(message=>{
+          if(message.senderPubkey !== account && isMessageAfter({id:message.id,createdAt:message.createdAt},cursor)) {
+            count++;if(isDirectMessageTags(message.tags))directCount++;
+          }
+        });
+      if(summary) await this.database.conversationStates.update(key,{unreadCache:{cursor:cursorKey,count,directCount}});
+      return directOnly ? directCount : count;
+    });
+  }
+
+  async getVisibleUnreadCount(accountPubkey: string, conversationId: string, policy: string,
+    cursor: { lastReadCreatedAt?: number; lastReadMessageId?: string } | undefined,
+    visible: (message: SyncedMessageRecord) => boolean) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const token = JSON.stringify([account, conversationId]);
+    this.visiblePolicies.delete(token);
+    this.visiblePolicies.set(token, { policy, test: message => isMessageAfter({ id: message.id, createdAt: message.createdAt }, cursor) && visible(message) });
+    if (this.visiblePolicies.size > 512) this.visiblePolicies.delete(this.visiblePolicies.keys().next().value!);
+    return this.database.transaction("rw", this.database.syncedMessages, this.database.conversationStates, async () => {
+      const key: [string, string] = [account, conversationId];
+      const summary = await this.database.conversationStates.get(key);
+      if (summary?.visibleUnreadCache?.policy === policy) return summary.visibleUnreadCache.count;
+      let count = 0;
+      await this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
+        .between([account, conversationId, cursor?.lastReadCreatedAt || 0, cursor?.lastReadMessageId || ""],
+          [account, conversationId, Number.MAX_SAFE_INTEGER, "\uffff"], false, true)
+        .each(message => { if (message.senderPubkey !== account && isDirectMessageTags(message.tags) && visible(message)) count++; });
+      if (summary) await this.database.conversationStates.update(key, { visibleUnreadCache: { policy, count } });
+      return count;
+    });
   }
 
   async getTotalUnread(accountPubkey: string) {

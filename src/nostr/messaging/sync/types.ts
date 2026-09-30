@@ -13,6 +13,7 @@ export type MessageAuthorizationDecision = "accepted" | "rejected" | "unresolved
 export type MessageDeliveryResult = boolean | "defer" | void;
 
 export type MessageIngestionMetadata = {
+  durable?: boolean;
   source: MessageSource;
   relayUrl?: string;
 };

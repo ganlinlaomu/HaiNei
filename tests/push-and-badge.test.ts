@@ -77,6 +77,15 @@ class PushD1 {
   deliveries = new Map<string, { status: "sending" | "sent"; updated_at: number }>();
   rateLimits = new Map<string, number>();
 
+  async batch(statements: Array<{ run(): Promise<unknown> }>) {
+    const previous = new Map(this.authorizations);
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      return results;
+    } catch (error) { this.authorizations = previous; throw error; }
+  }
+
   prepare(sql: string) {
     const normalized = sql.replace(/\s+/g, " ").trim();
     return this.bound(normalized, []);
@@ -635,25 +644,12 @@ describe("privacy-preserving push and badge", () => {
 
   it("keeps service-worker notification wording and click target private-message only", () => {
     const source = readFileSync(new URL("../public/service-worker.js", import.meta.url), "utf8");
-    expect(source).toContain("body: '你有新的私信消息'");
+    expect(source).toContain("body:'你有新的私信消息'");
     expect(source).toContain("JSON.parse(event.data?.text() || '{}')");
     expect(source).toContain("const path = '/#/conversations'");
     expect(source).not.toMatch(/sender|pubkey|private-message content|post content/);
   });
 
-  it("increments a persisted app badge immediately for background message pushes", () => {
-    const source = readFileSync(new URL("../public/service-worker.js", import.meta.url), "utf8");
-    expect(source).toContain("RUNTIME_STATE_CACHE");
-    expect(source).toContain("BADGE_STATE_URL");
-    expect(source).toContain("queueBadgeIncrementWhenBackground()");
-    expect(source).toContain("payload?.type === 'message'");
-    expect(source).toContain("client.visibilityState === 'visible'");
-    expect(source).toContain("return readStoredBadgeCount()");
-    expect(source).toContain("setAppBadge?.(normalized)");
-    expect(source).toContain("clearAppBadge?.()");
-    expect(source).toContain("event.data?.type === 'SYNC_APP_BADGE'");
-    expect(source).toContain("queueBadgeSync(event.data.count)");
-  });
 
   it("keeps foreground badge ownership in App instead of navigation chrome", () => {
     const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
@@ -680,8 +676,8 @@ describe("privacy-preserving push and badge", () => {
     await syncAppBadge(0, target);
     expect(target.setAppBadge).toHaveBeenCalledWith(3);
     expect(target.clearAppBadge).toHaveBeenCalledOnce();
-    expect(postMessage).toHaveBeenNthCalledWith(1, { type: "SYNC_APP_BADGE", count: 3 });
-    expect(postMessage).toHaveBeenNthCalledWith(2, { type: "SYNC_APP_BADGE", count: 0 });
+    expect(postMessage).toHaveBeenNthCalledWith(1, { type: "SYNC_APP_BADGE", count: 3, accountScope: "" });
+    expect(postMessage).toHaveBeenNthCalledWith(2, { type: "SYNC_APP_BADGE", count: 0, accountScope: "" });
     expect(accountBadgeCount(OTHER, ACCOUNT, 3)).toBe(0);
     expect(accountBadgeCount(ACCOUNT, ACCOUNT, 3)).toBe(3);
     expect(accountBadgeCount(ACCOUNT, ACCOUNT, 3, ACCOUNT, 2)).toBe(5);
@@ -860,4 +856,14 @@ describe("privacy-preserving push and badge", () => {
       .rejects.toThrow("推送服务数据库尚未准备好");
     expect(pushEnabledForAccount(ACCOUNT)).toBe(false);
   });
+});
+
+it("replaces recipient authorization through one atomic D1 batch", async () => {
+  const db = new PushD1();
+  await replacePushAuthorizationPolicy(pushEnv(db), OTHER, [ACCOUNT]);
+  const batch = vi.spyOn(db, "batch");
+  await replacePushAuthorizationPolicy(pushEnv(db), OTHER, []);
+  expect(batch).toHaveBeenCalledOnce();
+  expect(batch.mock.calls[0][0]).toHaveLength(1);
+  expect(db.authorizations.has(`${OTHER}|${ACCOUNT}`)).toBe(false);
 });

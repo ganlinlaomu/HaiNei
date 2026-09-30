@@ -349,7 +349,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(imagePreview).toContain('rootMargin: "500px 0px"');
     expect(imagePreview).toContain("DecryptPriority");
     expect(imagePreview).toContain("priority - b.priority");
-    expect(home).toContain("requestAnimationFrame(appendPage)");
+    expect(home).toContain("syncedMessageRepository.listHistoryPage");
     expect(home).toContain("AUTO_LOAD_MORE_THRESHOLD");
     expect(home).toContain('addEventListener("scroll", handleHomeScroll');
     expect(home).toContain("distanceToBottom <= AUTO_LOAD_MORE_THRESHOLD");
@@ -480,7 +480,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).not.toContain("sending = ref(");
     expect(chat).not.toContain(':disabled="!accepted || sending"');
     expect(chat).toContain(':disabled="!accepted || !keys.pkHex ||');
-    expect(chat).toContain('const messages = computed(() => directMessages.peerMessages(peerPubkey.value))');
+    expect(chat).toContain('directMessages.peerMessages(peerPubkey.value)');
     expect(chat).toContain("'输入消息……'");
     expect(chat).toContain('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>');
     expect(chat).not.toContain('@click="router.back()">‹</button>');
@@ -579,7 +579,7 @@ describe("direct-message navigation and UI contract", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain("上传中…");
     expect(chat).toContain("发送中…");
-    expect(chat).toContain("✓ 已发送");
+    expect(chat).toContain("✓ Relay 已接受");
     expect(chat).not.toContain("✔️ 已发送");
     expect(chat).toContain("font-size:9px;font-weight:400");
     expect(chat).toContain("opacity:.85");

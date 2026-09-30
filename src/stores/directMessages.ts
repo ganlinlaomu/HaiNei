@@ -419,6 +419,19 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         .map(({ item, preview }) => ({ id: item.id, createdAt: item.created_at, senderPubkey: item.pubkey, preview }))
         .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
     },
+    async loadPeerHistoryPage(peerPubkey: string, before?: {createdAt:number;id:string}) {
+      const account = this.loadedFor || useKeyStore().pkHex;
+      const peer = peerPubkey.toLowerCase();
+      const conversation = await deriveConversationId([account,peer]);
+      const records = await syncedMessageRepository.listConversationPage(account,conversation,before,50);
+      if (useKeyStore().pkHex !== account) return {items:[] as InboxItem[],cursor:before,exhausted:true};
+      const friendships = useFriendshipsStore();
+      const items = records.map(recordInboxItem).filter(item => isDirectMessageTags(item.tags)
+        && isAuthorizedDirectMessage(item,account,friendships.getRecord(peer))
+        && afterDeletion(item,this.preferencesByPeer[peer]));
+      const last=records[0];
+      return {items,cursor:last ? {createdAt:last.createdAt,id:last.id} : before,exhausted:records.length<50};
+    },
     async loadPeerMessageContext(peerPubkey: string, messageId: string, radius = 20) {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
       const peer = peerPubkey.toLowerCase();
@@ -548,6 +561,33 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       this.scheduleReceipt(peer, "delivered", { createdAt: message.createdAt, messageId: message.id });
     },
+    async reconcileDurableUnread(conversationId?: string) {
+      const account=this.loadedFor;
+      if(!account)return;
+      const cursors = this.readCursors;
+      const keys=Object.keys(this.unreadByConversation).filter(id=>!conversationId || id===conversationId);
+      const preferences = this.preferencesByPeer;
+      const records = useFriendshipsStore().records;
+      const counts = await Promise.all(keys.map(async id => {
+        const item = useMessagesStore().inbox.find(m => m.conversationId === id);
+        const peer = item && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account);
+        if (!peer || !useFriendshipsStore().isAccepted(peer) || preferences[peer]?.hidden) return [id, 0] as const;
+        const friendship = useFriendshipsStore().getRecord(peer);
+        const preference = preferences[peer];
+        const read = cursors[id];
+        const policy = JSON.stringify([friendship, preference, read]);
+        const count = await syncedMessageRepository.getVisibleUnreadCount(account, id, policy, read, message => {
+          const candidate = recordInboxItem(message);
+          return afterDeletion(candidate, preference) && isAuthorizedDirectMessage(candidate, account, friendship);
+        });
+        return [id, count] as const;
+      }));
+      if (this.loadedFor !== account || this.readCursors !== cursors || this.preferencesByPeer !== preferences
+        || useFriendshipsStore().records !== records) return;
+      const next = { ...this.unreadByConversation };
+      for (const [id, count] of counts) next[id] = count;
+      this.unreadByConversation=next;
+    },
     recomputeUnreadFromMemory(conversationId?: string) {
       const account = this.loadedFor;
       if (!account) return;
@@ -579,6 +619,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           : 0;
       }
       this.unreadByConversation = next;
+      void this.reconcileDurableUnread(conversationId).catch(() => undefined);
     },
     async ensurePeerState(account: string, peer: string, conversationId?: string) {
       const needsPreference = !Object.prototype.hasOwnProperty.call(this.preferencesByPeer, peer);
@@ -811,6 +852,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           : 0;
         return [conversationId, count];
       }));
+      void this.reconcileDurableUnread().catch(() => undefined);
       this.claimDerivedStateOwnership();
       ensureResumeListeners();
       void this.resumePending(false);
@@ -842,7 +884,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           notifications.unreadCount,
           this.loadedFor,
           this.unreadCount,
-        )).catch(() => undefined);
+        ), undefined, account).catch(() => undefined);
       }
       if (!advanced) return;
 

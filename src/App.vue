@@ -4,7 +4,7 @@
     <AndroidUpdateNotification />
     <HeaderBar v-if="!hideAppChrome" />
     <router-view v-slot="{ Component }">
-      <keep-alive :include="['Home', 'Friends', 'Conversations', 'Notifications', 'Settings']">
+      <keep-alive :key="`${keys.pkHex}:${keys.sessionGeneration}:${keys.isUnlocked}`" :include="['Home', 'Friends', 'Conversations', 'Notifications', 'Settings']">
         <component :is="Component" />
       </keep-alive>
     </router-view>
@@ -150,7 +150,7 @@ export default defineComponent({
 
     watch(
       () => [
-        keys.pkHex,
+        keys.isUnlocked ? keys.pkHex : "",
         notifications.loadedFor,
         notifications.unreadCount,
         directMessages.loadedFor,
@@ -158,7 +158,7 @@ export default defineComponent({
       ] as const,
       ([account, loadedFor, unreadCount, directLoadedFor, directUnread]) => {
         void syncAppBadge(
-          accountBadgeCount(account, loadedFor, unreadCount, directLoadedFor, directUnread),
+          accountBadgeCount(account, loadedFor, unreadCount, directLoadedFor, directUnread), undefined, account,
         ).catch(() => undefined);
       },
       { immediate: true }
@@ -211,6 +211,7 @@ export default defineComponent({
       document.body.classList.remove("login-page", "post-editor-open");
     });
     return {
+      keys,
       ui,
       hideAppChrome,
       isPrimaryRoute,

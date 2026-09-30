@@ -63,7 +63,7 @@ function outboxKeyFor(pk: string | null | undefined) {
   return `nostr_outbox_${pk}`;
 }
 
-function isHomeControl(tags: string[][] | undefined, content?: string) {
+export function isHomeControl(tags: string[][] | undefined, content?: string) {
   const values = new Set((tags || []).map(tag => `${tag[0]}:${tag[1]}`));
   return values.has("l:hainei-friendship")
     || values.has("l:hainei-interaction")
@@ -145,7 +145,7 @@ export const useMessagesStore = defineStore("messages", {
       } catch {
         // Leave the legacy key intact so a later load can retry safely.
       }
-      const records = await syncedMessageRepository.list(targetPk);
+      const records = await syncedMessageRepository.listRecent(targetPk);
       if (this.loadedFor !== targetPk) return;
       this.inbox = records.filter(record => !isHomeControl(record.tags, record.plaintext)).map(record => ({
         id: record.id,

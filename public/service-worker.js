@@ -3,7 +3,7 @@
  * ====================================================== */
 
 const VERSION = "0.1.5"; // ⚠️ 更新代码时同步修改此版本号
-const BUILD_ID = "2026-09-24T05:06:03.314Z"; // Replaced by scripts/update-sw-version.js on every production build
+const BUILD_ID = "2026-09-30T05:35:49.125Z"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
 const HTML_CACHE = `${CACHE_PREFIX}-html-${VERSION}-${BUILD_ID}`;
@@ -85,16 +85,28 @@ function queueBadgeSync(count) {
   return badgeUpdateQueue;
 }
 
-function queueBadgeIncrementWhenBackground() {
-  badgeUpdateQueue = badgeUpdateQueue
-    .catch(() => undefined)
-    .then(async () => {
-      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      if (windows.some(client => client.visibilityState === 'visible')) return readStoredBadgeCount();
-      const current = await readStoredBadgeCount();
-      return applyAppBadge(current + 1);
-    });
-  return badgeUpdateQueue;
+async function scopedPushHint(payload) {
+  const cache = await caches.open(RUNTIME_STATE_CACHE);
+  const stateUrl = new URL('/__hainei_push_state__', self.location.origin).href;
+  let state = {};
+  try { state = await (await cache.match(stateUrl))?.json() || {}; } catch {}
+  if (!payload.notificationId || !payload.accountScope || state.scope !== payload.accountScope) return false;
+  const seen = state.seen || [];
+  if (seen.includes(payload.notificationId)) return false;
+  state.seen = [...seen, payload.notificationId].slice(-256);
+  await cache.put(stateUrl, new Response(JSON.stringify(state)));
+  const windows = await self.clients.matchAll({type:'window',includeUncontrolled:true});
+  if (!windows.some(client => client.visibilityState === 'visible')) {
+    try { await self.navigator?.setAppBadge?.(); } catch {}
+  }
+  return true;
+}
+async function setBadgeScope(scope) {
+  const cache = await caches.open(RUNTIME_STATE_CACHE);
+  const url = new URL('/__hainei_push_state__', self.location.origin).href;
+  let state = {};
+  try { state = await (await cache.match(url))?.json() || {}; } catch {}
+  if (state.scope !== scope) await cache.put(url,new Response(JSON.stringify({scope,seen:[]})));
 }
 
 self.addEventListener('message', (event) => {
@@ -111,7 +123,7 @@ self.addEventListener('message', (event) => {
     return;
   }
   if (event.data?.type === 'SYNC_APP_BADGE') {
-    event.waitUntil(queueBadgeSync(event.data.count));
+    event.waitUntil(setBadgeScope(event.data.accountScope || "").then(() => queueBadgeSync(event.data.count)));
   }
 });
 
@@ -166,15 +178,14 @@ self.addEventListener('push', (event) => {
   let payload = {};
   try { payload = JSON.parse(event.data?.text() || '{}'); } catch {}
   event.waitUntil((async () => {
-    await Promise.all([
-      self.registration.showNotification('HaiNei', {
-        body: '你有新的私信消息',
-        icon: '/icon-192.png',
-        badge: '/icon-192.png',
-        data: { type: 'message' }
-      }),
-      payload?.type === 'message' ? queueBadgeIncrementWhenBackground() : Promise.resolve()
-    ]);
+    badgeUpdateQueue = badgeUpdateQueue.catch(() => undefined).then(async () => {
+      if (!await scopedPushHint(payload)) return;
+      await self.registration.showNotification('HaiNei', {
+        body:'你有新的私信消息', icon:'/icon-192.png', badge:'/icon-192.png',
+        tag: payload.notificationId, data:{type:'message'}
+      });
+    });
+    await badgeUpdateQueue;
   })());
 });
 

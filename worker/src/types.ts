@@ -7,6 +7,7 @@ export interface D1Statement {
 
 export interface D1Database {
   prepare(query: string): D1Statement;
+  batch(statements: D1Statement[]): Promise<unknown[]>;
 }
 
 export interface ServiceBinding {

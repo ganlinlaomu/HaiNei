@@ -1,3 +1,4 @@
+import { BoundedSet } from "@/utils/boundedSet";
 import { defineStore } from "pinia";
 import { deviceStorage } from "@/services/deviceStorage";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
@@ -101,7 +102,7 @@ function decodeInteractionMessage(message: CanonicalMessage): Interaction | null
 export const useInteractionsStore = defineStore("interactions", {
   state: () => ({
     interactions: new Map<string, Interaction[]>(),
-    processedEvents: new Set<string>(),
+    processedEvents: new BoundedSet<string>(),
     lastSyncedAt: 0,
     loadedFor: ""
   }),
