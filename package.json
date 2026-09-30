@@ -1,6 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.5",
+  "version": "0.1.6",
+  "releaseSummary": "隐私与媒体安全优化",
   "private": true,
   "scripts": {
     "dev": "vite",
