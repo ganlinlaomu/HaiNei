@@ -134,6 +134,34 @@ describe("reliable message persistence", () => {
     });
   });
 
+  it("never loses a newer read cursor to a concurrent older write", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const conversationId = `conversation:${PEER}`;
+    await Promise.all([
+      repo.advanceReadState(ACCOUNT_A, conversationId, { lastReadCreatedAt: 200, lastReadMessageId: "new" }),
+      repo.advanceReadState(ACCOUNT_A, conversationId, { lastReadCreatedAt: 100, lastReadMessageId: "old" }),
+    ]);
+    expect(await repo.getReadState(ACCOUNT_A, conversationId)).toMatchObject({ lastReadCreatedAt: 200, lastReadMessageId: "new" });
+  });
+
+  it("keeps 151 messages read after closing and reopening the database", async () => {
+    const db = database();
+    const repo = new SyncedMessageRepository(db);
+    const conversationId = `conversation:${PEER}`;
+    for (let index = 1; index <= 151; index++) {
+      await repo.insertMessageIfAbsent(ACCOUNT_A, message(`dm-${index}`, index, { tags: [["t", "hainei-dm"]] }));
+    }
+    expect(await repo.getUnreadCount(ACCOUNT_A, conversationId, true)).toBe(151);
+    await repo.advanceReadState(ACCOUNT_A, conversationId, { lastReadCreatedAt: 151, lastReadMessageId: "dm-151" });
+    db.close();
+    const reopened = new HaiNeiDatabase(db.name);
+    databases.push(reopened);
+    const restored = new SyncedMessageRepository(reopened);
+    expect(await restored.getUnreadCount(ACCOUNT_A, conversationId, true)).toBe(0);
+    await restored.insertMessageIfAbsent(ACCOUNT_A, message("new-dm", 152, { tags: [["t", "hainei-dm"]] }));
+    expect(await restored.getUnreadCount(ACCOUNT_A, conversationId, true)).toBe(1);
+  });
+
   it("persists account-scoped read state across restart and rebuilds derived conversations", async () => {
     const db = database();
     const repo = new SyncedMessageRepository(db);

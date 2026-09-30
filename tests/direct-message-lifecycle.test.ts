@@ -45,6 +45,7 @@ import {
 } from "@/stores/directMessages";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useMessagesStore } from "@/stores/messages";
+import { metaRepository } from "@/repositories/metaRepository";
 import { notifyDirectMessageAuthorizationChanged } from "@/services/directMessageStateEvents";
 
 function dm(id: string, created_at: number): InboxItem {
@@ -132,6 +133,37 @@ describe("direct-message authorization and conversation lifecycle", () => {
     await vi.waitFor(() => expect(summaries().map(item => item.latest.id)).toEqual(["new"]));
     expect(context.direct.unreadCount).toBe(1);
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("keeps a read made while background refresh is restoring an older cursor", async () => {
+    const context = seed([dm("latest", 20)], relationship("accepted"));
+    await context.direct.refresh(ACCOUNT);
+    const get = vi.mocked(metaRepository.get);
+    const original = get.getMockImplementation()!;
+    let release!: () => void;
+    let captured!: () => void;
+    const capturedRead = new Promise<void>(resolve => { captured = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    get.mockImplementation(async (account, key) => {
+      const record = await original(account, key);
+      if (key === `dm-read:${CONVERSATION}`) {
+        captured();
+        await gate;
+      }
+      return record;
+    });
+    try {
+      const refresh = context.direct.refresh(ACCOUNT);
+      await capturedRead;
+      await context.direct.markPeerRead(PEER);
+      release();
+      await refresh;
+      expect(context.direct.unreadCount).toBe(0);
+      expect(context.direct.readCursors[CONVERSATION]?.lastReadMessageId).toBe("latest");
+    } finally {
+      release();
+      get.mockImplementation(original);
+    }
   });
 
   it("never rewinds a restored read cursor when a new device has only older local history", async () => {

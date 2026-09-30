@@ -835,12 +835,22 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         return [conversationId, !local || (remote && isMessageAfter({ id: remote.lastReadMessageId, createdAt: remote.lastReadCreatedAt }, local)) ? remote : local] as const;
       }));
       if (useKeyStore().pkHex !== account) return;
-      this.loadedFor = account;
       this.preferencesByPeer = preferences;
       this.receiptStateByPeer = receiptStates;
       this.sentReceiptStateByPeer = sentReceiptStates;
       this.draftsByPeer = drafts;
-      this.readCursors = Object.fromEntries(cursors);
+      // A foreground read may complete while this refresh awaits storage or
+      // account restoration. Merge at commit time so its newer cursor survives.
+      const restoredCursors = Object.fromEntries(cursors);
+      if (this.loadedFor === account) {
+        for (const [id, current] of Object.entries(this.readCursors)) {
+          if (current && isMessageAfter({ id: current.lastReadMessageId, createdAt: current.lastReadCreatedAt }, restoredCursors[id])) {
+            restoredCursors[id] = current;
+          }
+        }
+      }
+      this.loadedFor = account;
+      this.readCursors = restoredCursors;
       this.unreadByConversation = Object.fromEntries(conversationIds.map(conversationId => {
         const read = this.readCursors[conversationId];
         const conversation = visible.filter(item => item.conversationId === conversationId);

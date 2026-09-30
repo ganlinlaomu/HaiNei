@@ -190,11 +190,13 @@ export async function materializeAccountState(account: string, namespace: Accoun
   } else if (namespace === "feed_preferences") {
     await db.accountMeta.put({ accountPubkey: account, key: "feed_preferences_v2", value: materializedData });
   } else if (namespace === "read_state") {
-    const existing = await db.conversationReadStates.where("accountPubkey").equals(account).toArray();
-    if (!isCurrent()) return;
-    materializedData = mergeReadState(existing, materializedData || [])
-      .map((record: any) => ({ ...record, accountPubkey: account }));
-    if (materializedData.length) await db.conversationReadStates.bulkPut(materializedData);
+    await db.transaction("rw", db.conversationReadStates, async () => {
+      const existing = await db.conversationReadStates.where("accountPubkey").equals(account).toArray();
+      if (!isCurrent()) return;
+      materializedData = mergeReadState(existing, materializedData || [])
+        .map((record: any) => ({ ...record, accountPubkey: account }));
+      if (materializedData.length) await db.conversationReadStates.bulkPut(materializedData);
+    });
   } else if (namespace === "notification_state") {
     await db.accountMeta.put({ accountPubkey: account, key: "notification_state", value: materializedData });
   }
