@@ -493,7 +493,7 @@ async function deliverPushRows(
       try {
         response = await fetch(row.endpoint, {
           method: "POST",
-          redirect: "error",
+          redirect: "manual",
           signal: controller.signal,
           headers: {
             ...vapidHeaders,

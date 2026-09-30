@@ -469,7 +469,7 @@ describe("privacy-preserving push and badge", () => {
     });
     const [, request] = send.mock.calls[0] as [string, RequestInit];
     expect(request.method).toBe("POST");
-    expect(request.redirect).toBe("error");
+    expect(request.redirect).toBe("manual");
     expect(request.signal).toBeInstanceOf(AbortSignal);
     expect(request.headers).toMatchObject({
       "Content-Encoding": "aes128gcm",
