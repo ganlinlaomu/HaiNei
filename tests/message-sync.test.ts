@@ -518,11 +518,78 @@ describe("message sync session", () => {
     expect(subscriptions.filter(item => item.filters.every(filter => filter.until === undefined))).toHaveLength(1);
 
     windowHandlers.get("focus")?.();
+    windowHandlers.get("pageshow")?.();
+    documentHandlers.get("visibilitychange")?.();
+    expect(resumeRelays).toHaveBeenCalledTimes(1);
     expect(resumeRelays).toHaveBeenCalledWith(["wss://active-read.test"]);
+    expect(retryOutgoing).toHaveBeenCalledTimes(1);
     expect(retryOutgoing).toHaveBeenCalledWith(ACCOUNT_A);
     for (let attempt = 0; attempt < 20 && subscriptions.length < 3; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
     expect(subscriptions).toHaveLength(3);
     expect(subscriptions.filter(item => item.filters.every(filter => filter.until === undefined))).toHaveLength(1);
+    manager.stop();
+    Reflect.deleteProperty(globalThis, "document");
+    Reflect.deleteProperty(globalThis, "window");
+  });
+
+  it("does not queue a second catch-up when a foreground wake fires during startup history", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const subscriptions: Array<{ filters: any[]; handlers: Record<string, Array<(...args: any[]) => void>> }> = [];
+    let releaseHistory: (() => void) | undefined;
+    const subscribeFake = (_relays: string[], filters: any[]) => {
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      subscriptions.push({ filters, handlers });
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name === "eose" && filters.some(filter => filter.until !== undefined)) {
+            releaseHistory = () => callback("wss://a");
+          }
+        },
+        unsub() {},
+      };
+    };
+    const documentHandlers = new Map<string, () => void>();
+    const windowHandlers = new Map<string, () => void>();
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: {
+        visibilityState: "visible",
+        addEventListener: (name: string, handler: () => void) => documentHandlers.set(name, handler),
+        removeEventListener: (name: string) => documentHandlers.delete(name),
+      },
+    });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        addEventListener: (name: string, handler: () => void) => windowHandlers.set(name, handler),
+        removeEventListener: (name: string) => windowHandlers.delete(name),
+      },
+    });
+
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: vi.fn(),
+      retryOutgoing: vi.fn(),
+      now: () => 2_000_000,
+    });
+    const start = manager.start({
+      accountPubkey: ACCOUNT_A,
+      relays: ["wss://a"],
+      authors: [PEER, ACCOUNT_A],
+      decodeContext: { accountPubkey: ACCOUNT_A },
+    });
+    for (let attempt = 0; attempt < 20 && subscriptions.length < 2; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(subscriptions).toHaveLength(2);
+
+    windowHandlers.get("focus")?.();
+    releaseHistory?.();
+    await start;
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(subscriptions).toHaveLength(2);
     manager.stop();
     Reflect.deleteProperty(globalThis, "document");
     Reflect.deleteProperty(globalThis, "window");
