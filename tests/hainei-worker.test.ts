@@ -114,7 +114,8 @@ describe("HaiNei Worker authentication and quota", () => {
     const env = baseEnv(db);
     const secret = generateSecretKey();
     const pubkey = getPublicKey(secret);
-    const created = await createChallenge(env, 1000);
+    const now = Math.floor(Date.now() / 1000);
+    const created = await createChallenge(env, now);
     const payload = { namespace: "settings", ciphertext: "ciphertext-a" };
     const url = "https://worker.test/api/account-state/put";
     const event = await signWorkerRequest(
@@ -135,12 +136,12 @@ describe("HaiNei Worker authentication and quota", () => {
       env,
       created.challenge,
       event,
-      1001,
+      now + 1,
       "hainei_account_state",
       { url, method: "POST", payload: { ...payload, ciphertext: "tampered" } },
     )).rejects.toMatchObject({ status: 401, message: "auth_payload_mismatch" });
 
-    const second = await createChallenge(env, 1010);
+    const second = await createChallenge(env, now + 10);
     const secondEvent = await signWorkerRequest(
       async template => finalizeEvent(template, secret),
       pubkey,
@@ -158,7 +159,7 @@ describe("HaiNei Worker authentication and quota", () => {
       env,
       second.challenge,
       secondEvent,
-      1011,
+      now + 11,
       "hainei_account_state",
       { url: "https://worker.test/api/account-state/get", method: "POST", payload },
     )).rejects.toMatchObject({ status: 401, message: "auth_url_mismatch" });
