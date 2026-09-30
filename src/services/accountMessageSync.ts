@@ -16,6 +16,7 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { onMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
+import { pushEnabledForAccount, syncPushAuthorizationPolicy } from "@/services/pushNotifications";
 
 export type AccountSyncKeys = {
   pkHex: string;
@@ -99,6 +100,11 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
     .map(record => record.peerPubkey);
 
   registerOutgoingPushSigner(account, keys.signEvent.bind(keys));
+  if (pushEnabledForAccount(account)) {
+    void syncPushAuthorizationPolicy(account, accepted, keys.signEvent.bind(keys)).catch(error => {
+      console.warn("[push] authorization policy refresh failed", error instanceof Error ? error.message : "unknown");
+    });
+  }
 
   try {
     await accountMessageSyncManager.start({
