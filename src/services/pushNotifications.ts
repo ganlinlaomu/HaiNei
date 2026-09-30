@@ -125,7 +125,7 @@ export function pushEnabledForAccount(pubkey: string) {
   return !!pubkey && deviceStorage.getItem(`hainei_push_enabled_${pubkey.toLowerCase()}`) === "1";
 }
 
-export async function enablePushNotifications(pubkey: string, signEvent: SignEvent) {
+export async function enablePushNotifications(pubkey: string, signEvent: SignEvent, authorizedSenderPubkeys: string[] = []) {
   const enabledKey = `hainei_push_enabled_${pubkey.toLowerCase()}`;
   deviceStorage.removeItem(enabledKey);
   if (!supportsPushNotifications()) throw new Error("当前浏览器不支持推送通知");
@@ -174,7 +174,23 @@ export async function enablePushNotifications(pubkey: string, signEvent: SignEve
   debugLog("system", "push_auth_start");
   await authenticatedPost("/api/push/subscribe", { subscription: subscription.toJSON() }, pubkey, signEvent);
   debugLog("system", "push_worker_subscribe_ok");
+  await authenticatedPost("/api/push/policy", {
+    senderPubkeys: [...new Set(authorizedSenderPubkeys.map(value => value.toLowerCase()))],
+  }, pubkey, signEvent);
+  debugLog("system", "push_policy_sync_ok");
   deviceStorage.setItem(enabledKey, "1");
+}
+
+export async function syncPushAuthorizationPolicy(
+  pubkey: string,
+  senderPubkeys: string[],
+  signEvent: SignEvent,
+) {
+  if (!pushEnabledForAccount(pubkey)) return false;
+  await authenticatedPost("/api/push/policy", {
+    senderPubkeys: [...new Set(senderPubkeys.map(value => value.toLowerCase()))],
+  }, pubkey, signEvent);
+  return true;
 }
 
 export async function disablePushNotifications(pubkey: string, signEvent: SignEvent) {
