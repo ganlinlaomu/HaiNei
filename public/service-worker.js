@@ -114,7 +114,10 @@ async function scopedPushHint(payload) {
     await cache.put(stateUrl, new Response(JSON.stringify(state)));
     const windows = await self.clients.matchAll({type:'window',includeUncontrolled:true});
     if (!windows.some(client => client.visibilityState === 'visible')) {
-      try { await self.navigator?.setAppBadge?.(); } catch {}
+      // Push runs before Relay/IndexedDB catch-up, so this is only a provisional
+      // numeric hint. The foreground app later replaces it with durable unread.
+      const current = await readStoredBadgeCount();
+      await applyAppBadge(current + 1);
     }
   };
 }

@@ -161,6 +161,19 @@ it("deduplicates push across worker restarts and ignores inactive account scope"
   send = worker();
   await send("push", push);
 
+  // A second unique background push increments the persisted provisional
+  // numeric badge. Duplicate delivery of the first push did not increment it.
+  await send("push", {
+    data: {
+      text: () =>
+        JSON.stringify({
+          type: "message",
+          notificationId: "second",
+          accountScope: "A",
+        }),
+    },
+  });
+
   // Once the app explicitly switches account scope, old-account pushes remain
   // suppressed even though the browser subscription still exists.
   await send("message", {
@@ -176,8 +189,9 @@ it("deduplicates push across worker restarts and ignores inactive account scope"
         }),
     },
   });
-  expect(show).toHaveBeenCalledTimes(1);
-  expect(badge).toHaveBeenCalledWith();
+  expect(show).toHaveBeenCalledTimes(2);
+  expect(badge).toHaveBeenNthCalledWith(1, 1);
+  expect(badge).toHaveBeenNthCalledWith(2, 2);
 });
 it("retains the last direct message even when newer interactions fill the recent page", async () => {
   const db = new HaiNeiDatabase("audit-latest-direct"),
