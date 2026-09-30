@@ -565,70 +565,47 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.scheduleReceipt(peer, "delivered", { createdAt: message.createdAt, messageId: message.id });
     },
     async reconcileDurableUnread(conversationId?: string) {
-      const account=this.loadedFor;
-      if(!account)return;
+      const account = this.loadedFor;
+      if (!account) return;
+      const messages = useMessagesStore();
+      const friendships = useFriendshipsStore();
       const cursors = this.readCursors;
-      const visibleConversationIds = useMessagesStore().inbox
+      const preferences = this.preferencesByPeer;
+      const records = friendships.records;
+      // listRecent() includes the latest direct message for every durable
+      // conversation, so this covers the complete DM set even though Home keeps
+      // only a bounded recent-message window.
+      const durableConversationIds = [...new Set(messages.inbox
         .filter(item => isDirectMessageTags(item.tags))
         .map(item => item.conversationId)
-        .filter((value): value is string => !!value);
-      const keys = conversationId
-        ? [conversationId]
-        : [...new Set([...Object.keys(this.unreadByConversation), ...visibleConversationIds])];
-      const preferences = this.preferencesByPeer;
-      const records = useFriendshipsStore().records;
-      const counts = await Promise.all(keys.map(async id => {
-        const item = useMessagesStore().inbox.find(m => m.conversationId === id);
-        const peer = item && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account);
-        if (!peer || !useFriendshipsStore().isAccepted(peer) || preferences[peer]?.hidden) return [id, 0] as const;
-        const friendship = useFriendshipsStore().getRecord(peer);
+        .filter((value): value is string => !!value))];
+      const ids = conversationId ? [conversationId] : durableConversationIds;
+      const counts = await Promise.all(ids.map(async id => {
+        const item = messages.inbox.find(message => message.conversationId === id && isDirectMessageTags(message.tags));
+        const peer = item && directMessagePeer({
+          senderPubkey: item.pubkey,
+          recipientPubkeys: item.recipientPubkeys || [],
+        }, account);
+        if (!peer || !friendships.isAccepted(peer) || preferences[peer]?.hidden) return [id, 0] as const;
+        const friendship = friendships.getRecord(peer);
         const preference = preferences[peer];
         const read = cursors[id];
         const policy = JSON.stringify([friendship, preference, read]);
         const count = await syncedMessageRepository.getVisibleUnreadCount(account, id, policy, read, message => {
           const candidate = recordInboxItem(message);
-          return afterDeletion(candidate, preference) && isAuthorizedDirectMessage(candidate, account, friendship);
+          return afterDeletion(candidate, preference)
+            && isAuthorizedDirectMessage(candidate, account, friendship);
         });
         return [id, count] as const;
       }));
       if (this.loadedFor !== account || this.readCursors !== cursors || this.preferencesByPeer !== preferences
-        || useFriendshipsStore().records !== records) return;
-      const next = { ...this.unreadByConversation };
-      for (const [id, count] of counts) next[id] = count;
-      this.unreadByConversation=next;
-    },
-    recomputeUnreadFromMemory(conversationId?: string) {
-      const account = this.loadedFor;
-      if (!account) return;
-      const friendships = useFriendshipsStore();
-      const visible = useMessagesStore().inbox.filter(item => {
-        if (!isDirectMessageTags(item.tags)) return false;
-        const peer = directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account);
-        return !!peer && !this.preferencesByPeer[peer]?.hidden
-          && afterDeletion(item, this.preferencesByPeer[peer])
-          && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer));
-      });
-      const ids = conversationId
-        ? [conversationId]
-        : [...new Set(visible.map(item => item.conversationId).filter((value): value is string => !!value))];
+        || friendships.records !== records) return;
+      // Single source of truth: de-duplicated durable messages strictly after
+      // the persisted read cursor. Never merge a provisional memory-window
+      // count into a full reconciliation.
       const next = conversationId ? { ...this.unreadByConversation } : {} as Record<string, number>;
-      for (const id of ids) {
-        const conversation = visible.filter(item => item.conversationId === id);
-        const peer = conversation[0] && directMessagePeer({
-          senderPubkey: conversation[0].pubkey,
-          recipientPubkeys: conversation[0].recipientPubkeys || [],
-        }, account);
-        if (!conversation.length || !peer) {
-          delete next[id];
-          continue;
-        }
-        const read = this.readCursors[id];
-        next[id] = friendships.isAccepted(peer)
-          ? conversation.filter(item => item.pubkey !== account && isMessageAfter({ id: item.id, createdAt: item.created_at }, read)).length
-          : 0;
-      }
+      for (const [id, count] of counts) next[id] = count;
       this.unreadByConversation = next;
-      void this.reconcileDurableUnread(conversationId).catch(() => undefined);
     },
     async ensurePeerState(account: string, peer: string, conversationId?: string) {
       const needsPreference = !Object.prototype.hasOwnProperty.call(this.preferencesByPeer, peer);
@@ -708,7 +685,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // The final count is reconciled once from durable history against the
       // restored read cursor when startup catch-up reaches live state.
       if (item.conversationId && this.unreadHydratingFor !== account) {
-        this.recomputeUnreadFromMemory(item.conversationId);
+        await this.reconcileDurableUnread(item.conversationId);
       }
       await this.relinkOutgoingTask(account, item);
     },
@@ -719,7 +696,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         await this.unhideForNewCanonicalMessages(account, peer);
         if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       }
-      this.recomputeUnreadFromMemory();
+      await this.reconcileDurableUnread();
     },
     beginUnreadHydration(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
@@ -881,19 +858,11 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
       this.loadedFor = account;
       this.readCursors = restoredCursors;
-      this.unreadByConversation = Object.fromEntries(conversationIds.map(conversationId => {
-        const read = this.readCursors[conversationId];
-        const conversation = visible.filter(item => item.conversationId === conversationId);
-        const peer = conversation[0] && directMessagePeer({
-          senderPubkey: conversation[0].pubkey,
-          recipientPubkeys: conversation[0].recipientPubkeys || [],
-        }, account);
-        const count = peer && friendships.isAccepted(peer)
-          ? conversation.filter(item => item.pubkey !== account && isMessageAfter({ id: item.id, createdAt: item.created_at }, read)).length
-          : 0;
-        return [conversationId, count];
-      }));
-      void this.reconcileDurableUnread().catch(() => undefined);
+      // Never expose a provisional count from the bounded in-memory window.
+      // Refresh completes only after the durable read-cursor calculation.
+      this.unreadByConversation = {};
+      await this.reconcileDurableUnread();
+      if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       this.claimDerivedStateOwnership();
       ensureResumeListeners();
       void this.resumePending(false);
