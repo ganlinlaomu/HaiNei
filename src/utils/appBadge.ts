@@ -10,13 +10,27 @@ async function syncServiceWorkerBadgeState(count: number, target: BadgeNavigator
   try {
     const registration = await serviceWorker.ready;
     const worker = serviceWorker.controller || registration.active;
-    const hash = account ? await crypto.subtle.digest("SHA-256",new TextEncoder().encode(account)) : null;
-    const accountScope = hash ? Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,"0")).join("") : "";
+    const accountScope = await accountScopeForBadge(account);
     if (current !== generation) return;
     worker?.postMessage({ type: "SYNC_APP_BADGE", count: Math.max(0, Math.floor(count)), accountScope });
   } catch {
     // Foreground badge updates should still succeed if the service worker is unavailable.
   }
+}
+
+async function accountScopeForBadge(account: string) {
+  const hash = account ? await crypto.subtle.digest("SHA-256", new TextEncoder().encode(account)) : null;
+  return hash ? Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, "0")).join("") : "";
+}
+
+export async function syncAppBadgeScope(account: string, target: BadgeNavigator = navigator as BadgeNavigator) {
+  const serviceWorker = target.serviceWorker;
+  if (!serviceWorker) return;
+  try {
+    const registration = await serviceWorker.ready;
+    const worker = serviceWorker.controller || registration.active;
+    worker?.postMessage({ type: "SYNC_APP_BADGE_SCOPE", accountScope: await accountScopeForBadge(account) });
+  } catch {}
 }
 
 export async function syncAppBadge(count: number, target: BadgeNavigator = navigator as BadgeNavigator, account = "") {
