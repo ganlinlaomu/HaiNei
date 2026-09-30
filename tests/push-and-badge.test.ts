@@ -440,7 +440,6 @@ describe("privacy-preserving push and badge", () => {
       requested: 1, subscriptionsFound: 1, sent: 1, failed: 0, expired: 0,
     });
     expect(log).toHaveBeenCalledWith({
-      recipientPubkey: OTHER.slice(0, 12),
       endpointHost: "web.push.apple.com",
       status: 201,
       message: "push sent",
@@ -619,7 +618,7 @@ describe("privacy-preserving push and badge", () => {
     await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", MESSAGE_ID);
 
     const diagnostics = JSON.stringify(log.mock.calls);
-    expect(diagnostics).toContain(OTHER.slice(0, 12));
+    expect(diagnostics).not.toContain(OTHER.slice(0, 12));
     expect(diagnostics).not.toContain(OTHER);
     expect(diagnostics).toContain("web.push.apple.com");
     expect(diagnostics).not.toContain(row.endpoint);
