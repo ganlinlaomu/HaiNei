@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.7",
-  "releaseSummary": "手机端登录与交互细节优化",
+  "version": "0.1.8",
+  "releaseSummary": "本地优先与设置页流畅度优化",
   "private": true,
   "scripts": {
     "dev": "vite",
