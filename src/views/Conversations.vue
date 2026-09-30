@@ -96,7 +96,7 @@ const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, o
 const canonicalConversations = computed(() => buildDirectConversationSummaries(
   directMessages.conversationItems(),
   keys.pkHex,
-  directMessages.unreadByConversation,
+  directMessages.visibleUnreadByConversation,
   { friendshipRecords: friendships.records, preferencesByPeer: directMessages.preferencesByPeer },
 ));
 const conversations = computed(() => {
