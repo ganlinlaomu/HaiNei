@@ -21,6 +21,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
+import { onAppResume } from '@/services/appResumeCoordinator';
 
 const showUpdate = ref(false);
 const updating = ref(false);
@@ -29,6 +30,7 @@ let updateInFlight: Promise<void> | null = null;
 let reloadedForControllerChange = false;
 let initialCheckTimer: number | null = null;
 let updateInterval: number | null = null;
+let stopAppResume: (() => void) | null = null;
 let expectedBuildId = "";
 const PENDING_BUILD_KEY = "hainei_pending_build_id";
 const BUILD_QUERY_KEY = "_hainei_build";
@@ -187,10 +189,6 @@ const handleControllerChange = async () => {
   window.location.reload();
 };
 
-const handleVisibilityChange = () => {
-  if (document.visibilityState === 'visible') void checkForUpdate();
-};
-
 onMounted(() => {
   if (!('serviceWorker' in navigator)) return;
 
@@ -199,12 +197,7 @@ onMounted(() => {
   // 延迟检查，避免抢占首屏资源
   initialCheckTimer = window.setTimeout(() => void checkForUpdate(), 1000);
 
-  // 🚀 灵敏度增强 1: 当用户把 PWA 从后台切回前台（或点击窗口）时立刻检查
-  window.addEventListener('focus', checkForUpdate);
-
-  // 🚀 灵敏度增强 2: 监听网络状态回到在线时检查
-  window.addEventListener('online', checkForUpdate);
-  document.addEventListener('visibilitychange', handleVisibilityChange);
+  stopAppResume = onAppResume(() => checkForUpdate());
 
   navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
 
@@ -215,9 +208,8 @@ onMounted(() => {
 onUnmounted(() => {
   if (updateInterval !== null) window.clearInterval(updateInterval);
   if (initialCheckTimer !== null) window.clearTimeout(initialCheckTimer);
-  window.removeEventListener('focus', checkForUpdate);
-  window.removeEventListener('online', checkForUpdate);
-  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  stopAppResume?.();
+  stopAppResume = null;
   navigator.serviceWorker?.removeEventListener('controllerchange', handleControllerChange);
 });
 </script>
