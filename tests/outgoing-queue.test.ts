@@ -39,7 +39,7 @@ describe("durable outgoing queue", () => {
     const signer = vi.fn();
     registerOutgoingPushSigner(ACCOUNT, signer);
     await publishQueuedOutgoing(ACCOUNT, "logical-1", "message");
-    expect(triggerPush).toHaveBeenCalledWith([OTHER], ACCOUNT, signer, "message");
+    expect(triggerPush).toHaveBeenCalledWith([OTHER], ACCOUNT, signer, "message", "logical-1");
   });
 
   it("is durable before publish and does not duplicate a concurrent logical retry", async () => {

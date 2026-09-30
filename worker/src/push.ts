@@ -1,4 +1,5 @@
-import { HttpError, type Env } from "./types";
+import { HttpError, integerSetting, type Env } from "./types";
+import { consumeRateLimit } from "./requestGuards";
 
 const encoder = new TextEncoder();
 const WEB_PUSH_INFO = encoder.encode("WebPush: info\0");
@@ -8,6 +9,15 @@ const RECORD_SIZE = 4096;
 const MAX_PAYLOAD_SIZE = 3993;
 
 const PUBKEY = /^[0-9a-f]{64}$/;
+const EVENT_ID = /^[0-9a-f]{64}$/;
+const MAX_PUSH_ENDPOINT_LENGTH = 2048;
+const MAX_PUSH_SUBSCRIPTIONS_PER_ACCOUNT = 8;
+const MAX_PUSH_AUTHORIZED_SENDERS = 200;
+const DEFAULT_PUSH_PROVIDER_ORIGINS = [
+  "https://web.push.apple.com",
+  "https://fcm.googleapis.com",
+  "https://updates.push.services.mozilla.com",
+];
 export const MESSAGE_PUSH_PAYLOAD = Object.freeze({
   type: "message" as const,
   title: "HaiNei",
@@ -182,6 +192,42 @@ function safePushErrorMessage(error: unknown, secrets: string[]) {
   return message.replace(/https?:\/\/[^\s"'<>]+/gi, "[redacted endpoint]");
 }
 
+function allowedPushOrigins(env: Env) {
+  const configured = String(env.PUSH_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map(value => value.trim())
+    .filter(Boolean);
+  const origins = configured.length ? configured : DEFAULT_PUSH_PROVIDER_ORIGINS;
+  return new Set(origins.map(value => {
+    try { return new URL(value).origin; } catch { return ""; }
+  }).filter(Boolean));
+}
+
+function isIpLiteral(hostname: string) {
+  const normalized = hostname.replace(/^\[|\]$/g, "");
+  if (normalized.includes(":")) return true;
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized);
+}
+
+function validatedPushEndpoint(env: Env, value: unknown) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw || raw.length > MAX_PUSH_ENDPOINT_LENGTH) throw new HttpError(400, "invalid_push_subscription");
+  let url: URL;
+  try { url = new URL(raw); } catch { throw new HttpError(400, "invalid_push_subscription"); }
+  if (
+    url.protocol !== "https:"
+    || !!url.username
+    || !!url.password
+    || !!url.port
+    || !url.hostname
+    || isIpLiteral(url.hostname)
+    || !allowedPushOrigins(env).has(url.origin)
+  ) {
+    throw new HttpError(400, "unsupported_push_endpoint");
+  }
+  return url.toString();
+}
+
 function pushConfig(env: Env): VapidConfig {
   const publicKey = String(env.VAPID_PUBLIC_KEY || "").trim();
   const privateKey = String(env.VAPID_PRIVATE_KEY || "").trim();
@@ -190,12 +236,20 @@ function pushConfig(env: Env): VapidConfig {
   return { publicKey, privateKey, subject };
 }
 
-function parseSubscription(value: unknown) {
+function parseSubscription(env: Env, value: unknown) {
   const item = value as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
-  const endpoint = typeof item?.endpoint === "string" ? item.endpoint.trim() : "";
+  const endpoint = validatedPushEndpoint(env, item?.endpoint);
   const p256dh = typeof item?.keys?.p256dh === "string" ? item.keys.p256dh.trim() : "";
   const auth = typeof item?.keys?.auth === "string" ? item.keys.auth.trim() : "";
-  if (!endpoint.startsWith("https://") || !p256dh || !auth) throw new HttpError(400, "invalid_push_subscription");
+  try {
+    const publicKey = base64UrlDecode(p256dh);
+    const authSecret = base64UrlDecode(auth);
+    if (publicKey.length !== 65 || publicKey[0] !== 4 || authSecret.length !== 16) {
+      throw new Error("invalid key size");
+    }
+  } catch {
+    throw new HttpError(400, "invalid_push_subscription");
+  }
   return { endpoint, p256dh, auth };
 }
 
@@ -204,7 +258,18 @@ export function getPushPublicKey(env: Env) {
 }
 
 export async function savePushSubscription(env: Env, accountPubkey: string, value: unknown) {
-  const subscription = parseSubscription(value);
+  const subscription = parseSubscription(env, value);
+  const existing = await env.DB.prepare(`
+    SELECT endpoint FROM hainei_push_subscriptions WHERE account_pubkey = ? AND endpoint = ?
+  `).bind(accountPubkey, subscription.endpoint).first<{ endpoint: string }>();
+  if (!existing) {
+    const count = await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM hainei_push_subscriptions WHERE account_pubkey = ?
+    `).bind(accountPubkey).first<{ count: number }>();
+    if (Number(count?.count || 0) >= MAX_PUSH_SUBSCRIPTIONS_PER_ACCOUNT) {
+      throw new HttpError(429, "push_subscription_limit");
+    }
+  }
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(`
     INSERT INTO hainei_push_subscriptions
@@ -217,12 +282,48 @@ export async function savePushSubscription(env: Env, accountPubkey: string, valu
 }
 
 export async function removePushSubscription(env: Env, accountPubkey: string, endpointValue: unknown) {
-  const endpoint = typeof endpointValue === "string" ? endpointValue.trim() : "";
-  if (!endpoint.startsWith("https://")) throw new HttpError(400, "invalid_push_subscription");
+  const endpoint = validatedPushEndpoint(env, endpointValue);
   await env.DB.prepare(`
     DELETE FROM hainei_push_subscriptions WHERE account_pubkey = ? AND endpoint = ?
   `).bind(accountPubkey, endpoint).run();
   return { subscribed: false };
+}
+
+export function sanitizePushAuthorizedSenders(value: unknown, recipientPubkey: string) {
+  if (!Array.isArray(value)) throw new HttpError(400, "invalid_push_authorization");
+  const senders = [...new Set(value
+    .filter((item): item is string => typeof item === "string")
+    .map(item => item.trim().toLowerCase())
+    .filter(item => PUBKEY.test(item) && item !== recipientPubkey))];
+  if (senders.length > MAX_PUSH_AUTHORIZED_SENDERS) throw new HttpError(400, "too_many_push_authorizations");
+  return senders;
+}
+
+export async function replacePushAuthorizationPolicy(
+  env: Env,
+  recipientPubkey: string,
+  senderValues: unknown,
+  now = Math.floor(Date.now() / 1000),
+) {
+  const senders = sanitizePushAuthorizedSenders(senderValues, recipientPubkey);
+  const ttl = integerSetting(env.PUSH_AUTHORIZATION_TTL_SECONDS, 30 * 24 * 60 * 60, 3600, 90 * 24 * 60 * 60);
+  const expiresAt = now + ttl;
+
+  // Delete first: a partial failure can suppress notifications, but cannot leave
+  // a sender authorized after the recipient has removed it from the policy.
+  await env.DB.prepare("DELETE FROM hainei_push_authorizations WHERE recipient_pubkey = ?")
+    .bind(recipientPubkey).run();
+  for (const senderPubkey of senders) {
+    await env.DB.prepare(`
+      INSERT INTO hainei_push_authorizations
+        (recipient_pubkey, sender_pubkey, expires_at, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(recipient_pubkey, sender_pubkey) DO UPDATE SET
+        expires_at = excluded.expires_at,
+        updated_at = excluded.updated_at
+    `).bind(recipientPubkey, senderPubkey, expiresAt, now).run();
+  }
+  return { accepted: true, expiresAt };
 }
 
 export function sanitizePushRecipients(value: unknown, senderPubkey: string) {
@@ -233,7 +334,73 @@ export function sanitizePushRecipients(value: unknown, senderPubkey: string) {
     .filter(item => PUBKEY.test(item) && item !== senderPubkey))].slice(0, 100);
 }
 
-export async function triggerGenericPush(env: Env, senderPubkey: string, recipientValue: unknown, typeValue?: unknown) {
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function reservePushDelivery(
+  env: Env,
+  senderPubkey: string,
+  recipientPubkey: string,
+  messageId: string,
+  endpoint: string,
+  now: number,
+) {
+  const endpointHash = await sha256Hex(endpoint);
+  const staleBefore = now - 120;
+  const result = await env.DB.prepare(`
+    INSERT INTO hainei_push_deliveries
+      (sender_pubkey, recipient_pubkey, message_id, endpoint_hash, status, updated_at)
+    VALUES (?, ?, ?, ?, 'sending', ?)
+    ON CONFLICT(sender_pubkey, recipient_pubkey, message_id, endpoint_hash)
+    DO UPDATE SET status = 'sending', updated_at = excluded.updated_at
+    WHERE hainei_push_deliveries.status != 'sent'
+      AND hainei_push_deliveries.updated_at <= ?
+  `).bind(senderPubkey, recipientPubkey, messageId, endpointHash, now, staleBefore).run();
+  return { reserved: Number(result.meta?.changes || 0) === 1, endpointHash };
+}
+
+async function completePushDelivery(
+  env: Env,
+  senderPubkey: string,
+  recipientPubkey: string,
+  messageId: string,
+  endpointHash: string,
+  sent: boolean,
+  now: number,
+) {
+  if (sent) {
+    await env.DB.prepare(`
+      UPDATE hainei_push_deliveries
+      SET status = 'sent', updated_at = ?
+      WHERE sender_pubkey = ? AND recipient_pubkey = ? AND message_id = ? AND endpoint_hash = ?
+    `).bind(now, senderPubkey, recipientPubkey, messageId, endpointHash).run();
+  } else {
+    await env.DB.prepare(`
+      DELETE FROM hainei_push_deliveries
+      WHERE sender_pubkey = ? AND recipient_pubkey = ? AND message_id = ? AND endpoint_hash = ? AND status = 'sending'
+    `).bind(senderPubkey, recipientPubkey, messageId, endpointHash).run();
+  }
+}
+
+async function mapWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      await worker(items[index]);
+    }
+  }));
+}
+
+export async function triggerGenericPush(
+  env: Env,
+  senderPubkey: string,
+  recipientValue: unknown,
+  typeValue?: unknown,
+  messageIdValue?: unknown,
+) {
   const recipients = sanitizePushRecipients(recipientValue, senderPubkey);
   const diagnostics: PushDiagnostics = {
     requested: recipients.length,
@@ -243,40 +410,80 @@ export async function triggerGenericPush(env: Env, senderPubkey: string, recipie
     expired: 0,
   };
   const pushPayload = pushPayloadForType(typeValue);
-  if (!pushPayload) return diagnostics;
-  if (!recipients.length) return diagnostics;
+  if (!pushPayload || !recipients.length) return diagnostics;
+
+  const messageId = typeof messageIdValue === "string" ? messageIdValue.trim().toLowerCase() : "";
+  if (!EVENT_ID.test(messageId)) throw new HttpError(400, "invalid_push_message_id");
+
+  const senderLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_SENDER, 60, 5, 600);
+  const globalLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_GLOBAL, 1000, 50, 10000);
+  const now = Math.floor(Date.now() / 1000);
+  await consumeRateLimit(env, `push:sender:${senderPubkey}`, senderLimit, 60, now);
+  await consumeRateLimit(env, "push:global", globalLimit, 60, now);
+
   const placeholders = recipients.map(() => "?").join(",");
   const rows = await env.DB.prepare(`
-    SELECT account_pubkey, endpoint, p256dh, auth
-    FROM hainei_push_subscriptions WHERE account_pubkey IN (${placeholders})
-  `).bind(...recipients).all<PushSubscriptionRow>();
+    SELECT s.account_pubkey, s.endpoint, s.p256dh, s.auth
+    FROM hainei_push_subscriptions AS s
+    INNER JOIN hainei_push_authorizations AS a
+      ON a.recipient_pubkey = s.account_pubkey
+      AND a.sender_pubkey = ?
+      AND a.expires_at > ?
+    WHERE s.account_pubkey IN (${placeholders})
+  `).bind(senderPubkey, now, ...recipients).all<PushSubscriptionRow>();
   diagnostics.subscriptionsFound = rows.results.length;
   if (!rows.results.length) return diagnostics;
 
   const config = pushConfig(env);
   const payload = JSON.stringify(pushPayload);
-  await Promise.all(rows.results.map(async row => {
+  const timeoutMs = integerSetting(env.PUSH_FETCH_TIMEOUT_MS, 8000, 1000, 30000);
+
+  await mapWithConcurrency(rows.results, 4, async row => {
     const host = endpointHost(row.endpoint);
+    let reservation: { reserved: boolean; endpointHash: string } | undefined;
     try {
+      // Re-validate persisted data in case an older deployment stored unsafe rows.
+      validatedPushEndpoint(env, row.endpoint);
+      const recipientLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_RECIPIENT, 30, 5, 600);
+      const deviceLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_DEVICE, 30, 5, 600);
+      const endpointFingerprint = (await sha256Hex(row.endpoint)).slice(0, 24);
+      await consumeRateLimit(env, `push:recipient:${row.account_pubkey}`, recipientLimit, 60, now);
+      await consumeRateLimit(env, `push:device:${endpointFingerprint}`, deviceLimit, 60, now);
+      reservation = await reservePushDelivery(env, senderPubkey, row.account_pubkey, messageId, row.endpoint, now);
+      if (!reservation.reserved) return;
+
       const [body, vapidHeaders] = await Promise.all([
         encryptPushPayload(payload, row.p256dh, row.auth),
         createVapidHeaders(config, row.endpoint),
       ]);
-      const response = await fetch(row.endpoint, {
-        method: "POST",
-        headers: {
-          ...vapidHeaders,
-          "Content-Encoding": "aes128gcm",
-          "Content-Type": "application/octet-stream",
-          TTL: "60",
-        },
-        body: arrayBuffer(body),
-      });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let response: Response;
+      try {
+        response = await fetch(row.endpoint, {
+          method: "POST",
+          redirect: "error",
+          signal: controller.signal,
+          headers: {
+            ...vapidHeaders,
+            "Content-Encoding": "aes128gcm",
+            "Content-Type": "application/octet-stream",
+            TTL: "60",
+          },
+          body: arrayBuffer(body),
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+
       if (response.ok) {
+        await completePushDelivery(env, senderPubkey, row.account_pubkey, messageId, reservation.endpointHash, true, now);
         diagnostics.sent += 1;
-        console.info({ recipientPubkey: row.account_pubkey, endpointHost: host, status: response.status, message: "push sent" });
+        console.info({ endpointHost: host, status: response.status, message: "push sent" });
         return;
       }
+
+      await completePushDelivery(env, senderPubkey, row.account_pubkey, messageId, reservation.endpointHash, false, now);
       if (response.status === 404 || response.status === 410) {
         await env.DB.prepare(`
           DELETE FROM hainei_push_subscriptions WHERE account_pubkey = ? AND endpoint = ?
@@ -286,19 +493,25 @@ export async function triggerGenericPush(env: Env, senderPubkey: string, recipie
         diagnostics.failed += 1;
       }
       console.error({
-        recipientPubkey: row.account_pubkey,
         endpointHost: host,
         status: response.status,
         message: "push request failed",
       });
     } catch (error: unknown) {
+      if (reservation?.reserved) {
+        await completePushDelivery(env, senderPubkey, row.account_pubkey, messageId, reservation.endpointHash, false, now).catch(() => {});
+      }
       diagnostics.failed += 1;
       console.error({
-        recipientPubkey: row.account_pubkey,
         endpointHost: host,
         message: safePushErrorMessage(error, [row.endpoint, row.p256dh, row.auth, config.privateKey]),
       });
     }
-  }));
+  });
+
+  if ((now & 63) === 0) {
+    void env.DB.prepare("DELETE FROM hainei_push_deliveries WHERE updated_at <= ?")
+      .bind(now - 7 * 24 * 60 * 60).run().catch(() => {});
+  }
   return diagnostics;
 }

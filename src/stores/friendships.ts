@@ -11,6 +11,7 @@ import { useProfilesStore } from "@/stores/profiles";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
 import { notifyDirectMessageAuthorizationChanged } from "@/services/directMessageStateEvents";
 import { notifyMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
+import { pushEnabledForAccount, syncPushAuthorizationPolicy } from "@/services/pushNotifications";
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
 
@@ -170,6 +171,14 @@ export const useFriendshipsStore = defineStore("friendships", {
       notifyDirectMessageAuthorizationChanged(accountPubkey);
       notifyMessageAuthorizationChanged(accountPubkey);
       scheduleAccountStateSync(useKeyStore(), "friendships");
+      const keys = useKeyStore();
+      if (pushEnabledForAccount(accountPubkey) && keys.pkHex === accountPubkey) {
+        const acceptedSenders = this.records
+          .filter(item => item.state === "accepted")
+          .map(item => item.peerPubkey);
+        void syncPushAuthorizationPolicy(accountPubkey, acceptedSenders, keys.signEvent.bind(keys))
+          .catch(error => console.warn("[push] friendship policy sync failed", error instanceof Error ? error.message : "unknown"));
+      }
       return { changed: true, record };
     },
     async sendControl(peerPubkey: string, action: FriendshipAction, requestId?: string) {
@@ -245,8 +254,29 @@ export const useFriendshipsStore = defineStore("friendships", {
       await this.sendControl(peerPubkey, "cancel", current.requestEventId);
     },
     async removeFriend(peerPubkey: string) {
-      if (this.getState(peerPubkey) !== "accepted") throw new Error("好友关系已失效");
-      await this.sendControl(peerPubkey, "remove");
+      const peer = normalized(peerPubkey);
+      if (this.getState(peer) !== "accepted") throw new Error("好友关系已失效");
+      const keys = useKeyStore();
+      const account = this.loadedFor;
+      let pushRevokedFirst = false;
+      if (account && pushEnabledForAccount(account) && keys.pkHex === account) {
+        const remaining = this.records
+          .filter(item => item.peerPubkey !== peer && item.state === "accepted")
+          .map(item => item.peerPubkey);
+        await syncPushAuthorizationPolicy(account, remaining, keys.signEvent.bind(keys));
+        pushRevokedFirst = true;
+      }
+      try {
+        await this.sendControl(peer, "remove");
+      } catch (error) {
+        // If the Nostr remove failed after a defensive push revoke, restore the
+        // still-valid friendship policy so reliability is not silently degraded.
+        if (pushRevokedFirst && account && keys.pkHex === account) {
+          const current = this.records.filter(item => item.state === "accepted").map(item => item.peerPubkey);
+          void syncPushAuthorizationPolicy(account, current, keys.signEvent.bind(keys)).catch(() => {});
+        }
+        throw error;
+      }
     },
     async processFriendshipMessage(message: CanonicalMessage) {
       const control = decodeFriendshipControl(message);

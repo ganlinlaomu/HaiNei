@@ -302,6 +302,7 @@ import {
   type RelayRuntimeStatus
 } from "@/nostr/relays";
 import { useKeyStore } from "@/stores/keys";
+import { useFriendshipsStore } from "@/stores/friendships";
 import { useProfilesStore } from "@/stores/profiles";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
@@ -330,6 +331,7 @@ import {
 } from "@/services/androidUpdater";
 
 const keyStore = useKeyStore();
+const friendships = useFriendshipsStore();
 const profiles = useProfilesStore();
 const settings = useSettingsStore();
 const ui = useUIStore();
@@ -691,7 +693,13 @@ async function togglePush() {
   pushBusy.value = true;
   try {
     if (pushEnabled.value) await disablePushNotifications(account, event => keyStore.signEvent(event));
-    else await enablePushNotifications(account, event => keyStore.signEvent(event));
+    else {
+      if (friendships.loadedFor !== account || !friendships.authorizationReady) await friendships.load(account);
+      const acceptedSenders = friendships.records
+        .filter(record => record.state === "accepted")
+        .map(record => record.peerPubkey);
+      await enablePushNotifications(account, event => keyStore.signEvent(event), acceptedSenders);
+    }
     if (keyStore.pkHex !== account) return;
     pushEnabled.value = pushEnabledForAccount(account);
     ui.addToast(pushEnabled.value ? "后台推送已开启" : "后台推送已关闭", 2_000, "success");

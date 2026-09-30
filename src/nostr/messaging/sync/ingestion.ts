@@ -29,10 +29,21 @@ function normalizeDeliveryResult(result: MessageDeliveryResult): "persist" | "di
   return "persist";
 }
 
+const MAX_PENDING_PERSISTENCE_RETRIES = 64;
+const MAX_PERSISTENCE_RETRY_ATTEMPTS = 3;
+const PERSISTENCE_RETRY_DELAY_MS = 500;
+
 export class MessageIngestionPipeline {
   private readonly deliveredLogicalIds = new Set<string>();
   private readonly discardedLogicalIds = new Set<string>();
+  private readonly finalizedTransportIds = new Set<string>();
   private readonly logicalFlights = new Map<string, Promise<{ inserted: boolean; discarded: boolean; deferred: boolean }>>();
+  private readonly pendingPersistenceRetries = new Map<string, {
+    message: CanonicalMessage;
+    metadata: MessageIngestionMetadata;
+    attempts: number;
+  }>();
+  private persistenceRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryDeferredFlight: Promise<number> | null = null;
 
   constructor(
@@ -58,6 +69,66 @@ export class MessageIngestionPipeline {
     }
   }
 
+  private finalizeTransport(message: CanonicalMessage, transportEventId?: string) {
+    const id = transportEventId || message.transportEventId;
+    if (id) this.finalizedTransportIds.add(id);
+  }
+
+  private queuePersistenceRetry(logicalToken: string, message: CanonicalMessage, metadata: MessageIngestionMetadata) {
+    if (!this.isSessionCurrent() || this.pendingPersistenceRetries.has(logicalToken)) return;
+    if (this.pendingPersistenceRetries.size >= MAX_PENDING_PERSISTENCE_RETRIES) {
+      debugLog("storage", "persistence_retry_queue_full", {
+        account: this.accountPubkey.slice(0, 12),
+        logicalMessageId: message.id.slice(0, 12),
+        queued: this.pendingPersistenceRetries.size,
+      }, "warn");
+      return;
+    }
+    this.pendingPersistenceRetries.set(logicalToken, { message, metadata, attempts: 0 });
+    this.schedulePersistenceRetry();
+  }
+
+  private schedulePersistenceRetry() {
+    if (this.persistenceRetryTimer || !this.pendingPersistenceRetries.size || !this.isSessionCurrent()) return;
+    this.persistenceRetryTimer = setTimeout(() => {
+      this.persistenceRetryTimer = null;
+      void this.flushPersistenceRetries();
+    }, PERSISTENCE_RETRY_DELAY_MS);
+    (this.persistenceRetryTimer as any).unref?.();
+  }
+
+  private async flushPersistenceRetries() {
+    if (!this.isSessionCurrent()) {
+      this.pendingPersistenceRetries.clear();
+      return;
+    }
+    for (const [logicalToken, pending] of [...this.pendingPersistenceRetries.entries()].slice(0, 8)) {
+      if (!this.isSessionCurrent()) break;
+      if (this.logicalFlights.has(logicalToken)) continue;
+      pending.attempts += 1;
+      const flight = this.persistAuthorizedMessage(pending.message, pending.metadata, logicalToken, false)
+        .finally(() => {
+          if (this.logicalFlights.get(logicalToken) === flight) this.logicalFlights.delete(logicalToken);
+        });
+      this.logicalFlights.set(logicalToken, flight);
+      try {
+        await flight;
+        this.pendingPersistenceRetries.delete(logicalToken);
+      } catch (error) {
+        if (pending.attempts >= MAX_PERSISTENCE_RETRY_ATTEMPTS) {
+          this.pendingPersistenceRetries.delete(logicalToken);
+          debugLog("storage", "persistence_retry_exhausted", {
+            account: this.accountPubkey.slice(0, 12),
+            logicalMessageId: pending.message.id.slice(0, 12),
+            attempts: pending.attempts,
+            reason: error instanceof Error ? error.name || "Error" : "storage_error",
+          }, "error");
+        }
+      }
+    }
+    if (this.pendingPersistenceRetries.size) this.schedulePersistenceRetry();
+  }
+
   async ingestNostrEvent(event: NostrEvent, metadata: MessageIngestionMetadata) {
     const diagnostic = eventContext(event, metadata);
     debugLog("sync", "ingestion_received", diagnostic);
@@ -69,7 +140,7 @@ export class MessageIngestionPipeline {
     if (!eventId) return { inserted: false, discarded: false, deferred: false };
     rememberSeenOn(eventId, metadata.relayUrl);
     const cacheKey = scopedKey(this.accountPubkey, eventId);
-    if (this.deliveredLogicalIds.has(`transport:${eventId}`)) {
+    if (this.finalizedTransportIds.has(eventId)) {
       performanceCounters.duplicateEventsDropped++;
       return { inserted: false, discarded: false, deferred: false };
     }
@@ -103,7 +174,6 @@ export class MessageIngestionPipeline {
       debugLog("sync", "decode_null", diagnostic);
       return { inserted: false, discarded: false, deferred: false };
     }
-    this.deliveredLogicalIds.add(`transport:${eventId}`);
     debugLog("sync", "decode_success", {
       ...diagnostic,
       logicalMessageId: message.id.slice(0, 12),
@@ -113,12 +183,26 @@ export class MessageIngestionPipeline {
       debugLog("sync", "stale_session_discarded", diagnostic, "warn");
       return { inserted: false, discarded: true, deferred: false };
     }
-    return this.ingestCanonicalMessage(message, metadata);
+    const result = await this.ingestCanonicalMessage(message, metadata);
+    if (this.isSessionCurrent()) this.finalizeTransport(message, eventId);
+    return result;
   }
 
   async ingestCanonicalMessage(message: CanonicalMessage, metadata: MessageIngestionMetadata) {
     const logicalKey = message.rumorId || message.id;
     const logicalToken = `logical:${logicalKey}`;
+
+    const pendingPersistence = this.pendingPersistenceRetries.get(logicalToken);
+    if (pendingPersistence) {
+      const existingFlight = this.logicalFlights.get(logicalToken);
+      if (existingFlight) return existingFlight;
+      const retryFlight = this.persistAuthorizedMessage(message, metadata, logicalToken, true)
+        .finally(() => {
+          if (this.logicalFlights.get(logicalToken) === retryFlight) this.logicalFlights.delete(logicalToken);
+        });
+      this.logicalFlights.set(logicalToken, retryFlight);
+      return retryFlight;
+    }
 
     if (this.discardedLogicalIds.has(logicalToken)) {
       await this.clearDeferredBestEffort(message.id);
@@ -188,12 +272,15 @@ export class MessageIngestionPipeline {
 
     if (delivery === "defer") {
       await this.repository.deferAuthorizationMessage(this.accountPubkey, message, metadata);
+      this.finalizeTransport(message);
       debugLog("sync", "authorization_deferred", diagnostic, "info");
       return { inserted: false, discarded: false, deferred: true };
     }
 
     if (delivery === "discard") {
       this.discardedLogicalIds.add(logicalToken);
+      this.pendingPersistenceRetries.delete(logicalToken);
+      this.finalizeTransport(message);
       await this.clearDeferredBestEffort(message.id, diagnostic);
       try {
         await this.repository.advanceHighWatermark(this.accountPubkey, message.createdAt);
@@ -206,26 +293,46 @@ export class MessageIngestionPipeline {
       return { inserted: false, discarded: true, deferred: false };
     }
 
+    return this.persistAuthorizedMessage(message, metadata, logicalToken, true, diagnostic);
+  }
+
+  private async persistAuthorizedMessage(
+    message: CanonicalMessage,
+    metadata: MessageIngestionMetadata,
+    logicalToken: string,
+    queueOnFailure: boolean,
+    diagnosticOverride?: Record<string, unknown>,
+  ) {
+    const diagnostic = diagnosticOverride || {
+      logicalMessageId: message.id.slice(0, 12),
+      transportEventId: message.transportEventId?.slice(0, 12) || "unknown",
+      sender: message.senderPubkey.slice(0, 12),
+      account: this.accountPubkey.slice(0, 12),
+      source: metadata.source,
+      relayUrl: metadata.relayUrl || "local",
+    };
     let result: Awaited<ReturnType<SyncedMessageRepository["insertMessageIfAbsent"]>>;
     try {
       result = await this.repository.enqueueMessage(this.accountPubkey, message);
     } catch (error) {
+      if (queueOnFailure) this.queuePersistenceRetry(logicalToken, message, metadata);
       debugLog("storage", "storage_failed", {
         ...diagnostic,
-        reason: error instanceof Error ? error.name || "Error" : "storage_error"
+        retryQueued: queueOnFailure && this.pendingPersistenceRetries.has(logicalToken),
+        reason: error instanceof Error ? error.name || "Error" : "storage_error",
       }, "error");
       throw error;
     }
 
+    this.pendingPersistenceRetries.delete(logicalToken);
     this.deliveredLogicalIds.add(logicalToken);
+    this.finalizeTransport(message);
     await this.clearDeferredBestEffort(message.id, diagnostic);
     debugLog("storage", result.inserted ? "storage_inserted" : "storage_duplicate", {
       ...diagnostic,
-      inserted: result.inserted
+      inserted: result.inserted,
     }, result.inserted ? "info" : "debug");
 
-    // A stale operation may safely finish writing to A's account namespace, but
-    // it must never update B's in-memory state or produce arrival side effects.
     if (!this.isSessionCurrent()) {
       debugLog("sync", "stale_session_discarded", diagnostic, "warn");
       return { inserted: result.inserted, discarded: true, deferred: false };
@@ -236,7 +343,7 @@ export class MessageIngestionPipeline {
       } catch (error) {
         debugLog("sync", "post_persist_side_effect_failed", {
           ...diagnostic,
-          reason: error instanceof Error ? error.name || "Error" : "unknown_error"
+          reason: error instanceof Error ? error.name || "Error" : "unknown_error",
         }, "warn");
       }
     }

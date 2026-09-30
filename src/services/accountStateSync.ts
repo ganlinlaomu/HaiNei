@@ -8,6 +8,7 @@ import {
 import { accountStateRepository } from "@/repositories/accountStateRepository";
 import { deviceStorage } from "@/services/deviceStorage";
 import { migrateConnectionSettings, SETTINGS_VERSION } from "@/services/connectionSettings";
+import { signWorkerRequest } from "@/services/workerAuth";
 
 export const ACCOUNT_STATE_NAMESPACES: AccountStateNamespace[] = [
   "friendships", "friend_metadata", "own_profile", "settings", "bookmarks",
@@ -52,19 +53,17 @@ async function authenticatedPost(keys: AccountStateKeys, path: string, payload: 
   const challengeResponse = await fetch(`${baseUrl()}/api/auth/challenge`, { method: "POST" });
   const challengeBody = await responseJson(challengeResponse);
   const challenge = String(challengeBody?.challenge || "");
-  const now = Math.floor(Date.now() / 1000);
-  const event = await keys.signEvent({
-    kind: 27235,
-    created_at: now,
+  const url = `${baseUrl()}${path}`;
+  const event = await signWorkerRequest(keys.signEvent.bind(keys), keys.pkHex, {
+    action: ACCOUNT_STATE_ACTION,
+    challenge,
+    expiresAt: Number(challengeBody?.expiresAt || 0),
+    url,
+    method: "POST",
+    payload,
     content: "Authorize HaiNei encrypted account state",
-    tags: [
-      ["t", ACCOUNT_STATE_ACTION],
-      ["challenge", challenge],
-      ["expiration", String(Math.min(Number(challengeBody?.expiresAt || now + 300), now + 300))],
-    ],
   });
-  if (event.pubkey.toLowerCase() !== keys.pkHex.toLowerCase()) throw new Error("account_state_identity_mismatch");
-  return responseJson(await fetch(`${baseUrl()}${path}`, {
+  return responseJson(await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, challenge, event }),

@@ -161,6 +161,36 @@ describe("reliable message persistence", () => {
     expect(await repo.list(ACCOUNT_B)).toEqual([]);
   });
 
+  it("retries the same transport after a transient persistence failure without duplicating UI delivery", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const originalEnqueue = repo.enqueueMessage.bind(repo);
+    const enqueue = vi.spyOn(repo, "enqueueMessage")
+      .mockRejectedValueOnce(Object.assign(new Error("quota full"), { name: "QuotaExceededError" }))
+      .mockImplementation((...args: Parameters<SyncedMessageRepository["enqueueMessage"]>) => originalEnqueue(...args));
+    const visible: string[] = [];
+    const decode = vi.fn(async () => message("retry-after-quota", 100));
+    const pipeline = new MessageIngestionPipeline(
+      ACCOUNT_A,
+      { accountPubkey: ACCOUNT_A },
+      () => true,
+      value => { visible.push(value.id); },
+      repo,
+      decode,
+    );
+    const event = { id: "same-transport", kind: 1059, created_at: 100 } as any;
+
+    await expect(pipeline.ingestNostrEvent(event, { source: "realtime", relayUrl: "wss://one" }))
+      .rejects.toMatchObject({ name: "QuotaExceededError" });
+    expect(await repo.list(ACCOUNT_A)).toEqual([]);
+    expect(visible).toEqual(["retry-after-quota"]);
+
+    await expect(pipeline.ingestNostrEvent(event, { source: "realtime", relayUrl: "wss://two" }))
+      .resolves.toMatchObject({ discarded: false, deferred: false });
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(visible).toEqual(["retry-after-quota"]);
+    expect((await repo.list(ACCOUNT_A)).map(item => item.id)).toEqual(["retry-after-quota"]);
+  });
+
   it("durably defers unresolved authorization without relying on the watermark", async () => {
     const repo = new SyncedMessageRepository(database());
     let authorized = false;

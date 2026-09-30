@@ -8,6 +8,7 @@ import {
   GENERIC_PUSH_PAYLOAD,
   MESSAGE_PUSH_PAYLOAD,
   pushPayloadForType,
+  replacePushAuthorizationPolicy,
   sanitizePushRecipients,
   triggerGenericPush,
 } from "../worker/src/push";
@@ -19,9 +20,12 @@ import {
 } from "@/services/pushNotifications";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { pushCategoryForMessage, shouldTriggerGenericPush } from "@/nostr/messaging/service";
+import { signWorkerRequest } from "@/services/workerAuth";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
+const MESSAGE_ID = "1".repeat(64);
+const SECOND_MESSAGE_ID = "2".repeat(64);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -69,6 +73,9 @@ class MemoryStorage implements Storage {
 class PushD1 {
   challenges = new Map<string, { expires_at: number; used_at: number | null; pubkey: string | null }>();
   subscriptions = new Map<string, { account_pubkey: string; endpoint: string; p256dh: string; auth: string }>();
+  authorizations = new Map<string, { recipient_pubkey: string; sender_pubkey: string; expires_at: number; updated_at: number }>();
+  deliveries = new Map<string, { status: "sending" | "sent"; updated_at: number }>();
+  rateLimits = new Map<string, number>();
 
   prepare(sql: string) {
     const normalized = sql.replace(/\s+/g, " ").trim();
@@ -80,14 +87,48 @@ class PushD1 {
       bind: (...next: unknown[]) => this.bound(sql, next),
       first: async () => {
         if (sql.includes("FROM hainei_auth_challenges")) return this.challenges.get(String(values[0])) || null;
+        if (sql.startsWith("SELECT endpoint FROM hainei_push_subscriptions")) {
+          const row = this.subscriptions.get(`${values[0]}|${values[1]}`);
+          return row ? { endpoint: row.endpoint } : null;
+        }
+        if (sql.startsWith("SELECT COUNT(*) AS count FROM hainei_push_subscriptions")) {
+          return { count: [...this.subscriptions.values()].filter(row => row.account_pubkey === values[0]).length };
+        }
         return null;
       },
-      all: async () => ({
-        results: sql.includes("FROM hainei_push_subscriptions")
-          ? [...this.subscriptions.values()].filter(row => values.includes(row.account_pubkey))
-          : [],
-      }),
+      all: async () => {
+        if (sql.includes("FROM hainei_push_subscriptions AS s")) {
+          const sender = String(values[0]);
+          const now = Number(values[1]);
+          const recipients = values.slice(2).map(String);
+          return {
+            results: [...this.subscriptions.values()].filter(row => {
+              if (!recipients.includes(row.account_pubkey)) return false;
+              const grant = this.authorizations.get(`${row.account_pubkey}|${sender}`);
+              return !!grant && grant.expires_at > now;
+            }),
+          };
+        }
+        if (sql.includes("FROM hainei_push_subscriptions")) {
+          return { results: [...this.subscriptions.values()].filter(row => values.includes(row.account_pubkey)) };
+        }
+        return { results: [] };
+      },
       run: async () => {
+        if (sql.startsWith("INSERT INTO hainei_rate_limits")) {
+          const bucket = String(values[0]);
+          const limit = Number(values[3]);
+          const count = this.rateLimits.get(bucket) || 0;
+          if (count >= limit) return { meta: { changes: 0 } };
+          this.rateLimits.set(bucket, count + 1);
+          return { meta: { changes: 1 } };
+        }
+        if (sql.startsWith("DELETE FROM hainei_rate_limits")) {
+          return { meta: { changes: 1 } };
+        }
+        if (sql.startsWith("DELETE FROM hainei_auth_challenges")) {
+          return { meta: { changes: 1 } };
+        }
         if (sql.startsWith("INSERT INTO hainei_auth_challenges")) {
           this.challenges.set(String(values[0]), { expires_at: Number(values[2]), used_at: null, pubkey: null });
           return { meta: { changes: 1 } };
@@ -114,6 +155,52 @@ class PushD1 {
           const removed = this.subscriptions.delete(`${values[0]}|${values[1]}`);
           return { meta: { changes: removed ? 1 : 0 } };
         }
+        if (sql.startsWith("DELETE FROM hainei_push_authorizations")) {
+          const recipient = String(values[0]);
+          let changes = 0;
+          for (const key of [...this.authorizations.keys()]) {
+            if (key.startsWith(`${recipient}|`)) {
+              this.authorizations.delete(key);
+              changes++;
+            }
+          }
+          return { meta: { changes } };
+        }
+        if (sql.startsWith("INSERT INTO hainei_push_authorizations")) {
+          const recipient = String(values[0]);
+          const sender = String(values[1]);
+          this.authorizations.set(`${recipient}|${sender}`, {
+            recipient_pubkey: recipient,
+            sender_pubkey: sender,
+            expires_at: Number(values[2]),
+            updated_at: Number(values[3]),
+          });
+          return { meta: { changes: 1 } };
+        }
+        if (sql.startsWith("INSERT INTO hainei_push_deliveries")) {
+          const key = `${values[0]}|${values[1]}|${values[2]}|${values[3]}`;
+          const current = this.deliveries.get(key);
+          const now = Number(values[4]);
+          const staleBefore = Number(values[5]);
+          if (current?.status === "sent" || (current && current.updated_at > staleBefore)) return { meta: { changes: 0 } };
+          this.deliveries.set(key, { status: "sending", updated_at: now });
+          return { meta: { changes: 1 } };
+        }
+        if (sql.startsWith("UPDATE hainei_push_deliveries")) {
+          const key = `${values[1]}|${values[2]}|${values[3]}|${values[4]}`;
+          const current = this.deliveries.get(key);
+          if (!current) return { meta: { changes: 0 } };
+          this.deliveries.set(key, { status: "sent", updated_at: Number(values[0]) });
+          return { meta: { changes: 1 } };
+        }
+        if (sql.startsWith("DELETE FROM hainei_push_deliveries WHERE sender_pubkey")) {
+          const key = `${values[0]}|${values[1]}|${values[2]}|${values[3]}`;
+          const removed = this.deliveries.delete(key);
+          return { meta: { changes: removed ? 1 : 0 } };
+        }
+        if (sql.startsWith("DELETE FROM hainei_push_deliveries")) {
+          return { meta: { changes: 1 } };
+        }
         return { meta: { changes: 0 } };
       },
     };
@@ -133,20 +220,32 @@ function pushEnv(db = new PushD1(), configured = true) {
   } as any;
 }
 
-async function authenticatedBody(env: any, secret: Uint8Array, extra: Record<string, unknown>) {
-  const challengeResponse = await handleRequest(new Request("https://worker.test/api/auth/challenge", { method: "POST" }), env);
+async function authenticatedBody(
+  env: any,
+  secret: Uint8Array,
+  path: string,
+  extra: Record<string, unknown>,
+) {
+  const challengeResponse = await handleRequest(new Request("https://worker.test/api/auth/challenge", {
+    method: "POST",
+    headers: { "CF-Connecting-IP": "203.0.113.10" },
+  }), env);
   const { challenge, expiresAt } = await challengeResponse.json() as { challenge: string; expiresAt: number };
-  const now = Math.floor(Date.now() / 1000);
-  return {
-    ...extra,
-    challenge,
-    event: finalizeEvent({
-      kind: 27235,
-      created_at: now,
+  const account = getPublicKey(secret);
+  const event = await signWorkerRequest(
+    async template => finalizeEvent(template, secret),
+    account,
+    {
+      action: "hainei_push",
+      challenge,
+      expiresAt,
+      url: `https://worker.test${path}`,
+      method: "POST",
+      payload: extra,
       content: "Authorize HaiNei push action",
-      tags: [["t", "hainei_push"], ["challenge", challenge], ["expiration", String(Math.min(expiresAt, now + 300))]],
-    }, secret),
-  };
+    },
+  );
+  return { ...extra, challenge, event };
 }
 
 beforeAll(async () => {
@@ -184,6 +283,15 @@ describe("privacy-preserving push and badge", () => {
     return row;
   }
 
+  function authorize(db: PushD1, sender = ACCOUNT, recipient = OTHER) {
+    db.authorizations.set(`${recipient}|${sender}`, {
+      recipient_pubkey: recipient,
+      sender_pubkey: sender,
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      updated_at: Math.floor(Date.now() / 1000),
+    });
+  }
+
   it("serves the POST public-key route and reports missing VAPID config explicitly", async () => {
     const configured = await handleRequest(new Request("https://worker.test/api/push/public-key", { method: "POST" }), pushEnv());
     expect(configured.status).toBe(200);
@@ -208,15 +316,15 @@ describe("privacy-preserving push and badge", () => {
     const env = pushEnv(db);
     const secret = generateSecretKey();
     const account = getPublicKey(secret);
-    const subscription = { endpoint: "https://push.test/subscription", keys: { p256dh: "p256dh", auth: "auth" } };
-    const subscribeBody = await authenticatedBody(env, secret, { subscription });
+    const subscription = { endpoint: "https://web.push.apple.com/test-subscription", keys: { p256dh: subscriptionPublicKey, auth: subscriptionAuth } };
+    const subscribeBody = await authenticatedBody(env, secret, "/api/push/subscribe", { subscription });
     const subscribed = await handleRequest(new Request("https://worker.test/api/push/subscribe", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(subscribeBody),
     }), env);
     expect(subscribed.status).toBe(201);
     expect(db.subscriptions.get(`${account}|${subscription.endpoint}`)).toMatchObject({ account_pubkey: account });
 
-    const unsubscribeBody = await authenticatedBody(env, secret, { endpoint: subscription.endpoint });
+    const unsubscribeBody = await authenticatedBody(env, secret, "/api/push/unsubscribe", { endpoint: subscription.endpoint });
     const unsubscribed = await handleRequest(new Request("https://worker.test/api/push/unsubscribe", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(unsubscribeBody),
     }), env);
@@ -323,21 +431,23 @@ describe("privacy-preserving push and badge", () => {
   it("reports a successful push as sent", async () => {
     const db = new PushD1();
     addSubscription(db);
+    authorize(db);
     const send = vi.fn().mockResolvedValue(new Response(null, { status: 201 }));
     vi.stubGlobal("fetch", send);
     const log = vi.spyOn(console, "info").mockImplementation(() => {});
 
-    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message")).resolves.toEqual({
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", MESSAGE_ID)).resolves.toEqual({
       requested: 1, subscriptionsFound: 1, sent: 1, failed: 0, expired: 0,
     });
     expect(log).toHaveBeenCalledWith({
-      recipientPubkey: OTHER,
       endpointHost: "web.push.apple.com",
       status: 201,
       message: "push sent",
     });
     const [, request] = send.mock.calls[0] as [string, RequestInit];
     expect(request.method).toBe("POST");
+    expect(request.redirect).toBe("error");
+    expect(request.signal).toBeInstanceOf(AbortSignal);
     expect(request.headers).toMatchObject({
       "Content-Encoding": "aes128gcm",
       "Content-Type": "application/octet-stream",
@@ -345,6 +455,78 @@ describe("privacy-preserving push and badge", () => {
     });
     expect((request.headers as Record<string, string>).Authorization).toMatch(/^vapid t=.+, k=/);
     expect((request.body as ArrayBuffer).byteLength).toBeGreaterThan(0);
+  });
+
+  it("blocks an otherwise valid sender until the recipient authorizes push", async () => {
+    const db = new PushD1();
+    addSubscription(db);
+    const send = vi.fn();
+    vi.stubGlobal("fetch", send);
+
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", MESSAGE_ID)).resolves.toEqual({
+      requested: 1, subscriptionsFound: 0, sent: 0, failed: 0, expired: 0,
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("lets the recipient revoke a previously authorized sender immediately", async () => {
+    const db = new PushD1();
+    addSubscription(db);
+    const send = vi.fn().mockResolvedValue(new Response(null, { status: 201 }));
+    vi.stubGlobal("fetch", send);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await replacePushAuthorizationPolicy(pushEnv(db), OTHER, [ACCOUNT]);
+    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", MESSAGE_ID);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    await replacePushAuthorizationPolicy(pushEnv(db), OTHER, []);
+    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", SECOND_MESSAGE_ID);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates the same canonical message push", async () => {
+    const db = new PushD1();
+    addSubscription(db);
+    authorize(db);
+    const send = vi.fn().mockResolvedValue(new Response(null, { status: 201 }));
+    vi.stubGlobal("fetch", send);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", SECOND_MESSAGE_ID);
+    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", SECOND_MESSAGE_ID);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects custom push origins and malformed subscription keys", async () => {
+    const db = new PushD1();
+    const env = pushEnv(db);
+    const secret = generateSecretKey();
+    const custom = {
+      subscription: {
+        endpoint: "https://attacker.example/push",
+        keys: { p256dh: subscriptionPublicKey, auth: subscriptionAuth },
+      },
+    };
+    const customBody = await authenticatedBody(env, secret, "/api/push/subscribe", custom);
+    const customResponse = await handleRequest(new Request("https://worker.test/api/push/subscribe", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(customBody),
+    }), env);
+    expect(customResponse.status).toBe(400);
+    expect(await customResponse.json()).toEqual({ error: "unsupported_push_endpoint" });
+
+    const malformed = {
+      subscription: {
+        endpoint: "https://web.push.apple.com/bad-key",
+        keys: { p256dh: "AQ", auth: "AQ" },
+      },
+    };
+    const malformedBody = await authenticatedBody(env, secret, "/api/push/subscribe", malformed);
+    const malformedResponse = await handleRequest(new Request("https://worker.test/api/push/subscribe", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(malformedBody),
+    }), env);
+    expect(malformedResponse.status).toBe(400);
+    expect(await malformedResponse.json()).toEqual({ error: "invalid_push_subscription" });
   });
 
   it("does not deliver activity or unknown push categories", async () => {
@@ -375,10 +557,11 @@ describe("privacy-preserving push and badge", () => {
   it.each([404, 410])("removes and reports an expired subscription for status %i", async statusCode => {
     const db = new PushD1();
     const row = addSubscription(db);
+    authorize(db);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: statusCode })));
     vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message")).resolves.toEqual({
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", MESSAGE_ID)).resolves.toEqual({
       requested: 1, subscriptionsFound: 1, sent: 0, failed: 0, expired: 1,
     });
     expect(db.subscriptions.has(`${OTHER}|${row.endpoint}`)).toBe(false);
@@ -387,20 +570,36 @@ describe("privacy-preserving push and badge", () => {
   it("reports other delivery failures and retains the subscription", async () => {
     const db = new PushD1();
     const row = addSubscription(db);
+    authorize(db);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
     vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message")).resolves.toEqual({
+    await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", MESSAGE_ID)).resolves.toEqual({
       requested: 1, subscriptionsFound: 1, sent: 0, failed: 1, expired: 0,
     });
     expect(db.subscriptions.has(`${OTHER}|${row.endpoint}`)).toBe(true);
+  });
+
+  it("returns only an accepted acknowledgement from the public trigger route", async () => {
+    const db = new PushD1();
+    const env = pushEnv(db);
+    const secret = generateSecretKey();
+    const sender = getPublicKey(secret);
+    const payload = { recipientPubkeys: [OTHER], type: "message", messageId: MESSAGE_ID };
+    const signedBody = await authenticatedBody(env, secret, "/api/push/trigger", payload);
+    const response = await handleRequest(new Request("https://worker.test/api/push/trigger", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(signedBody),
+    }), env);
+    expect(sender).not.toBe(OTHER);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ accepted: true });
   });
 
   it("reports no subscription without attempting delivery", async () => {
     const send = vi.fn();
     vi.stubGlobal("fetch", send);
 
-    await expect(triggerGenericPush(pushEnv(), ACCOUNT, [OTHER], "message")).resolves.toEqual({
+    await expect(triggerGenericPush(pushEnv(), ACCOUNT, [OTHER], "message", MESSAGE_ID)).resolves.toEqual({
       requested: 1, subscriptionsFound: 0, sent: 0, failed: 0, expired: 0,
     });
     expect(send).not.toHaveBeenCalled();
@@ -409,16 +608,18 @@ describe("privacy-preserving push and badge", () => {
   it("does not expose push secrets or full endpoint URLs in diagnostics", async () => {
     const db = new PushD1();
     const row = addSubscription(db);
+    authorize(db);
     const privateKey = vapidPrivateKey;
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(
       new Error(`failed ${row.endpoint} ${row.p256dh} ${row.auth} ${privateKey}`),
     ));
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message");
+    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", MESSAGE_ID);
 
     const diagnostics = JSON.stringify(log.mock.calls);
-    expect(diagnostics).toContain(OTHER);
+    expect(diagnostics).not.toContain(OTHER.slice(0, 12));
+    expect(diagnostics).not.toContain(OTHER);
     expect(diagnostics).toContain("web.push.apple.com");
     expect(diagnostics).not.toContain(row.endpoint);
     expect(diagnostics).not.toContain(row.p256dh);
@@ -562,7 +763,9 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 })));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 })));
 
     await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
 
@@ -586,7 +789,9 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 })));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 })));
 
     await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
 
@@ -604,7 +809,9 @@ describe("privacy-preserving push and badge", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
@@ -625,7 +832,9 @@ describe("privacy-preserving push and badge", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockImplementationOnce(() => subscribeResponse);
+      .mockImplementationOnce(() => subscribeResponse)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const enabling = enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);

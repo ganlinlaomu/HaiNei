@@ -35,7 +35,7 @@ HaiNei Pages/PWA 只包含前端代码。受管默认媒体服务使用独立的
 - `POST /api/auth/challenge` → `201 { challenge, expiresAt }`
 - `POST /api/media/session`，JSON 为 `{ challenge, event, fileSize? }` → `201 { token, pubkey, scope: "upload", expiresAt }`
 
-身份事件必须是有效 Nostr 签名，包含唯一 challenge、`t=hainei_media_session` 和未过期的 expiration。challenge 一次性消费。任何客户端标识、版本、请求头、Origin、Referer 或 User-Agent 都不授予权限。
+身份事件必须是有效 Nostr 签名，包含唯一 challenge、动作 `t`、未过期的 `expiration`，并绑定请求的完整 `u`（URL）、`method` 和稳定序列化业务 payload 的 SHA-256 `payload`。challenge 一次性消费；签名不得跨路由、跨方法或篡改 payload 重放。任何客户端标识、版本、请求头、Origin、Referer 或 User-Agent 都不授予权限。
 
 ### Cloudflare 配置
 

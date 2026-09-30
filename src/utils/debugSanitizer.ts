@@ -10,7 +10,8 @@ function sanitizeValue(value: unknown, key: string, depth: number): unknown {
     if (IDENTIFIER_KEY.test(key)) return value.slice(0, 12);
     const scrubbed = value
       .replace(/nsec1[023456789acdefghjklmnpqrstuvwxyz]+/gi, "[redacted-nsec]")
-      .replace(/(bunker:\/\/[^\s?]+\?[^\s#]*\bsecret=)[^&\s]+/gi, "$1[redacted]");
+      .replace(/(bunker:\/\/[^\s?]+\?[^\s#]*\bsecret=)[^&\s]+/gi, "$1[redacted]")
+      .replace(/blossom\+aesgcm(?:\+video)?:[A-Za-z0-9+/_=-]+/gi, "[redacted-encrypted-media-ref]");
     return scrubbed.length > MAX_STRING ? `${scrubbed.slice(0, MAX_STRING)}…` : scrubbed;
   }
   if (typeof value === "bigint") return value.toString();

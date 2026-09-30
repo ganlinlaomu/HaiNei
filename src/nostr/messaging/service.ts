@@ -202,7 +202,13 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     const pushSigner = pushSigners.get(accountPubkey);
     if (pushSigner && shouldTriggerGenericPush(message.tags)) {
       const recipients = [...new Set(events.map(eventTarget).filter((value): value is string => !!value))];
-      void triggerGenericPush(recipients, accountPubkey, pushSigner, pushCategory === "message" ? pushCategory : "message").catch(() => undefined);
+      void triggerGenericPush(
+        recipients,
+        accountPubkey,
+        pushSigner,
+        pushCategory === "message" ? pushCategory : "message",
+        message.id,
+      ).catch(() => undefined);
     }
     return queuedResult(sent!);
   })().finally(() => activePublishes.delete(key));
