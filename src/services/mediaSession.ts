@@ -1,5 +1,6 @@
 import { timedJsonFetch } from "@/utils/timedFetch";
 import { signWorkerRequest } from "@/services/workerAuth";
+import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 const SESSION_SCOPE = "upload";
 const EXPIRY_SKEW_SECONDS = 5;
 
@@ -26,8 +27,7 @@ function cacheKey(serverUrl: string, pubkey: string) {
 }
 
 function workerBaseUrl() {
-  const configured = String(import.meta.env.VITE_HAINEI_WORKER_URL || "").trim();
-  return normalizedUrl(configured || window.location.origin);
+  return normalizedUrl(haineiWorkerBaseUrl());
 }
 
 function usable(session: MediaSession | undefined, now = Math.floor(Date.now() / 1000)) {
