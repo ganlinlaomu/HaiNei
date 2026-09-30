@@ -237,17 +237,27 @@ export class SyncedMessageRepository {
       .between([account,0,""],[account,before?.createdAt ?? Number.MAX_SAFE_INTEGER,before?.id ?? "\uffff"],true,!before)
       .reverse().limit(100).toArray();
   }
+  async listDirectConversationHeads(accountPubkey: string, conversationId?: string) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const conversationIds = conversationId
+      ? [conversationId]
+      : (await this.database.conversationStates.where("accountPubkey").equals(account).toArray())
+          .map(summary => summary.conversationId);
+    const latestDirect = await Promise.all(conversationIds.map(id => this.database.syncedMessages
+      .where("[accountPubkey+conversationId+messageClass+createdAt+id]")
+      .between([account, id, "direct", 0, ""], [account, id, "direct", Number.MAX_SAFE_INTEGER, "\uffff"])
+      .reverse().first()));
+    return latestDirect.filter((message): message is SyncedMessageRecord => !!message);
+  }
+
   async listRecent(accountPubkey: string, limit = 200) {
     const account = normalizeAccountPubkey(accountPubkey);
     const recent = await this.database.syncedMessages.where("[accountPubkey+createdAt]")
       .between([account,Dexie.minKey],[account,Dexie.maxKey]).reverse().limit(limit).toArray();
     const summaries = await this.database.conversationStates.where("accountPubkey").equals(account).toArray();
     const latest = await this.database.syncedMessages.bulkGet(summaries.map(s=>[account,s.lastMessageId]));
-    const latestDirect = await Promise.all(summaries.map(summary => this.database.syncedMessages
-      .where("[accountPubkey+conversationId+messageClass+createdAt+id]")
-      .between([account, summary.conversationId, "direct", 0, ""], [account, summary.conversationId, "direct", Number.MAX_SAFE_INTEGER, "\uffff"])
-      .reverse().first()));
-    return [...new Map([...recent,...latest.filter((m):m is SyncedMessageRecord=>!!m), ...latestDirect.filter((m):m is SyncedMessageRecord=>!!m)].map(m=>[m.id,m])).values()];
+    const latestDirect = await this.listDirectConversationHeads(account);
+    return [...new Map([...recent,...latest.filter((m):m is SyncedMessageRecord=>!!m), ...latestDirect].map(m=>[m.id,m])).values()];
   }
 
   async purgeUnsupportedMessages(accountPubkey: string) {
