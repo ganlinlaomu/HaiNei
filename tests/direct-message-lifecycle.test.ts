@@ -97,7 +97,9 @@ describe("direct-message authorization and conversation lifecycle", () => {
     for (const file of ["src/components/HeaderBar.vue", "src/views/Conversations.vue", "src/views/Messages.vue"]) {
       expect(readFileSync(join(process.cwd(), file), "utf8")).not.toContain("directMessages.refresh(");
     }
-    expect(readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8")).toContain("useDirectMessagesStore().refresh(pk)");
+    const keys = readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8");
+    expect(keys).toContain("const directMessages = useDirectMessagesStore()");
+    expect(keys).toContain("await directMessages.refresh(pk)");
   });
 
   it("keeps text/reply drafts isolated by account and peer and protects newer drafts", async () => {
