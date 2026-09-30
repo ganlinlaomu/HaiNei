@@ -299,10 +299,16 @@
       </details>
 
     </section>
+
+    <footer class="version-footer" aria-label="当前应用版本">
+      HaiNei v{{ APP_VERSION }} · {{ APP_UPDATE_SUMMARY }}
+    </footer>
   </main>
 </template>
 <script setup lang="ts">
 import { deviceStorage } from "@/services/deviceStorage";
+import { APP_VERSION } from "@/db/dexie";
+import { APP_UPDATE_SUMMARY } from "@/appRelease";
 import { autoLockKey } from "@/services/autoLock";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
@@ -1166,6 +1172,14 @@ h3 {
   color: #64748b;
   font-size: 0.78rem;
   line-height: 1.6;
+}
+
+.version-footer {
+  padding: 22px 16px 4px;
+  color: #94a3b8;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .btn {
