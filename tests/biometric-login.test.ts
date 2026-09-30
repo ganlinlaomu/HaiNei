@@ -26,7 +26,7 @@ describe("Face ID quick login", () => {
 
   it("lets an unlocked encrypted account enable or disable Face ID in settings", () => {
     const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
-    expect(settings).toContain("Face ID");
+    expect(settings).toContain("通行密钥");
     expect(settings).toContain("toggleBiometricUnlock");
     expect(settings).toContain("await keyStore.enableBiometricUnlock()");
     expect(settings).toContain("await keyStore.disableBiometricUnlock()");

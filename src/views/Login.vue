@@ -192,7 +192,7 @@ const unlockPasswordEl = ref<HTMLInputElement | null>(null);
 
 const needsUnlock = computed(() => !!ks.pkHex && ks.isEncrypted && !ks.isUnlocked);
 const biometricEnabled = computed(() => !!ks.pkHex && ks.hasBiometricUnlock(ks.pkHex));
-const biometricLabel = computed(() => /iPhone/i.test(navigator.userAgent) ? "Face ID" : "生物识别");
+const biometricLabel = computed(() => "通行密钥");
 const addingAccount = computed(() => route.query.mode === "add");
 const pageMode = computed<"restoring" | "unlock" | "login">(() => {
   if (ks.isRestoring) return "restoring";

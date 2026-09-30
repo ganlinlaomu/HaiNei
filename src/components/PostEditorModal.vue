@@ -6,6 +6,8 @@
         class="editor-card"
         :class="{ dragging: sheetDragging }"
         :style="sheetStyle"
+        tabindex="-1"
+        aria-label="发帖"
         role="dialog"
         aria-modal="true"
         @click.stop
@@ -179,6 +181,7 @@
 </template>
 
 <script lang="ts">
+import { useDialogFocus } from "@/composables/useDialogFocus";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { defineComponent, ref, onBeforeUnmount, watch, nextTick, computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -258,6 +261,7 @@ export default defineComponent({
     const textarea = ref<HTMLTextAreaElement | null>(null);
     const overlay = ref<HTMLElement | null>(null);
     const editorCard = ref<HTMLElement | null>(null);
+    useDialogFocus(editorCard, () => ui.showPostEditor, onClose);
     const editorBody = ref<HTMLElement | null>(null);
     const sheetDragging = ref(false);
     const sheetOffset = ref(0);

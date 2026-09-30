@@ -164,6 +164,14 @@
         </div>
       </details>
 
+      <section v-if="keyStore.isEncrypted" class="technical-section">
+        <label class="account-row">
+          <span>进入后台 5 分钟后锁定</span>
+          <input type="checkbox" :checked="backgroundLock" @change="toggleBackgroundLock" />
+        </label>
+        <p class="section-detail">短暂切换应用不会锁定。再次打开时可用本地密码或通行密钥解锁。</p>
+      </section>
+
       <details class="technical-section">
         <summary class="section-heading">
           <div><h3>数据使用 / Data Saver</h3><p>{{ settings.dataSaver ? "节省流量" : "标准" }}</p></div>
@@ -292,6 +300,8 @@
   </main>
 </template>
 <script setup lang="ts">
+import { deviceStorage } from "@/services/deviceStorage";
+import { autoLockKey } from "@/services/autoLock";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -375,8 +385,13 @@ const pushStatusText = computed(() => isNativeApp
 const pushHelpText = computed(() => isNativeApp
   ? "Android APK 已禁用 PWA Service Worker；后续将接入原生 Push 与 Badge。"
   : pushSupported ? "需要你主动授权浏览器通知权限" : "当前浏览器不支持 Web Push");
+const backgroundLock = ref(deviceStorage.getItem(autoLockKey(keyStore.pkHex)) === "1");
+function toggleBackgroundLock(event: Event) {
+ backgroundLock.value=(event.target as HTMLInputElement).checked;
+ deviceStorage.setItem(autoLockKey(keyStore.pkHex),backgroundLock.value ? "1" : "0");
+}
 const biometricEnabled = computed(() => keyStore.hasBiometricUnlock());
-const biometricLabel = computed(() => /iPhone/i.test(navigator.userAgent) ? "Face ID" : "生物识别");
+const biometricLabel = computed(() => "通行密钥");
 const accountProtectionText = computed(() =>
   biometricEnabled.value ? `${biometricLabel.value} · 本机加密` : keyStore.isEncrypted ? "本机加密保存" : "仅当前会话"
 );

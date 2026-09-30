@@ -12,6 +12,7 @@ import {
   putDeviceValue,
   clearPrivateDeviceValues,
 } from "@/services/deviceStorage";
+import { installBackgroundLock } from "@/services/autoLock";
 import { timedJsonFetch } from "@/utils/timedFetch";
 
 it("requires unlock before new protected writes, including after reopen", async () => {
@@ -144,6 +145,43 @@ it("seals post drafts and embedded media references instead of writing device pl
   } finally {
     lockLocalVault(account);
     await clearAccountDeviceData(account);
+  }
+});
+it("background lock grants five minutes and never transfers A's timeout to B", async () => {
+  vi.useFakeTimers();
+  const read = vi.spyOn(deviceStorage, "getItem").mockReturnValue("1");
+  const target = new EventTarget() as Document;
+  Object.defineProperty(target, "visibilityState", {
+    value: "visible",
+    writable: true,
+  });
+  let account = "A";
+  const lock = vi.fn(async () => {});
+  const stop = installBackgroundLock(
+    { account: () => account, eligible: () => true, lock },
+    target,
+  );
+  const visibility = (state: string) => {
+    (target as any).visibilityState = state;
+    target.dispatchEvent(new Event("visibilitychange"));
+  };
+  try {
+    visibility("hidden");
+    await vi.advanceTimersByTimeAsync(30_000);
+    visibility("visible");
+    expect(lock).not.toHaveBeenCalled();
+    visibility("hidden");
+    account = "B";
+    await vi.advanceTimersByTimeAsync(300_000);
+    visibility("visible");
+    expect(lock).not.toHaveBeenCalled();
+    visibility("hidden");
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(lock).toHaveBeenCalledOnce();
+  } finally {
+    stop();
+    read.mockRestore();
+    vi.useRealTimers();
   }
 });
 it("times out a stalled JSON response body, not only the initial headers", async () => {

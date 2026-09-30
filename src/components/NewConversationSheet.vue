@@ -2,7 +2,7 @@
   <Teleport to="body">
     <Transition name="new-conversation">
       <div v-if="visible" class="sheet-backdrop" role="presentation" @click.self="emit('close')">
-        <section class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="new-conversation-title">
+        <section ref="dialog" tabindex="-1" class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="new-conversation-title">
           <header class="sheet-header">
             <button type="button" class="close-button" aria-label="关闭" @click="emit('close')">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
@@ -53,6 +53,7 @@
 </template>
 
 <script setup lang="ts">
+import { useDialogFocus } from "@/composables/useDialogFocus";
 import { computed, onMounted, ref, watch } from "vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { useFriendsStore } from "@/stores/friends";
@@ -68,6 +69,8 @@ const friends = useFriendsStore();
 const friendships = useFriendshipsStore();
 const profiles = useProfilesStore();
 const ui = useUIStore();
+const dialog = ref<HTMLElement | null>(null);
+useDialogFocus(dialog, () => props.visible, () => emit("close"));
 const query = ref("");
 const loading = ref(false);
 const loadError = ref("");
