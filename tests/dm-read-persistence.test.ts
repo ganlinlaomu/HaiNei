@@ -61,6 +61,32 @@ describe("reading paged DM history with an encrypted database", () => {
     expect(direct.scheduleReceipt).toHaveBeenCalledWith(PEER, "read", { createdAt: 151, messageId: item(151).id });
   });
 
+  it("does not persist a sent optimistic task as the conversation read cursor", async () => {
+    for (let i = 1; i <= 151; i++) await save(item(i));
+    let direct = await restore();
+    expect(direct.unreadCount).toBe(151);
+
+    const optimistic: InboxItem = {
+      ...item(999, ACCOUNT),
+      id: "local:sent-task",
+      conversationId: `local:${PEER}`,
+      outgoing: { localId: "sent-task", state: "sent", hasImage: false },
+    };
+    await direct.markPeerRead(PEER, optimistic);
+    await direct.reconcileDurableUnread();
+
+    expect((await syncedMessageRepository.getReadState(ACCOUNT, CONVERSATION))?.lastReadCreatedAt).toBe(151);
+    expect(await syncedMessageRepository.getReadState(ACCOUNT, `local:${PEER}`)).toBeUndefined();
+    expect(direct.unreadCount).toBe(0);
+
+    db.close();
+    lockLocalVault(ACCOUNT);
+    await unlockLocalVault(ACCOUNT, "1".repeat(64));
+    await db.open();
+    direct = await restore();
+    expect(direct.unreadCount).toBe(0);
+  });
+
   it("persists the actual chat read position when incoming messages are absent from the home cache", async () => {
     for (let i = 1; i <= 151; i++) await save(item(i));
     // The last incoming messages are outside the global recent-message window.
