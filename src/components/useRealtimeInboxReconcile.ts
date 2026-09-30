@@ -1,5 +1,6 @@
 // components/useRealtimeInboxReconcile.ts
 import { onMounted, onUnmounted } from "vue";
+import { onAppResume } from "@/services/appResumeCoordinator";
 
 type ReconcileOptions = {
   /**
@@ -40,35 +41,16 @@ export function useRealtimeInboxReconcile({
     await reconcile();
   };
 
-  const onVisibilityChange = () => {
-    if (document.visibilityState === "visible") {
-      safeReconcile("visibilitychange");
-    }
-  };
-
-  const onFocus = () => {
-    safeReconcile("window.focus");
-  };
-
-  // iOS / bfcache / PWA 非常关键
-  const onPageShow = (e: PageTransitionEvent) => {
-    if (e.persisted) {
-      safeReconcile("pageshow (bfcache)");
-    }
-  };
+  let stopResume: (() => void) | null = null;
 
   onMounted(() => {
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("pageshow", onPageShow);
-
+    stopResume = onAppResume(reason => safeReconcile(reason));
     // 首次 mount 也跑一次，避免冷启动漏算
-    safeReconcile("mounted");
+    void safeReconcile("mounted");
   });
 
   onUnmounted(() => {
-    document.removeEventListener("visibilitychange", onVisibilityChange);
-    window.removeEventListener("focus", onFocus);
-    window.removeEventListener("pageshow", onPageShow);
+    stopResume?.();
+    stopResume = null;
   });
 }
