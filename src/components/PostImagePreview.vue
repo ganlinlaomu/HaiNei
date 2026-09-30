@@ -173,6 +173,7 @@ function getDecryptedBlob(
   priority: DecryptPriority = 1,
   signal?: AbortSignal,
 ): Promise<Blob> {
+  if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
   const taskKey = `${account}:${encryptedRef}`;
   let job = inFlightDecrypts.get(taskKey);
   if (!job) {
