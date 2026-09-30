@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bytesToBase64 } from "@/nostr/crypto";
 import { decodeEncryptedImageRef, encodeEncryptedImageRef } from "@/utils/encryptedImageRef";
 import { decodeEncryptedVideoRef, encodeEncryptedVideoRef } from "@/utils/encryptedVideoRef";
@@ -41,6 +41,7 @@ async function encryptedAvatar(plaintext: string) {
 }
 
 describe("P3 media privacy hardening", () => {
+  beforeEach(() => mocks.downloadMedia.mockReset());
   it("loads private avatars through the bounded cancellable media downloader", async () => {
     const { encrypted, ref } = await encryptedAvatar("private avatar bytes");
     const controller = new AbortController();
