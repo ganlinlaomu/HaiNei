@@ -104,9 +104,15 @@ export class MessageIngestionPipeline {
     }
     for (const [logicalToken, pending] of [...this.pendingPersistenceRetries.entries()].slice(0, 8)) {
       if (!this.isSessionCurrent()) break;
+      if (this.logicalFlights.has(logicalToken)) continue;
       pending.attempts += 1;
+      const flight = this.persistAuthorizedMessage(pending.message, pending.metadata, logicalToken, false)
+        .finally(() => {
+          if (this.logicalFlights.get(logicalToken) === flight) this.logicalFlights.delete(logicalToken);
+        });
+      this.logicalFlights.set(logicalToken, flight);
       try {
-        await this.persistAuthorizedMessage(pending.message, pending.metadata, logicalToken, false);
+        await flight;
         this.pendingPersistenceRetries.delete(logicalToken);
       } catch (error) {
         if (pending.attempts >= MAX_PERSISTENCE_RETRY_ATTEMPTS) {
