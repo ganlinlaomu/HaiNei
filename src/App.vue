@@ -153,15 +153,23 @@ export default defineComponent({
 
     watch(
       () => [
-        keys.isUnlocked ? keys.pkHex : "",
+        keys.pkHex,
+        keys.isUnlocked,
+        keys.isRestored,
         notifications.loadedFor,
         notifications.unreadCount,
         directMessages.loadedFor,
         directMessages.unreadCount,
       ] as const,
-      ([account, loadedFor, unreadCount, directLoadedFor, directUnread]) => {
+      ([account, unlocked, restored, loadedFor, unreadCount, directLoadedFor, directUnread]) => {
+        // Before session restoration finishes, an empty store is not a logout.
+        // Keep the persisted push scope so a cold-start race cannot suppress it.
+        if (!account && !restored) return;
+        // Locking protects private data, but generic push notifications still
+        // belong to the remembered account. Only an actual logout clears scope.
+        const badgeAccount = unlocked ? account : "";
         void syncAppBadge(
-          accountBadgeCount(account, loadedFor, unreadCount, directLoadedFor, directUnread), undefined, account,
+          accountBadgeCount(badgeAccount, loadedFor, unreadCount, directLoadedFor, directUnread), undefined, account,
         ).catch(() => undefined);
       },
       { immediate: true }
