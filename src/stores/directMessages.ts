@@ -868,15 +868,22 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const items = this.peerMessages(peer);
       const latestIncoming = items.filter(item => item.pubkey !== account).at(-1);
       if (!latestIncoming?.conversationId) return;
-      const previous = this.readCursors[latestIncoming.conversationId];
-      const advanced = isMessageAfter({ id: latestIncoming.id, createdAt: latestIncoming.created_at }, previous);
-      const read = { lastReadCreatedAt: latestIncoming.created_at, lastReadMessageId: latestIncoming.id };
+      const conversationId = latestIncoming.conversationId;
+      const previous = this.readCursors[conversationId];
+      const candidate = { lastReadCreatedAt: latestIncoming.created_at, lastReadMessageId: latestIncoming.id };
+      const advanced = isMessageAfter({ id: candidate.lastReadMessageId, createdAt: candidate.lastReadCreatedAt }, previous);
+
+      // A new device can restore a read cursor that is newer than the subset of
+      // Relay history currently available locally. Never rewind that cursor to
+      // the newest message merely present on this device, otherwise later
+      // backfill is incorrectly counted as unread again.
+      const read = advanced || !previous ? candidate : previous;
 
       // Foreground read state owns the icon badge. Update memory immediately so
       // a previously delivered Push badge cannot linger while IndexedDB/D1 work
       // is still pending.
-      this.readCursors = { ...this.readCursors, [latestIncoming.conversationId]: read };
-      this.unreadByConversation = { ...this.unreadByConversation, [latestIncoming.conversationId]: 0 };
+      this.readCursors = { ...this.readCursors, [conversationId]: read };
+      this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: 0 };
       if (typeof navigator !== "undefined") {
         const notifications = useNotificationsStore();
         void syncAppBadge(accountBadgeCount(
@@ -887,19 +894,31 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           this.unreadCount,
         ), undefined, account).catch(() => undefined);
       }
-      if (!advanced) return;
 
+      // Persist even when the in-memory cursor did not advance. This self-heals
+      // a device whose first persistence attempt failed after memory was already
+      // updated, and keeps the durable cursor monotonic.
+      let durableReady = typeof indexedDB === "undefined";
+      if (typeof indexedDB !== "undefined") {
+        try {
+          await syncedMessageRepository.advanceReadState(account, conversationId, read);
+          durableReady = true;
+        } catch (error) {
+          console.warn("[dm] durable read-state persistence failed", error instanceof Error ? error.message : "unknown error");
+        }
+      }
       try {
-        await metaRepository.put(account, readKey(latestIncoming.conversationId), read);
-        if (typeof indexedDB !== "undefined") {
-          await syncedMessageRepository.advanceReadState(account, latestIncoming.conversationId, read);
-        }
-        scheduleAccountStateSync(useKeyStore(), "read_state");
-        if (emitReceipt && /^[0-9a-f]{64}$/i.test(latestIncoming.id)) {
-          this.scheduleReceipt(peer, "read", { createdAt: latestIncoming.created_at, messageId: latestIncoming.id });
-        }
+        await metaRepository.put(account, readKey(conversationId), read);
       } catch (error) {
-        console.warn("[dm] read-state persistence failed", error instanceof Error ? error.message : "unknown error");
+        console.warn("[dm] read-state mirror persistence failed", error instanceof Error ? error.message : "unknown error");
+      }
+      if (durableReady) scheduleAccountStateSync(useKeyStore(), "read_state");
+
+      if (advanced && emitReceipt && /^[0-9a-f]{64}$/i.test(candidate.lastReadMessageId)) {
+        this.scheduleReceipt(peer, "read", {
+          createdAt: candidate.lastReadCreatedAt,
+          messageId: candidate.lastReadMessageId,
+        });
       }
     },
     async hideConversation(peerPubkey: string) {
