@@ -16,6 +16,7 @@ import {
   enablePushNotifications,
   pushEnabledForAccount,
   pushServiceErrorMessage,
+  syncPushAuthorizationPolicy,
   triggerGenericPush as triggerFrontendPush,
 } from "@/services/pushNotifications";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
@@ -839,6 +840,47 @@ describe("privacy-preserving push and badge", () => {
     finishSubscribe(new Response(JSON.stringify({ subscribed: true }), { status: 201 }));
     await enabling;
     expect(pushEnabledForAccount(ACCOUNT)).toBe(true);
+  });
+
+  it("re-registers an existing browser subscription before policy refresh", async () => {
+    const notification = { permission: "granted", requestPermission: vi.fn() };
+    const subscription = {
+      endpoint: "https://push.test/existing",
+      toJSON: () => ({ endpoint: "https://push.test/existing", keys: { p256dh: "x", auth: "y" } }),
+    };
+    vi.stubGlobal("window", { location: { origin: "https://app.test" }, PushManager: function PushManager() {}, Notification: notification });
+    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { getSubscription: vi.fn(async () => subscription) } }) } });
+    vi.stubGlobal("Notification", notification);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    localStorage.setItem(`hainei_push_enabled_${ACCOUNT}`, "1");
+
+    await expect(syncPushAuthorizationPolicy(
+      ACCOUNT,
+      [OTHER],
+      async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any,
+    )).resolves.toBe(true);
+
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://app.test/api/push/subscribe");
+    expect(fetchMock.mock.calls[3]?.[0]).toBe("https://app.test/api/push/policy");
+  });
+
+  it("clears a stale local opt-in when the browser subscription disappeared", async () => {
+    const notification = { permission: "granted", requestPermission: vi.fn() };
+    vi.stubGlobal("window", { location: { origin: "https://app.test" }, PushManager: function PushManager() {}, Notification: notification });
+    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { getSubscription: vi.fn(async () => null) } }) } });
+    vi.stubGlobal("Notification", notification);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    localStorage.setItem(`hainei_push_enabled_${ACCOUNT}`, "1");
+
+    await expect(syncPushAuthorizationPolicy(ACCOUNT, [OTHER], vi.fn())).resolves.toBe(false);
+    expect(pushEnabledForAccount(ACCOUNT)).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not leave push enabled when authenticated subscribe fails", async () => {
