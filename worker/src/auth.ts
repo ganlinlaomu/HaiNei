@@ -1,6 +1,7 @@
 import { verifyEvent } from "nostr-tools";
 import type { Event } from "nostr-tools/core";
 import { HttpError, integerSetting, type Env } from "./types";
+import { consumeRateLimit } from "./requestGuards";
 
 const PUBKEY = /^[0-9a-f]{64}$/;
 const CHALLENGE = /^[0-9a-f]{64}$/;
@@ -46,6 +47,11 @@ export type WorkerAuthBinding = {
 };
 
 export async function createChallenge(env: Env, now = Math.floor(Date.now() / 1000)) {
+  // Keep the challenge table bounded even when clients abandon handshakes.
+  void env.DB.prepare(`
+    DELETE FROM hainei_auth_challenges
+    WHERE expires_at <= ? OR (used_at IS NOT NULL AND used_at <= ?)
+  `).bind(now, now - 3600).run().catch(() => {});
   const challenge = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
   const expiresAt = now + integerSetting(env.AUTH_CHALLENGE_TTL_SECONDS, 300, 60, 600);
   await env.DB.prepare(`
@@ -97,6 +103,9 @@ export async function verifyAndConsumeChallenge(
     if (methods.length !== 1 || methods[0]?.toUpperCase() !== expectedMethod) throw new HttpError(401, "auth_method_mismatch");
     if (payloads.length !== 1 || payloads[0] !== expectedPayload) throw new HttpError(401, "auth_payload_mismatch");
   }
+
+  const authLimit = integerSetting(env.AUTH_REQUESTS_PER_MINUTE_PER_PUBKEY, 120, 10, 2000);
+  await consumeRateLimit(env, `auth:${expectedAction}:${event.pubkey}`, authLimit, 60, now);
 
   const challengeHash = await sha256(challenge);
   const record = await env.DB.prepare(`
