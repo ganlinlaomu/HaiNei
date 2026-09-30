@@ -16,6 +16,7 @@ export const ACCOUNT_STATE_NAMESPACES: AccountStateNamespace[] = [
 ];
 const ACCOUNT_STATE_ACTION = "hainei_account_state";
 const SCHEMA_VERSION = 1;
+export const ACCOUNT_STATE_REQUEST_TIMEOUT_MS = 10_000;
 
 export type AccountStateEnvelope = {
   schemaVersion: number;
@@ -50,24 +51,45 @@ async function responseJson(response: Response) {
 }
 
 async function authenticatedPost(keys: AccountStateKeys, path: string, payload: Record<string, unknown>) {
-  const challengeResponse = await fetch(`${baseUrl()}/api/auth/challenge`, { method: "POST" });
-  const challengeBody = await responseJson(challengeResponse);
-  const challenge = String(challengeBody?.challenge || "");
-  const url = `${baseUrl()}${path}`;
-  const event = await signWorkerRequest(keys.signEvent.bind(keys), keys.pkHex, {
-    action: ACCOUNT_STATE_ACTION,
-    challenge,
-    expiresAt: Number(challengeBody?.expiresAt || 0),
-    url,
-    method: "POST",
-    payload,
-    content: "Authorize HaiNei encrypted account state",
-  });
-  return responseJson(await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, challenge, event }),
-  }));
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, ACCOUNT_STATE_REQUEST_TIMEOUT_MS);
+  try {
+    const challengeResponse = await fetch(`${baseUrl()}/api/auth/challenge`, {
+      method: "POST",
+      signal: controller.signal,
+    });
+    const challengeBody = await responseJson(challengeResponse);
+    const challenge = String(challengeBody?.challenge || "");
+    const url = `${baseUrl()}${path}`;
+    const event = await signWorkerRequest(keys.signEvent.bind(keys), keys.pkHex, {
+      action: ACCOUNT_STATE_ACTION,
+      challenge,
+      expiresAt: Number(challengeBody?.expiresAt || 0),
+      url,
+      method: "POST",
+      payload,
+      content: "Authorize HaiNei encrypted account state",
+    });
+    return responseJson(await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, challenge, event }),
+    }));
+  } catch (error) {
+    if (timedOut || (error instanceof DOMException && error.name === "AbortError")) {
+      const timeout = new Error("account_state_timeout") as Error & { code?: string };
+      timeout.code = "ACCOUNT_STATE_TIMEOUT";
+      throw timeout;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function controlTuple(record: FriendshipRecord) {
