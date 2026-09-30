@@ -148,7 +148,10 @@ export class MessageSyncManager {
     if (!isCurrent()) return;
 
     let state = await this.repository.getSyncState(accountPubkey);
-    if (!state.historyBackfillCompletedAt && !state.historyBackfillStartedAt && localMessages.length === 0) {
+    // Existing local messages do not prove that older Relay history was ever
+    // repaired. Upgraded devices without explicit completion state must enter
+    // the same bounded repair flow as a fresh installation.
+    if (!state.historyBackfillCompletedAt && !state.historyBackfillStartedAt) {
       state = await this.repository.updateSyncState(accountPubkey, { historyBackfillStartedAt: this.now() });
     }
     const nowSeconds = Math.floor(this.now() / 1000);
@@ -249,9 +252,12 @@ export class MessageSyncManager {
           : localHighWatermark
             ? calculateCatchupSince(localHighWatermark, nowSeconds)
             : nowSeconds;
-        const filters = buildMessageSubscriptions(options.accountPubkey, options.authors, since, nowSeconds)
+        const until = freshHistoryRepair
+          ? Math.min(state.historyBackfillUntil ?? nowSeconds, nowSeconds)
+          : nowSeconds;
+        const filters = buildMessageSubscriptions(options.accountPubkey, options.authors, since, until)
           .map(filter => ({ ...filter, limit: 500 }));
-        logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} session=${sessionId} phase=${activeSource} since=${since} until=${nowSeconds}`);
+        logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} session=${sessionId} phase=${activeSource} since=${since} until=${until}`);
         const result = await runPagedCatchup({
           relays,
           filters,
@@ -284,17 +290,27 @@ export class MessageSyncManager {
               .sort()
               .join("|")
           : currentRelaySignature;
+        const resumableHistoryCursor = freshHistoryRepair
+          && !result.incomplete
+          && result.hitMaxBatches
+          && typeof result.nextUntil === "number"
+          && result.nextUntil <= until
+            ? result.nextUntil
+            : undefined;
         await this.repository.updateSyncState(options.accountPubkey, {
           lastSuccessfulSyncAt: completedAt,
           lastCatchupCompletedAt: completedAt,
           ...(completedFreshHistory
             ? {
                 historyBackfillCompletedAt: completedAt,
+                historyBackfillUntil: undefined,
                 historyBackfillRelaySignature: currentRelaySignature
               }
-            : completedRelaySetUpdate
-              ? { historyBackfillRelaySignature: completedRelaySignature }
-              : {})
+            : resumableHistoryCursor !== undefined
+              ? { historyBackfillUntil: resumableHistoryCursor }
+              : completedRelaySetUpdate
+                ? { historyBackfillRelaySignature: completedRelaySignature }
+                : {})
         });
         for (const completedRelay of result.completedRelays) {
           await this.repository.updateRelayState(options.accountPubkey, completedRelay, {
