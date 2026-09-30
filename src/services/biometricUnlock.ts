@@ -230,15 +230,15 @@ export async function enrollBiometricUnlock(pubkey: string, skHex: string) {
 
 export async function unlockPrivateKeyWithBiometric(pubkey: string) {
   const record = readRecord(pubkey);
-  if (!record) throw new Error("尚未启用 Face ID 登录");
+  if (!record) throw new Error("尚未启用通行密钥登录");
   const rpId = currentRpId();
-  if (!rpId || record.rpId !== rpId) throw new Error("Face ID 登录只可在原绑定地址使用");
+  if (!rpId || record.rpId !== rpId) throw new Error("通行密钥登录只可在原绑定地址使用");
   const salt = new Uint8Array(copyBuffer(base64UrlToBytes(record.prfSalt)));
   const secret = await evaluatePrf(record.credentialId, salt, rpId);
   try {
     return await decryptPrivateKey(record, secret);
   } catch {
-    throw new Error("Face ID 解锁数据失败，请使用本地密码登录");
+    throw new Error("通行密钥解锁数据失败，请使用本地密码登录");
   }
 }
 
