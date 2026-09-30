@@ -29,10 +29,15 @@ export class OutgoingQueueRepository {
 
   async listRetryable(accountPubkey: string, includeFailed = false, now = Date.now()) {
     const records = await this.list(accountPubkey);
-    return records.filter(record =>
-      record.state === "pending" || record.state === "sending" || record.state === "waiting_network" ||
-      (includeFailed && record.state === "failed")
-    ).filter(record => includeFailed || !record.nextAttemptAt || record.nextAttemptAt <= now);
+    return records.filter(record => {
+      if (record.state === "sent") {
+        return record.pushState === "pending" && (record.pushExpiresAt || 0) > now;
+      }
+      return (
+        record.state === "pending" || record.state === "sending" || record.state === "waiting_network" ||
+        (includeFailed && record.state === "failed")
+      ) && (includeFailed || !record.nextAttemptAt || record.nextAttemptAt <= now);
+    });
   }
 }
 

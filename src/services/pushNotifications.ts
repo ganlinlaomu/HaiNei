@@ -266,3 +266,17 @@ export async function triggerGenericPush(
     ...(messageId ? { messageId } : {}),
   }, pubkey, signEvent);
 }
+
+export async function testPushNotification(pubkey: string, signEvent: SignEvent) {
+  if (!supportsPushNotifications() || Notification.permission !== "granted") {
+    throw new Error("请先开启本机推送权限");
+  }
+  const registration = await withTimeout(navigator.serviceWorker.ready, SERVICE_WORKER_TIMEOUT_MS, "service worker 未就绪");
+  const subscription = await withTimeout(registration.pushManager.getSubscription(), PUSH_SUBSCRIBE_TIMEOUT_MS, "读取本机推送订阅超时");
+  if (!subscription) throw new Error("本机推送订阅已失效，请重新开启推送");
+  const result = await authenticatedPost("/api/push/test", { endpoint: subscription.endpoint }, pubkey, signEvent);
+  if (!result?.subscriptionsFound) throw new Error("服务器没有本机的推送订阅，请重新开启推送");
+  if (result.expired) throw new Error("系统推送订阅已过期，请重新开启推送");
+  if (!result.sent) throw new Error("推送服务发送失败，请检查 Worker 日志中的 VAPID 或推送服务响应");
+  return "系统推送服务已接受测试通知；请确认本机是否弹出提醒。此结果不代表通知已经显示。";
+}

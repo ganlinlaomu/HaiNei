@@ -8,6 +8,7 @@ vi.mock("@/services/nostrClient", () => ({ nostrClient: { publish } }));
 vi.mock("@/services/pushNotifications", () => ({ triggerGenericPush: triggerPush }));
 
 import {
+  cancelOutgoingWorkForAccount,
   publishQueuedOutgoing,
   registerOutgoingPushSigner,
   retryFailedOutgoing,
@@ -27,6 +28,8 @@ function queued(accountPubkey = ACCOUNT, outgoingId = "logical-1", state: Outgoi
 }
 
 beforeEach(async () => {
+  cancelOutgoingWorkForAccount(ACCOUNT);
+  cancelOutgoingWorkForAccount(OTHER);
   publish.mockReset().mockResolvedValue([{ relay: "wss://relay.test", ok: true, ts: 1 }]);
   triggerPush.mockReset().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { onLine: true });
@@ -40,6 +43,35 @@ describe("durable outgoing queue", () => {
     registerOutgoingPushSigner(ACCOUNT, signer);
     await publishQueuedOutgoing(ACCOUNT, "logical-1", "message");
     expect(triggerPush).toHaveBeenCalledWith([OTHER], ACCOUNT, signer, "message", "logical-1");
+  });
+
+  it("persists failed push work and retries after reopening without republishing the DM", async () => {
+    await outgoingQueueRepository.putIfAbsent(queued());
+    registerOutgoingPushSigner(ACCOUNT, vi.fn());
+    triggerPush.mockRejectedValueOnce(new Error("network lost"));
+    await publishQueuedOutgoing(ACCOUNT, "logical-1");
+    expect(await outgoingQueueRepository.get(ACCOUNT, "logical-1")).toMatchObject({ state: "sent", pushState: "pending" });
+    cancelOutgoingWorkForAccount(ACCOUNT);
+    db.close();
+    await db.open();
+    registerOutgoingPushSigner(ACCOUNT, vi.fn());
+    await outgoingQueueRepository.update(ACCOUNT, "logical-1", { pushNextAttemptAt: 0 });
+    await retryOutgoingQueue(ACCOUNT);
+    expect(publish).toHaveBeenCalledOnce();
+    expect(triggerPush).toHaveBeenCalledTimes(2);
+    expect(await outgoingQueueRepository.get(ACCOUNT, "logical-1")).toMatchObject({ state: "sent", pushState: "accepted" });
+    await retryOutgoingQueue(ACCOUNT);
+    expect(triggerPush).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers a push interrupted after relay acknowledgement and ignores historical sent messages", async () => {
+    await outgoingQueueRepository.putIfAbsent(queued(ACCOUNT, "old", "sent"));
+    await outgoingQueueRepository.putIfAbsent({ ...queued(ACCOUNT, "interrupted", "sent"), pushState: "pending", pushExpiresAt: Date.now() + 60_000 });
+    registerOutgoingPushSigner(ACCOUNT, vi.fn());
+    await retryOutgoingQueue(ACCOUNT);
+    expect(publish).not.toHaveBeenCalled();
+    expect(triggerPush).toHaveBeenCalledOnce();
+    expect(triggerPush.mock.calls[0][4]).toBe("interrupted");
   });
 
   it("is durable before publish and does not duplicate a concurrent logical retry", async () => {

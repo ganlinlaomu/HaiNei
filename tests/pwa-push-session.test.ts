@@ -61,6 +61,34 @@ function watchApp(keys: { pkHex: string; isUnlocked: boolean; isRestored: boolea
 }
 
 describe("PWA push across account lock and restore", () => {
+  it("routes push to the selected account even when the badge API rejects", async () => {
+    const worker = harness();
+    await syncAppBadge(0, worker.target, OTHER);
+    await worker.settle();
+    worker.target.clearAppBadge.mockRejectedValue(new Error("badge denied"));
+    await syncAppBadge(0, worker.target, ACCOUNT);
+    await worker.settle();
+    worker.push({ accountScope: await scope(ACCOUNT), notificationId: "badge-failure" });
+    await worker.settle();
+    expect(worker.showNotification).toHaveBeenCalledOnce();
+  });
+
+  it("allows redelivery after showNotification rejects and deduplicates only successful displays", async () => {
+    const worker = harness();
+    await syncAppBadge(0, worker.target, ACCOUNT);
+    await worker.settle();
+    const payload = { accountScope: await scope(ACCOUNT), notificationId: "retry-display" };
+    worker.showNotification.mockRejectedValueOnce(new Error("display failed"));
+    worker.push(payload);
+    await expect(worker.settle()).rejects.toThrow("display failed");
+    worker.push(payload);
+    await worker.settle();
+    expect(worker.showNotification).toHaveBeenCalledTimes(2);
+    worker.push(payload);
+    await worker.settle();
+    expect(worker.showNotification).toHaveBeenCalledTimes(2);
+  });
+
   it("still shows the generic push while the remembered account is locked", async () => {
     const worker = harness();
     const keys = reactive({ pkHex: ACCOUNT, isUnlocked: true, isRestored: true });

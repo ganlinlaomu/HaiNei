@@ -168,6 +168,11 @@ export type OutgoingQueueRecord = {
   events: unknown[];
   relays: string[];
   relayResults?: unknown[];
+  // Separate from relay delivery so a suspended PWA can retry the push request.
+  pushState?: "pending" | "accepted";
+  pushAttempts?: number;
+  pushNextAttemptAt?: number;
+  pushExpiresAt?: number;
   attempts: number;
   nextAttemptAt?: number;
   lastError?: string;

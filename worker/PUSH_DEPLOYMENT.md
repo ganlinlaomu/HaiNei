@@ -51,7 +51,7 @@ npm exec wrangler -- d1 execute DB --remote --config worker/wrangler.toml \
   --command "SELECT COUNT(*) AS subscription_count FROM hainei_push_subscriptions; SELECT COUNT(*) AS authorization_count FROM hainei_push_authorizations"
 ```
 
-从另一已接受好友账号发送一条私信，确认 `/api/push/trigger` 只返回通用 `202 { "accepted": true }`，不会暴露收件人是否有订阅；后台实际投递必须要求该 sender 仍在收件人的授权表中，并按 canonical message id 去重。系统通知严格只有：
+从另一已接受好友账号发送一条私信，确认 `/api/push/trigger` 正常时返回通用 `202 { "accepted": true }`，发送失败时返回 `503 { "error": "push_delivery_failed" }` 供发送端重试，不返回收件人订阅数或设备信息；后台实际投递必须要求该 sender 仍在收件人的授权表中，并按 canonical message id 去重。系统通知严格只有：
 
 ```text
 HaiNei
@@ -66,3 +66,16 @@ HaiNei
 本批次是“数据库迁移先行”的兼容升级。若 Worker 部署后需要回滚前端，可保留 `0004` 新表；旧前端不会读取这些表。不要在回滚时删除 `hainei_push_authorizations` / `hainei_push_deliveries` / `hainei_rate_limits`，以免正在运行的新 Worker 实例出现表缺失。
 
 若只回滚 Worker，则应同时暂停新前端部署，因为新前端的请求签名包含 `u` / `method` / `payload` 绑定标签，并会调用 `/api/push/policy`。
+
+## 6. 本机推送测试与故障恢复
+
+Pages 自动发布不会部署 `worker/`。本次修复增加 `/api/push/test`，必须另外运行第 2 节的 Worker 部署命令；已有迁移无需新增表，保持现有 VAPID 密钥不变。
+
+在已安装的 PWA 中打开“系统设置 → 后台推送 → 测试本机推送”。测试请求使用当前账号签名，只能向该账号已登记的本机 endpoint 发送，不需要自己成为自己的好友。结果区分订阅不存在、订阅已过期、发送失败和系统推送服务已接受。最后一种结果仍需以本机实际显示通知为准。
+
+- 若显示 Worker 尚未部署：部署最新 Worker，不能只更新 Pages。
+- 若订阅不存在或过期：关闭再开启推送，重新登记本机订阅。
+- 若发送失败：使用 `npm exec wrangler -- tail --config worker/wrangler.toml` 查看推送供应商状态码；日志不会包含完整 endpoint、订阅密钥或 VAPID 私钥。
+- 若测试可显示而好友私信没有提醒：让发送端也更新前端，然后检查接收账号 `/api/push/policy` 是否已同步该 accepted 好友。
+
+发送端现在将推送请求单独持久化。请求失败、网络断开或 PWA 被挂起后，在解锁恢复或联网时重试，退避最长 15 分钟、有效期 24 小时；不会重新发布已经发送的私信，也不会补发修复前历史消息的提醒。Worker 已接受的请求不再重试；供应商接受也不等同于设备已显示通知。
