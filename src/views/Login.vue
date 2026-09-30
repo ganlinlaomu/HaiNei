@@ -63,8 +63,10 @@
               <strong>{{ shortPubkey(account.pubkey) }}</strong>
               <small>{{ account.hasEncryptedKey ? "私钥 · 已加密保存" : "私钥 · 需重新输入" }}</small>
             </button>
-            <button type="button" class="remove-account" :disabled="loading" @click="removeAccount(account.pubkey)">忘记此账号</button>
-            <button type="button" class="remove-account" :disabled="loading" @click="deleteDeviceData(account.pubkey)">删除本机资料</button>
+            <div class="account-device-actions">
+              <button type="button" class="account-device-action" :disabled="loading" @click="removeAccount(account.pubkey)">忘记此账号</button>
+              <button type="button" class="account-device-action account-device-action-danger" :disabled="loading" @click="deleteDeviceData(account.pubkey)">删除本机资料</button>
+            </div>
           </div>
         </div>
 
@@ -395,7 +397,7 @@ async function selectAccount(pubkey: string) {
 }
 
 async function deleteDeviceData(pubkey: string) {
-  if (loading.value || !window.confirm("删除此账号在本机的私信、草稿、待发消息、缓存和解锁设置？其他账号及云端资料不会被删除。本机未发送的草稿无法恢复。")) return;
+  if (loading.value || !window.confirm("删除此账号的全部本机资料？将清除本机私信、草稿、待发消息、缓存和登录凭证；不会删除其他账号或任何远端内容。此操作无法恢复。")) return;
   loading.value = true;
   try { await ks.deleteAccountDeviceData(pubkey); }
   catch { errorMessage.value = "本机资料删除失败，请重试"; }
@@ -403,7 +405,7 @@ async function deleteDeviceData(pubkey: string) {
 }
 
 async function removeAccount(pubkey: string) {
-  if (loading.value || !window.confirm("只从此设备移除该账号？账号数据不会被删除。")) return;
+  if (loading.value || !window.confirm("忘记此账号？将移除本机保存的登录凭证，但保留本机历史数据。以后重新输入私钥后仍可继续使用这些历史。")) return;
   loading.value = true;
   try {
     await ks.removeAccountFromDevice(pubkey);
@@ -623,11 +625,15 @@ async function switchAccount() {
 .account-picker { display: grid; gap: 8px; margin-bottom: 10px; }
 .picker-title { margin: 0 0 2px; color: #8d99aa; font-size: .78rem; }
 .account-mode-title{margin-top:2px;margin-bottom:0;text-align:center}
-.account-option { display: grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; border:1px solid #293445; border-radius:12px; overflow:hidden; }
+.account-option { display:grid; border:1px solid #293445; border-radius:12px; overflow:hidden; }
 .account-select { display:grid; min-width:0; gap:4px; padding:11px 12px; border:0; background:transparent; color:#d8dee9; text-align:left; cursor:pointer; }
 .account-select strong { overflow:hidden; font: .82rem ui-monospace,SFMono-Regular,Menlo,monospace; text-overflow:ellipsis; white-space:nowrap; }
 .account-select small { color:#748095; font-size:.72rem; }
-.remove-account { align-self:stretch; padding:0 10px; border:0; border-left:1px solid #293445; background:transparent; color:#a87878; font-size:.72rem; cursor:pointer; }
+.account-device-actions{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid #293445}
+.account-device-action{min-height:40px;padding:0 10px;border:0;background:#0d141d;color:#8d99aa;font-size:.72rem;cursor:pointer}
+.account-device-action+.account-device-action{border-left:1px solid #293445}
+.account-device-action-danger{color:#d28f8f}
+.account-device-action:disabled{cursor:not-allowed;opacity:.55}
 .private-login { margin-top:4px; padding-top:18px; border-top:1px solid #252e3c; }
 .registration-panel { display:grid; gap:14px; }
 .registration-title { margin:0; color:#cbd2dd; font-size:1rem; font-weight:600; }
