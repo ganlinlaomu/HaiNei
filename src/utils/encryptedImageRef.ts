@@ -1,4 +1,4 @@
-import { validEncryptedMedia } from "./mediaSafety";
+import { hasOnlyObjectKeys, validEncryptedMedia } from "./mediaSafety";
 import { bytesToBase64, base64ToBytes } from "@/nostr/crypto";
 
 /**
@@ -19,9 +19,12 @@ export interface EncryptedImageMetadata extends EncryptedImageVariant {
   preview?: EncryptedImageVariant;
 }
 
+const IMAGE_VARIANT_KEYS = ["url", "mime", "alg", "iv", "key", "width", "height"] as const;
+const IMAGE_METADATA_KEYS = ["v", ...IMAGE_VARIANT_KEYS, "preview"] as const;
+
 function isVariant(value: unknown): value is EncryptedImageVariant {
   const item = value as Partial<EncryptedImageVariant> | null;
-  return validEncryptedMedia(item);
+  return hasOnlyObjectKeys(item, IMAGE_VARIANT_KEYS) && validEncryptedMedia(item);
 }
 
 export function variantToEncryptedImageRef(variant: EncryptedImageVariant): string {
@@ -57,7 +60,8 @@ export function decodeEncryptedImageRef(ref: string): EncryptedImageMetadata | n
     // Basic validation
     if (
       (metadata.v !== 1 && metadata.v !== 2) ||
-      !isVariant(metadata) ||
+      !hasOnlyObjectKeys(metadata, IMAGE_METADATA_KEYS) ||
+      !isVariant(Object.fromEntries(Object.entries(metadata).filter(([key]) => key !== "v" && key !== "preview"))) ||
       (metadata.preview !== undefined && !isVariant(metadata.preview))
     ) {
       console.error("Invalid encrypted image metadata", { reason: "schema_validation_failed" });
