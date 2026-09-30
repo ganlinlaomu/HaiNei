@@ -502,7 +502,7 @@ export async function triggerGenericPush(
         message: safePushErrorMessage(error, [row.endpoint, row.p256dh, row.auth, config.privateKey]),
       });
     }
-  }));
+  });
 
   if ((now & 63) === 0) {
     void env.DB.prepare("DELETE FROM hainei_push_deliveries WHERE updated_at <= ?")
