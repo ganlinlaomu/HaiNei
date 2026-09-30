@@ -8,6 +8,7 @@ import {
   GENERIC_PUSH_PAYLOAD,
   MESSAGE_PUSH_PAYLOAD,
   pushPayloadForType,
+  replacePushAuthorizationPolicy,
   sanitizePushRecipients,
   triggerGenericPush,
 } from "../worker/src/push";
@@ -467,6 +468,22 @@ describe("privacy-preserving push and badge", () => {
       requested: 1, subscriptionsFound: 0, sent: 0, failed: 0, expired: 0,
     });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("lets the recipient revoke a previously authorized sender immediately", async () => {
+    const db = new PushD1();
+    addSubscription(db);
+    const send = vi.fn().mockResolvedValue(new Response(null, { status: 201 }));
+    vi.stubGlobal("fetch", send);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await replacePushAuthorizationPolicy(pushEnv(db), OTHER, [ACCOUNT]);
+    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", MESSAGE_ID);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    await replacePushAuthorizationPolicy(pushEnv(db), OTHER, []);
+    await triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", SECOND_MESSAGE_ID);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("deduplicates the same canonical message push", async () => {
