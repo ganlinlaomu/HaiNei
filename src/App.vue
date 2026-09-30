@@ -52,7 +52,7 @@
 
 <script lang="ts">
 import { computed, defineAsyncComponent, defineComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import HeaderBar from "@/components/HeaderBar.vue";
 import ToastContainer from "@/components/ToastContainer.vue";
 import UpdateNotification from "@/components/UpdateNotification.vue";
@@ -65,6 +65,7 @@ import { preloadBottomTabViews } from "@/router/lazyViews";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useDirectMessagesStore } from "@/stores/directMessages";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
+import { installBackgroundLock } from "@/services/autoLock";
 import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
@@ -73,6 +74,8 @@ export default defineComponent({
   components: { HeaderBar, ToastContainer, PostEditorModal, UpdateNotification, AndroidUpdateNotification },
   setup() {
     const route = useRoute();
+    const router = useRouter();
+    let stopAutoLock: (() => void) | undefined;
     const ui = useUIStore();
     const keys = useKeyStore();
     const notifications = useNotificationsStore();
@@ -188,12 +191,14 @@ export default defineComponent({
       { immediate: true }
     );
     onMounted(() => {
+      stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked,lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
       document.addEventListener("visibilitychange", reconcileFriendStateOnForeground);
       window.addEventListener("pageshow", reconcileFriendStateOnForeground);
       window.addEventListener("online", reconcileFriendStateOnForeground);
     });
     onBeforeUnmount(() => {
+      stopAutoLock?.();
       document.removeEventListener("visibilitychange", reconcileFriendStateOnForeground);
       window.removeEventListener("pageshow", reconcileFriendStateOnForeground);
       window.removeEventListener("online", reconcileFriendStateOnForeground);
