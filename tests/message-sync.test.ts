@@ -516,6 +516,10 @@ describe("message sync session", () => {
       decodeContext: { accountPubkey: ACCOUNT_A },
     });
     expect(subscriptions.filter(item => item.filters.every(filter => filter.until === undefined))).toHaveLength(1);
+    // start() intentionally restores the configured Relay set once. Measure
+    // only the foreground lifecycle burst below.
+    resumeRelays.mockClear();
+    retryOutgoing.mockClear();
 
     windowHandlers.get("focus")?.();
     windowHandlers.get("pageshow")?.();
@@ -527,6 +531,9 @@ describe("message sync session", () => {
     for (let attempt = 0; attempt < 20 && subscriptions.length < 3; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
     expect(subscriptions).toHaveLength(3);
     expect(subscriptions.filter(item => item.filters.every(filter => filter.until === undefined))).toHaveLength(1);
+    for (let attempt = 0; attempt < 20 && (await repo.getSyncState(ACCOUNT_A)).status !== "live"; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
     manager.stop();
     Reflect.deleteProperty(globalThis, "document");
     Reflect.deleteProperty(globalThis, "window");

@@ -95,6 +95,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   const notifications = useNotificationsStore();
   const messages = useMessagesStore();
   const directMessages = useDirectMessagesStore();
+  directMessages.beginUnreadHydration(account);
   const accepted = friendships.records
     .filter(record => record.state === "accepted")
     .map(record => record.peerPubkey);
@@ -185,6 +186,11 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       },
       onStatus: status => {
         setAccountMessageSyncStatus(account, status);
+        if (status === "live") {
+          void directMessages.finishUnreadHydration(account).catch(error => {
+            console.warn("[dm] startup unread reconciliation failed", error instanceof Error ? error.message : "unknown");
+          });
+        }
         if (status !== "live" || friendshipHistoryComplete) return;
         void syncedMessageRepository.getSyncState(account).then(state => {
           if (activeKeys?.pkHex.toLowerCase() !== account || !state.historyBackfillCompletedAt) return;
@@ -197,7 +203,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
     });
     return true;
   } catch (error) {
-    if (activeKeys?.pkHex.toLowerCase() === account) setAccountMessageSyncStatus(account, "error");
+    if (activeKeys?.pkHex.toLowerCase() === account) {
+      setAccountMessageSyncStatus(account, "error");
+      void directMessages.finishUnreadHydration(account).catch(() => undefined);
+    }
     throw error;
   }
 }

@@ -135,6 +135,24 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it("keeps unread stable while startup Relay history is hydrating", async () => {
+    const context = seed([dm("first", 5)], relationship("accepted"));
+    await context.direct.refresh(ACCOUNT);
+    expect(context.direct.unreadCount).toBe(1);
+
+    context.direct.beginUnreadHydration(ACCOUNT);
+    context.messageStore.addInbox(dm("history", 6));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(context.direct.unreadCount).toBe(1);
+    const reconcile = vi.spyOn(context.direct, "reconcileDurableUnread").mockResolvedValue(undefined);
+    reconcile.mockClear();
+    await context.direct.finishUnreadHydration(ACCOUNT);
+    expect(reconcile).toHaveBeenCalled();
+    expect(context.direct.unreadHydratingFor).toBe("");
+  });
+
   it("keeps a read made while background refresh is restoring an older cursor", async () => {
     const context = seed([dm("latest", 20)], relationship("accepted"));
     await context.direct.refresh(ACCOUNT);
