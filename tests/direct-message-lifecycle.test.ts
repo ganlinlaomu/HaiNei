@@ -134,6 +134,26 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it("never rewinds a restored read cursor when a new device has only older local history", async () => {
+    const context = seed([dm("local-10", 10)], relationship("accepted"));
+    await context.direct.refresh(ACCOUNT);
+
+    const restored = { lastReadCreatedAt: 20, lastReadMessageId: "remote-20" };
+    context.direct.readCursors = { [CONVERSATION]: restored };
+    context.direct.unreadByConversation = { [CONVERSATION]: 151 };
+
+    await context.direct.markPeerRead(PEER);
+
+    expect(context.direct.readCursors[CONVERSATION]).toEqual(restored);
+    expect(context.direct.unreadCount).toBe(0);
+    expect(mocks.meta.get(`${ACCOUNT}:dm-read:${CONVERSATION}`)).toEqual(restored);
+
+    // Historical backfill that is still before the restored cursor must stay read.
+    context.messageStore.addInbox(dm("backfill-15", 15));
+    await vi.waitFor(() => expect(context.direct.unreadCount).toBe(0));
+    expect(context.direct.readCursors[CONVERSATION]).toEqual(restored);
+  });
+
   it("recomputes authorization-derived unread in memory when friendship state changes", async () => {
     const context = seed([dm("historical", 5), dm("blocked", 20)], relationship("removed", 10));
     await context.direct.refresh(ACCOUNT);
