@@ -4,6 +4,7 @@ import { decodeEncryptedImageRef, encodeEncryptedImageRef } from "@/utils/encryp
 import { encryptImageBytes } from "@/utils/imageCrypto";
 import { getImageFromCache, storeImageInCache } from "@/utils/imageCache";
 import { resizeImageFile } from "@/utils/imageResize";
+import { downloadMedia } from "@/utils/mediaSafety";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
 
 export async function uploadPrivateProfileAvatar(
@@ -33,19 +34,20 @@ export async function uploadPrivateProfileAvatar(
   return reference;
 }
 
-export async function loadPrivateProfileAvatar(accountPubkey: string, reference: string) {
+export async function loadPrivateProfileAvatar(accountPubkey: string, reference: string, signal?: AbortSignal) {
   const cached = await getImageFromCache(accountPubkey, reference);
   if (cached) return cached.blob;
   const metadata = decodeEncryptedImageRef(reference);
-  if (!metadata) throw new Error("头像引用无效");
-  const response = await fetch(metadata.url);
-  if (!response.ok) throw new Error(`头像下载失败 (${response.status})`);
+  if (!metadata || !metadata.mime.startsWith("image/")) throw new Error("头像引用无效");
+  const encryptedBytes = await downloadMedia(metadata.url, 16 * 1024 * 1024, signal);
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
   const decrypted = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },
     key,
-    await response.arrayBuffer()
+    encryptedBytes
   );
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   const blob = new Blob([decrypted], { type: metadata.mime });
   await storeImageInCache(accountPubkey, reference, blob, metadata.mime);
   return blob;
