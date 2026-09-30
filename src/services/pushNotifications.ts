@@ -11,8 +11,24 @@ const FETCH_TIMEOUT_MS = 15_000;
 type SignEvent = (event: EventTemplate) => Promise<VerifiedEvent>;
 export type PushCategory = "message" | "activity";
 
+export const DEFAULT_HAINEI_WORKER_URL = "https://hainei-media.noster.workers.dev";
+
+export function resolvePushWorkerBaseUrl(
+  configuredUrl: string | undefined,
+  pageOrigin: string,
+  isProduction: boolean,
+) {
+  const configured = String(configuredUrl || "").trim();
+  const fallback = isProduction ? DEFAULT_HAINEI_WORKER_URL : pageOrigin;
+  return String(configured || fallback).trim().replace(/\/+$/, "");
+}
+
 function baseUrl() {
-  return String(import.meta.env.VITE_HAINEI_WORKER_URL || window.location.origin).trim().replace(/\/+$/, "");
+  return resolvePushWorkerBaseUrl(
+    import.meta.env.VITE_HAINEI_WORKER_URL,
+    window.location.origin,
+    import.meta.env.PROD,
+  );
 }
 
 async function responseJson(response: Response, fallback: string) {
