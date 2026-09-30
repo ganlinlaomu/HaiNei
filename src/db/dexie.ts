@@ -98,6 +98,8 @@ export type MessageSyncStateRecord = {
   historyBackfillStartedAt?: number;
   /** Marks completion of the bounded, one-time history repair for this device. */
   historyBackfillCompletedAt?: number;
+  /** Oldest gift-wrap timestamp reached by an incomplete bounded history repair. */
+  historyBackfillUntil?: number;
   historyBackfillRelaySignature?: string;
   highWatermarkCreatedAt?: number;
   lastRealtimeConnectedAt?: number;

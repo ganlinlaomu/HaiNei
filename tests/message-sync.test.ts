@@ -712,3 +712,139 @@ describe("message sync session", () => {
     manager.stop();
   });
 });
+
+
+describe("P0 resumable history repair", () => {
+  it("starts full bounded repair on an upgraded device even when local messages already exist", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const nowMs = 1_900_000_000_000;
+    await repo.insertMessageIfAbsent(ACCOUNT_A, message("legacy-local", Math.floor(nowMs / 1000) - 60), nowMs);
+
+    const subscriptions: Array<{ filters: any[] }> = [];
+    const subscribeFake = (_relays: string[], filters: any[]) => {
+      subscriptions.push({ filters });
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          if (name === "eose" && filters.some(filter => filter.until !== undefined)) {
+            queueMicrotask(() => callback("wss://a"));
+          }
+        },
+        unsub() {},
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => nowMs,
+    });
+
+    await manager.start({
+      accountPubkey: ACCOUNT_A,
+      relays: ["wss://a"],
+      authors: [PEER, ACCOUNT_A],
+      decodeContext: { accountPubkey: ACCOUNT_A },
+    });
+
+    const history = subscriptions.find(item => item.filters.some(filter => filter.until !== undefined));
+    expect(history?.filters[0].since).toBe(0);
+    const state = await repo.getSyncState(ACCOUNT_A);
+    expect(state.historyBackfillStartedAt).toBe(nowMs);
+    expect(state.historyBackfillCompletedAt).toBe(nowMs);
+    manager.stop();
+  });
+
+  it("persists the oldest safe boundary after a bounded run and resumes there next session", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const nowMs = 1_900_000_000_000;
+    const nowSeconds = Math.floor(nowMs / 1000);
+    let historyPage = 0;
+    const firstHistoryUntils: number[] = [];
+
+    const firstSubscribe = (_relays: string[], filters: any[]) => {
+      const historical = filters.some(filter => filter.until !== undefined);
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      if (historical) firstHistoryUntils.push(filters[0].until);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name !== "eose" || !historical) return;
+          queueMicrotask(() => {
+            const until = Number(filters[0].until);
+            const page = historyPage++;
+            for (let index = 0; index < 500; index++) {
+              const createdAt = until - index - 1;
+              const event = {
+                id: `wrap-${page}-${index}`,
+                pubkey: PEER,
+                created_at: createdAt,
+                kind: 1059,
+                tags: [["p", ACCOUNT_A]],
+                content: "",
+                sig: "0".repeat(128),
+              };
+              handlers.event?.forEach(handler => handler(event, "wss://a"));
+            }
+            callback("wss://a");
+          });
+        },
+        unsub() {},
+      };
+    };
+
+    const first = new MessageSyncManager({
+      repository: repo,
+      subscribe: firstSubscribe,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      decode: async () => null,
+      now: () => nowMs,
+    });
+    await first.start({
+      accountPubkey: ACCOUNT_A,
+      relays: ["wss://a"],
+      authors: [PEER, ACCOUNT_A],
+      decodeContext: { accountPubkey: ACCOUNT_A },
+    });
+    const partial = await repo.getSyncState(ACCOUNT_A);
+    expect(firstHistoryUntils).toHaveLength(4);
+    expect(partial.historyBackfillCompletedAt).toBeUndefined();
+    expect(partial.historyBackfillUntil).toBeLessThan(nowSeconds);
+    const resumeUntil = partial.historyBackfillUntil;
+    first.stop();
+
+    const secondHistoryUntils: number[] = [];
+    const secondSubscribe = (_relays: string[], filters: any[]) => {
+      const historical = filters.some(filter => filter.until !== undefined);
+      if (historical) secondHistoryUntils.push(filters[0].until);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          if (name === "eose" && historical) queueMicrotask(() => callback("wss://a"));
+        },
+        unsub() {},
+      };
+    };
+    const second = new MessageSyncManager({
+      repository: repo,
+      subscribe: secondSubscribe,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      decode: async () => null,
+      now: () => nowMs + 10_000,
+    });
+    await second.start({
+      accountPubkey: ACCOUNT_A,
+      relays: ["wss://a"],
+      authors: [PEER, ACCOUNT_A],
+      decodeContext: { accountPubkey: ACCOUNT_A },
+    });
+
+    expect(secondHistoryUntils[0]).toBe(resumeUntil);
+    expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillCompletedAt).toBe(nowMs + 10_000);
+    second.stop();
+  });
+});
