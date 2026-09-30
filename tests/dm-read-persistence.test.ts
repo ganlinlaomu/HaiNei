@@ -61,6 +61,20 @@ describe("reading paged DM history with an encrypted database", () => {
     expect(direct.scheduleReceipt).toHaveBeenCalledWith(PEER, "read", { createdAt: 151, messageId: item(151).id });
   });
 
+  it("never replaces the durable unread total with the bounded memory subset", async () => {
+    for (let i = 1; i <= 151; i++) await save(item(i));
+    const direct = await restore();
+    expect(direct.unreadCount).toBe(151);
+
+    // Home happens to hold only one historical message. The badge must still
+    // reflect all 151 durable unread messages after the same canonical event is
+    // applied to the UI.
+    useMessagesStore().inbox = [item(151)];
+    await direct.applyCanonicalMessage(ACCOUNT, item(151));
+
+    expect(direct.unreadCount).toBe(151);
+  });
+
   it("does not persist a sent optimistic task as the conversation read cursor", async () => {
     for (let i = 1; i <= 151; i++) await save(item(i));
     let direct = await restore();
