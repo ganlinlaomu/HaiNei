@@ -4,7 +4,7 @@
     <AndroidUpdateNotification />
     <HeaderBar v-if="!hideAppChrome" />
     <router-view v-slot="{ Component }">
-      <keep-alive :key="`${keys.pkHex}:${keys.sessionGeneration}:${keys.isUnlocked}`" :include="['Home', 'Friends', 'Conversations', 'Notifications', 'Settings']">
+      <keep-alive :key="`${keys.pkHex}:${keys.sessionGeneration}:${keys.isUnlocked}`" :include="['Home', 'Friends', 'Conversations', 'Notifications', 'Settings', 'SystemSettings']">
         <component :is="Component" />
       </keep-alive>
     </router-view>
