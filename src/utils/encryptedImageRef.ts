@@ -59,13 +59,13 @@ export function decodeEncryptedImageRef(ref: string): EncryptedImageMetadata | n
       !isVariant(metadata) ||
       (metadata.preview !== undefined && !isVariant(metadata.preview))
     ) {
-      console.error("Invalid encrypted image metadata:", metadata);
+      console.error("Invalid encrypted image metadata", { reason: "schema_validation_failed" });
       return null;
     }
     
     return metadata;
   } catch (e) {
-    console.error("Failed to decode encrypted image reference:", ref, e);
+    console.error("Failed to decode encrypted image reference", { reason: e instanceof Error ? e.name : "decode_failed" });
     return null;
   }
 }
