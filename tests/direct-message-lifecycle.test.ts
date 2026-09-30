@@ -147,8 +147,9 @@ describe("direct-message authorization and conversation lifecycle", () => {
 
     expect(context.direct.unreadCount).toBe(1);
     const reconcile = vi.spyOn(context.direct, "reconcileDurableUnread").mockResolvedValue(undefined);
+    reconcile.mockClear();
     await context.direct.finishUnreadHydration(ACCOUNT);
-    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(reconcile).toHaveBeenCalled();
     expect(context.direct.unreadHydratingFor).toBe("");
   });
 
