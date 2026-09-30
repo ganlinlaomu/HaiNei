@@ -564,9 +564,49 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       this.scheduleReceipt(peer, "delivered", { createdAt: message.createdAt, messageId: message.id });
     },
+    recomputeUnreadWithoutIndexedDb(conversationId?: string) {
+      // Degraded fallback for environments where IndexedDB is genuinely
+      // unavailable (including lightweight unit tests). Production PWA unread
+      // never uses this path.
+      const account = this.loadedFor;
+      if (!account) return;
+      const friendships = useFriendshipsStore();
+      const visible = useMessagesStore().inbox.filter(item => {
+        if (!isDirectMessageTags(item.tags)) return false;
+        const peer = directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account);
+        return !!peer && !this.preferencesByPeer[peer]?.hidden
+          && afterDeletion(item, this.preferencesByPeer[peer])
+          && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer));
+      });
+      const ids = conversationId
+        ? [conversationId]
+        : [...new Set(visible.map(item => item.conversationId).filter((value): value is string => !!value))];
+      const next = conversationId ? { ...this.unreadByConversation } : {} as Record<string, number>;
+      for (const id of ids) {
+        const conversation = visible.filter(item => item.conversationId === id);
+        const peer = conversation[0] && directMessagePeer({
+          senderPubkey: conversation[0].pubkey,
+          recipientPubkeys: conversation[0].recipientPubkeys || [],
+        }, account);
+        if (!conversation.length || !peer) {
+          delete next[id];
+          continue;
+        }
+        const read = this.readCursors[id];
+        next[id] = friendships.isAccepted(peer)
+          ? conversation.filter(item => item.pubkey !== account
+              && isMessageAfter({ id: item.id, createdAt: item.created_at }, read)).length
+          : 0;
+      }
+      this.unreadByConversation = next;
+    },
     async reconcileDurableUnread(conversationId?: string) {
       const account = this.loadedFor;
       if (!account) return;
+      if (typeof indexedDB === "undefined") {
+        this.recomputeUnreadWithoutIndexedDb(conversationId);
+        return;
+      }
       const messages = useMessagesStore();
       const friendships = useFriendshipsStore();
       const cursors = this.readCursors;
