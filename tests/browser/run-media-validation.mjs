@@ -103,5 +103,19 @@ try {
       sleep(500),
     ]);
   }
-  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  let cleanupError;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      rmSync(profile, { recursive: true, force: true });
+      cleanupError = undefined;
+      break;
+    } catch (error) {
+      cleanupError = error;
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(error?.code)) throw error;
+      await sleep(200);
+    }
+  }
+  if (cleanupError) {
+    console.warn(`Browser validation passed but Chrome profile cleanup was incomplete: ${cleanupError.code}`);
+  }
 }
