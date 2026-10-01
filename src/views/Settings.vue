@@ -12,7 +12,7 @@
         </button>
         <span><strong>{{ nickname }}</strong><span class="pubkey-row"><small>{{ shortPk }}</small><button class="copy-pubkey" type="button" aria-label="复制公钥" title="复制公钥" @click="copyPubkey"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button><button class="copy-pubkey" type="button" aria-label="打开我的二维码" title="打开我的二维码" @click="showMyQr = true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2v2h-2zM14 18h2v2h-2zM18 18h2v2h-2z"/></svg></button></span></span>
       </header>
-      <button class="top-level-row" type="button" @pointerdown="loadMyProfileView" @focus="loadMyProfileView" @click="openOwnProfile"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><strong>我的资料</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
+      <button class="top-level-row" type="button" @pointerdown="loadProfileView" @focus="loadProfileView" @click="openOwnProfile"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><strong>我的资料</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @pointerdown="loadSavedView" @focus="loadSavedView" @click="openSaved"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg></span><strong>已收藏</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @pointerdown="loadFriendsView" @focus="loadFriendsView" @click="openFriends"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 15.5a5 5 0 0 1 7 4.5"/></svg></span><strong>好友 / 好友分组</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @pointerdown="preloadSystemSettings" @focus="preloadSystemSettings" @click="openSystemSettings"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></span><strong>设置</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
@@ -29,7 +29,7 @@ import { useKeyStore } from "@/stores/keys";
 import { useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { pubkeyToNpub, shortNpub } from "@/utils/nostrQr";
-import { loadFriendsView, loadMyProfileView, loadSavedView, loadSystemSettingsView } from "@/router/lazyViews";
+import { loadFriendsView, loadProfileView, loadSavedView, loadSystemSettingsView } from "@/router/lazyViews";
 import { runAfterFirstPaint } from "@/utils/bottomTabActivation";
 
 const keyStore = useKeyStore();
@@ -52,8 +52,8 @@ function openSystemSettings() {
 }
 
 function openOwnProfile() {
-  void loadMyProfileView();
-  if (keyStore.pkHex) void router.push("/settings/profile");
+  void loadProfileView();
+  if (keyStore.pkHex) void router.push(`/profile/${keyStore.pkHex}`);
 }
 
 function openSaved() {
