@@ -64,20 +64,38 @@ describe("account-scoped repositories", () => {
     expect((await reloadedMessages.listLatest(ACCOUNT_B))[0].content).toBe("B private");
   });
 
-  it("isolates unread metadata and decrypted image blobs", async () => {
+  it("isolates unread metadata and sealed image-cache rows", async () => {
     const database = createDatabase();
     const meta = new MetaRepository(database);
     const images = new ImageCacheRepository(database);
 
     await meta.put(ACCOUNT_A, `unread:${PEER_C}`, 5);
     await meta.put(ACCOUNT_B, `unread:${PEER_C}`, 2);
-    await images.put(ACCOUNT_A, { url: "encrypted://same", blob: new Blob(["A"]), mime: "text/plain", timestamp: 1 });
-    await images.put(ACCOUNT_B, { url: "encrypted://same", blob: new Blob(["BB"]), mime: "text/plain", timestamp: 2 });
+    await images.put(ACCOUNT_A, {
+      url: "same-cache-id",
+      sealedBytes: new Uint8Array([1]).buffer,
+      iv: new Uint8Array(12).buffer,
+      mime: "image/jpeg",
+      size: 1,
+      timestamp: 1,
+      lastAccess: 1,
+      version: 1,
+    });
+    await images.put(ACCOUNT_B, {
+      url: "same-cache-id",
+      sealedBytes: new Uint8Array([2, 3]).buffer,
+      iv: new Uint8Array(12).buffer,
+      mime: "image/jpeg",
+      size: 2,
+      timestamp: 2,
+      lastAccess: 2,
+      version: 1,
+    });
 
     expect((await meta.get(ACCOUNT_A, `unread:${PEER_C}`))?.value).toBe(5);
     expect((await meta.get(ACCOUNT_B, `unread:${PEER_C}`))?.value).toBe(2);
-    expect((await images.get(ACCOUNT_A, "encrypted://same"))?.blob.size).toBe(1);
-    expect((await images.get(ACCOUNT_B, "encrypted://same"))?.blob.size).toBe(2);
+    expect((await images.get(ACCOUNT_A, "same-cache-id"))?.sealedBytes.byteLength).toBe(1);
+    expect((await images.get(ACCOUNT_B, "same-cache-id"))?.sealedBytes.byteLength).toBe(2);
   });
 
 });

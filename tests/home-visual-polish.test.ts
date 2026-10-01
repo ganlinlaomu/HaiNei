@@ -48,14 +48,16 @@ describe("Home visual polish contract", () => {
     expect(profile).toContain(".profile-posts{width:100%;box-sizing:border-box;padding:4px 0 0}");
   });
 
-  it("renders success feedback as compact neutral toast instead of a green block", () => {
+  it("renders one compact green success style across successful actions", () => {
     const toast = readFileSync(join(process.cwd(), "src/components/ToastContainer.vue"), "utf8");
     const editor = readFileSync(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
     const profile = readFileSync(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
 
     expect(toast).toContain("font-size:13px");
     expect(toast).toContain('background:rgba(255,255,255,.96)');
-    expect(toast).toContain('.toast.success::before{content:"✓";color:#15803d;background:#f0fdf4}');
+    expect(toast).toContain('.toast.success{border-color:rgba(22,163,74,.22);background:rgba(247,254,249,.97)}');
+    expect(toast).toContain('.toast.success::before{content:"✓";color:#15803d;background:#dcfce7}');
+    expect(toast).not.toContain(".toast.bookmark");
     expect(toast).not.toContain("background: #16a34a");
     expect(editor).toContain('ui.addToast("已发布", 1_400, "success")');
     expect(profile).toContain('ui.addToast("已保存，正在同步", 1_600, "success")');

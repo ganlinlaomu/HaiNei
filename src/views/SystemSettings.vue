@@ -213,14 +213,14 @@
 
       <details class="technical-section">
         <summary class="section-heading">
-          <div><h3>存储 / Cache</h3><p>{{ cacheStats.count }} 个图片文件 · {{ formatSize(cacheStats.size) }} / 48 MB</p></div>
+          <div><h3>存储 / Cache</h3><p>内存 {{ formatSize(cacheStats.size) }} / {{ formatSize(IMAGE_MEMORY_CACHE_MAX_BYTES) }} · 本地 {{ formatSize(cacheStats.persistentSize) }} / {{ formatSize(IMAGE_PERSISTENT_CACHE_MAX_BYTES) }}</p></div>
         </summary>
         <div class="cache-info">
           <div class="small">
-            <div>图片缓存：{{ cacheStats.count }} 个文件</div>
-            <div>缓存大小：{{ formatSize(cacheStats.size) }} / 48 MB</div>
-            <div>临时内存缓存 · 锁定、切换账号或退出后自动清除</div>
-            <div v-if="cacheStats.oldestTimestamp">最早缓存：{{ new Date(cacheStats.oldestTimestamp).toLocaleDateString() }}</div>
+            <div>内存缓存：{{ cacheStats.count }} 个文件 · {{ formatSize(cacheStats.size) }} / {{ formatSize(IMAGE_MEMORY_CACHE_MAX_BYTES) }}</div>
+            <div>加密本地缓存：{{ cacheStats.persistentCount }} 个文件 · {{ formatSize(cacheStats.persistentSize) }} / {{ formatSize(IMAGE_PERSISTENT_CACHE_MAX_BYTES) }}</div>
+            <div>内存缓存会在锁定、切换账号或退出后清除；加密本地缓存保留，解锁后按需解密。</div>
+            <div v-if="cacheStats.persistentOldestTimestamp">最早本地缓存：{{ new Date(cacheStats.persistentOldestTimestamp).toLocaleDateString() }}</div>
           </div>
           <div class="button-row">
             <button class="btn btn-secondary" type="button" :disabled="loadingCache" @click="refreshCacheStats(true)">
@@ -325,7 +325,12 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useProfilesStore } from "@/stores/profiles";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
-import { clearAllCache, getCacheStats } from "@/utils/imageCache";
+import {
+  clearAllCache,
+  getCacheStats,
+  IMAGE_MEMORY_CACHE_MAX_BYTES,
+  IMAGE_PERSISTENT_CACHE_MAX_BYTES,
+} from "@/utils/imageCache";
 import { registerOutgoingPushSigner, retryFailedOutgoing } from "@/nostr/messaging/service";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
@@ -370,7 +375,7 @@ const newMediaType = ref<MediaServerType>("blossom");
 const newMediaUrl = ref("");
 const newMediaToken = ref("");
 const statuses = reactive<Record<string, RelayRuntimeStatus | undefined>>({});
-const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0 });
+const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0, persistentCount: 0, persistentSize: 0, persistentOldestTimestamp: 0 });
 const loadingCache = ref(false);
 const clearingCache = ref(false);
 const pushBusy = ref(false);
@@ -621,7 +626,7 @@ function scheduleDeferredRuntimeRefresh() {
 async function refreshCacheStats(force = false) {
   const account = keyStore.pkHex;
   if (!account) {
-    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
+    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, persistentCount: 0, persistentSize: 0, persistentOldestTimestamp: 0 });
     return;
   }
   if (!force && !isAccountResourceStale(

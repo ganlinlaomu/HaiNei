@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.15",
-  "releaseSummary": "评论面板下拉关闭优化",
+  "version": "0.1.16",
+  "releaseSummary": "加密媒体缓存与成功提示统一",
   "private": true,
   "scripts": {
     "dev": "vite",

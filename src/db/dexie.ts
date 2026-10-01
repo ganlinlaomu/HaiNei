@@ -2,8 +2,8 @@ import { installLocalVault } from "@/services/localVault";
 import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 
-export const APP_VERSION = "0.1.15";
-export const DB_VERSION = 14;
+export const APP_VERSION = "0.1.16";
+export const DB_VERSION = 15;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -30,6 +30,7 @@ export type DBMeta = {
 };
 
 export type DBImageCache = {
+  // Legacy v2 plaintext image-cache row. Current application code never writes it.
   url: string;
   blob: Blob;
   timestamp: number;
@@ -39,7 +40,19 @@ export type DBImageCache = {
 export type AccountMessageRecord = DBMessage & { accountPubkey: string };
 export type AccountFriendRecord = DBFriend & { accountPubkey: string };
 export type AccountMetaRecord = DBMeta & { accountPubkey: string };
-export type AccountImageCacheRecord = DBImageCache & { accountPubkey: string };
+export type AccountImageCacheRecord = {
+  accountPubkey: string;
+  // Legacy-compatible column name: this stores only the SHA-256 cache id,
+  // never the key-bearing media reference itself.
+  url: string;
+  sealedBytes: ArrayBuffer;
+  iv: ArrayBuffer;
+  mime: string;
+  size: number;
+  timestamp: number;
+  lastAccess: number;
+  version: 1;
+};
 
 export type SyncedMessageRecord = {
   accountPubkey: string;
@@ -305,7 +318,7 @@ async function migrateLegacyPrivateData(transaction: Transaction) {
     await transaction.table<AccountMetaRecord>("accountMeta").bulkPut(
       meta.map(record => ({ ...record, accountPubkey }))
     );
-    await transaction.table<AccountImageCacheRecord>("accountImageCache").bulkPut(
+    await transaction.table<DBImageCache & { accountPubkey: string }>("accountImageCache").bulkPut(
       imageCache.map(record => ({ ...record, accountPubkey }))
     );
     console.info(`[storage] migrated legacy IndexedDB rows account=${accountPubkey.slice(0, 8)}`);
@@ -584,6 +597,14 @@ export class HaiNeiDatabase extends Dexie {
     }).upgrade(transaction => transaction.table("syncedMessages").toCollection().modify(record => {
       record.messageClass = record.tags?.some((tag: string[]) => tag[0] === "t" && tag[1] === "hainei-dm") ? "direct" : "other";
     }));
+
+    // Encrypted Media Cache v1. Keep the legacy-compatible primary-key shape
+    // because Dexie 3 cannot change primary keys in place. The "url" column now
+    // stores only a SHA-256 cache id, never the key-bearing media reference.
+    // Clear legacy plaintext rows and add lastAccess for disk LRU.
+    this.version(15).stores({
+      accountImageCache: "[accountPubkey+url], accountPubkey, [accountPubkey+timestamp], [accountPubkey+lastAccess]"
+    }).upgrade(transaction => transaction.table("accountImageCache").clear());
 
   }
 }

@@ -27,6 +27,100 @@ export function lockLocalVault(account: string) {
   keys.get(account)?.fill(0);
   keys.delete(account);
 }
+
+export function isLocalVaultUnlocked(account: string) {
+  return keys.has(account);
+}
+
+function binaryAssociated(
+  purpose: string,
+  account: string,
+  identifier: string,
+  mime: string,
+  size: number,
+) {
+  return encoder.encode(
+    JSON.stringify(["hainei-vault-binary", 1, purpose, account, identifier, mime, size]),
+  );
+}
+
+export async function sealLocalVaultBytes(
+  account: string,
+  purpose: string,
+  identifier: string,
+  mime: string,
+  plainBytes: ArrayBuffer,
+) {
+  const keyBytes = keys.get(account);
+  if (!keyBytes) throw new Error("local_vault_locked");
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    new Uint8Array(keyBytes),
+    { name: "AES-GCM" },
+    false,
+    ["encrypt"],
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const bytes = await crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv,
+      additionalData: binaryAssociated(
+        purpose,
+        account,
+        identifier,
+        mime,
+        plainBytes.byteLength,
+      ),
+    },
+    cryptoKey,
+    plainBytes,
+  );
+  return {
+    iv: iv.slice().buffer,
+    bytes,
+  };
+}
+
+export async function openLocalVaultBytes(
+  account: string,
+  purpose: string,
+  identifier: string,
+  mime: string,
+  size: number,
+  iv: ArrayBuffer,
+  sealedBytes: ArrayBuffer,
+) {
+  const keyBytes = keys.get(account);
+  if (!keyBytes) throw new Error("local_vault_locked");
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    new Uint8Array(keyBytes),
+    { name: "AES-GCM" },
+    false,
+    ["decrypt"],
+  );
+  const plain = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: new Uint8Array(iv),
+      additionalData: binaryAssociated(
+        purpose,
+        account,
+        identifier,
+        mime,
+        size,
+      ),
+    },
+    cryptoKey,
+    sealedBytes,
+  );
+  if (keys.get(account) !== keyBytes) {
+    new Uint8Array(plain).fill(0);
+    throw new Error("local_vault_locked");
+  }
+  return plain;
+}
 export async function unlockLocalVault(
   account: string,
   privateKeyHex: string,

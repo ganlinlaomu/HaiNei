@@ -44,16 +44,17 @@ describe("feed media carousel and actions", () => {
     expect(source).toContain("font-size:11px");
   });
 
-  it("uses a blue saved bookmark and compact neutral top feedback", () => {
+  it("keeps the saved bookmark blue but uses the shared green success feedback", () => {
     const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     const toasts = readFileSync(join(process.cwd(), "src/components/ToastContainer.vue"), "utf8");
     expect(card).toContain(".action.bookmark.saved{color:#60A5FA}");
     expect(card).toContain('saved ? "已添加到收藏夹" : "已从收藏夹移除"');
-    expect(card).toContain('1700, "bookmark"');
+    expect(card).toContain('1700, "success"');
     expect(toasts).toContain("top:calc(env(safe-area-inset-top) + 10px)");
     expect(toasts).toContain("background:rgba(255,255,255,.96)");
     expect(toasts).toContain("font-size:13px");
-    expect(toasts).toContain('.toast.bookmark::before{content:"✓";color:#3b82f6');
+    expect(toasts).toContain('.toast.success{border-color:rgba(22,163,74,.22);background:rgba(247,254,249,.97)}');
+    expect(toasts).not.toContain(".toast.bookmark");
   });
 
   it("mounts heavy feed UI only when the post actually needs it", () => {
