@@ -292,8 +292,8 @@ export default defineComponent({
     }
 
     const stopBeforeLock = onBeforeAccountLock(account => {
-      if (draftAccount !== account) return;
       cancelUploadsForAccount(account);
+      if (draftAccount !== account) return;
       persistDraft(account);
       draftPersistenceEnabled = false;
       ui.closePostEditor();
@@ -900,10 +900,10 @@ export default defineComponent({
       if (ui.showPostEditor) onClose();
     });
     watch(() => keys.pkHex, account => {
-      if (ui.showPostEditor && draftAccount && account !== draftAccount) {
-        cancelUploadsForAccount(draftAccount);
-        onClose();
+      for (const [id, active] of activeUploads) {
+        if (active.account !== account) cancelUpload(id);
       }
+      if (ui.showPostEditor && draftAccount && account !== draftAccount) onClose();
     });
 
     onBeforeUnmount(()=>{
