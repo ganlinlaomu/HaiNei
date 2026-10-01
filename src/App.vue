@@ -68,6 +68,7 @@ import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appB
 import { installBackgroundLock } from "@/services/autoLock";
 import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
 import { onAppResume } from "@/services/appResumeCoordinator";
+import { scheduleBackgroundWork } from "@/services/backgroundWorkScheduler";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
 
@@ -95,8 +96,8 @@ export default defineComponent({
       && !ui.showNewConversation
       && ui.blockingOverlays.size === 0);
     let disposed = false;
-    let idleHandle: number | null = null;
-    let bottomTabIdleHandle: number | null = null;
+    let cancelPostEditorWarmup: (() => void) | null = null;
+    let cancelBottomTabWarmup: (() => void) | null = null;
     let bottomTabsPreloaded = false;
 
     async function preparePostEditor() {
@@ -110,31 +111,20 @@ export default defineComponent({
     }
 
     function schedulePostEditorWarmup() {
-      if (hideAppChrome.value || postEditorReady.value || idleHandle !== null) return;
-      const requestIdle = (window as any).requestIdleCallback as undefined | ((callback: () => void, options?: { timeout: number }) => number);
-      if (requestIdle) {
-        idleHandle = requestIdle(() => {
-          idleHandle = null;
-          void preparePostEditor();
-        }, { timeout: 1_500 });
-      } else {
-        idleHandle = window.setTimeout(() => {
-          idleHandle = null;
-          void preparePostEditor();
-        }, 1_200);
-      }
+      if (hideAppChrome.value || postEditorReady.value || cancelPostEditorWarmup) return;
+      cancelPostEditorWarmup = scheduleBackgroundWork(() => {
+        cancelPostEditorWarmup = null;
+        void preparePostEditor();
+      }, { priority: "low", delayMs: 900, timeoutMs: 2_000 });
     }
 
     function scheduleBottomTabWarmup() {
-      if (bottomTabsPreloaded || bottomTabIdleHandle !== null || !keys.isLoggedIn || !keys.isUnlocked) return;
-      const warmup = () => {
-        bottomTabIdleHandle = null;
+      if (bottomTabsPreloaded || cancelBottomTabWarmup || !keys.isLoggedIn || !keys.isUnlocked) return;
+      cancelBottomTabWarmup = scheduleBackgroundWork(() => {
+        cancelBottomTabWarmup = null;
         bottomTabsPreloaded = true;
         void preloadBottomTabViews();
-      };
-      const requestIdle = (window as any).requestIdleCallback as undefined | ((callback: () => void, options?: { timeout: number }) => number);
-      if (requestIdle) bottomTabIdleHandle = requestIdle(warmup, { timeout: 2_000 });
-      else bottomTabIdleHandle = window.setTimeout(warmup, 800);
+      }, { priority: "low", delayMs: 450, timeoutMs: 2_000 });
     }
 
     function handleFabIntent() {
@@ -217,16 +207,10 @@ export default defineComponent({
       stopAutoLock?.();
       stopForegroundResume?.();
       disposed = true;
-      if (idleHandle !== null) {
-        const cancelIdle = (window as any).cancelIdleCallback as undefined | ((handle: number) => void);
-        if (cancelIdle) cancelIdle(idleHandle);
-        else window.clearTimeout(idleHandle);
-      }
-      if (bottomTabIdleHandle !== null) {
-        const cancelIdle = (window as any).cancelIdleCallback as undefined | ((handle: number) => void);
-        if (cancelIdle) cancelIdle(bottomTabIdleHandle);
-        else window.clearTimeout(bottomTabIdleHandle);
-      }
+      cancelPostEditorWarmup?.();
+      cancelPostEditorWarmup = null;
+      cancelBottomTabWarmup?.();
+      cancelBottomTabWarmup = null;
       document.body.classList.remove("login-page", "post-editor-open");
     });
     return {
