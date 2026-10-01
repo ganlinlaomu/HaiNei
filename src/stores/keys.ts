@@ -31,6 +31,7 @@ import { clearAccountScopedCaches } from "@/services/nostrCache";
 import { clearMemoryImageCache } from "@/utils/imageCache";
 import { cancelOutgoingWorkForAccount } from "@/nostr/messaging/service";
 import { ACCOUNT_STATE_NAMESPACES, fetchAndMaterializeAccountState, syncAccountStateNamespace } from "@/services/accountStateSync";
+import { syncPrivateBookmarkMirror } from "@/services/privateBookmarkMirror";
 import { hydratePrivateDeviceValues, clearPrivateDeviceValues, deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/deviceStorage";
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { startAccountMessageSync, stopAccountMessageSync } from "@/services/accountMessageSync";
@@ -178,6 +179,19 @@ export const useKeyStore = defineStore("keys", {
           const backgroundNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
             namespace => !criticalStateNamespaces.includes(namespace)
           );
+          const reconcileBookmarkMirror = async () => {
+            if (!isCurrent()) return;
+            try {
+              await syncPrivateBookmarkMirror(this);
+              if (!isCurrent()) return;
+              await useBookmarksStore().load(pk, true);
+            } catch (error) {
+              debugLog("account", "nip51_bookmark_restore_unavailable", {
+                reason: error instanceof Error ? error.name : "unknown",
+              }, "warn");
+            }
+          };
+
           void fetchAndMaterializeAccountState(this, backgroundNamespaces, { onlyNewer: true, isCurrent })
             .then(async () => {
               if (!isCurrent()) return;
@@ -185,9 +199,14 @@ export const useKeyStore = defineStore("keys", {
               if (!isCurrent()) return;
               await Promise.all([useFriendsStore().reloadFromStorage(pk), useProfilesStore().load(pk, true), useBookmarksStore().load(pk, true)]);
               if (!isCurrent()) return;
+              await reconcileBookmarkMirror();
+              if (!isCurrent()) return;
               const { pushEnabledForAccount, syncPushAuthorizationPolicy } = await import("@/services/pushNotifications");
               if (pushEnabledForAccount(pk)) await syncPushAuthorizationPolicy(pk, useFriendshipsStore().records.filter(r => r.state === "accepted").map(r => r.peerPubkey), this.signEvent.bind(this));
-            }).catch(() => debugLog("account", "background_restore_unavailable", {}, "warn"));
+            }).catch(async () => {
+              debugLog("account", "background_restore_unavailable", {}, "warn");
+              await reconcileBookmarkMirror();
+            });
         }
 
         await startAccountMessageSync(this);
