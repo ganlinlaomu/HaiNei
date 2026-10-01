@@ -39,7 +39,7 @@
             @pointerdown="startBodyPointerDrag"
             @pointermove="moveBodyPointerDrag"
             @pointerup="endBodyPointerDrag"
-            @pointercancel="cancelBodyDrag"
+            @pointercancel="cancelBodyPointerDrag"
             @touchstart="startBodyTouchDrag"
             @touchmove="moveBodyTouchDrag"
             @touchend="endBodyTouchDrag"
@@ -469,6 +469,11 @@ function endBodyPointerDrag(event: PointerEvent) {
   );
   activeDrag = update.gesture;
   completeDrag(false);
+}
+function cancelBodyPointerDrag(event: PointerEvent) {
+  if (event.pointerType === "touch") return;
+  if (activePointerId !== null && event.pointerId !== activePointerId) return;
+  completeDrag(true);
 }
 function cancelBodyDrag() {
   completeDrag(true);
