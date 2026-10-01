@@ -87,7 +87,8 @@ describe("bottom-tab activation loading", () => {
     expect(routes).toContain("component: loadNotificationsView");
     expect(routes).toContain("component: loadSettingsView");
     expect(routes).toContain("component: loadSystemSettingsView");
-    expect(lazyViews).toContain("loadSystemSettingsView()");
+    expect(lazyViews).toContain("loadSystemSettingsView,");
+    expect(lazyViews).toContain("await yieldToMainThread()");
     expect(lazyViews).toContain('import("@/views/SystemSettings.vue")');
   });
 });

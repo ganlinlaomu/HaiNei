@@ -87,6 +87,12 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+async function flushPromiseQueue() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
@@ -112,7 +118,7 @@ describe("interaction persistence scheduling", () => {
     expect(mocks.putDeviceValue).not.toHaveBeenCalled();
 
     await mocks.scheduled.values().next().value?.();
-    await Promise.resolve();
+    await flushPromiseQueue();
     expect(mocks.putDeviceValue).toHaveBeenCalledTimes(1);
     const payload = JSON.parse(mocks.putDeviceValue.mock.calls[0][1]);
     expect(payload.interactions.post).toHaveLength(2);
@@ -128,7 +134,7 @@ describe("interaction persistence scheduling", () => {
 
     expect(mocks.putDeviceValue).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(INTERACTION_SAVE_MAX_WAIT_MS);
-    await Promise.resolve();
+    await flushPromiseQueue();
     expect(mocks.putDeviceValue).toHaveBeenCalled();
   });
 
@@ -142,17 +148,17 @@ describe("interaction persistence scheduling", () => {
 
     addComment(store, "first");
     const firstFlush = store._flushToStorage();
-    await Promise.resolve();
+    await flushPromiseQueue();
     expect(mocks.putDeviceValue).toHaveBeenCalledTimes(1);
 
     addComment(store, "second");
     const secondFlush = store._flushToStorage();
-    await Promise.resolve();
+    await flushPromiseQueue();
     expect(mocks.putDeviceValue).toHaveBeenCalledTimes(1);
 
     firstWrite.resolve();
     await firstFlush;
-    await Promise.resolve();
+    await flushPromiseQueue();
     expect(mocks.putDeviceValue).toHaveBeenCalledTimes(2);
 
     const older = JSON.parse(mocks.putDeviceValue.mock.calls[0][1]);
@@ -173,7 +179,7 @@ describe("interaction persistence scheduling", () => {
     addComment(store, "before-lock");
     let lockFinished = false;
     const locking = prepareAccountLock(firstAccount).then(() => { lockFinished = true; });
-    await Promise.resolve();
+    await flushPromiseQueue();
     expect(mocks.putDeviceValue).toHaveBeenCalledTimes(1);
     expect(lockFinished).toBe(false);
 
