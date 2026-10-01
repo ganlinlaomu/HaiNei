@@ -22,6 +22,9 @@ describe("responsive application layout", () => {
     const header = source("src/components/HeaderBar.vue");
     expect(header).toMatch(/@media \(min-width: 768px\)[\s\S]*?\.bottom-nav \{[\s\S]*?top: 0;[\s\S]*?width: var\(--navigation-rail-width\);[\s\S]*?flex-direction: column/);
     expect(header).not.toMatch(/innerWidth|matchMedia/);
+    expect(header).toContain("touch-action: manipulation");
+    expect(header).toContain("@media (hover: hover) and (pointer: fine)");
+    expect(header).toContain("@media (min-width: 768px) and (hover: hover) and (pointer: fine)");
     expect((header.match(/<router-link/g) || [])).toHaveLength(4);
   });
 
