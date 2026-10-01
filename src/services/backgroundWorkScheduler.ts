@@ -26,7 +26,7 @@ function scheduleIdle(task: ScheduledTask) {
 
   const execute = () => {
     if (cancelled) return;
-    if (document.visibilityState === "hidden" || now() < busyUntil) {
+    if ((typeof document !== "undefined" && document.visibilityState === "hidden") || now() < busyUntil) {
       timeoutHandle = setTimeout(execute, 120);
       return;
     }
