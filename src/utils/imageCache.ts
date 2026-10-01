@@ -115,7 +115,8 @@ async function persistEncryptedImage(
     new Uint8Array(plainBytes).fill(0);
     const now = Date.now();
     await imageCacheRepository.put(account, {
-      cacheId,
+      // The legacy-compatible "url" column stores only this SHA-256 id.
+      url: cacheId,
       sealedBytes: sealed.bytes,
       iv: sealed.iv,
       mime,
