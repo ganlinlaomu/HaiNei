@@ -752,17 +752,18 @@ describe("message sync session", () => {
     const subscriptions: Array<Record<string, Array<(...args: any[]) => void>>> = [];
     let relayObserver: ((event: any) => void) | undefined;
     const canonical = message("during-history", 1000);
-    const subscribeFake = () => {
+    const subscribeFake = (relays: string[]) => {
       const handlers: Record<string, Array<(...args: any[]) => void>> = {};
       const index = subscriptions.push(handlers) - 1;
+      const relay = relays[0];
       return {
         on(name: string, callback: (...args: any[]) => void) {
           (handlers[name] ||= []).push(callback);
           if (index > 0 && name === "eose") queueMicrotask(() => {
             // The same logical message arrives live while historical replay is active.
-            if (index === 1) subscriptions[0].event?.forEach(handler => handler({ canonical }, "wss://a"));
-            handlers.event?.forEach(handler => handler({ canonical }, "wss://a"));
-            callback("wss://a");
+            if (index === 1) subscriptions[0].event?.forEach(handler => handler({ canonical }, relay));
+            handlers.event?.forEach(handler => handler({ canonical }, relay));
+            callback(relay);
           });
         },
         unsub() {}
