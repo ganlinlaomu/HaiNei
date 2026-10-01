@@ -33,11 +33,11 @@
         </button>
       </template>
       <div v-if="searchOpen && searchQuery.trim()" class="chat-search-results">
-        <div v-if="searching" class="search-result-state">正在搜索本机消息…</div>
-        <div v-else-if="searchResults.length === 0" class="search-result-state">未找到相关消息</div>
-        <template v-else>
+        <div v-if="searching && searchResults.length === 0" class="search-result-state">正在搜索本机历史消息…</div>
+        <div v-else-if="searchComplete && searchResults.length === 0" class="search-result-state">未找到相关消息</div>
+        <template v-if="searchResults.length > 0">
           <button
-            v-for="result in searchResults"
+            v-for="result in visibleSearchResults"
             :key="result.id"
             class="chat-search-result"
             type="button"
@@ -49,6 +49,11 @@
             </span>
             <span class="search-result-preview">{{ result.preview }}</span>
           </button>
+          <button v-if="hiddenSearchResultCount > 0" class="search-result-more" type="button" @click="showMoreSearchResults">
+            显示更多结果（剩余 {{ hiddenSearchResultCount }} 条）
+          </button>
+          <div v-if="searching" class="search-result-state compact">正在继续搜索更早的消息…</div>
+          <div v-else-if="searchComplete" class="search-result-state compact">搜索完成</div>
         </template>
       </div>
     </header>
@@ -266,11 +271,12 @@ import { useUIStore } from "@/stores/ui";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import {
-  initialMessageWindowStart,
+  focusBoundedMessageWindow,
+  initialBoundedMessageWindow,
   isNearMessageBottom,
-  prependMessageWindowStart,
+  scrollTopAfterAnchorShift,
   scrollTopAfterNewMessages,
-  scrollTopAfterPrepend,
+  shiftBoundedMessageWindow,
   type MessageScrollMetrics,
 } from "@/utils/messageWindow";
 import { classifyVoiceGesture } from "@/utils/voiceGesture";
@@ -306,8 +312,10 @@ async function fetchOlderPage(reset = false) {
 }
 const searchContextMessages = ref<InboxItem[]>([]);
 const searchContextActive = ref(false);
-const windowStart = ref(initialMessageWindowStart(messages.value.length));
-const windowMessages = computed(() => searchContextActive.value ? searchContextMessages.value : messages.value.slice(windowStart.value));
+const initialWindowRange = initialBoundedMessageWindow(messages.value.length, 60);
+const windowStart = ref(initialWindowRange.start);
+const windowEnd = ref(initialWindowRange.end);
+const windowMessages = computed(() => searchContextActive.value ? searchContextMessages.value : messages.value.slice(windowStart.value, windowEnd.value));
 const draft = ref("");
 const replyingToId = ref("");
 const draftReplyMessage = ref<InboxItem | undefined>();
@@ -319,8 +327,16 @@ const searchOpen = ref(false);
 const searchQuery = ref("");
 const searchResults = ref<DmSearchResult[]>([]);
 const searching = ref(false);
+const searchComplete = ref(false);
+const searchRenderLimit = ref(60);
 const searchInput = ref<HTMLInputElement | null>(null);
-const searchStatusText = computed(() => !searchQuery.value.trim() ? "" : searching.value ? "…" : `${searchResults.value.length} 条`);
+const visibleSearchResults = computed(() => searchResults.value.slice(0, searchRenderLimit.value));
+const hiddenSearchResultCount = computed(() => Math.max(0, searchResults.value.length - visibleSearchResults.value.length));
+const searchStatusText = computed(() => {
+  if (!searchQuery.value.trim()) return "";
+  if (searching.value) return `${searchResults.value.length} 条 · 搜索中`;
+  return searchComplete.value ? `${searchResults.value.length} 条 · 已完成` : "";
+});
 const selectedImage = ref<{ file: File; preview: string } | null>(null);
 const recording = shallowRef<VoiceRecordingSession | null>(null);
 const startingRecording = ref(false);
@@ -351,6 +367,7 @@ const voiceCaptureOwnsAudioSession = computed(() => startingRecording.value || !
 const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
 const INITIAL_MESSAGE_COUNT = 60;
 const OLDER_MESSAGE_BATCH = 40;
+const MAX_RENDERED_MESSAGES = 100;
 const TOP_LOAD_THRESHOLD = 120;
 const BOTTOM_FOLLOW_THRESHOLD = 120;
 const SWIPE_INTENT_THRESHOLD = 8;
@@ -371,6 +388,8 @@ let messageGesture: {
 let longPressTimer: number | null = null;
 let replyHighlightTimer: number | null = null;
 let prependingOlder = false;
+let windowMutationInProgress = false;
+let followLatestTail = true;
 let loadingConversation = false;
 let loadGeneration = 0;
 let restoreOverflowAnchorFrame: number | null = null;
@@ -385,6 +404,7 @@ let composerFocused = false;
 let composerFocusSettleTimer: number | null = null;
 let searchTimer: number | null = null;
 let searchGeneration = 0;
+let searchAbortController: AbortController | null = null;
 let draftSaveTimer: number | null = null;
 let draftReady = false;
 let suppressDraftPersistence = false;
@@ -575,7 +595,15 @@ async function focusMessage(messageId: string) {
   if (targetIndex >= 0) {
     searchContextActive.value = false;
     searchContextMessages.value = [];
-    if (targetIndex < windowStart.value) windowStart.value = Math.max(0, targetIndex - 6);
+    const range = focusBoundedMessageWindow(
+      messages.value.length,
+      targetIndex,
+      6,
+      MAX_RENDERED_MESSAGES,
+      currentPinnedMessageIndexes(),
+    );
+    windowStart.value = range.start;
+    windowEnd.value = range.end;
     await nextTick();
   } else {
     const context = await directMessages.loadPeerMessageContext(peerPubkey.value, messageId, 20);
@@ -647,35 +675,85 @@ function clearSearchTimer() {
   if (searchTimer !== null) window.clearTimeout(searchTimer);
   searchTimer = null;
 }
+function cancelSearchRequest() {
+  clearSearchTimer();
+  searchAbortController?.abort();
+  searchAbortController = null;
+  searchGeneration += 1;
+}
+function resetSearchResults() {
+  searchResults.value = [];
+  searchRenderLimit.value = 60;
+  searching.value = false;
+  searchComplete.value = false;
+}
 function openSearch() {
   textInput.value?.blur();
   searchOpen.value = true;
   void nextTick(() => searchInput.value?.focus());
 }
 function closeSearch() {
-  clearSearchTimer();
-  searchGeneration += 1;
+  cancelSearchRequest();
   searchOpen.value = false;
   searchQuery.value = "";
-  searchResults.value = [];
-  searching.value = false;
+  resetSearchResults();
+}
+function showMoreSearchResults() {
+  searchRenderLimit.value += 60;
+}
+function mergeSearchBatch(batch: DmSearchResult[]) {
+  if (!batch.length) return;
+  const merged = new Map(searchResults.value.map(result => [result.id, result]));
+  for (const result of batch) merged.set(result.id, result);
+  searchResults.value = [...merged.values()].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
 }
 function scheduleSearch() {
-  clearSearchTimer();
+  cancelSearchRequest();
   const query = searchQuery.value.trim();
   if (!query) {
-    searchResults.value = [];
-    searching.value = false;
+    resetSearchResults();
     return;
   }
+
   const generation = ++searchGeneration;
+  const account = keys.pkHex;
+  const peer = peerPubkey.value;
+  const controller = new AbortController();
+  searchAbortController = controller;
+  searchResults.value = [];
+  searchRenderLimit.value = 60;
   searching.value = true;
+  searchComplete.value = false;
+
   searchTimer = window.setTimeout(async () => {
     searchTimer = null;
-    const results = await directMessages.searchPeerMessages(peerPubkey.value, query).catch(() => []);
-    if (generation !== searchGeneration || query !== searchQuery.value.trim()) return;
-    searchResults.value = results;
-    searching.value = false;
+    const isCurrent = () => generation === searchGeneration
+      && !controller.signal.aborted
+      && account === keys.pkHex
+      && peer === peerPubkey.value
+      && query === searchQuery.value.trim();
+
+    try {
+      const results = await directMessages.searchPeerMessages(peer, query, {
+        signal: controller.signal,
+        onBatch: (batch, progress) => {
+          if (!isCurrent()) return;
+          mergeSearchBatch(batch);
+          searching.value = !progress.complete;
+          searchComplete.value = progress.complete;
+        },
+      });
+      if (!isCurrent()) return;
+      searchResults.value = results;
+      searching.value = false;
+      searchComplete.value = true;
+    } catch {
+      if (!isCurrent()) return;
+      searching.value = false;
+      searchComplete.value = true;
+    } finally {
+      if (searchAbortController === controller) searchAbortController = null;
+    }
   }, 180);
 }
 async function selectSearchResult(messageId: string) {
@@ -732,7 +810,19 @@ async function restoreDraft(account: string, peer: string) {
 }
 function setMessageListToBottom() {
   const list = messageList.value;
+  const range = initialBoundedMessageWindow(
+    messages.value.length,
+    INITIAL_MESSAGE_COUNT,
+    currentPinnedMessageIndexes(),
+  );
+  if (windowStart.value !== range.start || windowEnd.value !== range.end) {
+    windowStart.value = range.start;
+    windowEnd.value = range.end;
+    void nextTick(setMessageListToBottom);
+    return;
+  }
   if (list) list.scrollTop = list.scrollHeight;
+  followLatestTail = true;
   showJumpToLatest.value = false;
   pendingTailCount.value = 0;
 }
@@ -767,35 +857,133 @@ function scrollMetrics(element: HTMLElement): MessageScrollMetrics {
   return { scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight };
 }
 
+type MessageDomAnchor = { id: string; offset: number; scrollTop: number };
+
+function currentPinnedMessageIndexes() {
+  const ids = new Set<string>();
+  for (const id of [actionMenuMessageId.value, swipingMessageId.value, highlightedMessageId.value]) {
+    if (id) ids.add(id);
+  }
+  const playingShell = messageList.value?.querySelector<HTMLElement>(".voice-shell.playing");
+  const playingLine = playingShell?.closest<HTMLElement>(".message-line[data-message-id]");
+  if (playingLine?.dataset.messageId) ids.add(playingLine.dataset.messageId);
+  return [...ids]
+    .map(id => messages.value.findIndex(message => message.id === id))
+    .filter(index => index >= 0);
+}
+
+function captureMessageDomAnchor(list: HTMLElement): MessageDomAnchor | undefined {
+  const listTop = list.getBoundingClientRect().top;
+  const rows = [...list.querySelectorAll<HTMLElement>(".message-line[data-message-id]")];
+  const row = rows.find(candidate => candidate.getBoundingClientRect().bottom > listTop + 1) || rows[0];
+  const id = row?.dataset.messageId;
+  if (!row || !id) return undefined;
+  return { id, offset: row.getBoundingClientRect().top - listTop, scrollTop: list.scrollTop };
+}
+
+function restoreMessageDomAnchor(list: HTMLElement, anchor?: MessageDomAnchor) {
+  if (!anchor) return;
+  const row = [...list.querySelectorAll<HTMLElement>(".message-line[data-message-id]")]
+    .find(candidate => candidate.dataset.messageId === anchor.id);
+  if (!row) return;
+  const nextOffset = row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+  list.scrollTop = scrollTopAfterAnchorShift(anchor.scrollTop, anchor.offset, nextOffset);
+}
+
+function restoreNativeOverflowAnchor(list: HTMLElement) {
+  if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
+  restoreOverflowAnchorFrame = requestAnimationFrame(() => {
+    restoreOverflowAnchorFrame = null;
+    list.style.removeProperty("overflow-anchor");
+  });
+}
+
 function resetMessageWindow() {
-  windowStart.value = initialMessageWindowStart(messages.value.length, INITIAL_MESSAGE_COUNT);
+  const range = initialBoundedMessageWindow(
+    messages.value.length,
+    INITIAL_MESSAGE_COUNT,
+    currentPinnedMessageIndexes(),
+  );
+  windowStart.value = range.start;
+  windowEnd.value = range.end;
 }
 
 async function prependOlderMessages() {
   const list = messageList.value;
   if (!list || prependingOlder || (windowStart.value === 0 && historyExhausted.value)) return;
-  const nextStart = prependMessageWindowStart(windowStart.value, OLDER_MESSAGE_BATCH);
 
   prependingOlder = true;
+  windowMutationInProgress = true;
   const peerAtStart = peerPubkey.value;
-  const previousScrollTop = list.scrollTop;
-  const previousScrollHeight = list.scrollHeight;
+  const anchor = captureMessageDomAnchor(list);
+  const needsHistoryPage = windowStart.value === 0 && !historyExhausted.value;
   list.style.overflowAnchor = "none";
-  if (windowStart.value === 0) await fetchOlderPage();
-  windowStart.value = nextStart;
-  await nextTick();
-  if (disposed || peerAtStart !== peerPubkey.value) {
-    list.style.removeProperty("overflow-anchor");
-    prependingOlder = false;
-    return;
-  }
-  list.scrollTop = scrollTopAfterPrepend(previousScrollTop, previousScrollHeight, list.scrollHeight);
-  prependingOlder = false;
 
-  if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
-  restoreOverflowAnchorFrame = requestAnimationFrame(() => {
-    restoreOverflowAnchorFrame = null;
-    list.style.removeProperty("overflow-anchor");
+  try {
+    if (needsHistoryPage) await fetchOlderPage();
+    if (disposed || peerAtStart !== peerPubkey.value) return;
+
+    const pinned = currentPinnedMessageIndexes();
+    const anchorIndex = anchor ? messages.value.findIndex(message => message.id === anchor.id) : -1;
+    const range = needsHistoryPage && anchorIndex >= 0
+      ? focusBoundedMessageWindow(messages.value.length, anchorIndex, OLDER_MESSAGE_BATCH, MAX_RENDERED_MESSAGES, pinned)
+      : shiftBoundedMessageWindow(
+        { start: windowStart.value, end: windowEnd.value },
+        messages.value.length,
+        "older",
+        OLDER_MESSAGE_BATCH,
+        MAX_RENDERED_MESSAGES,
+        pinned,
+      );
+
+    windowStart.value = range.start;
+    windowEnd.value = range.end;
+    await nextTick();
+    if (disposed || peerAtStart !== peerPubkey.value) return;
+    restoreMessageDomAnchor(list, anchor);
+  } finally {
+    windowMutationInProgress = false;
+    prependingOlder = false;
+    restoreNativeOverflowAnchor(list);
+  }
+}
+
+async function appendNewerMessages() {
+  const list = messageList.value;
+  if (!list || prependingOlder || windowEnd.value >= messages.value.length) return;
+
+  prependingOlder = true;
+  windowMutationInProgress = true;
+  const peerAtStart = peerPubkey.value;
+  const anchor = captureMessageDomAnchor(list);
+  list.style.overflowAnchor = "none";
+
+  try {
+    const range = shiftBoundedMessageWindow(
+      { start: windowStart.value, end: windowEnd.value },
+      messages.value.length,
+      "newer",
+      OLDER_MESSAGE_BATCH,
+      MAX_RENDERED_MESSAGES,
+      currentPinnedMessageIndexes(),
+    );
+    windowStart.value = range.start;
+    windowEnd.value = range.end;
+    await nextTick();
+    if (disposed || peerAtStart !== peerPubkey.value) return;
+    restoreMessageDomAnchor(list, anchor);
+  } finally {
+    windowMutationInProgress = false;
+    prependingOlder = false;
+    restoreNativeOverflowAnchor(list);
+  }
+}
+
+function handleMessageMediaLoad() {
+  const list = messageList.value;
+  if (!list || searchContextActive.value || !followLatestTail || windowEnd.value < messages.value.length) return;
+  requestAnimationFrame(() => {
+    if (!disposed && followLatestTail && windowEnd.value >= messages.value.length) setMessageListToBottom();
   });
 }
 
@@ -810,18 +998,27 @@ function handleMessageScroll() {
   if (!list) return;
   if (actionMenuMessageId.value) closeMessageActionMenu();
   if (searchContextActive.value) {
+    followLatestTail = false;
     showJumpToLatest.value = true;
     return;
   }
-  if (list.scrollTop <= TOP_LOAD_THRESHOLD) void prependOlderMessages();
 
+  if (list.scrollTop <= TOP_LOAD_THRESHOLD) void prependOlderMessages();
   const metrics = scrollMetrics(list);
-  if (isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD)) {
+  const nearBottom = isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD);
+  if (nearBottom && windowEnd.value < messages.value.length) void appendNewerMessages();
+
+  const atConversationTail = windowEnd.value >= messages.value.length;
+  if (atConversationTail && nearBottom) {
+    followLatestTail = true;
     showJumpToLatest.value = false;
     pendingTailCount.value = 0;
     if (!loadingConversation) void markVisibleMessagesRead();
-  } else if (list.scrollHeight > list.clientHeight + BOTTOM_FOLLOW_THRESHOLD) {
-    showJumpToLatest.value = true;
+  } else {
+    followLatestTail = false;
+    if (list.scrollHeight > list.clientHeight + BOTTOM_FOLLOW_THRESHOLD || !atConversationTail) {
+      showJumpToLatest.value = true;
+    }
   }
 }
 
@@ -1151,6 +1348,7 @@ function handlePageHide() {
 onMounted(() => {
   window.visualViewport?.addEventListener("resize", handleVisualViewportResize);
   window.addEventListener("pagehide", handlePageHide);
+  messageList.value?.addEventListener("load", handleMessageMediaLoad, true);
   void load();
 });
 watch([draft, replyingToId], scheduleDraftSave);
@@ -1171,6 +1369,7 @@ watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
   void load();
 });
 watch(() => messages.value.map(message => message.id).join("\0"), async (nextSignature, previousSignature) => {
+  if (windowMutationInProgress) return;
   const nextIds = nextSignature ? nextSignature.split("\0") : [];
   const previousIds = previousSignature ? previousSignature.split("\0") : [];
   if (loadingConversation) {
@@ -1180,17 +1379,19 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
 
   const list = messageList.value;
   const previousMetrics = list ? scrollMetrics(list) : undefined;
-  const previousFirstId = previousIds?.[windowStart.value];
-  const preservedStart = previousFirstId ? nextIds.indexOf(previousFirstId) : -1;
-  if (preservedStart >= 0) windowStart.value = preservedStart;
-  else windowStart.value = Math.min(windowStart.value, initialMessageWindowStart(nextIds.length, INITIAL_MESSAGE_COUNT));
-
-  const previousLastId = previousIds?.at(-1);
-  const previousLastIndex = previousLastId ? nextIds.indexOf(previousLastId) : -1;
-  const hasNewTail = !!nextIds.length && (!previousLastId || previousLastIndex < nextIds.length - 1);
+  const previousWindowEnd = Math.min(windowEnd.value, previousIds.length);
+  const previousFirstId = previousIds[windowStart.value];
+  const previousWindowLastId = previousIds[Math.max(windowStart.value, previousWindowEnd - 1)];
+  const previousConversationLastId = previousIds.at(-1);
+  const previousConversationLastIndex = previousConversationLastId ? nextIds.indexOf(previousConversationLastId) : -1;
+  const hasNewTail = !!nextIds.length
+    && (!previousConversationLastId || previousConversationLastIndex < nextIds.length - 1);
   const newTailCount = hasNewTail
-    ? Math.max(1, previousLastIndex >= 0 ? nextIds.length - previousLastIndex - 1 : nextIds.length - previousIds.length)
+    ? Math.max(1, previousConversationLastIndex >= 0
+      ? nextIds.length - previousConversationLastIndex - 1
+      : nextIds.length - previousIds.length)
     : 0;
+
   if (searchContextActive.value) {
     if (hasNewTail) {
       showJumpToLatest.value = true;
@@ -1198,15 +1399,39 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
     }
     return;
   }
-  const followingLatest = !!list && !!previousMetrics
+
+  const wasAtConversationTail = previousWindowEnd >= previousIds.length;
+  const followingLatest = !!list && !!previousMetrics && wasAtConversationTail
     && isNearMessageBottom(previousMetrics, BOTTOM_FOLLOW_THRESHOLD);
+
   if (list && previousMetrics && hasNewTail && followingLatest) {
+    const range = initialBoundedMessageWindow(
+      nextIds.length,
+      INITIAL_MESSAGE_COUNT,
+      currentPinnedMessageIndexes(),
+    );
+    windowStart.value = range.start;
+    windowEnd.value = range.end;
     await nextTick();
     list.scrollTop = scrollTopAfterNewMessages(previousMetrics, list.scrollHeight, BOTTOM_FOLLOW_THRESHOLD);
+    followLatestTail = true;
     showJumpToLatest.value = false;
     pendingTailCount.value = 0;
     await markVisibleMessagesRead();
-  } else if (hasNewTail) {
+    return;
+  }
+
+  const preservedStart = previousFirstId ? nextIds.indexOf(previousFirstId) : -1;
+  const preservedLast = previousWindowLastId ? nextIds.indexOf(previousWindowLastId) : -1;
+  if (preservedStart >= 0 && preservedLast >= preservedStart) {
+    windowStart.value = preservedStart;
+    windowEnd.value = preservedLast + 1;
+  } else {
+    resetMessageWindow();
+  }
+
+  if (hasNewTail) {
+    followLatestTail = false;
     showJumpToLatest.value = true;
     pendingTailCount.value += newTailCount;
   }
@@ -1217,9 +1442,10 @@ onBeforeUnmount(() => {
   flushDraft();
   draftReady = false;
   clearDraftSaveTimer();
-  clearSearchTimer();
+  cancelSearchRequest();
   window.removeEventListener("pagehide", handlePageHide);
   window.visualViewport?.removeEventListener("resize", handleVisualViewportResize);
+  messageList.value?.removeEventListener("load", handleMessageMediaLoad, true);
   handleComposerBlur();
   loadGeneration += 1;
   if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
@@ -1236,7 +1462,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .chat-page{position:fixed;inset:0;z-index:1000;display:grid;width:100%;max-width:none;margin:0;box-sizing:border-box;grid-template-rows:auto minmax(0,1fr) auto;background:#fff;color:#0f1419}
-.chat-header{position:relative;z-index:8;display:grid;grid-template-columns:38px 34px minmax(0,1fr) 38px;align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.chat-header.search-mode{grid-template-columns:38px minmax(0,1fr) auto}.header-search-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.header-search-button:active{background:#eff3f4}.header-search-button svg,.chat-search-field svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}.chat-search-field{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:7px;height:38px;padding:0 11px;border-radius:999px;background:#eff3f4;color:#536471}.chat-search-field input{min-width:0;width:100%;height:38px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:15px}.search-count{min-width:32px;color:#657786;font-size:12px;text-align:right;white-space:nowrap}.chat-search-results{position:absolute;top:54px;right:0;left:0;z-index:9;max-height:min(56vh,520px);overflow-y:auto;border-bottom:1px solid #e2e8f0;background:#fff;box-shadow:0 12px 28px rgba(15,23,42,.12)}.search-result-state{padding:28px 18px;color:#657786;font-size:13px;text-align:center}.chat-search-result{display:flex;width:100%;min-height:62px;flex-direction:column;gap:4px;padding:10px 16px;border:0;border-bottom:1px solid #eff1f3;background:#fff;color:#0f1419;text-align:left}.chat-search-result:active{background:#f7f9f9}.search-result-meta{display:flex;align-items:center;justify-content:space-between;gap:12px}.search-result-meta strong{font-size:12px}.search-result-meta time{color:#8b98a5;font-size:11px}.search-result-preview{display:-webkit-box;overflow:hidden;color:#536471;font-size:13px;line-height:1.35;-webkit-box-orient:vertical;-webkit-line-clamp:2}.peer-profile,.message-avatar-link{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.avatar-profile-link,.message-avatar-link{display:grid;place-items:center}.name-profile-link{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:16px;font-weight:700}.peer-profile:focus-visible,.message-avatar-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:6px}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.chat-header{position:relative;z-index:8;display:grid;grid-template-columns:38px 34px minmax(0,1fr) 38px;align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid #eff1f3;background:#fff}.chat-header.search-mode{grid-template-columns:38px minmax(0,1fr) auto}.header-search-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.header-search-button:active{background:#eff3f4}.header-search-button svg,.chat-search-field svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}.chat-search-field{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:7px;height:38px;padding:0 11px;border-radius:999px;background:#eff3f4;color:#536471}.chat-search-field input{min-width:0;width:100%;height:38px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:15px}.search-count{min-width:32px;color:#657786;font-size:12px;text-align:right;white-space:nowrap}.chat-search-results{position:absolute;top:54px;right:0;left:0;z-index:9;max-height:min(56vh,520px);overflow-y:auto;border-bottom:1px solid #e2e8f0;background:#fff;box-shadow:0 12px 28px rgba(15,23,42,.12)}.search-result-state{padding:28px 18px;color:#657786;font-size:13px;text-align:center}.search-result-state.compact{padding:12px 18px}.search-result-more{display:block;width:100%;padding:12px 16px;border:0;border-top:1px solid #eff1f3;background:#fff;color:#2563eb;font-size:13px;text-align:center}.chat-search-result{display:flex;width:100%;min-height:62px;flex-direction:column;gap:4px;padding:10px 16px;border:0;border-bottom:1px solid #eff1f3;background:#fff;color:#0f1419;text-align:left}.chat-search-result:active{background:#f7f9f9}.search-result-meta{display:flex;align-items:center;justify-content:space-between;gap:12px}.search-result-meta strong{font-size:12px}.search-result-meta time{color:#8b98a5;font-size:11px}.search-result-preview{display:-webkit-box;overflow:hidden;color:#536471;font-size:13px;line-height:1.35;-webkit-box-orient:vertical;-webkit-line-clamp:2}.peer-profile,.message-avatar-link{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.avatar-profile-link,.message-avatar-link{display:grid;place-items:center}.name-profile-link{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:16px;font-weight:700}.peer-profile:focus-visible,.message-avatar-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:6px}.back-button{display:grid;width:38px;height:42px;padding:8px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.back-button:active{background:#eff3f4}.back-button svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .message-list{min-height:0;overflow-x:hidden;overflow-y:auto;padding:12px 12px 16px;overscroll-behavior:contain}.relationship-notice,.empty-chat{margin:14px auto;padding:9px 13px;color:#536471;font-size:12px;text-align:center}.message-time{display:block;margin:16px 0 10px;color:#8b98a5;font-size:11px;text-align:center}.message-line{display:flex;align-items:flex-end;gap:6px;margin:3px 0;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .message-line .message-bubble,.message-line .message-bubble *{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important}
 .message-line .bubble-text,.message-line .quoted-message,.message-line .quoted-message *{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.swipe-reply-indicator{display:grid;height:30px;flex:0 0 auto;place-items:center;overflow:hidden;border-radius:50%;color:#657786;transition:color 120ms ease,background 120ms ease}.swipe-reply-indicator.active{background:#e8f4fd;color:#1687e8}.swipe-reply-indicator svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:#eff3f4;color:#0f1419;line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:#d9efff}.quoted-message{display:flex;width:100%;min-width:0;flex-direction:column;gap:1px;margin:0 0 6px;padding:6px 8px;border:0;border-left:3px solid #1687e8;border-radius:7px;background:rgba(255,255,255,.58);color:inherit;font:inherit;line-height:1.25;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}.quoted-message:active{background:rgba(255,255,255,.88)}.quoted-message strong{overflow:hidden;color:#536471;font-size:11px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.quoted-message span{overflow:hidden;max-width:280px;color:#536471;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.message-line.message-highlight .message-bubble{animation:message-target-highlight 1.25s ease-out}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-status{margin:3px 5px 1px;color:#8b98a5;font-size:9px;font-weight:400;line-height:1.3;opacity:.85}.message-status.failed,.caption-meta.failed{color:#dc2626}.message-status.read,.caption-meta.read{color:#1687e8}.message-status button,.caption-meta button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble>.quoted-message{margin:8px 10px 6px}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}.caption-meta{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;color:#718096;font-size:9px;line-height:1.3;white-space:nowrap}

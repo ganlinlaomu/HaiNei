@@ -503,7 +503,11 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('aria-label="搜索当前聊天"');
     expect(chat).toContain('placeholder="搜索当前聊天"');
     expect(chat).toContain("scheduleSearch");
-    expect(chat).toContain("directMessages.searchPeerMessages(peerPubkey.value, query)");
+    expect(chat).toContain("directMessages.searchPeerMessages(peer, query, {");
+    expect(chat).toContain("new AbortController()");
+    expect(chat).toContain("searchAbortController?.abort()");
+    expect(chat).toContain("visibleSearchResults");
+    expect(chat).toContain("searchComplete");
     expect(chat).toContain("directMessages.loadPeerMessageContext(peerPubkey.value, messageId, 20)");
     expect(chat).toContain("searchContextActive");
     expect(chat).toContain("if (searchContextActive.value)");
@@ -513,7 +517,9 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("}, 300)");
     expect(chat).toContain("directMessages.saveDraft(peer, { text, replyTo }, account)");
     expect(chat).toContain('window.addEventListener("pagehide", handlePageHide)');
-    expect(store).toContain("syncedMessageRepository.listConversation(account, conversationId)");
+    expect(store).toContain("syncedMessageRepository.listConversationPage(account, conversationId, before, limit)");
+    expect(store).toContain("scanMessageSearchPages");
+    expect(store).not.toContain("const records = await syncedMessageRepository.listConversation(account, conversationId)");
     expect(store).toContain('value.normalize("NFKC").toLocaleLowerCase()');
     expect(store).toContain('const DRAFT_PREFIX = "dm-draft:"');
     expect(store).toContain("clearDraftThrough(peer, now, account)");
@@ -531,6 +537,21 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('window.visualViewport?.removeEventListener("resize", handleVisualViewportResize)');
     expect(chat).toContain("requestAnimationFrame(setMessageListToBottom)");
     expect(chat).toContain("if (composerFocused) setMessageListToBottom()");
+  });
+
+  it("keeps long DM rendering bounded while preserving playback, anchors, and latest-read semantics", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    expect(chat).toContain("const windowEnd = ref(initialWindowRange.end)");
+    expect(chat).toContain("messages.value.slice(windowStart.value, windowEnd.value)");
+    expect(chat).toContain("MAX_RENDERED_MESSAGES = 100");
+    expect(chat).toContain("shiftBoundedMessageWindow");
+    expect(chat).toContain("captureMessageDomAnchor");
+    expect(chat).toContain("restoreMessageDomAnchor");
+    expect(chat).toContain('querySelector<HTMLElement>(".voice-shell.playing")');
+    expect(chat).toContain('messageList.value?.addEventListener("load", handleMessageMediaLoad, true)');
+    expect(chat).toContain('messageList.value?.removeEventListener("load", handleMessageMediaLoad, true)');
+    expect(chat).toContain("windowEnd.value >= messages.value.length");
+    expect(chat).toContain("if (!loadingConversation) void markVisibleMessagesRead()");
   });
 
   it("offers a jump-to-latest control without changing DM read or sync semantics", () => {

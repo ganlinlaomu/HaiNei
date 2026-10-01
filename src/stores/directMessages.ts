@@ -32,6 +32,7 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { registerDirectMessageStateOwner } from "@/services/directMessageStateEvents";
 import { onAppResume } from "@/services/appResumeCoordinator";
+import { scanMessageSearchPages } from "@/utils/messageSearch";
 
 type MessageCursor = { lastReadCreatedAt: number; lastReadMessageId: string };
 export type PeerReceiptState = {
@@ -48,6 +49,15 @@ export type DmSearchResult = {
   createdAt: number;
   senderPubkey: string;
   preview: string;
+};
+export type DmSearchProgress = {
+  scanned: number;
+  complete: boolean;
+};
+export type DmSearchOptions = {
+  signal?: AbortSignal;
+  batchSize?: number;
+  onBatch?: (batch: DmSearchResult[], progress: DmSearchProgress) => void;
 };
 export type ConversationPreference = {
   hidden: boolean;
@@ -105,7 +115,7 @@ export function receiptStatusForMessage(
 function normalizeSearchText(value: string) {
   return value.normalize("NFKC").toLocaleLowerCase();
 }
-function recordInboxItem(record: Awaited<ReturnType<typeof syncedMessageRepository.listConversation>>[number]): InboxItem {
+function recordInboxItem(record: Awaited<ReturnType<typeof syncedMessageRepository.listConversationPage>>[number]): InboxItem {
   return {
     id: record.id,
     pubkey: record.senderPubkey,
@@ -400,28 +410,62 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!current || current.updatedAt > updatedAt) return;
       await this.clearDraft(peer, account);
     },
-    async searchPeerMessages(peerPubkey: string, query: string): Promise<DmSearchResult[]> {
-      const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
+    async searchPeerMessages(peerPubkey: string, query: string, options: DmSearchOptions = {}): Promise<DmSearchResult[]> {
+      const keyStore = useKeyStore();
+      const account = (this.loadedFor || keyStore.pkHex).toLowerCase();
       const peer = peerPubkey.toLowerCase();
       const needle = normalizeSearchText(query.trim());
-      if (!account || !peer || !needle) return [];
+      if (!account || !peer || !needle || options.signal?.aborted) return [];
+
       const friendships = useFriendshipsStore();
       if (friendships.loadedFor !== account) await friendships.load(account);
+      if (options.signal?.aborted || keyStore.pkHex.toLowerCase() !== account) return [];
+
       const conversationId = await deriveConversationId([account, peer]);
-      const records = await syncedMessageRepository.listConversation(account, conversationId);
       const preference = this.preferencesByPeer[peer];
-      const byId = new Map<string, InboxItem>();
-      for (const item of records.map(recordInboxItem)) byId.set(item.id, item);
-      for (const item of this.peerMessages(peer)) byId.set(item.id, item);
-      return [...byId.values()]
-        .filter(item => isDirectMessageTags(item.tags)
-          && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) === peer
-          && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
-          && afterDeletion(item, preference))
-        .map(item => ({ item, preview: directMessagePreview(item.content) }))
-        .filter(({ preview }) => !!preview && !["[图片]", "[语音]"].includes(preview) && normalizeSearchText(preview).includes(needle))
-        .map(({ item, preview }) => ({ id: item.id, createdAt: item.created_at, senderPubkey: item.pubkey, preview }))
-        .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+      const friendship = friendships.getRecord(peer);
+      const batchSize = Math.max(20, Math.min(options.batchSize ?? 80, 100));
+      const results = new Map<string, DmSearchResult>();
+      const seen = new Set<string>();
+
+      const isActive = () => !options.signal?.aborted
+        && keyStore.pkHex.toLowerCase() === account
+        && (!this.loadedFor || this.loadedFor.toLowerCase() === account);
+
+      const collectMatches = (items: InboxItem[]) => {
+        const batch: DmSearchResult[] = [];
+        for (const item of items) {
+          if (seen.has(item.id)) continue;
+          seen.add(item.id);
+          if (!isDirectMessageTags(item.tags)
+            || directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) !== peer
+            || !isAuthorizedDirectMessage(item, account, friendship)
+            || !afterDeletion(item, preference)) continue;
+          const preview = directMessagePreview(item.content);
+          if (!preview || ["[图片]", "[语音]"].includes(preview) || !normalizeSearchText(preview).includes(needle)) continue;
+          const result = { id: item.id, createdAt: item.created_at, senderPubkey: item.pubkey, preview };
+          results.set(item.id, result);
+          batch.push(result);
+        }
+        return batch.sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+      };
+
+      const localBatch = collectMatches(this.peerMessages(peer));
+      if (localBatch.length && isActive()) options.onBatch?.(localBatch, { scanned: 0, complete: false });
+
+      await scanMessageSearchPages({
+        batchSize,
+        signal: options.signal,
+        shouldContinue: isActive,
+        loadPage: (before, limit) => syncedMessageRepository.listConversationPage(account, conversationId, before, limit),
+        onPage: (records, progress) => {
+          if (!isActive()) return;
+          const batch = collectMatches(records.map(recordInboxItem));
+          options.onBatch?.(batch, progress);
+        },
+      });
+
+      return [...results.values()].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
     },
     async loadPeerHistoryPage(peerPubkey: string, before?: {createdAt:number;id:string}) {
       const account = this.loadedFor || useKeyStore().pkHex;
