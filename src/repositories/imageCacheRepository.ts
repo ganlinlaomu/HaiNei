@@ -47,7 +47,7 @@ export class ImageCacheRepository {
       this.database.accountImageCache,
       this.database.deviceKeyValues,
       async () => {
-        const previous = await this.database.accountImageCache.get([account, entry.cacheId]);
+        const previous = await this.database.accountImageCache.get([account, entry.url]);
         const total = await this.readTotalBytes(account);
         await this.database.accountImageCache.put(record);
         await this.writeTotalBytes(
@@ -118,7 +118,7 @@ export class ImageCacheRepository {
             return 0;
           }
           const currentTotal = await this.readTotalBytes(account);
-          await this.database.accountImageCache.delete([account, oldest.cacheId]);
+          await this.database.accountImageCache.delete([account, oldest.url]);
           const nextTotal = Math.max(0, currentTotal - oldest.size);
           await this.writeTotalBytes(account, nextTotal);
           return oldest.size;
