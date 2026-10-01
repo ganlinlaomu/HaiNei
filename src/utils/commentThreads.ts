@@ -45,9 +45,118 @@ export function buildCommentSubmission(
   };
 }
 
-export function shouldCloseCommentSheetDrag(distance: number, panelHeight: number, durationMs: number) {
-  const velocity = durationMs > 0 ? distance / durationMs : 0;
-  return distance > panelHeight * 0.25 || velocity >= 0.7;
+export const COMMENT_SHEET_DRAG_START_DISTANCE = 10;
+export const COMMENT_SHEET_FLICK_MIN_DISTANCE = 48;
+const COMMENT_SHEET_DRAG_DIRECTION_RATIO = 1.15;
+const COMMENT_SHEET_SCROLL_TOP_TOLERANCE = 1;
+
+export type CommentSheetDragPhase = "pending" | "dragging" | "native";
+export type CommentSheetDragGesture = {
+  phase: CommentSheetDragPhase;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  startedAt: number;
+  panelHeight: number;
+};
+
+export function canStartCommentSheetBodyDrag(options: {
+  commentCount: number;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  interactiveTarget: boolean;
+  pointerCount?: number;
+}) {
+  if (options.interactiveTarget || (options.pointerCount ?? 1) !== 1) return false;
+  // Comment count is intentionally not the arbiter: short populated lists and
+  // the empty state should both be draggable. Scroll geometry decides whether
+  // native scrolling still owns the gesture.
+  void options.commentCount;
+  const scrollable = options.scrollHeight > options.clientHeight + COMMENT_SHEET_SCROLL_TOP_TOLERANCE;
+  return !scrollable || options.scrollTop <= COMMENT_SHEET_SCROLL_TOP_TOLERANCE;
+}
+
+export function createCommentSheetDragGesture(
+  startX: number,
+  startY: number,
+  startedAt: number,
+  panelHeight: number,
+  phase: CommentSheetDragPhase = "pending",
+): CommentSheetDragGesture {
+  return {
+    phase,
+    startX,
+    startY,
+    lastX: startX,
+    lastY: startY,
+    startedAt,
+    panelHeight: Math.max(1, panelHeight),
+  };
+}
+
+export function updateCommentSheetDragGesture(
+  gesture: CommentSheetDragGesture,
+  clientX: number,
+  clientY: number,
+  scrollTop = 0,
+) {
+  const next = { ...gesture, lastX: clientX, lastY: clientY };
+  if (next.phase === "native") return { gesture: next, dragDistance: 0, preventDefault: false };
+
+  const deltaX = clientX - next.startX;
+  const deltaY = clientY - next.startY;
+
+  if (next.phase === "pending") {
+    if (Math.hypot(deltaX, deltaY) < COMMENT_SHEET_DRAG_START_DISTANCE) {
+      return { gesture: next, dragDistance: 0, preventDefault: false };
+    }
+    const downward = deltaY > 0 && deltaY > Math.abs(deltaX) * COMMENT_SHEET_DRAG_DIRECTION_RATIO;
+    if (scrollTop > COMMENT_SHEET_SCROLL_TOP_TOLERANCE || !downward) {
+      next.phase = "native";
+      return { gesture: next, dragDistance: 0, preventDefault: false };
+    }
+    next.phase = "dragging";
+  }
+
+  return {
+    gesture: next,
+    dragDistance: Math.max(0, deltaY),
+    preventDefault: true,
+  };
+}
+
+export function shouldCloseCommentSheetDrag(
+  distance: number,
+  panelHeight: number,
+  durationMs: number,
+  horizontalDistance = 0,
+) {
+  const vertical = Math.max(0, distance);
+  const horizontal = Math.abs(horizontalDistance);
+  if (vertical < COMMENT_SHEET_DRAG_START_DISTANCE
+    || vertical <= horizontal * COMMENT_SHEET_DRAG_DIRECTION_RATIO) return false;
+  const velocity = durationMs > 0 ? vertical / durationMs : 0;
+  return vertical > panelHeight * 0.25
+    || (vertical >= COMMENT_SHEET_FLICK_MIN_DISTANCE && velocity >= 0.7);
+}
+
+export function finishCommentSheetDragGesture(
+  gesture: CommentSheetDragGesture,
+  endedAt: number,
+  cancelled = false,
+): "close" | "rebound" | "none" | "cancel" {
+  if (cancelled) return "cancel";
+  if (gesture.phase !== "dragging") return "none";
+  const distance = Math.max(0, gesture.lastY - gesture.startY);
+  const horizontalDistance = gesture.lastX - gesture.startX;
+  return shouldCloseCommentSheetDrag(
+    distance,
+    gesture.panelHeight,
+    Math.max(0, endedAt - gesture.startedAt),
+    horizontalDistance,
+  ) ? "close" : "rebound";
 }
 
 export function canSubmitComment(text: string, hasImage: boolean) {
