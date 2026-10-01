@@ -324,7 +324,7 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useProfilesStore } from "@/stores/profiles";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
-import { clearAllCache, getCacheStats } from "@/utils/imageCache";
+import { clearAllCache, getCacheStats, MEMORY_IMAGE_CACHE_MAX_BYTES } from "@/utils/imageCache";
 import { registerOutgoingPushSigner, retryFailedOutgoing } from "@/nostr/messaging/service";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
@@ -370,7 +370,7 @@ const newMediaType = ref<MediaServerType>("blossom");
 const newMediaUrl = ref("");
 const newMediaToken = ref("");
 const statuses = reactive<Record<string, RelayRuntimeStatus | undefined>>({});
-const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0, maxSize: 48 * 1024 * 1024 });
+const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0, maxSize: MEMORY_IMAGE_CACHE_MAX_BYTES });
 const loadingCache = ref(false);
 const clearingCache = ref(false);
 const pushBusy = ref(false);
@@ -621,7 +621,7 @@ function scheduleDeferredRuntimeRefresh() {
 async function refreshCacheStats(force = false) {
   const account = keyStore.pkHex;
   if (!account) {
-    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, maxSize: 48 * 1024 * 1024 });
+    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, maxSize: MEMORY_IMAGE_CACHE_MAX_BYTES });
     return;
   }
   if (!force && !isAccountResourceStale(
@@ -819,7 +819,7 @@ watch(() => keyStore.pkHex, async pk => {
   loadingCache.value = false;
   if (!pk) {
     settings.reset();
-    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, maxSize: 48 * 1024 * 1024 });
+    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, maxSize: MEMORY_IMAGE_CACHE_MAX_BYTES });
     cacheStatsAccount = "";
     cacheStatsUpdatedAt = 0;
     for (const url of Object.keys(statuses)) delete statuses[url];
@@ -827,7 +827,7 @@ watch(() => keyStore.pkHex, async pk => {
     Object.assign(diagnostics, { syncStatus: "idle", lastCatchupCompletedAt: 0, pendingOutgoing: 0 });
     return;
   }
-  if (cacheStatsAccount !== pk) Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, maxSize: 48 * 1024 * 1024 });
+  if (cacheStatsAccount !== pk) Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, maxSize: MEMORY_IMAGE_CACHE_MAX_BYTES });
   backgroundLock.value = deviceStorage.getItem(autoLockKey(pk)) === "1";
   pushEnabled.value = pushEnabledForAccount(pk);
   if (settings.loadedFor !== pk) await settings.load(pk);
