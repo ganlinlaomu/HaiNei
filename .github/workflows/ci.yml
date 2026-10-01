@@ -63,7 +63,7 @@ jobs:
             --disable-gpu \
             --disable-dev-shm-usage \
             --autoplay-policy=no-user-gesture-required \
-            --virtual-time-budget=12000 \
+            --disable-background-timer-throttling \
             --dump-dom \
             http://127.0.0.1:5173/tests/browser/media-validation.html \
             > /tmp/media-validation-dom.html
