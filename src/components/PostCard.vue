@@ -74,11 +74,11 @@ import ProfileAvatar from "./ProfileAvatar.vue";
 import { shouldSendDoubleTapLike } from "@/utils/feedCarousel";
 import { extractImageUrls } from "@/utils/extractImageUrls";
 import { loadProfileView } from "@/router/lazyViews";
+import { feedScrollAfterSheetClose } from "@/utils/commentThreads";
 
 const PostImagePreview = defineAsyncComponent(() => import("./PostImagePreview.vue"));
 const VideoPlayer = defineAsyncComponent(() => import("./VideoPlayer.vue"));
 const CommentSheet = defineAsyncComponent(() => import("./CommentSheet.vue"));
-import { feedScrollAfterSheetClose } from "@/utils/commentThreads";
 
 const props = withDefaults(defineProps<{ message: InboxItem; openCommentId?: string; flat?: boolean }>(), { flat: false });
 const emit = defineEmits<{ height: [id: string, height: number] }>();
