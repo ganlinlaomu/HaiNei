@@ -14,17 +14,22 @@ describe("account relay startup ordering", () => {
   it("returns from local restore without waiting for remote critical state, but gates Relay history on authoritative unread", () => {
     const source = readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8");
     const criticalRequest = source.indexOf("fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false");
+    const criticalNamespaces = source.indexOf('["read_state", "notification_state", "friendships"]');
     const localRefresh = source.indexOf("await directMessages.refresh(pk)");
     const pendingUnread = source.indexOf("directMessages.beginAuthoritativeUnreadRestore(pk)");
     const remoteWait = source.indexOf("const criticalState = await criticalStateRestore");
     const authoritativeRefresh = source.indexOf("await directMessages.refresh(pk)", localRefresh + 1);
+    const notificationRefresh = source.indexOf("await useNotificationsStore().refreshSyncedState(pk)");
     const finishUnread = source.indexOf("directMessages.finishAuthoritativeUnreadRestore(pk)");
     const relayStart = source.indexOf("await startAccountMessageSync(this)");
 
     expect(criticalRequest).toBeGreaterThan(-1);
+    expect(criticalNamespaces).toBeGreaterThan(-1);
     expect(localRefresh).toBeGreaterThan(criticalRequest);
     expect(pendingUnread).toBeGreaterThan(localRefresh);
     expect(remoteWait).toBeGreaterThan(pendingUnread);
+    expect(notificationRefresh).toBeGreaterThan(remoteWait);
+    expect(notificationRefresh).toBeLessThan(authoritativeRefresh);
     expect(authoritativeRefresh).toBeGreaterThan(remoteWait);
     expect(finishUnread).toBeGreaterThan(authoritativeRefresh);
     expect(relayStart).toBeGreaterThan(finishUnread);
