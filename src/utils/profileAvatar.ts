@@ -5,6 +5,7 @@ import { encryptImageBytes } from "@/utils/imageCrypto";
 import { getImageFromCache, storeImageInCache } from "@/utils/imageCache";
 import { resizeImageFile } from "@/utils/imageResize";
 import { downloadMedia } from "@/utils/mediaSafety";
+import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
 
 export async function uploadPrivateProfileAvatar(
@@ -34,21 +35,96 @@ export async function uploadPrivateProfileAvatar(
   return reference;
 }
 
-export async function loadPrivateProfileAvatar(accountPubkey: string, reference: string, signal?: AbortSignal) {
-  const cached = await getImageFromCache(accountPubkey, reference);
-  if (cached) return cached.blob;
-  const metadata = decodeEncryptedImageRef(reference);
-  if (!metadata || !metadata.mime.startsWith("image/")) throw new Error("头像引用无效");
-  const encryptedBytes = await downloadMedia(metadata.url, 16 * 1024 * 1024, signal);
-  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-  const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
-  const decrypted = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },
-    key,
-    encryptedBytes
-  );
-  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-  const blob = new Blob([decrypted], { type: metadata.mime });
-  await storeImageInCache(accountPubkey, reference, blob, metadata.mime);
-  return blob;
+type SharedAvatarJob = {
+  controller: AbortController;
+  promise: Promise<Blob>;
+  consumers: number;
+};
+
+const avatarJobs = new Map<string, SharedAvatarJob>();
+
+function consumeAvatarJob(taskKey: string, job: SharedAvatarJob, signal?: AbortSignal) {
+  job.consumers += 1;
+  return new Promise<Blob>((resolve, reject) => {
+    let released = false;
+    const release = (abortIfUnused: boolean) => {
+      if (released) return;
+      released = true;
+      signal?.removeEventListener("abort", onAbort);
+      job.consumers = Math.max(0, job.consumers - 1);
+      if (abortIfUnused && job.consumers === 0 && avatarJobs.get(taskKey) === job) {
+        job.controller.abort();
+      }
+    };
+    const onAbort = () => {
+      release(true);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    job.promise.then(
+      blob => {
+        if (released) return;
+        release(false);
+        resolve(blob);
+      },
+      error => {
+        if (released) return;
+        release(false);
+        reject(error);
+      }
+    );
+  });
 }
+
+export function cancelPrivateProfileAvatarLoads(accountPubkey: string) {
+  const prefix = `${accountPubkey.toLowerCase()}:`;
+  for (const [key, job] of avatarJobs) {
+    if (key.startsWith(prefix)) job.controller.abort();
+  }
+}
+
+export async function loadPrivateProfileAvatar(accountPubkey: string, reference: string, signal?: AbortSignal) {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const account = accountPubkey.toLowerCase();
+  const taskKey = `${account}:${reference}`;
+  let job = avatarJobs.get(taskKey);
+  if (!job) {
+    const controller = new AbortController();
+    const shared: SharedAvatarJob = {
+      controller,
+      consumers: 0,
+      promise: Promise.resolve(new Blob()),
+    };
+    shared.promise = (async () => {
+      const cached = await getImageFromCache(account, reference);
+      if (cached) return cached.blob;
+      const metadata = decodeEncryptedImageRef(reference);
+      if (!metadata || !metadata.mime.startsWith("image/")) throw new Error("头像引用无效");
+      const encryptedBytes = await downloadMedia(metadata.url, 16 * 1024 * 1024, controller.signal);
+      if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const key = await crypto.subtle.importKey("raw", base64ToBytes(metadata.key), "AES-GCM", false, ["decrypt"]);
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: base64ToBytes(metadata.iv) },
+        key,
+        encryptedBytes
+      );
+      if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const blob = new Blob([decrypted], { type: metadata.mime });
+      await storeImageInCache(account, reference, blob, metadata.mime);
+      return blob;
+    })().finally(() => {
+      if (avatarJobs.get(taskKey) === shared) avatarJobs.delete(taskKey);
+    });
+    job = shared;
+    avatarJobs.set(taskKey, job);
+  }
+  return consumeAvatarJob(taskKey, job, signal);
+}
+
+onBeforeAccountLock(account => {
+  cancelPrivateProfileAvatarLoads(account);
+});
