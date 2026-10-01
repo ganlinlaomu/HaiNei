@@ -116,10 +116,10 @@ export const useKeyStore = defineStore("keys", {
       // an account switch can briefly reconnect using the previous account's Relay mirror.
       if (!isCurrent()) return;
       warmReadRelaysForSession(this);
-      // Read state and friendship authorization are startup-critical for DMs.
-      // Do not let Relay history race ahead of them: otherwise old history is
-      // temporarily counted as unread and the badge oscillates during login.
-      const criticalStateNamespaces: AccountStateNamespace[] = ["read_state", "friendships"];
+      // DM read state, notification read state and friendship authorization are
+      // startup-critical. Do not let Relay history race ahead of them: otherwise
+      // old history is temporarily counted as unread during a new-device login.
+      const criticalStateNamespaces: AccountStateNamespace[] = ["read_state", "notification_state", "friendships"];
       const criticalStateRestore: Promise<{ available: boolean; restored: AccountStateNamespace[] }> = this.supportsNip44
         ? fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false, isCurrent })
             .catch(error => {
@@ -169,6 +169,10 @@ export const useKeyStore = defineStore("keys", {
 
         if (criticalState.restored.includes("friendships")) {
           await useFriendshipsStore().reloadFromStorage(pk);
+          if (!isCurrent()) return;
+        }
+        if (criticalState.restored.includes("notification_state")) {
+          await useNotificationsStore().refreshSyncedState(pk);
           if (!isCurrent()) return;
         }
         await directMessages.refresh(pk);
