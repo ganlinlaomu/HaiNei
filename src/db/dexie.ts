@@ -42,8 +42,9 @@ export type AccountFriendRecord = DBFriend & { accountPubkey: string };
 export type AccountMetaRecord = DBMeta & { accountPubkey: string };
 export type AccountImageCacheRecord = {
   accountPubkey: string;
-  // SHA-256 of the in-memory cache reference. Never persist key-bearing media refs.
-  cacheId: string;
+  // Legacy-compatible column name: this stores only the SHA-256 cache id,
+  // never the key-bearing media reference itself.
+  url: string;
   sealedBytes: ArrayBuffer;
   iv: ArrayBuffer;
   mime: string;
@@ -597,10 +598,12 @@ export class HaiNeiDatabase extends Dexie {
       record.messageClass = record.tags?.some((tag: string[]) => tag[0] === "t" && tag[1] === "hainei-dm") ? "direct" : "other";
     }));
 
-    // Encrypted Media Cache v1. Drop any legacy plaintext image rows, switch
-    // the primary key to a SHA-256 cache id, and index lastAccess for disk LRU.
+    // Encrypted Media Cache v1. Keep the legacy-compatible primary-key shape
+    // because Dexie 3 cannot change primary keys in place. The "url" column now
+    // stores only a SHA-256 cache id, never the key-bearing media reference.
+    // Clear legacy plaintext rows and add lastAccess for disk LRU.
     this.version(15).stores({
-      accountImageCache: "[accountPubkey+cacheId], accountPubkey, [accountPubkey+timestamp], [accountPubkey+lastAccess]"
+      accountImageCache: "[accountPubkey+url], accountPubkey, [accountPubkey+timestamp], [accountPubkey+lastAccess]"
     }).upgrade(transaction => transaction.table("accountImageCache").clear());
 
   }
