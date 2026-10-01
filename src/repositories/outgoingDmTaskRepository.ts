@@ -130,8 +130,15 @@ export class OutgoingDmTaskRepository {
   }
 
   async list(accountPubkey: string) {
-    const rows = await this.database.outgoingDmTasks.where("accountPubkey").equals(normalizeAccountPubkey(accountPubkey)).toArray();
-    return Promise.all(rows.map(row => this.put(row)));
+    const account = normalizeAccountPubkey(accountPubkey);
+    const rows = await this.database.outgoingDmTasks.where("accountPubkey").equals(account).toArray();
+    return Promise.all(rows.map(async row => {
+      const normalized = await normalizeOutgoingDmTask(row as LegacyOutgoingDmTask);
+      // Normal reads stay read-only. Only pre-migration Blob rows are written
+      // back once after conversion to clone-safe ArrayBuffer fields.
+      if (normalized.changed) await this.database.outgoingDmTasks.put(normalized.task);
+      return normalized.task;
+    }));
   }
 }
 
