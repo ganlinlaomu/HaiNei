@@ -44,6 +44,82 @@ describe("comment bottom sheet", () => {
     expect(threads[0].replies.map(item => item.id)).toEqual(["reply", "nested"]);
   });
 
+  it("preserves ordering when replies arrive before their parents", () => {
+    const threads = buildCommentThreads([NESTED, REPLY, ROOT]);
+    expect(threads.map(thread => thread.root.id)).toEqual(["root"]);
+    expect(threads[0].replies.map(item => item.id)).toEqual(["nested", "reply"]);
+  });
+
+  it("preserves orphan-chain, self-reference, and multi-node-cycle behavior", () => {
+    const orphan: Comment = {
+      ...ROOT,
+      id: "orphan",
+      parentCommentId: "missing"
+    };
+    const orphanChild: Comment = {
+      ...REPLY,
+      id: "orphan-child",
+      parentCommentId: "orphan"
+    };
+    expect(buildCommentThreads([orphan, orphanChild]).map(thread => ({
+      root: thread.root.id,
+      replies: thread.replies.map(reply => reply.id)
+    }))).toEqual([
+      { root: "orphan", replies: [] },
+      { root: "orphan-child", replies: [] }
+    ]);
+
+    const self: Comment = { ...ROOT, id: "self", parentCommentId: "self" };
+    expect(buildCommentThreads([self])).toEqual([{ root: self, replies: [] }]);
+
+    const cycleA: Comment = { ...ROOT, id: "cycle-a", parentCommentId: "cycle-b" };
+    const cycleB: Comment = { ...REPLY, id: "cycle-b", parentCommentId: "cycle-c" };
+    const cycleC: Comment = { ...NESTED, id: "cycle-c", parentCommentId: "cycle-a" };
+    expect(buildCommentThreads([cycleA, cycleB, cycleC])).toEqual([]);
+  });
+
+  it("handles a ten-thousand-comment reply chain iteratively", () => {
+    const comments: Comment[] = [ROOT];
+    for (let index = 1; index < 10_000; index += 1) {
+      comments.push({
+        ...REPLY,
+        id: `deep-${index}`,
+        parentCommentId: index === 1 ? ROOT.id : `deep-${index - 1}`,
+        timestamp: index + 1
+      });
+    }
+    const threads = buildCommentThreads(comments);
+    expect(threads).toHaveLength(1);
+    expect(threads[0].root.id).toBe(ROOT.id);
+    expect(threads[0].replies).toHaveLength(9_999);
+    expect(threads[0].replies.at(-1)?.id).toBe("deep-9999");
+  });
+
+  it("keeps parent-chain property access within a linear upper bound", () => {
+    let parentReads = 0;
+    const comments: Comment[] = [];
+    for (let index = 0; index < 4_000; index += 1) {
+      const comment = {
+        ...ROOT,
+        id: `linear-${index}`,
+        timestamp: index + 1
+      } as Comment;
+      Object.defineProperty(comment, "parentCommentId", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          parentReads += 1;
+          return index === 0 ? undefined : `linear-${index - 1}`;
+        }
+      });
+      comments.push(comment);
+    }
+
+    const threads = buildCommentThreads(comments);
+    expect(threads).toHaveLength(1);
+    expect(parentReads).toBeLessThanOrEqual(comments.length * 2);
+  });
+
   it("sets the actual reply id and recipient for existing interaction sending", () => {
     expect(buildCommentSubmission("post", ROOT.author, " hello ", REPLY, ROOT.author)).toEqual({
       messageId: "post", recipientPubkey: REPLY.author, text: "hello", parentCommentId: "reply"
