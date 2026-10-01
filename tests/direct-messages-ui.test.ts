@@ -38,7 +38,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(source).not.toContain('class="nav-label"');
     expect(source).toContain('to="/settings"');
     const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
-    expect(settings).toContain("router.push('/friends')");
+    expect(settings).toContain('router.push("/friends")');
   });
 
   it("shows profile save progress and prevents duplicate submissions", () => {
