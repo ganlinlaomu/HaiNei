@@ -74,7 +74,7 @@ describe("feed media carousel and actions", () => {
     expect(source).toContain("new Set(adjacentSlideIndexes(index, images.value.length))");
     expect(source).toContain("job.queued.promote(priority)");
     expect(source).toContain("viewerOriginalFailed");
-    expect(source).toContain("requestController.abort()");
+    expect(source).toContain("for (const controller of viewerOriginalControllers.values()) controller.abort()");
     expect(source).not.toContain("images.value.forEach((_, itemIndex) =>");
     expect(viewer).toContain('emit("index-change", next)');
   });
