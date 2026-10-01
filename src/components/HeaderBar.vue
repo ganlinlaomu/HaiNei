@@ -8,7 +8,7 @@
         <polyline points="9 22 9 12 15 12 15 22"></polyline>
       </svg>
     </router-link>
-    <router-link class="nav-item" to="/conversations" aria-label="私信" @click="handleNavigation">
+    <router-link class="nav-item" to="/conversations" aria-label="私信" @pointerdown="preloadBottomTab('conversations')" @focus="preloadBottomTab('conversations')" @click="handleNavigation">
       <span class="icon-wrapper">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
@@ -16,7 +16,7 @@
         <span v-if="directMessages.unreadCount > 0" class="badge">{{ directMessages.unreadCount }}</span>
       </span>
     </router-link>
-    <router-link class="nav-item" to="/notifications" aria-label="通知" @click="handleNavigation">
+    <router-link class="nav-item" to="/notifications" aria-label="通知" @pointerdown="preloadBottomTab('notifications')" @focus="preloadBottomTab('notifications')" @click="handleNavigation">
       <span class="icon-wrapper">
         <svg
           class="icon"
@@ -40,7 +40,7 @@
         </span>
       </span>
     </router-link>
-    <router-link class="nav-item" to="/settings" aria-label="我的" @click="handleNavigation">
+    <router-link class="nav-item" to="/settings" aria-label="我的" @pointerdown="preloadBottomTab('settings')" @focus="preloadBottomTab('settings')" @click="handleNavigation">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="8" r="4"></circle>
         <path d="M4 21a8 8 0 0 1 16 0"></path>
@@ -56,6 +56,7 @@ import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useDirectMessagesStore } from "@/stores/directMessages";
+import { loadConversationsView, loadNotificationsView, loadSettingsView } from "@/router/lazyViews";
 
 
 export default defineComponent({
@@ -77,11 +78,22 @@ export default defineComponent({
       return true; // Logged in and unlocked (or not encrypted)
     });
 
+    type BottomTab = "conversations" | "notifications" | "settings";
+
+    function preloadBottomTab(tab: BottomTab) {
+      const loader = tab === "conversations"
+        ? loadConversationsView
+        : tab === "notifications"
+          ? loadNotificationsView
+          : loadSettingsView;
+      void loader().catch(() => undefined);
+    }
+
     function handleNavigation() {
       ui.closePostEditor();
     }
     
-    return { isLoggedIn, shortPk, handleNavigation, notifications, directMessages, shouldShowBottomNav, ui };
+    return { isLoggedIn, shortPk, preloadBottomTab, handleNavigation, notifications, directMessages, shouldShowBottomNav, ui };
   }
 });
 </script>
@@ -270,6 +282,9 @@ export default defineComponent({
     padding: 10px;
   }
 
+}
+
+@media (min-width: 768px) and (hover: hover) and (pointer: fine) {
   .nav-item:hover {
     transform: translateX(2px);
   }
