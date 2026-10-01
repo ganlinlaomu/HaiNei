@@ -26,7 +26,10 @@ const child = spawn(chrome, [
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function targetInfo() {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`Chrome exited before DevTools became available (code=${child.exitCode}, signal=${child.signalCode})`);
+    }
     try {
       const response = await fetch("http://127.0.0.1:9222/json");
       const targets = await response.json();
@@ -35,7 +38,7 @@ async function targetInfo() {
     } catch {}
     await sleep(100);
   }
-  throw new Error("Chrome DevTools target did not become available");
+  throw new Error("Chrome DevTools target did not become available within 20 seconds");
 }
 
 async function evaluate(ws, expression, id) {
