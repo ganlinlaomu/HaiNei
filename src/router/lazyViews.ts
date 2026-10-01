@@ -14,9 +14,11 @@ let bottomTabPreload: Promise<PromiseSettledResult<unknown>[]> | null = null;
 
 async function preloadBottomTabsInBatches() {
   const loaders = [
+    // "我的" is the smallest primary hub and a frequent cold-start target on
+    // mobile. Warm it first, then keep the remaining tab chunks staggered.
+    loadSettingsView,
     loadConversationsView,
     loadNotificationsView,
-    loadSettingsView,
     loadSystemSettingsView,
   ];
   const results: PromiseSettledResult<unknown>[] = [];
