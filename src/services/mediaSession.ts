@@ -30,6 +30,31 @@ function workerBaseUrl() {
   return normalizedUrl(haineiWorkerBaseUrl());
 }
 
+function abortError() {
+  const error = new Error("media_session_aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+async function withAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) throw abortError();
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(abortError());
+    signal.addEventListener("abort", abort, { once: true });
+    operation.then(
+      value => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      error => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      }
+    );
+  });
+}
+
 function usable(session: MediaSession | undefined, now = Math.floor(Date.now() / 1000)) {
   return !!session && session.scope === SESSION_SCOPE && session.expiresAt > now + EXPIRY_SKEW_SECONDS;
 }
@@ -63,6 +88,7 @@ export async function getMediaSession(
   forceRefresh = false,
   fileSize?: number,
   contentHash?: string,
+  signal?: AbortSignal,
 ): Promise<MediaSession> {
   const pubkey = normalizedPubkey(accountPubkey);
   if (!/^[0-9a-f]{64}$/.test(pubkey)) throw new Error("当前 Nostr 账号公钥无效");
@@ -77,6 +103,7 @@ export async function getMediaSession(
     const challengeResponse = await timedJsonFetch(`${base}/api/auth/challenge`, {
       method: "POST",
       headers: { Accept: "application/json" },
+      signal,
     });
     const challengeBody = await json(challengeResponse, "获取身份验证 challenge 失败");
     const challenge = String(challengeBody?.challenge || "").trim().toLowerCase();
@@ -87,7 +114,7 @@ export async function getMediaSession(
 
     const url = `${base}/api/media/session`;
     const payload = { ...(fileSize === undefined ? {} : { fileSize }), ...(contentHash === undefined ? {} : { contentHash }) };
-    const event = await signWorkerRequest(signEvent, pubkey, {
+    const event = await withAbort(signWorkerRequest(signEvent, pubkey, {
       action: "hainei_media_session",
       challenge,
       expiresAt: challengeExpiresAt,
@@ -95,11 +122,12 @@ export async function getMediaSession(
       method: "POST",
       payload,
       content: "Authorize HaiNei media session",
-    });
+    }), signal);
     const sessionResponse = await timedJsonFetch(url, {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({ ...payload, challenge, event }),
+      signal,
     });
     const body = await json(sessionResponse, "获取媒体上传会话失败");
     const session: MediaSession = {
