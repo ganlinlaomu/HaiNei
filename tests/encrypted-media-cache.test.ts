@@ -63,7 +63,9 @@ describe("encrypted media cache vault", () => {
     expect(cache).toContain("IMAGE_PERSISTENT_CACHE_MAX_BYTES = 256 * 1024 * 1024");
     expect(cache).toContain('"SHA-256"');
     expect(cache).toContain('"media-cache"');
-    expect(schema).toContain("[accountPubkey+cacheId]");
+    expect(schema).toContain("[accountPubkey+url]");
+    expect(cache).toContain("url: cacheId");
+    expect(schema).toContain('never the key-bearing media reference');
     expect(schema).toContain("[accountPubkey+lastAccess]");
     expect(repository).toContain("trimToBytes");
     expect(repository).not.toContain("blob:");
