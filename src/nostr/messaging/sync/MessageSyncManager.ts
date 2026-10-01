@@ -12,6 +12,7 @@ import { MessageIngestionPipeline, type DecodeMessage } from "./ingestion";
 import { calculateCatchupSince } from "./sorting";
 import { retryOutgoingQueue } from "@/nostr/messaging/service";
 import { onAppResume } from "@/services/appResumeCoordinator";
+import { normalizeRelayUrl } from "@/services/connectionSettings";
 import {
   INITIAL_HISTORY_MAX_BATCHES,
   type MessageSource,
@@ -81,7 +82,9 @@ export class MessageSyncManager {
   async start(options: MessageSyncOptions) {
     this.stop();
     const accountPubkey = options.accountPubkey.toLowerCase();
-    this.options = { ...options, accountPubkey };
+    const relays = [...new Set(options.relays.map(normalizeRelayUrl).filter(Boolean))];
+    options = { ...options, accountPubkey, relays };
+    this.options = options;
     const sessionId = `${accountPubkey.slice(0, 8)}-${this.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.sessionId = sessionId;
     this.abortController = new AbortController();
@@ -281,9 +284,10 @@ export class MessageSyncManager {
           && result.exhaustedHistory
           && !result.hitMaxBatches
           && !result.incomplete;
-        const completedRelaySetUpdate = !freshHistoryRepair
+        const completedIncremental = !freshHistoryRepair
           && result.allRelaysCompleted
           && !result.incomplete;
+        const completedRelaySetUpdate = completedIncremental;
         const completedRelaySignature = relayUrl
           ? [...new Set([...previousRelaySet, relayUrl])]
               .filter(url => options.relays.includes(url))
@@ -297,26 +301,35 @@ export class MessageSyncManager {
           && result.nextUntil <= until
             ? result.nextUntil
             : undefined;
-        await this.repository.updateSyncState(options.accountPubkey, {
-          lastSuccessfulSyncAt: completedAt,
-          lastCatchupCompletedAt: completedAt,
-          ...(completedFreshHistory
-            ? {
-                historyBackfillCompletedAt: completedAt,
-                historyBackfillUntil: undefined,
-                historyBackfillRelaySignature: currentRelaySignature
-              }
-            : resumableHistoryCursor !== undefined
-              ? { historyBackfillUntil: resumableHistoryCursor }
-              : completedRelaySetUpdate
-                ? { historyBackfillRelaySignature: completedRelaySignature }
-                : {})
-        });
+
+        const syncStatePatch: Record<string, number | string | undefined> = {};
+        if (completedFreshHistory || completedIncremental) {
+          syncStatePatch.lastSuccessfulSyncAt = completedAt;
+          syncStatePatch.lastCatchupCompletedAt = completedAt;
+        }
+        if (completedFreshHistory) {
+          syncStatePatch.historyBackfillCompletedAt = completedAt;
+          syncStatePatch.historyBackfillUntil = undefined;
+          syncStatePatch.historyBackfillRelaySignature = currentRelaySignature;
+        } else if (resumableHistoryCursor !== undefined) {
+          syncStatePatch.historyBackfillUntil = resumableHistoryCursor;
+        } else if (completedRelaySetUpdate) {
+          syncStatePatch.historyBackfillRelaySignature = completedRelaySignature;
+        }
+        if (Object.keys(syncStatePatch).length > 0) {
+          await this.repository.updateSyncState(options.accountPubkey, syncStatePatch);
+        }
+
         for (const completedRelay of result.completedRelays) {
           await this.repository.updateRelayState(options.accountPubkey, completedRelay, {
             lastEOSEAt: completedAt,
-            lastSuccessfulCatchupAt: completedAt
+            ...((completedFreshHistory || completedIncremental)
+              ? { lastSuccessfulCatchupAt: completedAt }
+              : {})
           });
+        }
+        if (result.incomplete) {
+          logger.warn(`[message-sync] catch-up incomplete account=${options.accountPubkey.slice(0, 8)} phase=${activeSource} failed=${[...result.failedRelays.entries()].map(([url, reason]) => `${url}:${reason}`).join(",") || (result.timedOut ? "timeout" : result.aborted ? "aborted" : "partial")}`);
         }
         logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} phase=${activeSource} received=${result.received} unique=${result.unique}`);
         nextSource = this.catchupPending;
