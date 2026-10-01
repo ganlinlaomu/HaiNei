@@ -213,12 +213,13 @@
 
       <details class="technical-section">
         <summary class="section-heading">
-          <div><h3>存储 / Cache</h3><p>{{ cacheStats.count }} 个图片文件 · {{ formatSize(cacheStats.size) }}</p></div>
+          <div><h3>存储 / Cache</h3><p>{{ cacheStats.count }} 个图片文件 · {{ formatSize(cacheStats.size) }} / 48 MB</p></div>
         </summary>
         <div class="cache-info">
           <div class="small">
             <div>图片缓存：{{ cacheStats.count }} 个文件</div>
-            <div>缓存大小：{{ formatSize(cacheStats.size) }}</div>
+            <div>缓存大小：{{ formatSize(cacheStats.size) }} / 48 MB</div>
+            <div>临时内存缓存 · 锁定、切换账号或退出后自动清除</div>
             <div v-if="cacheStats.oldestTimestamp">最早缓存：{{ new Date(cacheStats.oldestTimestamp).toLocaleDateString() }}</div>
           </div>
           <div class="button-row">
