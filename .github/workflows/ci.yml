@@ -57,4 +57,4 @@ jobs:
             echo "Chrome/Chromium is not available on the runner" >&2
             exit 1
           fi
-          CHROME="$CHROME" node tests/browser/run-media-validation.mjs
+          CHROME="$CHROME" node --experimental-websocket tests/browser/run-media-validation.mjs
