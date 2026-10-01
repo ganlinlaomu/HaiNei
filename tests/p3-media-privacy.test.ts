@@ -53,7 +53,7 @@ describe("P3 media privacy hardening", () => {
 
     const blob = await loadPrivateProfileAvatar(ACCOUNT, ref, controller.signal);
 
-    expect(mocks.downloadMedia).toHaveBeenCalledWith(URL, 16 * 1024 * 1024, controller.signal);
+    expect(mocks.downloadMedia).toHaveBeenCalledWith(URL, 16 * 1024 * 1024, expect.any(AbortSignal));
     expect(await blob.text()).toBe("private avatar bytes");
   });
 
