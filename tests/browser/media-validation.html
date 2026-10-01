@@ -96,6 +96,7 @@
         throw new Error("decrypted Blob metadata is incorrect");
       }
 
+      video.preload = "metadata";
       video.load();
       if (video.readyState < 1) {
         await new Promise((resolve, reject) => {
