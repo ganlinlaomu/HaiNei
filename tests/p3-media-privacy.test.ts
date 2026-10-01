@@ -14,6 +14,7 @@ vi.mock("@/utils/mediaSafety", async importOriginal => {
 });
 
 import { loadPrivateProfileAvatar } from "@/utils/profileAvatar";
+import { clearMemoryImageCache } from "@/utils/imageCache";
 
 const ACCOUNT = "a".repeat(64);
 const URL = "https://media.example/avatar.enc";
@@ -41,7 +42,10 @@ async function encryptedAvatar(plaintext: string) {
 }
 
 describe("P3 media privacy hardening", () => {
-  beforeEach(() => mocks.downloadMedia.mockReset());
+  beforeEach(() => {
+    mocks.downloadMedia.mockReset();
+    clearMemoryImageCache();
+  });
   it("loads private avatars through the bounded cancellable media downloader", async () => {
     const { encrypted, ref } = await encryptedAvatar("private avatar bytes");
     const controller = new AbortController();
@@ -51,6 +55,24 @@ describe("P3 media privacy hardening", () => {
 
     expect(mocks.downloadMedia).toHaveBeenCalledWith(URL, 16 * 1024 * 1024, controller.signal);
     expect(await blob.text()).toBe("private avatar bytes");
+  });
+
+  it("shares one avatar download/decrypt across concurrent consumers and then hits memory cache", async () => {
+    const { encrypted, ref } = await encryptedAvatar("shared avatar bytes");
+    let release!: (value: ArrayBuffer) => void;
+    mocks.downloadMedia.mockReturnValue(new Promise<ArrayBuffer>(resolve => { release = resolve; }));
+
+    const first = loadPrivateProfileAvatar(ACCOUNT, ref);
+    const second = loadPrivateProfileAvatar(ACCOUNT, ref);
+    expect(mocks.downloadMedia).toHaveBeenCalledTimes(1);
+
+    release(encrypted);
+    const [a, b] = await Promise.all([first, second]);
+    expect(await a.text()).toBe("shared avatar bytes");
+    expect(await b.text()).toBe("shared avatar bytes");
+
+    await loadPrivateProfileAvatar(ACCOUNT, ref);
+    expect(mocks.downloadMedia).toHaveBeenCalledTimes(1);
   });
 
   it("rejects unknown encrypted-media metadata fields before any media load", async () => {
