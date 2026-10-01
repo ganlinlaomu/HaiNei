@@ -28,6 +28,7 @@ import {
 } from "@/utils/crypto";
 import { debugLog } from "@/utils/debugLog";
 import { clearAccountScopedCaches } from "@/services/nostrCache";
+import { clearMemoryImageCache } from "@/utils/imageCache";
 import { cancelOutgoingWorkForAccount } from "@/nostr/messaging/service";
 import { ACCOUNT_STATE_NAMESPACES, fetchAndMaterializeAccountState, syncAccountStateNamespace } from "@/services/accountStateSync";
 import { hydratePrivateDeviceValues, clearPrivateDeviceValues, deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/deviceStorage";
@@ -208,6 +209,7 @@ export const useKeyStore = defineStore("keys", {
       lockLocalVault(currentPk);
       clearPrivateDeviceValues(currentPk);
       clearAccountScopedCaches(currentPk);
+      clearMemoryImageCache(currentPk);
       cancelOutgoingWorkForAccount(currentPk);
       const account = currentPk.slice(0, 8) || "none";
       try {
