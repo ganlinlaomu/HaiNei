@@ -32,7 +32,11 @@ export async function prepareEncryptedDmAudio(blob: Blob, duration: number): Pro
 
 export async function uploadPreparedEncryptedDmAudio(
   prepared: PreparedEncryptedAudio,
-  options: { accountPubkey: string; signEvent: (event: EventTemplate) => Promise<VerifiedEvent> },
+  options: {
+    accountPubkey: string;
+    signEvent: (event: EventTemplate) => Promise<VerifiedEvent>;
+    signal?: AbortSignal;
+  },
 ) {
   const encryptedFile = new File([prepared.encryptedBytes], prepared.encryptedName, { type: "application/octet-stream" });
   const descriptor = await uploadImageToBlossomWithFallback(encryptedFile, options);
