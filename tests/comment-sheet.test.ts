@@ -6,10 +6,14 @@ import {
   buildCommentSubmission,
   buildCommentThreads,
   canSubmitComment,
+  canStartCommentSheetBodyDrag,
   commentCountIncludingReplies,
   commentDraftAfterSend,
+  createCommentSheetDragGesture,
   feedScrollAfterSheetClose,
-  shouldCloseCommentSheetDrag
+  finishCommentSheetDragGesture,
+  shouldCloseCommentSheetDrag,
+  updateCommentSheetDragGesture
 } from "@/utils/commentThreads";
 
 const ROOT: Comment = {
@@ -70,19 +74,112 @@ describe("comment bottom sheet", () => {
     expect(shouldCloseCommentSheetDrag(260, 1000, 1000)).toBe(true);
     expect(shouldCloseCommentSheetDrag(80, 1000, 80)).toBe(true);
     expect(shouldCloseCommentSheetDrag(80, 1000, 500)).toBe(false);
+    expect(shouldCloseCommentSheetDrag(8, 1000, 1)).toBe(false);
     const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain("height:calc(100dvh - 72px)");
     expect(sheet).toContain("320ms cubic-bezier(.22,1,.36,1)");
     expect(sheet).toContain("260ms cubic-bezier(.22,1,.36,1)");
   });
 
-  it("drags the empty body but preserves native scrolling when comments exist", () => {
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
-    expect(sheet).toContain('@pointerdown="startEmptyDrag"');
-    expect(sheet).toContain("if (commentCount.value) return");
-    expect(sheet).toContain("touch-action:pan-y");
-    expect(sheet).toContain("-webkit-overflow-scrolling:touch");
-    expect(sheet).toContain(".comment-sheet-body.empty{touch-action:none");
+  it("allows empty and populated short bodies to start a pull-down without depending on comment count", () => {
+    const shortBody = {
+      scrollTop: 0,
+      scrollHeight: 420,
+      clientHeight: 520,
+      interactiveTarget: false,
+      pointerCount: 1
+    };
+    expect(canStartCommentSheetBodyDrag({ ...shortBody, commentCount: 0 })).toBe(true);
+    expect(canStartCommentSheetBodyDrag({ ...shortBody, commentCount: 4 })).toBe(true);
+  });
+
+  it("preserves native scrolling for long lists away from the top and hands off only on a later top-edge gesture", () => {
+    expect(canStartCommentSheetBodyDrag({
+      commentCount: 20,
+      scrollTop: 180,
+      scrollHeight: 1600,
+      clientHeight: 520,
+      interactiveTarget: false,
+      pointerCount: 1
+    })).toBe(false);
+    expect(canStartCommentSheetBodyDrag({
+      commentCount: 20,
+      scrollTop: 0,
+      scrollHeight: 1600,
+      clientHeight: 520,
+      interactiveTarget: false,
+      pointerCount: 1
+    })).toBe(true);
+
+    let gesture = createCommentSheetDragGesture(20, 100, 0, 800);
+    const upward = updateCommentSheetDragGesture(gesture, 20, 70, 0);
+    gesture = upward.gesture;
+    expect(gesture.phase).toBe("native");
+    expect(upward.preventDefault).toBe(false);
+    expect(finishCommentSheetDragGesture(gesture, 80)).toBe("none");
+  });
+
+  it("closes on a deliberate downward pull or valid flick and rebounds below threshold", () => {
+    let closeGesture = createCommentSheetDragGesture(20, 100, 0, 800);
+    closeGesture = updateCommentSheetDragGesture(closeGesture, 24, 330, 0).gesture;
+    expect(closeGesture.phase).toBe("dragging");
+    expect(finishCommentSheetDragGesture(closeGesture, 500)).toBe("close");
+
+    let flickGesture = createCommentSheetDragGesture(20, 100, 0, 800);
+    const flickUpdate = updateCommentSheetDragGesture(flickGesture, 22, 170, 0);
+    flickGesture = flickUpdate.gesture;
+    expect(flickUpdate.preventDefault).toBe(true);
+    expect(finishCommentSheetDragGesture(flickGesture, 80)).toBe("close");
+
+    let reboundGesture = createCommentSheetDragGesture(20, 100, 0, 800);
+    reboundGesture = updateCommentSheetDragGesture(reboundGesture, 22, 155, 0).gesture;
+    expect(finishCommentSheetDragGesture(reboundGesture, 400)).toBe("rebound");
+  });
+
+  it("never closes horizontal, multi-touch, cancelled, selection, or interactive-input gestures", () => {
+    expect(canStartCommentSheetBodyDrag({
+      commentCount: 3,
+      scrollTop: 0,
+      scrollHeight: 900,
+      clientHeight: 520,
+      interactiveTarget: false,
+      pointerCount: 2
+    })).toBe(false);
+    expect(canStartCommentSheetBodyDrag({
+      commentCount: 3,
+      scrollTop: 0,
+      scrollHeight: 900,
+      clientHeight: 520,
+      interactiveTarget: true,
+      pointerCount: 1
+    })).toBe(false);
+
+    let horizontal = createCommentSheetDragGesture(20, 100, 0, 800);
+    const horizontalUpdate = updateCommentSheetDragGesture(horizontal, 80, 118, 0);
+    horizontal = horizontalUpdate.gesture;
+    expect(horizontal.phase).toBe("native");
+    expect(horizontalUpdate.preventDefault).toBe(false);
+    expect(finishCommentSheetDragGesture(horizontal, 50)).toBe("none");
+
+    const selection = createCommentSheetDragGesture(20, 100, 0, 800);
+    const selectionHold = updateCommentSheetDragGesture(selection, 20, 103, 0);
+    expect(selectionHold.gesture.phase).toBe("pending");
+    expect(selectionHold.preventDefault).toBe(false);
+    expect(finishCommentSheetDragGesture(selectionHold.gesture, 700)).toBe("none");
+
+    let cancelled = createCommentSheetDragGesture(20, 100, 0, 800);
+    cancelled = updateCommentSheetDragGesture(cancelled, 20, 360, 0).gesture;
+    expect(finishCommentSheetDragGesture(cancelled, 300, true)).toBe("cancel");
+  });
+
+  it("starts clean after a cancelled drag so reopening cannot inherit stale close state", () => {
+    let first = createCommentSheetDragGesture(0, 0, 0, 800);
+    first = updateCommentSheetDragGesture(first, 0, 300, 0).gesture;
+    expect(finishCommentSheetDragGesture(first, 300, true)).toBe("cancel");
+
+    let reopened = createCommentSheetDragGesture(0, 0, 1000, 800);
+    reopened = updateCommentSheetDragGesture(reopened, 0, 40, 0).gesture;
+    expect(finishCommentSheetDragGesture(reopened, 1400)).toBe("rebound");
   });
 
   it("keeps the root toggle before expanded roots and collapses back in place", () => {
