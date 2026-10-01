@@ -43,6 +43,8 @@
           class="conversation-main"
           type="button"
           :style="swipeStyle(conversation.peerPubkey)"
+          @pointerdown="preloadMessagesView"
+          @focus="preloadMessagesView"
           @click="openConversation(conversation.peerPubkey)"
         >
           <ProfileAvatar :pubkey="conversation.peerPubkey" :local-name="localName(conversation.peerPubkey)" :size="48" />
@@ -80,6 +82,7 @@ import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { formatRelativeTime } from "@/utils/format";
 import { loadAccountStoresOnce } from "@/utils/bottomTabActivation";
+import { loadMessagesView } from "@/router/lazyViews";
 import { useSwipeActions } from "@/composables/useSwipeActions";
 
 const router = useRouter();
@@ -167,6 +170,7 @@ async function load() {
   await loadAccountStoresOnce(account, [messages, friendships, friends, profiles]);
 }
 function openConversation(pubkey: string) {
+  void loadMessagesView();
   if (isSwipeOpen(pubkey)) {
     closeSwipe(pubkey);
     return;
