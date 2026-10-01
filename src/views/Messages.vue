@@ -274,6 +274,7 @@ import {
   focusBoundedMessageWindow,
   initialBoundedMessageWindow,
   isNearMessageBottom,
+  mergeBoundedMessageIndexes,
   scrollTopAfterAnchorShift,
   scrollTopAfterNewMessages,
   shiftBoundedMessageWindow,
@@ -315,7 +316,6 @@ const searchContextActive = ref(false);
 const initialWindowRange = initialBoundedMessageWindow(messages.value.length, 60);
 const windowStart = ref(initialWindowRange.start);
 const windowEnd = ref(initialWindowRange.end);
-const windowMessages = computed(() => searchContextActive.value ? searchContextMessages.value : messages.value.slice(windowStart.value, windowEnd.value));
 const draft = ref("");
 const replyingToId = ref("");
 const draftReplyMessage = ref<InboxItem | undefined>();
@@ -355,6 +355,26 @@ const swipingMessageId = ref("");
 const swipeOffset = ref(0);
 const highlightedMessageId = ref("");
 const actionMenuMessageId = ref("");
+const retainedPlaybackMessageId = ref("");
+const retainedMessageIds = computed(() => [...new Set([
+  actionMenuMessageId.value,
+  swipingMessageId.value,
+  highlightedMessageId.value,
+  retainedPlaybackMessageId.value,
+].filter(Boolean))]);
+const windowMessages = computed(() => {
+  if (searchContextActive.value) return searchContextMessages.value;
+  const retainedIndexes = retainedMessageIds.value
+    .map(id => messages.value.findIndex(message => message.id === id))
+    .filter(index => index >= 0);
+  return mergeBoundedMessageIndexes(
+    { start: windowStart.value, end: windowEnd.value },
+    messages.value.length,
+    retainedIndexes,
+  )
+    .map(index => messages.value[index])
+    .filter((message): message is InboxItem => !!message);
+});
 const actionMenuPosition = ref({ top: 0, left: 12, width: 280 });
 const actionMenuStyle = computed(() => ({
   top: `${actionMenuPosition.value.top}px`,
@@ -595,12 +615,12 @@ async function focusMessage(messageId: string) {
   if (targetIndex >= 0) {
     searchContextActive.value = false;
     searchContextMessages.value = [];
+    refreshRetainedPlaybackMessage();
     const range = focusBoundedMessageWindow(
       messages.value.length,
       targetIndex,
       6,
       MAX_RENDERED_MESSAGES,
-      currentPinnedMessageIndexes(),
     );
     windowStart.value = range.start;
     windowEnd.value = range.end;
@@ -810,10 +830,10 @@ async function restoreDraft(account: string, peer: string) {
 }
 function setMessageListToBottom() {
   const list = messageList.value;
+  refreshRetainedPlaybackMessage();
   const range = initialBoundedMessageWindow(
     messages.value.length,
     INITIAL_MESSAGE_COUNT,
-    currentPinnedMessageIndexes(),
   );
   if (windowStart.value !== range.start || windowEnd.value !== range.end) {
     windowStart.value = range.start;
@@ -859,17 +879,10 @@ function scrollMetrics(element: HTMLElement): MessageScrollMetrics {
 
 type MessageDomAnchor = { id: string; offset: number; scrollTop: number };
 
-function currentPinnedMessageIndexes() {
-  const ids = new Set<string>();
-  for (const id of [actionMenuMessageId.value, swipingMessageId.value, highlightedMessageId.value]) {
-    if (id) ids.add(id);
-  }
+function refreshRetainedPlaybackMessage() {
   const playingShell = messageList.value?.querySelector<HTMLElement>(".voice-shell.playing");
   const playingLine = playingShell?.closest<HTMLElement>(".message-line[data-message-id]");
-  if (playingLine?.dataset.messageId) ids.add(playingLine.dataset.messageId);
-  return [...ids]
-    .map(id => messages.value.findIndex(message => message.id === id))
-    .filter(index => index >= 0);
+  retainedPlaybackMessageId.value = playingLine?.dataset.messageId || "";
 }
 
 function captureMessageDomAnchor(list: HTMLElement): MessageDomAnchor | undefined {
@@ -902,7 +915,6 @@ function resetMessageWindow() {
   const range = initialBoundedMessageWindow(
     messages.value.length,
     INITIAL_MESSAGE_COUNT,
-    currentPinnedMessageIndexes(),
   );
   windowStart.value = range.start;
   windowEnd.value = range.end;
@@ -923,17 +935,16 @@ async function prependOlderMessages() {
     if (needsHistoryPage) await fetchOlderPage();
     if (disposed || peerAtStart !== peerPubkey.value) return;
 
-    const pinned = currentPinnedMessageIndexes();
+    refreshRetainedPlaybackMessage();
     const anchorIndex = anchor ? messages.value.findIndex(message => message.id === anchor.id) : -1;
     const range = needsHistoryPage && anchorIndex >= 0
-      ? focusBoundedMessageWindow(messages.value.length, anchorIndex, OLDER_MESSAGE_BATCH, MAX_RENDERED_MESSAGES, pinned)
+      ? focusBoundedMessageWindow(messages.value.length, anchorIndex, OLDER_MESSAGE_BATCH, MAX_RENDERED_MESSAGES)
       : shiftBoundedMessageWindow(
         { start: windowStart.value, end: windowEnd.value },
         messages.value.length,
         "older",
         OLDER_MESSAGE_BATCH,
         MAX_RENDERED_MESSAGES,
-        pinned,
       );
 
     windowStart.value = range.start;
@@ -959,13 +970,13 @@ async function appendNewerMessages() {
   list.style.overflowAnchor = "none";
 
   try {
+    refreshRetainedPlaybackMessage();
     const range = shiftBoundedMessageWindow(
       { start: windowStart.value, end: windowEnd.value },
       messages.value.length,
       "newer",
       OLDER_MESSAGE_BATCH,
       MAX_RENDERED_MESSAGES,
-      currentPinnedMessageIndexes(),
     );
     windowStart.value = range.start;
     windowEnd.value = range.end;
@@ -1363,6 +1374,7 @@ watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
   cancelReply();
   closeMessageActionMenu();
   resetMessageGesture();
+  retainedPlaybackMessageId.value = "";
   highlightedMessageId.value = "";
   if (replyHighlightTimer !== null) window.clearTimeout(replyHighlightTimer);
   replyHighlightTimer = null;
@@ -1405,10 +1417,10 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
     && isNearMessageBottom(previousMetrics, BOTTOM_FOLLOW_THRESHOLD);
 
   if (list && previousMetrics && hasNewTail && followingLatest) {
+    refreshRetainedPlaybackMessage();
     const range = initialBoundedMessageWindow(
       nextIds.length,
       INITIAL_MESSAGE_COUNT,
-      currentPinnedMessageIndexes(),
     );
     windowStart.value = range.start;
     windowEnd.value = range.end;
