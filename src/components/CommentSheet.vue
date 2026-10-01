@@ -19,9 +19,15 @@
             @pointerdown="startDrag"
             @pointermove="moveDrag"
             @pointerup="endDrag"
-            @pointercancel="endDrag"
+            @pointercancel="cancelDrag"
           ><span></span></div>
-          <header class="comment-sheet-header">
+          <header
+            class="comment-sheet-header"
+            @pointerdown="startSurfaceDrag"
+            @pointermove="moveSurfaceDrag"
+            @pointerup="endSurfaceDrag"
+            @pointercancel="cancelDrag"
+          >
             <h2 id="comment-sheet-title">评论</h2>
             <button type="button" aria-label="关闭评论" @click="close">×</button>
           </header>
@@ -30,10 +36,14 @@
             ref="commentBody"
             class="comment-sheet-body"
             :class="{ empty: !commentCount }"
-            @pointerdown="startEmptyDrag"
-            @pointermove="moveEmptyDrag"
-            @pointerup="endEmptyDrag"
-            @pointercancel="endEmptyDrag"
+            @pointerdown="startBodyPointerDrag"
+            @pointermove="moveBodyPointerDrag"
+            @pointerup="endBodyPointerDrag"
+            @pointercancel="cancelBodyPointerDrag"
+            @touchstart="startBodyTouchDrag"
+            @touchmove="moveBodyTouchDrag"
+            @touchend="endBodyTouchDrag"
+            @touchcancel="cancelBodyDrag"
           >
             <div v-if="!threads.length" class="empty-comments">
               <strong>还没有评论</strong>
@@ -112,7 +122,17 @@ import { useFriendsStore } from "@/stores/friends";
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { formatRelativeTime } from "@/utils/format";
-import { buildCommentSubmission, commentDraftAfterSend, buildCommentThreads, canSubmitComment, shouldCloseCommentSheetDrag } from "@/utils/commentThreads";
+import {
+  buildCommentSubmission,
+  commentDraftAfterSend,
+  buildCommentThreads,
+  canSubmitComment,
+  canStartCommentSheetBodyDrag,
+  createCommentSheetDragGesture,
+  finishCommentSheetDragGesture,
+  updateCommentSheetDragGesture,
+  type CommentSheetDragGesture,
+} from "@/utils/commentThreads";
 import { openProfile } from "@/utils/profileNavigation";
 import { uploadEncryptedCommentImage } from "@/utils/commentImage";
 import { useRouter } from "vue-router";
@@ -284,40 +304,239 @@ async function submitComment() {
   }
 }
 
-let dragStartY = 0;
-let dragStartedAt = 0;
-function startDrag(event: PointerEvent) {
-  dragStartY = event.clientY;
-  dragStartedAt = performance.now();
-  dragging.value = true;
-  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+let activeDrag: CommentSheetDragGesture | null = null;
+let activePointerId: number | null = null;
+let pointerCaptureTarget: HTMLElement | null = null;
+let activeTouchId: number | null = null;
+let dragFrame: number | null = null;
+let pendingDragY = 0;
+
+function currentPanelHeight() {
+  return panel.value?.clientHeight || window.innerHeight;
 }
-function moveDrag(event: PointerEvent) {
-  if (!dragging.value) return;
-  dragY.value = Math.max(0, event.clientY - dragStartY);
-}
-function endDrag() {
-  if (!dragging.value) return;
-  const shouldClose = shouldCloseCommentSheetDrag(
-    dragY.value,
-    panel.value?.clientHeight || window.innerHeight,
-    performance.now() - dragStartedAt
+function isInteractiveDragTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  return !!target.closest(
+    'button,a[href],input,textarea,select,option,[contenteditable="true"],[role="button"],img,picture,video,audio,canvas,.comment-image,.post-image-preview'
   );
+}
+function isEligiblePointer(event: PointerEvent) {
+  return event.isPrimary && (event.pointerType !== "mouse" || event.button === 0);
+}
+function queueDragY(value: number) {
+  pendingDragY = Math.max(0, value);
+  if (dragFrame !== null) return;
+  dragFrame = requestAnimationFrame(() => {
+    dragFrame = null;
+    dragY.value = pendingDragY;
+  });
+}
+function clearDragFrame() {
+  if (dragFrame !== null) cancelAnimationFrame(dragFrame);
+  dragFrame = null;
+  pendingDragY = 0;
+}
+function releasePointerCapture() {
+  if (pointerCaptureTarget && activePointerId !== null) {
+    try {
+      if (pointerCaptureTarget.hasPointerCapture(activePointerId)) {
+        pointerCaptureTarget.releasePointerCapture(activePointerId);
+      }
+    } catch {
+      // The browser may already have cancelled native pointer ownership.
+    }
+  }
+  pointerCaptureTarget = null;
+  activePointerId = null;
+}
+function resetDragState() {
+  releasePointerCapture();
+  clearDragFrame();
+  activeTouchId = null;
+  activeDrag = null;
   dragging.value = false;
   dragY.value = 0;
-  if (shouldClose) void nextTick(close);
 }
-function startEmptyDrag(event: PointerEvent) {
-  if (commentCount.value) return;
-  startDrag(event);
+function completeDrag(cancelled = false) {
+  const gesture = activeDrag;
+  if (!gesture) {
+    resetDragState();
+    return;
+  }
+  const result = finishCommentSheetDragGesture(gesture, performance.now(), cancelled);
+  resetDragState();
+  if (result === "close") void nextTick(close);
 }
-function moveEmptyDrag(event: PointerEvent) {
-  if (!dragging.value) return;
-  moveDrag(event);
+function capturePointer(event: PointerEvent) {
+  const target = event.currentTarget as HTMLElement;
+  try {
+    target.setPointerCapture(event.pointerId);
+    pointerCaptureTarget = target;
+  } catch {
+    pointerCaptureTarget = null;
+  }
 }
-function endEmptyDrag() {
-  if (!dragging.value) return;
-  endDrag();
+function beginSurfaceDrag(event: PointerEvent) {
+  activePointerId = event.pointerId;
+  activeDrag = createCommentSheetDragGesture(
+    event.clientX,
+    event.clientY,
+    performance.now(),
+    currentPanelHeight(),
+    "dragging",
+  );
+  dragging.value = true;
+  capturePointer(event);
+}
+function startDrag(event: PointerEvent) {
+  if (!isEligiblePointer(event) || isInteractiveDragTarget(event.target)) return;
+  beginSurfaceDrag(event);
+}
+function startSurfaceDrag(event: PointerEvent) {
+  if (!isEligiblePointer(event) || isInteractiveDragTarget(event.target)) return;
+  beginSurfaceDrag(event);
+}
+function moveSurfaceDrag(event: PointerEvent) {
+  if (!activeDrag || activePointerId !== event.pointerId) return;
+  const update = updateCommentSheetDragGesture(activeDrag, event.clientX, event.clientY);
+  activeDrag = update.gesture;
+  queueDragY(update.dragDistance);
+}
+function moveDrag(event: PointerEvent) {
+  moveSurfaceDrag(event);
+}
+function endSurfaceDrag(event: PointerEvent) {
+  if (!activeDrag || activePointerId !== event.pointerId) return;
+  const update = updateCommentSheetDragGesture(activeDrag, event.clientX, event.clientY);
+  activeDrag = update.gesture;
+  completeDrag(false);
+}
+function endDrag(event: PointerEvent) {
+  endSurfaceDrag(event);
+}
+function cancelDrag(event?: PointerEvent) {
+  if (event && activePointerId !== null && event.pointerId !== activePointerId) return;
+  completeDrag(true);
+}
+
+function canStartBodyDrag(interactiveTarget: boolean, pointerCount = 1) {
+  const body = commentBody.value;
+  if (!body) return false;
+  return canStartCommentSheetBodyDrag({
+    commentCount: commentCount.value,
+    scrollTop: body.scrollTop,
+    scrollHeight: body.scrollHeight,
+    clientHeight: body.clientHeight,
+    interactiveTarget,
+    pointerCount,
+  });
+}
+function startBodyPointerDrag(event: PointerEvent) {
+  if (event.pointerType === "touch" || !isEligiblePointer(event)) return;
+  if (!canStartBodyDrag(isInteractiveDragTarget(event.target))) return;
+  activePointerId = event.pointerId;
+  activeDrag = createCommentSheetDragGesture(
+    event.clientX,
+    event.clientY,
+    performance.now(),
+    currentPanelHeight(),
+  );
+}
+function moveBodyPointerDrag(event: PointerEvent) {
+  if (!activeDrag || activePointerId !== event.pointerId || event.pointerType === "touch") return;
+  const wasPending = activeDrag.phase === "pending";
+  const update = updateCommentSheetDragGesture(
+    activeDrag,
+    event.clientX,
+    event.clientY,
+    commentBody.value?.scrollTop || 0,
+  );
+  activeDrag = update.gesture;
+  if (wasPending && activeDrag.phase === "dragging") {
+    dragging.value = true;
+    capturePointer(event);
+  }
+  if (update.preventDefault) event.preventDefault();
+  if (activeDrag.phase === "dragging") queueDragY(update.dragDistance);
+}
+function endBodyPointerDrag(event: PointerEvent) {
+  if (!activeDrag || activePointerId !== event.pointerId || event.pointerType === "touch") return;
+  const update = updateCommentSheetDragGesture(
+    activeDrag,
+    event.clientX,
+    event.clientY,
+    commentBody.value?.scrollTop || 0,
+  );
+  activeDrag = update.gesture;
+  completeDrag(false);
+}
+function cancelBodyPointerDrag(event: PointerEvent) {
+  if (event.pointerType === "touch") return;
+  if (activePointerId !== null && event.pointerId !== activePointerId) return;
+  completeDrag(true);
+}
+function cancelBodyDrag() {
+  completeDrag(true);
+}
+
+function touchById(touches: TouchList, identifier: number) {
+  for (let index = 0; index < touches.length; index += 1) {
+    const touch = touches.item(index);
+    if (touch?.identifier === identifier) return touch;
+  }
+  return null;
+}
+function startBodyTouchDrag(event: TouchEvent) {
+  if (event.touches.length !== 1 || !canStartBodyDrag(isInteractiveDragTarget(event.target), event.touches.length)) {
+    cancelBodyDrag();
+    return;
+  }
+  const touch = event.touches.item(0);
+  if (!touch) return;
+  activeTouchId = touch.identifier;
+  activeDrag = createCommentSheetDragGesture(
+    touch.clientX,
+    touch.clientY,
+    performance.now(),
+    currentPanelHeight(),
+  );
+}
+function moveBodyTouchDrag(event: TouchEvent) {
+  if (!activeDrag || activeTouchId === null) return;
+  if (event.touches.length !== 1) {
+    cancelBodyDrag();
+    return;
+  }
+  const touch = touchById(event.touches, activeTouchId);
+  if (!touch) {
+    cancelBodyDrag();
+    return;
+  }
+  const wasPending = activeDrag.phase === "pending";
+  const update = updateCommentSheetDragGesture(
+    activeDrag,
+    touch.clientX,
+    touch.clientY,
+    commentBody.value?.scrollTop || 0,
+  );
+  activeDrag = update.gesture;
+  if (wasPending && activeDrag.phase === "dragging") dragging.value = true;
+  if (update.preventDefault && event.cancelable) event.preventDefault();
+  if (activeDrag.phase === "dragging") queueDragY(update.dragDistance);
+}
+function endBodyTouchDrag(event: TouchEvent) {
+  if (!activeDrag || activeTouchId === null) return;
+  const touch = touchById(event.changedTouches, activeTouchId);
+  if (touch) {
+    const update = updateCommentSheetDragGesture(
+      activeDrag,
+      touch.clientX,
+      touch.clientY,
+      commentBody.value?.scrollTop || 0,
+    );
+    activeDrag = update.gesture;
+  }
+  completeDrag(false);
 }
 
 let targetFocusGeneration = 0;
@@ -369,6 +588,7 @@ async function focusTarget() {
 }
 watch(() => props.visible, visible => {
   ui.setBlockingOverlay(overlayId, visible);
+  resetDragState();
   if (visible) {
     commentsExpanded.value = false;
     expandedReplyRoots.value = new Set();
@@ -386,6 +606,7 @@ watch([threads, () => props.targetCommentId], ([, targetCommentId]) => {
   if (props.visible) void focusTarget();
 });
 onBeforeUnmount(() => {
+  resetDragState();
   ui.setBlockingOverlay(overlayId, false);
   replyTarget.value = null;
   removeSelectedImage();
@@ -396,8 +617,8 @@ onBeforeUnmount(() => {
 .comment-sheet-backdrop{position:fixed;inset:0;z-index:12000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.42);touch-action:pan-y}
 .comment-sheet-panel{width:min(100%,720px);height:calc(100dvh - 72px);display:flex;flex-direction:column;border-radius:18px 18px 0 0;background:#fff;box-shadow:0 -12px 38px rgba(15,23,42,.2);transition:transform 260ms cubic-bezier(.22,1,.36,1);overflow:hidden;touch-action:pan-y}.comment-sheet-panel.dragging{transition:none}
 .drag-handle-area{display:grid;place-items:center;height:24px;flex:0 0 24px;touch-action:none}.drag-handle-area span{width:38px;height:4px;border-radius:999px;background:#cbd5e1}
-.comment-sheet-header{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:44px;padding-left:44px;border-bottom:1px solid #e2e8f0}.comment-sheet-header h2{margin:0;text-align:center;font-size:16px}.comment-sheet-header button{width:44px;height:44px;border:0;background:transparent;color:#64748b;font-size:24px}
-.comment-sheet-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scroll-padding-bottom:24px;padding:8px 14px 24px}.comment-sheet-body.empty{touch-action:none;cursor:grab}.comment-sheet-body.empty:active{cursor:grabbing}.empty-comments{display:flex;flex-direction:column;align-items:center;gap:4px;padding:54px 0;color:#94a3b8;text-align:center}.empty-comments strong{color:#334155;font-size:14px;font-weight:600}.empty-comments span{font-size:12px}
+.comment-sheet-header{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:44px;padding-left:44px;border-bottom:1px solid #e2e8f0;touch-action:none}.comment-sheet-header h2{margin:0;text-align:center;font-size:16px}.comment-sheet-header button{width:44px;height:44px;border:0;background:transparent;color:#64748b;font-size:24px}
+.comment-sheet-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scroll-padding-bottom:24px;padding:8px 14px 24px}.comment-sheet-body.empty{cursor:grab}.comment-sheet-body.empty:active{cursor:grabbing}.empty-comments{display:flex;flex-direction:column;align-items:center;gap:4px;padding:54px 0;color:#94a3b8;text-align:center}.empty-comments strong{color:#334155;font-size:14px;font-weight:600}.empty-comments span{font-size:12px}
 .comment-thread{padding:5px 0}.comment-replies{margin-top:1px}.comment-reply{margin-left:42px;padding-top:4px}.comment-row{display:flex;align-items:flex-start;gap:10px;padding:4px 2px;border-radius:10px}.comment-row.highlight{animation:comment-highlight 1.6s ease}:deep(.comment-avatar),:deep(.comment-name),:deep(.comment-actions button){appearance:none;-webkit-appearance:none;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;color:inherit;font-family:inherit;cursor:pointer}:deep(.comment-avatar){display:flex;align-items:flex-start;justify-content:center;width:36px;height:36px;min-width:36px;min-height:36px;flex:0 0 36px;align-self:flex-start;border-radius:50%;overflow:hidden}:deep(.reply-row .comment-avatar){width:32px;height:32px;min-width:32px;min-height:32px;flex-basis:32px}:deep(.comment-copy){flex:1;min-width:0;font-size:13px}:deep(.comment-author-line){display:flex;align-items:baseline;gap:6px;min-width:0;line-height:1.25}:deep(.comment-name){min-width:0;color:#1f2937;font-size:13px;font-weight:600;line-height:1.25;text-align:left}:deep(.comment-author-line time){flex-shrink:0;color:#8e8e8e;font-size:11px;font-weight:400;line-height:1.25}:deep(.comment-text){margin-top:3px;color:#1f2937;line-height:1.4;overflow-wrap:anywhere}:deep(.comment-mention){color:#2563eb}:deep(.comment-actions){display:flex;align-items:center;gap:6px;min-height:17px;margin-top:3px;color:#8e8e8e;font-size:11px;line-height:1.25}:deep(.comment-actions button){color:#8e8e8e;font-size:11px;font-weight:600;line-height:1.25}:deep(.pending){margin-left:2px}:deep(.failed){margin-left:2px;color:#dc2626}.thread-toggle{min-height:30px;padding:2px 0;border:0;background:transparent;color:#64748b;font-size:11px;font-weight:500;text-align:left}.toggle-line{display:block;height:1px;background:#cbd5e1}.toggle-label{white-space:nowrap}.root-toggle{display:grid;grid-template-columns:minmax(48px,1fr) auto minmax(48px,1fr);align-items:center;gap:10px;width:100%;margin:3px 0}.root-toggle .toggle-line{width:100%;background:#aeb8c5}.reply-toggle{display:flex;align-items:center;gap:8px;margin:1px 0 0 48px}.reply-toggle .toggle-line{width:24px;flex:0 0 24px}:deep(.comment-image){width:min(260px,100%);max-height:320px;margin-top:6px;overflow:hidden;border-radius:10px}:deep(.comment-image .post-image-preview),:deep(.comment-image .carousel-shell){width:100%;max-width:260px}:deep(.comment-image .carousel-shell){max-height:320px;margin:0;border-radius:10px}:deep(.comment-image .carousel-image){display:block;width:auto;height:auto;max-width:100%;max-height:320px;margin:auto;object-fit:cover;border-radius:10px}:deep(.comment-image .carousel-dots),:deep(.comment-image .carousel-counter),:deep(.comment-image .carousel-nav){display:none}
 .reply-target{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;padding:2px 12px;border-top:1px solid #eef2f6;color:#64748b;font-size:11px}.reply-target button{width:28px;height:28px;border:0;background:transparent;color:inherit}
 .selected-image{position:relative;width:72px;height:72px;margin:7px 12px 0}.selected-image img{display:block;width:100%;height:100%;object-fit:cover;border-radius:9px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:rgba(15,23,42,.82);color:#fff;font-size:16px;line-height:22px}.comment-composer{position:sticky;bottom:0;z-index:2;display:grid;grid-template-columns:36px minmax(0,1fr) 40px auto;align-items:center;gap:6px;flex-shrink:0;padding:8px 10px calc(env(safe-area-inset-bottom) + 10px);border-top:1px solid #e2e8f0;background:#fff}.comment-composer input[type=text]{min-width:0;height:40px;padding:0 12px;border:1px solid #dbe3ec;border-radius:999px;font-size:16px}.image-input{display:none}.comment-composer button{height:40px;border:0;background:transparent;color:#2563eb;font-weight:700}.comment-composer button:disabled{opacity:.45}.image-button{width:40px;padding:8px}.image-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.send-button{min-width:44px;padding:0 4px}.send-error{flex-shrink:0;padding:3px 14px;color:#dc2626;font-size:11px;text-align:center}
