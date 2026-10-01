@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db, type OutgoingDmTaskRecord } from "@/db/dexie";
 import { outgoingDmTaskRepository } from "@/repositories/outgoingDmTaskRepository";
 
@@ -64,6 +64,19 @@ describe("account-scoped outgoing DM task persistence", () => {
     expect(new TextDecoder().decode(restored!.imageBytes)).toBe("legacy-image");
     expect(new TextDecoder().decode(restored!.preparedImage!.previewBytes)).toBe("legacy-preview");
     expect(containsBlob(await db.outgoingDmTasks.get([ACCOUNT, "local-1"]))).toBe(false);
+  });
+
+  it("does not rewrite already-normalized tasks during list reads", async () => {
+    await outgoingDmTaskRepository.put(pending());
+    const bulkPut = vi.spyOn(db.outgoingDmTasks, "bulkPut");
+    bulkPut.mockClear();
+
+    const rows = await outgoingDmTaskRepository.list(ACCOUNT);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].localId).toBe("local-1");
+    expect(bulkPut).not.toHaveBeenCalled();
+    bulkPut.mockRestore();
   });
 
   it("keeps pending tasks isolated by account", async () => {

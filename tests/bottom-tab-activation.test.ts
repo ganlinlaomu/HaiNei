@@ -80,7 +80,8 @@ describe("bottom-tab activation loading", () => {
     expect(systemSettings).not.toContain("onMounted(() => {\n  startStatusPolling();");
     expect(settings).toContain("loadSystemSettingsView");
     expect(settings).toContain('@pointerdown="preloadSystemSettings"');
-    expect(app).toContain("void preloadBottomTabViews()");
+    expect(app).toContain('scheduleBackgroundTask("preload-bottom-tabs"');
+    expect(app).toContain("await preloadBottomTabViews()");
     expect(app).toContain("'SystemSettings'");
     expect(routes).toContain("component: loadConversationsView");
     expect(routes).toContain("component: loadNotificationsView");

@@ -1,11 +1,11 @@
 <template>
   <article ref="root" :id="`msg-${message.id}`" class="post-card" :class="{ 'force-flat': flat }">
     <header class="post-author">
-      <button class="profile-link avatar-link" type="button" :aria-label="`查看 ${displayName(message.pubkey)} 的资料`" @click="openAuthor(message.pubkey, $event)">
+      <button class="profile-link avatar-link" type="button" :aria-label="`查看 ${displayName(message.pubkey)} 的资料`" @pointerdown="preloadProfile" @focus="preloadProfile" @click="openAuthor(message.pubkey, $event)">
         <ProfileAvatar :pubkey="message.pubkey" :local-name="localName(message.pubkey)" :size="38" />
       </button>
       <div class="author-copy">
-        <button class="profile-link name-link" type="button" @click="openAuthor(message.pubkey, $event)">{{ displayName(message.pubkey) }}</button>
+        <button class="profile-link name-link" type="button" @pointerdown="preloadProfile" @focus="preloadProfile" @click="openAuthor(message.pubkey, $event)">{{ displayName(message.pubkey) }}</button>
         <div class="author-meta">
           <time :datetime="new Date(message.created_at * 1000).toISOString()">{{ formatRelativeTime(message.created_at) }}</time>
           <template v-if="isOwn && message._localMeta">
@@ -27,14 +27,14 @@
     <div v-if="cleanText" class="message-text">
       <span>{{ displayedText }}</span><button v-if="isLong" class="text-button" type="button" @click="expanded = !expanded">{{ expanded ? "收起" : "全文" }}</button>
     </div>
-    <PostImagePreview v-if="message.content" :content="message.content" :show-all="true" @double-like="likeFromImage" />
+    <PostImagePreview v-if="hasImages" :content="message.content" :show-all="true" @double-like="likeFromImage" />
     <VideoPlayer v-if="video" :video-data="video" />
     <div class="actions">
       <button class="action icon-action" :class="{ liked }" type="button" :aria-label="liked ? '取消点赞' : '点赞'" :aria-pressed="liked" @click="toggleLike">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z"/></svg>
         <span v-if="likeCount">{{ likeCount }}</span>
       </button>
-      <button class="action icon-action" type="button" aria-label="评论" :aria-expanded="commentsOpen" @click="toggleComments">
+      <button class="action icon-action" type="button" aria-label="评论" :aria-expanded="commentsOpen" @pointerdown="preloadComments" @focus="preloadComments" @click="toggleComments">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.5 9.6 9.6 0 0 1-4-.9L3 21l1.7-4.2A8.2 8.2 0 0 1 3 11.5a8.5 8.5 0 0 1 9-8.5 8.5 8.5 0 0 1 9 8.5Z"/></svg>
         <span v-if="commentCount">{{ commentCount }}</span>
       </button>
@@ -47,6 +47,7 @@
       <div v-for="group in message._localMeta?.groups || []" :key="group.name" class="meta-row"><span>{{ group.name }}</span><span>{{ group.count }} 人</span></div>
     </div>
     <CommentSheet
+      v-if="commentsOpen"
       :visible="commentsOpen"
       :message="message"
       :target-comment-id="openCommentId"
@@ -56,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { InboxItem } from "@/stores/messages";
 import { useFriendsStore } from "@/stores/friends";
 import { useInteractionsStore } from "@/stores/interactions";
@@ -70,11 +71,15 @@ import { useRouter } from "vue-router";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { useBookmarksStore } from "@/stores/bookmarks";
 import ProfileAvatar from "./ProfileAvatar.vue";
-import PostImagePreview from "./PostImagePreview.vue";
-import VideoPlayer from "./VideoPlayer.vue";
 import { shouldSendDoubleTapLike } from "@/utils/feedCarousel";
-import CommentSheet from "./CommentSheet.vue";
+import { extractImageUrls } from "@/utils/extractImageUrls";
+import { loadProfileView } from "@/router/lazyViews";
 import { feedScrollAfterSheetClose } from "@/utils/commentThreads";
+
+const loadCommentSheet = () => import("./CommentSheet.vue");
+const PostImagePreview = defineAsyncComponent(() => import("./PostImagePreview.vue"));
+const VideoPlayer = defineAsyncComponent(() => import("./VideoPlayer.vue"));
+const CommentSheet = defineAsyncComponent(loadCommentSheet);
 
 const props = withDefaults(defineProps<{ message: InboxItem; openCommentId?: string; flat?: boolean }>(), { flat: false });
 const emit = defineEmits<{ height: [id: string, height: number] }>();
@@ -93,6 +98,7 @@ const cleanText = computed(() => (props.message.content || "")
   .replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim());
 const isLong = computed(() => Array.from(cleanText.value).length > 280 || cleanText.value.split("\n").length > 6);
 const displayedText = computed(() => !isLong.value || expanded.value ? cleanText.value : `${Array.from(cleanText.value.split("\n").slice(0, 6).join("\n")).slice(0, 280).join("").trimEnd()}…`);
+const hasImages = computed(() => extractImageUrls(props.message.content || "").length > 0);
 const video = computed(() => extractVideoData(props.message.content));
 const liked = computed(() => !!keys.pkHex && interactions.isLikedByUser(props.message.id, keys.pkHex));
 const likeCount = computed(() => interactions.getLikeCount(props.message.id)); const commentCount = computed(() => interactions.getCommentCount(props.message.id));
@@ -106,7 +112,11 @@ const visibilityLabel = computed(() => {
 });
 function localName(pubkey: string) { if (pubkey === keys.pkHex) return "自己"; return friends.list.find(friend => friend.pubkey === pubkey)?.name; }
 function displayName(pubkey: string) { return privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey)); }
-function openAuthor(pubkey: string, event?: Event) { return openProfile(router, keys.pkHex, pubkey, event); }
+function preloadProfile() { void loadProfileView(); }
+function openAuthor(pubkey: string, event?: Event) {
+  preloadProfile();
+  return openProfile(router, keys.pkHex, pubkey, event);
+}
 async function hidePost() { menuOpen.value = false; await feedPreferences.hide(props.message.id); ui.addToast("已在本机隐藏", 1600, "success"); }
 async function muteAuthor() { menuOpen.value = false; await feedPreferences.mute(props.message.pubkey); ui.addToast("已在本机隐藏该好友的动态", 1800, "success"); }
 async function deleteOwnPost() {
@@ -146,6 +156,7 @@ function openComments() {
   metaOpen.value = false;
   commentsOpen.value = true;
 }
+function preloadComments() { void loadCommentSheet(); }
 function toggleComments() { openComments(); }
 function closeComments() {
   commentsOpen.value = false;

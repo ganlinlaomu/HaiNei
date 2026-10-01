@@ -68,6 +68,7 @@ import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appB
 import { installBackgroundLock } from "@/services/autoLock";
 import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
 import { onAppResume } from "@/services/appResumeCoordinator";
+import { cancelBackgroundTask, installForegroundActivityMonitor, scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
 
@@ -78,6 +79,7 @@ export default defineComponent({
     const router = useRouter();
     let stopAutoLock: (() => void) | undefined;
     let stopForegroundResume: (() => void) | undefined;
+    let stopActivityMonitor: (() => void) | undefined;
     const ui = useUIStore();
     const keys = useKeyStore();
     const notifications = useNotificationsStore();
@@ -95,8 +97,6 @@ export default defineComponent({
       && !ui.showNewConversation
       && ui.blockingOverlays.size === 0);
     let disposed = false;
-    let idleHandle: number | null = null;
-    let bottomTabIdleHandle: number | null = null;
     let bottomTabsPreloaded = false;
 
     async function preparePostEditor() {
@@ -110,31 +110,16 @@ export default defineComponent({
     }
 
     function schedulePostEditorWarmup() {
-      if (hideAppChrome.value || postEditorReady.value || idleHandle !== null) return;
-      const requestIdle = (window as any).requestIdleCallback as undefined | ((callback: () => void, options?: { timeout: number }) => number);
-      if (requestIdle) {
-        idleHandle = requestIdle(() => {
-          idleHandle = null;
-          void preparePostEditor();
-        }, { timeout: 1_500 });
-      } else {
-        idleHandle = window.setTimeout(() => {
-          idleHandle = null;
-          void preparePostEditor();
-        }, 1_200);
-      }
+      if (hideAppChrome.value || postEditorReady.value) return;
+      scheduleBackgroundTask("preload-post-editor", preparePostEditor, { priority: "idle", timeoutMs: 2_500 });
     }
 
     function scheduleBottomTabWarmup() {
-      if (bottomTabsPreloaded || bottomTabIdleHandle !== null || !keys.isLoggedIn || !keys.isUnlocked) return;
-      const warmup = () => {
-        bottomTabIdleHandle = null;
+      if (bottomTabsPreloaded || !keys.isLoggedIn || !keys.isUnlocked) return;
+      scheduleBackgroundTask("preload-bottom-tabs", async () => {
         bottomTabsPreloaded = true;
-        void preloadBottomTabViews();
-      };
-      const requestIdle = (window as any).requestIdleCallback as undefined | ((callback: () => void, options?: { timeout: number }) => number);
-      if (requestIdle) bottomTabIdleHandle = requestIdle(warmup, { timeout: 2_000 });
-      else bottomTabIdleHandle = window.setTimeout(warmup, 800);
+        await preloadBottomTabViews();
+      }, { priority: "idle", timeoutMs: 2_000 });
     }
 
     function handleFabIntent() {
@@ -209,6 +194,7 @@ export default defineComponent({
       { immediate: true }
     );
     onMounted(() => {
+      stopActivityMonitor = installForegroundActivityMonitor();
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked,lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
       stopForegroundResume = onAppResume(() => reconcileFriendStateOnForeground());
@@ -216,17 +202,10 @@ export default defineComponent({
     onBeforeUnmount(() => {
       stopAutoLock?.();
       stopForegroundResume?.();
+      stopActivityMonitor?.();
+      cancelBackgroundTask("preload-post-editor");
+      cancelBackgroundTask("preload-bottom-tabs");
       disposed = true;
-      if (idleHandle !== null) {
-        const cancelIdle = (window as any).cancelIdleCallback as undefined | ((handle: number) => void);
-        if (cancelIdle) cancelIdle(idleHandle);
-        else window.clearTimeout(idleHandle);
-      }
-      if (bottomTabIdleHandle !== null) {
-        const cancelIdle = (window as any).cancelIdleCallback as undefined | ((handle: number) => void);
-        if (cancelIdle) cancelIdle(bottomTabIdleHandle);
-        else window.clearTimeout(bottomTabIdleHandle);
-      }
       document.body.classList.remove("login-page", "post-editor-open");
     });
     return {

@@ -131,7 +131,10 @@ export class OutgoingDmTaskRepository {
 
   async list(accountPubkey: string) {
     const rows = await this.database.outgoingDmTasks.where("accountPubkey").equals(normalizeAccountPubkey(accountPubkey)).toArray();
-    return Promise.all(rows.map(row => this.put(row)));
+    const normalized = await Promise.all(rows.map(row => normalizeOutgoingDmTask(row as LegacyOutgoingDmTask)));
+    const migrated = normalized.filter(item => item.changed).map(item => item.task);
+    if (migrated.length) await this.database.outgoingDmTasks.bulkPut(migrated);
+    return normalized.map(item => item.task);
   }
 }
 

@@ -56,6 +56,16 @@ describe("feed media carousel and actions", () => {
     expect(toasts).toContain('.toast.bookmark::before{content:"✓";color:#3b82f6');
   });
 
+  it("mounts heavy feed UI only when the post actually needs it", () => {
+    const source = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    expect(source).toContain('const PostImagePreview = defineAsyncComponent');
+    expect(source).toContain('const VideoPlayer = defineAsyncComponent');
+    expect(source).toContain('const CommentSheet = defineAsyncComponent');
+    expect(source).toContain('<PostImagePreview v-if="hasImages"');
+    expect(source).toContain('v-if="commentsOpen"');
+    expect(source).toContain("extractImageUrls(props.message.content");
+  });
+
   it("shows no counter or dots for a single image", () => {
     const source = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
     expect(source).toContain('v-if="images.length > 1" class="carousel-counter"');
