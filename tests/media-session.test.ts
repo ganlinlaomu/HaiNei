@@ -175,6 +175,7 @@ describe("HaiNei Worker media sessions", () => {
     });
     const rejected = expect(upload).rejects.toMatchObject({ name: "TimeoutError", phase: "head_timeout" });
 
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     await vi.advanceTimersByTimeAsync(8_000);
 
     await rejected;
@@ -238,6 +239,7 @@ describe("HaiNei Worker media sessions", () => {
     });
     const rejected = expect(upload).rejects.toMatchObject({ name: "AbortError" });
 
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     controller.abort();
 
     await rejected;
