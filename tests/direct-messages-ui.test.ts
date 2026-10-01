@@ -503,7 +503,11 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('aria-label="搜索当前聊天"');
     expect(chat).toContain('placeholder="搜索当前聊天"');
     expect(chat).toContain("scheduleSearch");
-    expect(chat).toContain("directMessages.searchPeerMessages(peerPubkey.value, query)");
+    expect(chat).toContain("directMessages.searchPeerMessages(peer, query, {");
+    expect(chat).toContain("new AbortController()");
+    expect(chat).toContain("searchAbortController?.abort()");
+    expect(chat).toContain("visibleSearchResults");
+    expect(chat).toContain("searchComplete");
     expect(chat).toContain("directMessages.loadPeerMessageContext(peerPubkey.value, messageId, 20)");
     expect(chat).toContain("searchContextActive");
     expect(chat).toContain("if (searchContextActive.value)");
@@ -513,7 +517,9 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("}, 300)");
     expect(chat).toContain("directMessages.saveDraft(peer, { text, replyTo }, account)");
     expect(chat).toContain('window.addEventListener("pagehide", handlePageHide)');
-    expect(store).toContain("syncedMessageRepository.listConversation(account, conversationId)");
+    expect(store).toContain("syncedMessageRepository.listConversationPage(account, conversationId, before, limit)");
+    expect(store).toContain("scanMessageSearchPages");
+    expect(store).not.toContain("const records = await syncedMessageRepository.listConversation(account, conversationId)");
     expect(store).toContain('value.normalize("NFKC").toLocaleLowerCase()');
     expect(store).toContain('const DRAFT_PREFIX = "dm-draft:"');
     expect(store).toContain("clearDraftThrough(peer, now, account)");
