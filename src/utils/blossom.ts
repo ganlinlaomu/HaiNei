@@ -680,7 +680,7 @@ export async function uploadImageToBlossomWithFallback(
     });
     },
     (current, ok) => reportHealth?.(current.id, ok, Date.now()),
-    error => error instanceof Error && error.name === "AbortError"
+    error => !!error && typeof error === "object" && (error as any).phase === "aborted"
   );
   return { ...result, serverUsed: normalizeBlossomUploadUrl(server.url) };
 }
