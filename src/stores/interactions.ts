@@ -1,6 +1,6 @@
 import { BoundedSet } from "@/utils/boundedSet";
 import { defineStore } from "pinia";
-import { deviceStorage } from "@/services/deviceStorage";
+import { deviceStorage, putDeviceValue } from "@/services/deviceStorage";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { sendDirectMessage } from "@/nostr/messaging/service";
 import { getRelaysFromStorage } from "@/nostr/relays";
@@ -9,6 +9,8 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { logger } from "@/utils/logger";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { isEncryptedImageRef } from "@/utils/encryptedImageRef";
+import { cancelBackgroundTask, scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
+import { onBeforeAccountLock } from "@/services/accountLifecycle";
 
 export const INTERACTION_LABEL = "hainei-interaction";
 
@@ -44,8 +46,54 @@ export interface CommentMedia {
 }
 
 export type Interaction = Like | Comment;
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+export const INTERACTION_SAVE_DEBOUNCE_MS = 400;
+export const INTERACTION_SAVE_MAX_WAIT_MS = 2_500;
+const INTERACTION_SAVE_IDLE_TIMEOUT_MS = 1_000;
+
+type InteractionSaveState = {
+  dirtyRevision: number;
+  enqueuedRevision: number;
+  persistedRevision: number;
+  quietTimer: ReturnType<typeof setTimeout> | null;
+  deadlineTimer: ReturnType<typeof setTimeout> | null;
+  writeChain: Promise<void>;
+};
+
+const saveStates = new Map<string, InteractionSaveState>();
 const pendingLikeTransitions = new Set<string>();
+
+function interactionSaveTaskKey(account: string) {
+  return `persist-interactions:${account}`;
+}
+
+function interactionSaveState(account: string) {
+  let state = saveStates.get(account);
+  if (!state) {
+    state = {
+      dirtyRevision: 0,
+      enqueuedRevision: 0,
+      persistedRevision: 0,
+      quietTimer: null,
+      deadlineTimer: null,
+      writeChain: Promise.resolve(),
+    };
+    saveStates.set(account, state);
+  }
+  return state;
+}
+
+function cancelInteractionSaveSchedule(account: string, state = interactionSaveState(account)) {
+  if (state.quietTimer) {
+    clearTimeout(state.quietTimer);
+    state.quietTimer = null;
+  }
+  if (state.deadlineTimer) {
+    clearTimeout(state.deadlineTimer);
+    state.deadlineTimer = null;
+  }
+  cancelBackgroundTask(interactionSaveTaskKey(account));
+}
 
 export function likeNotificationId(messageId: string, authorPubkey: string) {
   return `like:${messageId}:${authorPubkey.toLowerCase()}`;
@@ -292,7 +340,7 @@ export const useInteractionsStore = defineStore("interactions", {
       const targetPk = pk ?? useKeyStore().pkHex;
       if (!targetPk) return this.reset(false);
       if (this.loadedFor === targetPk) return;
-      if (this.loadedFor) this._flushToStorage();
+      if (this.loadedFor) void this._flushToStorage(this.loadedFor);
       this.interactions.clear();
       this.processedEvents.clear();
       this.lastSyncedAt = 0;
@@ -316,33 +364,98 @@ export const useInteractionsStore = defineStore("interactions", {
     },
 
     _scheduleSave() {
-      if (saveTimer) return;
-      saveTimer = setTimeout(() => {
-        saveTimer = null;
-        this._flushToStorage();
-      }, 150);
+      const account = this.loadedFor.toLowerCase();
+      if (!account) return;
+      const state = interactionSaveState(account);
+      state.dirtyRevision += 1;
+      this._armSave(account);
     },
 
-    _flushToStorage() {
-      if (!this.loadedFor) return;
-      if (saveTimer) {
-        clearTimeout(saveTimer);
-        saveTimer = null;
+    _armSave(account: string) {
+      const normalized = account.toLowerCase();
+      if (!normalized || this.loadedFor.toLowerCase() !== normalized) return;
+      const state = interactionSaveState(normalized);
+      if (state.dirtyRevision <= state.persistedRevision) return;
+
+      if (state.quietTimer) clearTimeout(state.quietTimer);
+      cancelBackgroundTask(interactionSaveTaskKey(normalized));
+      state.quietTimer = setTimeout(() => {
+        state.quietTimer = null;
+        if (this.loadedFor.toLowerCase() !== normalized || state.dirtyRevision <= state.persistedRevision) return;
+        scheduleBackgroundTask(
+          interactionSaveTaskKey(normalized),
+          () => this._flushToStorage(normalized),
+          { priority: "idle", timeoutMs: INTERACTION_SAVE_IDLE_TIMEOUT_MS },
+        );
+      }, INTERACTION_SAVE_DEBOUNCE_MS);
+
+      if (!state.deadlineTimer) {
+        state.deadlineTimer = setTimeout(() => {
+          state.deadlineTimer = null;
+          cancelBackgroundTask(interactionSaveTaskKey(normalized));
+          void this._flushToStorage(normalized);
+        }, INTERACTION_SAVE_MAX_WAIT_MS);
       }
-      try {
-        deviceStorage.setItem(`interactions_${this.loadedFor}`, JSON.stringify({
-          protocol: "nip17",
-          interactions: Object.fromEntries(this.interactions),
-          lastSyncedAt: this.lastSyncedAt
-        }));
-      } catch (error) {
+    },
+
+    _flushToStorage(
+      accountOverride?: string,
+      options: { throwOnError?: boolean } = {},
+    ): Promise<void> {
+      const account = (accountOverride || this.loadedFor).toLowerCase();
+      if (!account) return Promise.resolve();
+
+      const state = interactionSaveState(account);
+      cancelInteractionSaveSchedule(account, state);
+      let waitFor = state.writeChain;
+
+      if (this.loadedFor.toLowerCase() === account && state.dirtyRevision > state.enqueuedRevision) {
+        const revision = state.dirtyRevision;
+        let payload: string;
+        try {
+          payload = JSON.stringify({
+            protocol: "nip17",
+            interactions: Object.fromEntries(this.interactions),
+            lastSyncedAt: this.lastSyncedAt,
+          });
+        } catch (error) {
+          logger.warn("Failed to serialize interactions", error);
+          this._armSave(account);
+          return options.throwOnError ? Promise.reject(error) : Promise.resolve();
+        }
+
+        state.enqueuedRevision = revision;
+        const write = state.writeChain
+          .catch(() => undefined)
+          .then(() => putDeviceValue(`interactions_${account}`, payload));
+
+        state.writeChain = write.then(
+          () => {
+            state.persistedRevision = Math.max(state.persistedRevision, revision);
+          },
+          error => {
+            if (state.enqueuedRevision === revision) {
+              state.enqueuedRevision = state.persistedRevision;
+            }
+            throw error;
+          },
+        );
+        waitFor = state.writeChain;
+      }
+
+      return waitFor.catch(error => {
         logger.warn("Failed to save interactions", error);
-      }
+        if (this.loadedFor.toLowerCase() === account && state.dirtyRevision > state.persistedRevision) {
+          this._armSave(account);
+        }
+        if (options.throwOnError) throw error;
+      });
     },
 
     reset(removeFromStorage = false) {
-      const pk = this.loadedFor;
-      if (!removeFromStorage) this._flushToStorage();
+      const pk = this.loadedFor.toLowerCase();
+      if (!removeFromStorage && pk) void this._flushToStorage(pk);
+      else if (pk) cancelInteractionSaveSchedule(pk);
       this.interactions.clear();
       this.processedEvents.clear();
       this.lastSyncedAt = 0;
@@ -351,3 +464,12 @@ export const useInteractionsStore = defineStore("interactions", {
     }
   }
 });
+
+
+const stopInteractionLockFlush = onBeforeAccountLock(async account => {
+  const interactions = useInteractionsStore();
+  if (interactions.loadedFor.toLowerCase() !== account.toLowerCase()) return;
+  await interactions._flushToStorage(account, { throwOnError: true });
+});
+
+if (import.meta.hot) import.meta.hot.dispose(stopInteractionLockFlush);

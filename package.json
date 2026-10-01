@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.11",
-  "releaseSummary": "图片查看与头像按需加载优化",
+  "version": "0.1.12",
+  "releaseSummary": "后台任务与互动保存调度优化",
   "private": true,
   "scripts": {
     "dev": "vite",
