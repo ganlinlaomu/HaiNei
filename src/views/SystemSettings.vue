@@ -213,13 +213,13 @@
 
       <details class="technical-section">
         <summary class="section-heading">
-          <div><h3>存储 / Cache</h3><p>{{ cacheStats.count }} 个图片文件 · {{ formatSize(cacheStats.size) }}</p></div>
+          <div><h3>存储 / Cache</h3><p>{{ cacheStats.count }} 个图片 · {{ formatSize(cacheStats.size) }} / {{ formatSize(cacheStats.maxSize) }}</p></div>
         </summary>
         <div class="cache-info">
           <div class="small">
-            <div>图片缓存：{{ cacheStats.count }} 个文件</div>
-            <div>缓存大小：{{ formatSize(cacheStats.size) }}</div>
-            <div v-if="cacheStats.oldestTimestamp">最早缓存：{{ new Date(cacheStats.oldestTimestamp).toLocaleDateString() }}</div>
+            <div>临时内存缓存：{{ cacheStats.count }} 个图片</div>
+            <div>缓存大小：{{ formatSize(cacheStats.size) }} / {{ formatSize(cacheStats.maxSize) }}</div>
+            <div>锁定账号、切换账号或退出后自动清除，不保存解密图片到磁盘。</div>
           </div>
           <div class="button-row">
             <button class="btn btn-secondary" type="button" :disabled="loadingCache" @click="refreshCacheStats(true)">
@@ -369,7 +369,7 @@ const newMediaType = ref<MediaServerType>("blossom");
 const newMediaUrl = ref("");
 const newMediaToken = ref("");
 const statuses = reactive<Record<string, RelayRuntimeStatus | undefined>>({});
-const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0 });
+const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0, maxSize: 48 * 1024 * 1024 });
 const loadingCache = ref(false);
 const clearingCache = ref(false);
 const pushBusy = ref(false);
@@ -620,7 +620,7 @@ function scheduleDeferredRuntimeRefresh() {
 async function refreshCacheStats(force = false) {
   const account = keyStore.pkHex;
   if (!account) {
-    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
+    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, maxSize: 48 * 1024 * 1024 });
     return;
   }
   if (!force && !isAccountResourceStale(
@@ -663,7 +663,7 @@ function scheduleCacheStatsRefresh(force = false) {
 
 async function clearCache() {
   const account = keyStore.pkHex;
-  if (!account || !confirm("确定要清空所有图片缓存吗？")) return;
+  if (!account || !confirm("确定要清空当前账号的临时图片缓存吗？")) return;
   clearingCache.value = true;
   try {
     await clearAllCache(account);
@@ -818,7 +818,7 @@ watch(() => keyStore.pkHex, async pk => {
   loadingCache.value = false;
   if (!pk) {
     settings.reset();
-    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
+    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, maxSize: 48 * 1024 * 1024 });
     cacheStatsAccount = "";
     cacheStatsUpdatedAt = 0;
     for (const url of Object.keys(statuses)) delete statuses[url];
@@ -826,7 +826,7 @@ watch(() => keyStore.pkHex, async pk => {
     Object.assign(diagnostics, { syncStatus: "idle", lastCatchupCompletedAt: 0, pendingOutgoing: 0 });
     return;
   }
-  if (cacheStatsAccount !== pk) Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
+  if (cacheStatsAccount !== pk) Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, maxSize: 48 * 1024 * 1024 });
   backgroundLock.value = deviceStorage.getItem(autoLockKey(pk)) === "1";
   pushEnabled.value = pushEnabledForAccount(pk);
   if (settings.loadedFor !== pk) await settings.load(pk);
