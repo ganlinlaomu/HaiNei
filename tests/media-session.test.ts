@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMediaSession, resetMediaSessionCacheForTests } from "@/services/mediaSession";
-import { uploadImageToBlossom, uploadImageToBlossomWithFallback } from "@/utils/blossom";
+import { setMediaHealthReporter, uploadImageToBlossom, uploadImageToBlossomWithFallback } from "@/utils/blossom";
 
 class MockXMLHttpRequest {
   static responses: Array<{ status?: number; body?: string; pending?: boolean }> = [];
@@ -158,6 +158,92 @@ describe("HaiNei Worker media sessions", () => {
     expect(MockXMLHttpRequest.aborts).toBe(0);
     MockXMLHttpRequest.instances[0].onabort?.();
     expect(MockXMLHttpRequest.aborts).toBe(0);
+  });
+
+  it("caps the HEAD phase at eight seconds even with a larger service budget", async () => {
+    fetchMock.mockImplementationOnce((_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      }, { once: true });
+    }));
+    const upload = uploadImageToBlossom(new File(["data"], "file.txt", { type: "text/plain" }), {
+      uploadUrl: "https://media.example/upload",
+      uploadToken: "test-token",
+      timeoutMs: 60_000,
+    });
+    const rejected = expect(upload).rejects.toMatchObject({ name: "TimeoutError", phase: "head_timeout" });
+
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    await rejected;
+    expect(MockXMLHttpRequest.instances).toHaveLength(0);
+  });
+
+  it("includes authorization signing in the per-service total budget", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    const sign = vi.fn(() => new Promise<any>(() => {}));
+    const upload = uploadImageToBlossom(new File(["data"], "file.txt", { type: "text/plain" }), {
+      uploadUrl: "https://custom.example/upload",
+      accountPubkey: A,
+      signEvent: sign,
+      timeoutMs: 1_000,
+    });
+    const rejected = expect(upload).rejects.toMatchObject({ name: "TimeoutError", phase: "attempt_timeout" });
+
+    await vi.waitFor(() => expect(sign).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await rejected;
+  });
+
+  it("propagates caller cancellation into an active PUT as AbortError", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
+    MockXMLHttpRequest.responses.push({ pending: true });
+    const controller = new AbortController();
+    const upload = uploadImageToBlossom(new File(["data"], "file.txt", { type: "text/plain" }), {
+      uploadUrl: "https://media.example/upload",
+      uploadToken: "test-token",
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    });
+    const rejected = expect(upload).rejects.toMatchObject({ name: "AbortError", phase: "aborted" });
+
+    await vi.waitFor(() => expect(MockXMLHttpRequest.instances).toHaveLength(1));
+    controller.abort();
+
+    await rejected;
+    expect(MockXMLHttpRequest.aborts).toBe(1);
+  });
+
+  it("stops fallback immediately on caller cancellation without recording a health failure", async () => {
+    const health = vi.fn();
+    setMediaHealthReporter(health);
+    fetchMock.mockImplementationOnce((_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      }, { once: true });
+    }));
+    const controller = new AbortController();
+    const upload = uploadImageToBlossomWithFallback(new File(["data"], "file.txt", { type: "text/plain" }), {
+      uploadToken: "test-token",
+      signal: controller.signal,
+      servers: [
+        { id: "first", type: "blossom", url: "https://first.example", source: "user" },
+        { id: "second", type: "blossom", url: "https://second.example", source: "user" },
+      ],
+    });
+    const rejected = expect(upload).rejects.toMatchObject({ name: "AbortError" });
+
+    controller.abort();
+
+    await rejected;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(health).not.toHaveBeenCalled();
+    setMediaHealthReporter(undefined);
   });
 
   it("aborts only on timeout and reports the timeout phase once", async () => {
