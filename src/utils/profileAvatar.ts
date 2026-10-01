@@ -5,10 +5,15 @@ import { encryptImageBytes } from "@/utils/imageCrypto";
 import { getImageFromCache, storeImageInCache } from "@/utils/imageCache";
 import { resizeImageFile } from "@/utils/imageResize";
 import { downloadMedia } from "@/utils/mediaSafety";
+import { createPrioritizedTaskQueue, type ScheduledTask } from "@/utils/prioritizedTaskQueue";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
+
+export const MAX_AVATAR_LOAD_CONCURRENCY = 4;
+const avatarLoadScheduler = createPrioritizedTaskQueue(MAX_AVATAR_LOAD_CONCURRENCY);
 
 type SharedAvatarJob = {
   controller: AbortController;
+  scheduled: ScheduledTask<Blob>;
   promise: Promise<Blob>;
   consumers: number;
 };
@@ -24,7 +29,11 @@ function consumeAvatarJob(key: string, job: SharedAvatarJob, signal?: AbortSigna
       released = true;
       signal?.removeEventListener("abort", onAbort);
       job.consumers = Math.max(0, job.consumers - 1);
-      if (abortIfUnused && job.consumers === 0 && avatarJobs.get(key) === job) job.controller.abort();
+      if (abortIfUnused && job.consumers === 0 && avatarJobs.get(key) === job) {
+        avatarJobs.delete(key);
+        job.controller.abort();
+        job.scheduled.cancel();
+      }
     };
     const onAbort = () => {
       release(true);
@@ -79,12 +88,7 @@ export async function loadPrivateProfileAvatar(accountPubkey: string, reference:
   let job = avatarJobs.get(taskKey);
   if (!job) {
     const controller = new AbortController();
-    const shared: SharedAvatarJob = {
-      controller,
-      consumers: 0,
-      promise: Promise.resolve(new Blob()),
-    };
-    shared.promise = (async () => {
+    const scheduled = avatarLoadScheduler.schedule(async () => {
       const metadata = decodeEncryptedImageRef(reference);
       if (!metadata || !metadata.mime.startsWith("image/")) throw new Error("头像引用无效");
       const encryptedBytes = await downloadMedia(metadata.url, 16 * 1024 * 1024, controller.signal);
@@ -99,9 +103,16 @@ export async function loadPrivateProfileAvatar(accountPubkey: string, reference:
       const blob = new Blob([decrypted], { type: metadata.mime });
       await storeImageInCache(accountPubkey, reference, blob, metadata.mime);
       return blob;
-    })().finally(() => {
+    }, 1);
+    const shared: SharedAvatarJob = {
+      controller,
+      scheduled,
+      promise: scheduled.promise,
+      consumers: 0,
+    };
+    shared.promise.finally(() => {
       if (avatarJobs.get(taskKey) === shared) avatarJobs.delete(taskKey);
-    });
+    }).catch(() => undefined);
     job = shared;
     avatarJobs.set(taskKey, job);
   }

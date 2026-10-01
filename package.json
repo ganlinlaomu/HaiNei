@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.10",
-  "releaseSummary": "图片缓存与界面响应速度优化",
+  "version": "0.1.11",
+  "releaseSummary": "图片查看与头像加载优化",
   "private": true,
   "scripts": {
     "dev": "vite",

@@ -349,8 +349,10 @@ describe("direct-message navigation and UI contract", () => {
     const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
     expect(imagePreview).toContain("IntersectionObserver");
     expect(imagePreview).toContain('rootMargin: "500px 0px"');
+    const queue = readFileSync(join(process.cwd(), "src/utils/prioritizedTaskQueue.ts"), "utf8");
     expect(imagePreview).toContain("DecryptPriority");
-    expect(imagePreview).toContain("priority - b.priority");
+    expect(imagePreview).toContain("scheduled.promote(priority)");
+    expect(queue).toContain("a.priority - b.priority");
     expect(home).toContain("syncedMessageRepository.listHistoryPage");
     expect(home).toContain("AUTO_LOAD_MORE_THRESHOLD");
     expect(home).toContain('addEventListener("scroll", handleHomeScroll');

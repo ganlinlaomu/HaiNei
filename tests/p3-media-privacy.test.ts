@@ -111,9 +111,10 @@ describe("P3 media privacy hardening", () => {
     const avatar = readFileSync("src/components/ProfileAvatar.vue", "utf8");
     const preview = readFileSync("src/components/PostImagePreview.vue", "utf8");
 
-    expect(avatar).toContain("controller?.abort()");
+    expect(avatar).toContain("abortPending()");
     expect(avatar).toContain("requestController.signal");
-    expect(avatar).toContain("onBeforeUnmount(() => { generation++; controller?.abort()");
+    expect(avatar).toContain("onBeforeUnmount(() =>");
+    expect(avatar).toContain("onDeactivated(() =>");
 
     expect(preview).toContain("job.consumers += 1");
     expect(preview).toContain("loadController.abort()");

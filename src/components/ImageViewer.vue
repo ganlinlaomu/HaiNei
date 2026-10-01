@@ -47,6 +47,14 @@
         />
         <div v-if="loading" class="loading-spinner">加载中...</div>
         <div v-if="error" class="error-message">图片加载失败</div>
+        <button
+          v-if="upgradeError && currentImage && !error"
+          class="original-retry"
+          type="button"
+          @click.stop="retryOriginal"
+        >
+          原图加载失败 · 重试
+        </button>
       </div>
 
       <!-- Navigation arrows (only show if multiple images) -->
@@ -113,9 +121,13 @@ export default defineComponent({
     initialIndex: {
       type: Number,
       default: 0
+    },
+    upgradeError: {
+      type: Boolean,
+      default: false
     }
   },
-  emits: ["close"],
+  emits: ["close", "indexChange", "retryOriginal"],
   setup(props, { emit }) {
     const ui = useUIStore();
     const overlayId = `image-viewer-${getCurrentInstance()?.uid}`;
@@ -156,12 +168,17 @@ export default defineComponent({
       }
     }
 
+    function notifyIndexChange() {
+      emit("indexChange", currentIndex.value);
+    }
+
     function previousImage() {
       if (currentIndex.value > 0) {
         currentIndex.value--;
         resetTransform();
         loading.value = true;
         error.value = false;
+        notifyIndexChange();
       }
     }
 
@@ -171,14 +188,21 @@ export default defineComponent({
         resetTransform();
         loading.value = true;
         error.value = false;
+        notifyIndexChange();
       }
     }
 
     function goToImage(index: number) {
+      if (index < 0 || index >= props.images.length || index === currentIndex.value) return;
       currentIndex.value = index;
       resetTransform();
       loading.value = true;
       error.value = false;
+      notifyIndexChange();
+    }
+
+    function retryOriginal() {
+      emit("retryOriginal");
     }
 
     function toggleZoom() {
@@ -305,6 +329,7 @@ export default defineComponent({
       previousImage,
       nextImage,
       goToImage,
+      retryOriginal,
       toggleZoom,
       onImageLoad,
       onImageError,
@@ -550,4 +575,5 @@ export default defineComponent({
     height: 50px;
   }
 }
+.original-retry{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);z-index:4;min-height:38px;padding:0 14px;border:1px solid rgba(255,255,255,.28);border-radius:999px;background:rgba(15,23,42,.78);color:#fff;font:inherit;font-size:13px;backdrop-filter:blur(8px)}
 </style>
