@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.17",
-  "releaseSummary": "NIP-51 私密收藏跨设备镜像",
+  "version": "0.1.18",
+  "releaseSummary": "修复新设备通知已读状态恢复",
   "private": true,
   "scripts": {
     "dev": "vite",

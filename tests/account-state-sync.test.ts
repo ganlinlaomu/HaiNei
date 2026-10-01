@@ -284,6 +284,46 @@ describe("encrypted account-state materialization", () => {
     ]);
   });
 
+  it("merges notification read ids and keeps the furthest cross-device cursor", () => {
+    expect(mergeNamespaceData("notification_state", {
+      dismissedIds: ["dismissed-local"],
+      readIds: ["read-local"],
+      readCursor: { lastReadCreatedAt: 20, lastReadMessageId: "b" },
+    }, {
+      dismissedIds: ["dismissed-remote"],
+      readIds: ["read-remote"],
+      readCursor: { lastReadCreatedAt: 30, lastReadMessageId: "a" },
+    })).toEqual({
+      dismissedIds: ["dismissed-local", "dismissed-remote"],
+      readIds: ["read-local", "read-remote"],
+      readCursor: { lastReadCreatedAt: 30, lastReadMessageId: "a" },
+    });
+  });
+
+  it("does not overwrite a newer unsynced local notification read with a stale Worker restore", async () => {
+    await db.accountMeta.put({
+      accountPubkey: ACCOUNT,
+      key: "notification_state",
+      value: { dismissedIds: [], readIds: ["local-read"] },
+    });
+
+    await materializeAccountState(ACCOUNT, "notification_state", {
+      dismissedIds: [],
+      readIds: ["remote-read"],
+    }, 4);
+
+    expect((await db.accountMeta.get([ACCOUNT, "notification_state"]))?.value).toEqual({
+      dismissedIds: [],
+      readIds: ["local-read", "remote-read"],
+      readCursor: undefined,
+    });
+    expect((await db.accountStateMirrors.get([ACCOUNT, "notification_state"]))?.data).toEqual({
+      dismissedIds: [],
+      readIds: ["local-read", "remote-read"],
+      readCursor: undefined,
+    });
+  });
+
   it("merges a 409 conflict instead of overwriting another device bookmark", async () => {
     await db.accountBookmarks.put({ accountPubkey: ACCOUNT, messageId: "local", createdAt: 2, updatedAt: 2 });
     await db.accountStateMirrors.put({ accountPubkey: ACCOUNT, namespace: "bookmarks", version: 1, data: [], updatedAt: 1 });
