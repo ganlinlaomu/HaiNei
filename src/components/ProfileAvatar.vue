@@ -1,5 +1,6 @@
 <template>
   <span
+    ref="root"
     class="profile-avatar"
     :style="avatarStyle"
     role="img"
@@ -23,7 +24,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import {
+  computed,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  ref,
+  watch
+} from "vue";
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, profileAvatarInitial, useProfilesStore } from "@/stores/profiles";
 import { loadPrivateProfileAvatar } from "@/utils/profileAvatar";
@@ -31,6 +40,8 @@ import { loadPrivateProfileAvatar } from "@/utils/profileAvatar";
 const props = withDefaults(defineProps<{ pubkey: string; localName?: string; size?: number }>(), { size: 38 });
 const keys = useKeyStore();
 const profiles = useProfilesStore();
+const root = ref<HTMLElement | null>(null);
+const nearVisible = ref(false);
 const imageLoaded = ref(false);
 const imageFailed = ref(false);
 const picture = ref("");
@@ -51,42 +62,156 @@ const avatarStyle = computed(() => ({
 let objectUrl = "";
 let generation = 0;
 let controller: AbortController | null = null;
+let visibilityObserver: IntersectionObserver | null = null;
+let active = true;
+let scheduledGeneration = -1;
+
 function clearObjectUrl() {
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = "";
 }
 
-watch([() => keys.pkHex, () => props.pubkey, () => privateProfile.value?.avatar], async ([account, _pubkey, avatar]) => {
-  const current = ++generation;
+function cancelPendingLoad() {
+  generation += 1;
+  scheduledGeneration = -1;
   controller?.abort();
   controller = null;
+}
+
+function resetAvatarState() {
+  cancelPendingLoad();
   clearObjectUrl();
   picture.value = "";
   imageLoaded.value = false;
   imageFailed.value = false;
-  if (!account) return;
+}
+
+async function loadVisibleAvatar(targetGeneration: number) {
+  const account = keys.pkHex;
+  const pubkey = props.pubkey;
+  if (!active || !nearVisible.value || !account || targetGeneration !== generation) return;
+
   if (profiles.loadedFor !== account) await profiles.load(account);
-  if (!avatar || current !== generation || keys.pkHex !== account) return;
+  if (
+    !active
+    || !nearVisible.value
+    || targetGeneration !== generation
+    || keys.pkHex !== account
+    || props.pubkey !== pubkey
+    || profiles.loadedFor !== account
+  ) return;
+
+  const avatar = profiles.getProfile(pubkey)?.avatar;
+  if (!avatar || picture.value || imageFailed.value) return;
+
   const requestController = new AbortController();
   controller = requestController;
   try {
     const blob = await loadPrivateProfileAvatar(account, avatar, requestController.signal);
-    if (requestController.signal.aborted || current !== generation || keys.pkHex !== account) return;
-    objectUrl = URL.createObjectURL(blob);
+    if (
+      requestController.signal.aborted
+      || !active
+      || !nearVisible.value
+      || targetGeneration !== generation
+      || keys.pkHex !== account
+      || props.pubkey !== pubkey
+      || profiles.getProfile(pubkey)?.avatar !== avatar
+    ) return;
+    const nextObjectUrl = URL.createObjectURL(blob);
+    if (
+      requestController.signal.aborted
+      || targetGeneration !== generation
+      || keys.pkHex !== account
+      || props.pubkey !== pubkey
+    ) {
+      URL.revokeObjectURL(nextObjectUrl);
+      return;
+    }
+    objectUrl = nextObjectUrl;
     picture.value = objectUrl;
   } catch (error) {
     if (requestController.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
-    if (current === generation) imageFailed.value = true;
+    if (targetGeneration === generation && keys.pkHex === account && props.pubkey === pubkey) imageFailed.value = true;
   } finally {
     if (controller === requestController) controller = null;
   }
-}, { immediate: true });
+}
+
+function requestVisibleAvatar() {
+  if (!active || !nearVisible.value || picture.value || imageFailed.value || !keys.pkHex) return;
+  const targetGeneration = generation;
+  if (scheduledGeneration === targetGeneration) return;
+  scheduledGeneration = targetGeneration;
+  void loadVisibleAvatar(targetGeneration).finally(() => {
+    if (scheduledGeneration === targetGeneration) scheduledGeneration = -1;
+  });
+}
+
+function disconnectVisibilityObserver() {
+  visibilityObserver?.disconnect();
+  visibilityObserver = null;
+}
+
+function observeVisibility() {
+  disconnectVisibilityObserver();
+  if (!active || !root.value) return;
+
+  if (typeof IntersectionObserver === "undefined") {
+    nearVisible.value = true;
+    requestVisibleAvatar();
+    return;
+  }
+
+  visibilityObserver = new IntersectionObserver(entries => {
+    const visible = entries.some(entry => entry.isIntersecting);
+    if (nearVisible.value === visible) return;
+    nearVisible.value = visible;
+    if (visible) requestVisibleAvatar();
+    else if (controller) cancelPendingLoad();
+  }, { rootMargin: "320px 0px" });
+  visibilityObserver.observe(root.value);
+}
+
+watch(
+  [() => keys.pkHex, () => props.pubkey, () => privateProfile.value?.avatar],
+  () => {
+    resetAvatarState();
+    if (active && nearVisible.value) requestVisibleAvatar();
+  },
+  { immediate: true },
+);
 
 function handleImageError() {
   imageLoaded.value = false;
   imageFailed.value = true;
+  picture.value = "";
+  clearObjectUrl();
 }
-onBeforeUnmount(() => { generation++; controller?.abort(); controller = null; clearObjectUrl(); });
+
+onMounted(() => {
+  active = true;
+  observeVisibility();
+});
+
+onActivated(() => {
+  active = true;
+  observeVisibility();
+  if (nearVisible.value) requestVisibleAvatar();
+});
+
+onDeactivated(() => {
+  active = false;
+  disconnectVisibilityObserver();
+  nearVisible.value = false;
+  cancelPendingLoad();
+});
+
+onBeforeUnmount(() => {
+  active = false;
+  disconnectVisibilityObserver();
+  cancelPendingLoad();
+  clearObjectUrl();
+});
 </script>
 
 <style scoped>

@@ -346,11 +346,12 @@ describe("direct-message navigation and UI contract", () => {
 
   it("prioritizes near-viewport encrypted images and auto-loads Home pages with an unsupported-browser fallback", () => {
     const imagePreview = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
+    const priorityQueue = readFileSync(join(process.cwd(), "src/utils/priorityTaskQueue.ts"), "utf8");
     const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
     expect(imagePreview).toContain("IntersectionObserver");
     expect(imagePreview).toContain('rootMargin: "500px 0px"');
     expect(imagePreview).toContain("DecryptPriority");
-    expect(imagePreview).toContain("priority - b.priority");
+    expect(priorityQueue).toContain("a.priority - b.priority");
     expect(home).toContain("syncedMessageRepository.listHistoryPage");
     expect(home).toContain("AUTO_LOAD_MORE_THRESHOLD");
     expect(home).toContain('addEventListener("scroll", handleHomeScroll');

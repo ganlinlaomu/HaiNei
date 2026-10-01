@@ -5,15 +5,20 @@ import { encryptImageBytes } from "@/utils/imageCrypto";
 import { getImageFromCache, storeImageInCache } from "@/utils/imageCache";
 import { resizeImageFile } from "@/utils/imageResize";
 import { downloadMedia } from "@/utils/mediaSafety";
+import { PriorityTaskQueue, type QueuedTask } from "@/utils/priorityTaskQueue";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
+
+export const MAX_AVATAR_LOAD_CONCURRENCY = 4;
 
 type SharedAvatarJob = {
   controller: AbortController;
+  queued: QueuedTask<Blob>;
   promise: Promise<Blob>;
   consumers: number;
 };
 
 const avatarJobs = new Map<string, SharedAvatarJob>();
+const avatarWorkQueue = new PriorityTaskQueue(MAX_AVATAR_LOAD_CONCURRENCY);
 
 function consumeAvatarJob(key: string, job: SharedAvatarJob, signal?: AbortSignal) {
   job.consumers += 1;
@@ -24,7 +29,10 @@ function consumeAvatarJob(key: string, job: SharedAvatarJob, signal?: AbortSigna
       released = true;
       signal?.removeEventListener("abort", onAbort);
       job.consumers = Math.max(0, job.consumers - 1);
-      if (abortIfUnused && job.consumers === 0 && avatarJobs.get(key) === job) job.controller.abort();
+      if (abortIfUnused && job.consumers === 0 && avatarJobs.get(key) === job) {
+        job.controller.abort();
+        job.queued.cancel();
+      }
     };
     const onAbort = () => {
       release(true);
@@ -41,7 +49,6 @@ function consumeAvatarJob(key: string, job: SharedAvatarJob, signal?: AbortSigna
     );
   });
 }
-
 
 export async function uploadPrivateProfileAvatar(
   file: File,
@@ -77,14 +84,19 @@ export async function loadPrivateProfileAvatar(accountPubkey: string, reference:
 
   const taskKey = `${accountPubkey.toLowerCase()}:${reference}`;
   let job = avatarJobs.get(taskKey);
+  if (job?.controller.signal.aborted) {
+    if (avatarJobs.get(taskKey) === job) avatarJobs.delete(taskKey);
+    job = undefined;
+  }
+
   if (!job) {
     const controller = new AbortController();
-    const shared: SharedAvatarJob = {
-      controller,
-      consumers: 0,
-      promise: Promise.resolve(new Blob()),
-    };
-    shared.promise = (async () => {
+    let shared!: SharedAvatarJob;
+    const queued = avatarWorkQueue.enqueue(async () => {
+      if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const cachedAfterQueue = await getImageFromCache(accountPubkey, reference);
+      if (cachedAfterQueue) return cachedAfterQueue.blob;
+
       const metadata = decodeEncryptedImageRef(reference);
       if (!metadata || !metadata.mime.startsWith("image/")) throw new Error("头像引用无效");
       const encryptedBytes = await downloadMedia(metadata.url, 16 * 1024 * 1024, controller.signal);
@@ -99,7 +111,14 @@ export async function loadPrivateProfileAvatar(accountPubkey: string, reference:
       const blob = new Blob([decrypted], { type: metadata.mime });
       await storeImageInCache(accountPubkey, reference, blob, metadata.mime);
       return blob;
-    })().finally(() => {
+    }, 1);
+    shared = {
+      controller,
+      queued,
+      consumers: 0,
+      promise: queued.promise,
+    };
+    shared.promise = queued.promise.finally(() => {
       if (avatarJobs.get(taskKey) === shared) avatarJobs.delete(taskKey);
     });
     job = shared;

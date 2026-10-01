@@ -13,13 +13,13 @@ vi.mock("@/utils/mediaSafety", async importOriginal => {
   return { ...actual, downloadMedia: mocks.downloadMedia };
 });
 
-import { loadPrivateProfileAvatar } from "@/utils/profileAvatar";
+import { MAX_AVATAR_LOAD_CONCURRENCY, loadPrivateProfileAvatar } from "@/utils/profileAvatar";
 import { clearMemoryImageCache } from "@/utils/imageCache";
 
 const ACCOUNT = "a".repeat(64);
 const URL = "https://media.example/avatar.enc";
 
-async function encryptedAvatar(plaintext: string) {
+async function encryptedAvatar(plaintext: string, url = URL) {
   const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
   const raw = new Uint8Array(await crypto.subtle.exportKey("raw", key));
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -32,7 +32,7 @@ async function encryptedAvatar(plaintext: string) {
     encrypted,
     ref: encodeEncryptedImageRef({
       v: 1,
-      url: URL,
+      url,
       mime: "image/jpeg",
       alg: "AES-GCM",
       iv: bytesToBase64(iv),
@@ -75,6 +75,59 @@ describe("P3 media privacy hardening", () => {
     expect(mocks.downloadMedia).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps shared avatar work alive while another consumer still needs it", async () => {
+    const { encrypted, ref } = await encryptedAvatar("shared cancellation bytes");
+    const firstController = new AbortController();
+    let sharedSignal: AbortSignal | undefined;
+    let release!: (value: ArrayBuffer) => void;
+    mocks.downloadMedia.mockImplementation((_url, _maxBytes, signal) => {
+      sharedSignal = signal;
+      return new Promise<ArrayBuffer>(resolve => { release = resolve; });
+    });
+
+    const first = loadPrivateProfileAvatar(ACCOUNT, ref, firstController.signal);
+    const second = loadPrivateProfileAvatar(ACCOUNT, ref);
+    await vi.waitFor(() => expect(mocks.downloadMedia).toHaveBeenCalledTimes(1));
+
+    firstController.abort();
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    expect(sharedSignal?.aborted).toBe(false);
+
+    release(encrypted);
+    expect(await (await second).text()).toBe("shared cancellation bytes");
+    expect(mocks.downloadMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds different avatar downloads while preserving per-avatar dedupe", async () => {
+    const fixtures = await Promise.all(
+      Array.from({ length: MAX_AVATAR_LOAD_CONCURRENCY + 1 }, (_, index) =>
+        encryptedAvatar(`avatar-${index}`, `https://media.example/avatar-${index}.enc`)
+      )
+    );
+    const byUrl = new Map(fixtures.map((fixture, index) => [
+      `https://media.example/avatar-${index}.enc`,
+      fixture.encrypted,
+    ]));
+    const releases = new Map<string, (value: ArrayBuffer) => void>();
+    mocks.downloadMedia.mockImplementation((url: string) =>
+      new Promise<ArrayBuffer>(resolve => { releases.set(url, resolve); })
+    );
+
+    const loads = fixtures.map(fixture => loadPrivateProfileAvatar(ACCOUNT, fixture.ref));
+    await vi.waitFor(() => expect(mocks.downloadMedia).toHaveBeenCalledTimes(MAX_AVATAR_LOAD_CONCURRENCY));
+    expect(MAX_AVATAR_LOAD_CONCURRENCY).toBe(4);
+
+    const firstUrl = "https://media.example/avatar-0.enc";
+    releases.get(firstUrl)?.(byUrl.get(firstUrl)!);
+    await vi.waitFor(() => expect(mocks.downloadMedia).toHaveBeenCalledTimes(MAX_AVATAR_LOAD_CONCURRENCY + 1));
+
+    for (const [url, release] of releases) release(byUrl.get(url)!);
+    const blobs = await Promise.all(loads);
+    expect(await Promise.all(blobs.map(blob => blob.text()))).toEqual(
+      fixtures.map((_, index) => `avatar-${index}`)
+    );
+  });
+
   it("rejects unknown encrypted-media metadata fields before any media load", async () => {
     const rawKey = bytesToBase64(new Uint8Array(32));
     const iv = bytesToBase64(new Uint8Array(12));
@@ -111,9 +164,15 @@ describe("P3 media privacy hardening", () => {
     const avatar = readFileSync("src/components/ProfileAvatar.vue", "utf8");
     const preview = readFileSync("src/components/PostImagePreview.vue", "utf8");
 
+    expect(avatar).toContain('ref="root"');
+    expect(avatar).toContain("new IntersectionObserver");
+    expect(avatar).toContain('rootMargin: "320px 0px"');
+    expect(avatar).toContain("onActivated(() =>");
+    expect(avatar).toContain("onDeactivated(() =>");
     expect(avatar).toContain("controller?.abort()");
     expect(avatar).toContain("requestController.signal");
-    expect(avatar).toContain("onBeforeUnmount(() => { generation++; controller?.abort()");
+    expect(avatar).toContain("if (active && nearVisible.value) requestVisibleAvatar()");
+    expect(avatar).not.toContain("}, { immediate: true });");
 
     expect(preview).toContain("job.consumers += 1");
     expect(preview).toContain("loadController.abort()");
