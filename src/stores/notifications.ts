@@ -30,6 +30,65 @@ interface NotificationMeta {
   seenEventIds: string[];
 }
 
+interface NotificationReadCursor {
+  lastReadCreatedAt: number;
+  lastReadMessageId: string;
+}
+
+interface SyncedNotificationState {
+  dismissedIds?: string[];
+  readIds?: string[];
+  readCursor?: Partial<NotificationReadCursor>;
+}
+
+const MAX_SYNCED_READ_IDS = 512;
+
+function normalizedReadCursor(value?: Partial<NotificationReadCursor>): NotificationReadCursor | undefined {
+  const createdAt = Number(value?.lastReadCreatedAt || 0);
+  if (!Number.isFinite(createdAt) || createdAt <= 0) return undefined;
+  return {
+    lastReadCreatedAt: createdAt,
+    lastReadMessageId: String(value?.lastReadMessageId || ""),
+  };
+}
+
+function laterReadCursor(
+  left?: Partial<NotificationReadCursor>,
+  right?: Partial<NotificationReadCursor>,
+): NotificationReadCursor | undefined {
+  const a = normalizedReadCursor(left);
+  const b = normalizedReadCursor(right);
+  if (!a) return b;
+  if (!b) return a;
+  if (a.lastReadCreatedAt !== b.lastReadCreatedAt) {
+    return a.lastReadCreatedAt > b.lastReadCreatedAt ? a : b;
+  }
+  // Legacy notification cursors used an empty id for mark-all. Treat that as
+  // the complete second so an older client cannot move the watermark back.
+  if (!a.lastReadMessageId || !b.lastReadMessageId) {
+    return { lastReadCreatedAt: a.lastReadCreatedAt, lastReadMessageId: "" };
+  }
+  return a.lastReadMessageId.localeCompare(b.lastReadMessageId) >= 0 ? a : b;
+}
+
+function notificationReadByCursor(item: NotificationItem, cursor?: NotificationReadCursor) {
+  if (!cursor) return false;
+  if (item.created_at !== cursor.lastReadCreatedAt) return item.created_at < cursor.lastReadCreatedAt;
+  return !cursor.lastReadMessageId || item.id.localeCompare(cursor.lastReadMessageId) <= 0;
+}
+
+function cursorForNotifications(items: NotificationItem[]) {
+  return items.reduce<NotificationReadCursor | undefined>((cursor, item) => laterReadCursor(cursor, {
+    lastReadCreatedAt: item.created_at,
+    lastReadMessageId: item.id,
+  }), undefined);
+}
+
+function trimReadIds(values: Iterable<string>) {
+  const ids = [...new Set([...values].filter(value => typeof value === "string" && value))];
+  return ids.slice(-MAX_SYNCED_READ_IDS);
+}
+
 function loadMeta(pk: string): NotificationMeta | null {
   try { const raw = deviceStorage.getItem(metaKeyFor(pk)!); return raw ? JSON.parse(raw) : null; } catch { return null; }
 }
@@ -43,6 +102,8 @@ export const useNotificationsStore = defineStore("notifications", {
     loadedFor: "" as string,
     dismissed: new Set<string>(),
     meta: null as NotificationMeta | null,
+    readIds: new Set<string>(),
+    readCursor: undefined as NotificationReadCursor | undefined,
   }),
 
   getters: {
@@ -109,19 +170,51 @@ export const useNotificationsStore = defineStore("notifications", {
       }
       this.meta = meta;
 
-      const syncedState = (typeof indexedDB === "undefined" ? undefined : (await metaRepository.get(targetPk, "notification_state"))?.value) as {
-        dismissedIds?: string[];
-        readCursor?: { lastReadCreatedAt?: number; lastReadMessageId?: string };
-      } | undefined;
-      if (syncedState) {
-        this.dismissed = new Set([...this.dismissed, ...(syncedState.dismissedIds || [])]);
-        if (this.meta && Number(syncedState.readCursor?.lastReadCreatedAt || 0) > this.meta.lastSeenAt) {
-          this.meta.lastSeenAt = Number(syncedState.readCursor?.lastReadCreatedAt || 0);
-        }
-      }
+      this.readIds = new Set(this.list.filter(item => item.read).map(item => item.id));
+      const syncedState = (typeof indexedDB === "undefined" ? undefined : (await metaRepository.get(targetPk, "notification_state"))?.value) as SyncedNotificationState | undefined;
+      this.readCursor = syncedState ? undefined : normalizedReadCursor(this.meta ? {
+        lastReadCreatedAt: this.meta.lastSeenAt,
+        lastReadMessageId: this.meta.seenEventIds.at(-1) || "",
+      } : undefined);
+      if (syncedState) this.applySyncedState(syncedState, false);
 
       // 4. 填充缺失内容
       this.refreshContent();
+    },
+
+    async refreshSyncedState(pk?: string) {
+      const targetPk = pk ?? this.loadedFor;
+      if (!targetPk || this.loadedFor !== targetPk || typeof indexedDB === "undefined") return false;
+      const syncedState = (await metaRepository.get(targetPk, "notification_state"))?.value as SyncedNotificationState | undefined;
+      if (!syncedState || this.loadedFor !== targetPk) return false;
+      this.applySyncedState(syncedState, true);
+      return true;
+    },
+
+    applySyncedState(syncedState: SyncedNotificationState, persist = true) {
+      const pk = this.loadedFor;
+      if (!pk) return;
+      this.dismissed = new Set([...this.dismissed, ...(syncedState.dismissedIds || [])]);
+      this.readIds = new Set(trimReadIds([...this.readIds, ...(syncedState.readIds || [])]));
+      this.readCursor = laterReadCursor(this.readCursor, syncedState.readCursor);
+      let changed = false;
+      this.list.forEach(item => {
+        if (!item.read && (this.readIds.has(item.id) || notificationReadByCursor(item, this.readCursor))) {
+          item.read = true;
+          changed = true;
+        }
+      });
+      if (this.meta && this.readCursor) {
+        this.meta.lastSeenAt = Math.max(this.meta.lastSeenAt, this.readCursor.lastReadCreatedAt);
+        this.meta.seenEventIds = this.readCursor.lastReadMessageId ? [this.readCursor.lastReadMessageId] : [];
+      }
+      if (!persist) return;
+      try {
+        deviceStorage.setItem(notificationsKeyFor(pk)!, JSON.stringify(this.list));
+        deviceStorage.setItem(dismissedKeyFor(pk)!, JSON.stringify([...this.dismissed]));
+        if (this.meta) saveMeta(pk, this.meta);
+      } catch {}
+      if (changed) this.refreshContent();
     },
 
     // 提取出的内容刷新逻辑
@@ -145,11 +238,21 @@ export const useNotificationsStore = defineStore("notifications", {
         deviceStorage.setItem(notificationsKeyFor(pk)!, JSON.stringify(this.list));
         deviceStorage.setItem(dismissedKeyFor(pk)!, JSON.stringify([...this.dismissed]));
         if (this.meta) saveMeta(pk, this.meta);
-        if (typeof indexedDB !== "undefined") void metaRepository.put(pk, "notification_state", {
-          dismissedIds: [...this.dismissed],
-          readCursor: this.meta ? { lastReadCreatedAt: this.meta.lastSeenAt, lastReadMessageId: this.meta.seenEventIds.at(-1) || "" } : undefined,
-        });
-        scheduleAccountStateSync(useKeyStore(), "notification_state");
+        if (typeof indexedDB !== "undefined") {
+          const keys = useKeyStore();
+          const syncedState: SyncedNotificationState = {
+            dismissedIds: [...this.dismissed],
+            readIds: trimReadIds([...this.readIds, ...this.list.filter(item => item.read).map(item => item.id)]),
+            readCursor: this.readCursor,
+          };
+          void metaRepository.put(pk, "notification_state", syncedState).then(() => {
+            if (this.loadedFor !== pk || keys.pkHex !== pk) return;
+            // Notification read state is tiny and must leave the device before
+            // iOS suspends a just-backgrounded PWA. Start its debounced upload
+            // on the next task instead of waiting the general 500 ms window.
+            scheduleAccountStateSync(keys, "notification_state", undefined, { delayMs: 0 });
+          }).catch(() => undefined);
+        }
       } catch {}
     },
 
@@ -176,6 +279,7 @@ export const useNotificationsStore = defineStore("notifications", {
       }
 
       // 4. 插入列表并排序
+      if (this.readIds.has(n.id) || notificationReadByCursor(n, this.readCursor)) n.read = true;
       this.list.unshift(n);
       this.list.sort((a, b) => b.created_at - a.created_at);
       
@@ -190,6 +294,7 @@ export const useNotificationsStore = defineStore("notifications", {
       this.list.forEach(item => {
         if (item.type === "friend_request" && item.from === from && !item.read) {
           item.read = true;
+          this.readIds.add(item.id);
           changed = true;
         }
       });
@@ -200,6 +305,7 @@ export const useNotificationsStore = defineStore("notifications", {
       const n = this.list.find(x => x.id === id); 
       if (!n) return;
       n.read = true;
+      this.readIds.add(n.id);
       // 只有读取了更新的消息，才更新 lastSeenAt
       if (this.meta) {
         this.meta.lastSeenAt = Math.max(this.meta.lastSeenAt, n.created_at);
@@ -208,10 +314,14 @@ export const useNotificationsStore = defineStore("notifications", {
     },
 
     markAllRead() {
-      const now = Math.floor(Date.now() / 1000);
       this.list.forEach(n => { n.read = true; });
+      this.readCursor = laterReadCursor(this.readCursor, cursorForNotifications(this.list));
+      this.readIds = new Set();
       if (this.meta) {
-        this.meta.lastSeenAt = now;
+        if (this.readCursor) {
+          this.meta.lastSeenAt = Math.max(this.meta.lastSeenAt, this.readCursor.lastReadCreatedAt);
+          this.meta.seenEventIds = this.readCursor.lastReadMessageId ? [this.readCursor.lastReadMessageId] : [];
+        }
       }
       this.save();
     },
@@ -226,6 +336,8 @@ export const useNotificationsStore = defineStore("notifications", {
       this.list = [];
       this.dismissed = new Set();
       this.meta = null;
+      this.readIds = new Set();
+      this.readCursor = undefined;
       this.loadedFor = "";
       if (removeFromStorage && pk) {
         try {
