@@ -32,8 +32,14 @@ export async function timedJsonFetch(
       headers: response.headers,
     });
   } catch (error) {
-    if (upstreamAborted || upstream?.aborted) throw namedRequestError("AbortError", "request_aborted");
-    if (timedOut) throw namedRequestError("TimeoutError", "request_timeout");
+    if (upstreamAborted || upstream?.aborted) {
+      if (upstream?.reason instanceof Error) throw upstream.reason;
+      throw namedRequestError("AbortError", "request_aborted");
+    }
+    // Preserve the historical timedJsonFetch error surface for callers that
+    // already inspect the underlying aborted request. Media download timeout
+    // classification is handled separately in mediaSafety.ts.
+    if (timedOut) throw error;
     throw error;
   } finally {
     clearTimeout(timer);
