@@ -58,12 +58,14 @@ export async function uploadPreparedImage(
   prepared: PreparedEncryptedImage,
   accountPubkey: string,
   signEvent: SignEvent,
-  onProgress: (progress: number) => void
+  onProgress: (progress: number) => void,
+  signal?: AbortSignal
 ) {
   const descriptor = await uploadImageToBlossomWithFallback(prepared.encryptedFile, {
     accountPubkey,
     signEvent,
     onProgress,
+    signal,
   });
   return { url: descriptor.url, key: prepared.key, iv: prepared.iv, mime: prepared.mime };
 }

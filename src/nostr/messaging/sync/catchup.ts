@@ -1,5 +1,7 @@
 import type { NostrEvent } from "nostr-tools";
 import { subscribe } from "@/nostr/relays";
+import type { RelaySubscriptionFailureReason } from "@/nostr/relays";
+import { normalizeRelayUrl } from "@/services/connectionSettings";
 import { closeSubscription } from "@/utils/subscriptions";
 import { logger } from "@/utils/logger";
 import type { SubscriptionLike } from "./types";
@@ -7,12 +9,17 @@ import type { SubscriptionLike } from "./types";
 export type CatchupPageResult = {
   events: Array<{ event: NostrEvent; relayUrl?: string }>;
   completedRelays: Set<string>;
+  failedRelays: Map<string, RelaySubscriptionFailureReason>;
   allRelaysCompleted: boolean;
   timedOut: boolean;
   aborted: boolean;
 };
 
 export type SubscribeForCatchup = (relays: string[], filters: any[]) => SubscriptionLike;
+
+function normalizedRelaySet(relays: string[]) {
+  return [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))];
+}
 
 export async function fetchCatchupPage(
   relays: string[],
@@ -22,36 +29,56 @@ export async function fetchCatchupPage(
   trackSubscription?: (subscription: SubscriptionLike) => (() => void) | void,
   signal?: AbortSignal
 ): Promise<CatchupPageResult> {
-  const expectedRelays = new Set(relays);
+  const normalizedRelays = normalizedRelaySet(relays);
+  const expectedRelays = new Set(normalizedRelays);
   const completedRelays = new Set<string>();
+  const failedRelays = new Map<string, RelaySubscriptionFailureReason>();
   const events: Array<{ event: NostrEvent; relayUrl?: string }> = [];
-  const subscription = subscribeFn(relays, filters);
+  const subscription = subscribeFn(normalizedRelays, filters);
   const untrack = trackSubscription?.(subscription);
+
   return new Promise(resolve => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (reason: "eose" | "timeout" | "abort" | "empty") => {
+    const finish = (reason: "eose" | "timeout" | "failure" | "abort" | "empty") => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (reason === "timeout") {
+        for (const relay of expectedRelays) {
+          if (!completedRelays.has(relay) && !failedRelays.has(relay)) failedRelays.set(relay, "timeout");
+        }
+      }
       closeSubscription(subscription);
       untrack?.();
       signal?.removeEventListener("abort", abort);
       resolve({
         events,
         completedRelays,
-        allRelaysCompleted: completedRelays.size >= expectedRelays.size,
+        failedRelays,
+        allRelaysCompleted: expectedRelays.size === completedRelays.size && failedRelays.size === 0,
         timedOut: reason === "timeout",
         aborted: reason === "abort",
       });
     };
     const abort = () => finish("abort");
+
     subscription.on("event", (event: NostrEvent, relayUrl?: string) => events.push({ event, relayUrl }));
-    subscription.on("eose", (relayUrl: string) => {
+    subscription.on("eose", (rawRelayUrl: string) => {
+      const relayUrl = normalizeRelayUrl(rawRelayUrl);
+      if (!relayUrl || !expectedRelays.has(relayUrl) || completedRelays.has(relayUrl) || failedRelays.has(relayUrl)) return;
       completedRelays.add(relayUrl);
       logger.debug(`[message-sync] EOSE relay=${relayUrl} count=${completedRelays.size}/${expectedRelays.size}`);
-      if (completedRelays.size >= expectedRelays.size) finish("eose");
+      if (completedRelays.size === expectedRelays.size) finish("eose");
     });
+    subscription.on("failure", (rawRelayUrl: string, reason: RelaySubscriptionFailureReason) => {
+      const relayUrl = normalizeRelayUrl(rawRelayUrl);
+      if (!relayUrl || !expectedRelays.has(relayUrl) || completedRelays.has(relayUrl) || failedRelays.has(relayUrl)) return;
+      failedRelays.set(relayUrl, reason);
+      logger.warn(`[message-sync] relay catch-up failed relay=${relayUrl} reason=${reason}`);
+      finish("failure");
+    });
+
     timer = setTimeout(() => finish("timeout"), timeoutMs);
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) finish("abort");
@@ -77,7 +104,8 @@ export async function runPagedCatchup(options: {
   }, undefined);
   let received = 0;
   let insertedCandidates = 0;
-  let completedRelays = new Set<string>();
+  const completedRelays = new Set<string>();
+  const failedRelays = new Map<string, RelaySubscriptionFailureReason>();
   let allRelaysCompleted = true;
   let timedOut = false;
   let aborted = false;
@@ -87,7 +115,8 @@ export async function runPagedCatchup(options: {
 
   for (let batch = 0; batch < maxBatches && options.isCurrent(); batch++) {
     batches++;
-    const pageFilters = options.filters.map(filter => ({ ...filter, ...(currentUntil === undefined ? {} : { until: currentUntil }) }));
+    const pageUntil = currentUntil;
+    const pageFilters = options.filters.map(filter => ({ ...filter, ...(pageUntil === undefined ? {} : { until: pageUntil }) }));
     const page = await fetchCatchupPage(
       options.relays,
       pageFilters,
@@ -97,10 +126,12 @@ export async function runPagedCatchup(options: {
       options.signal
     );
     for (const relay of page.completedRelays) completedRelays.add(relay);
+    for (const [relay, reason] of page.failedRelays) if (!failedRelays.has(relay)) failedRelays.set(relay, reason);
     allRelaysCompleted = allRelaysCompleted && page.allRelaysCompleted;
     timedOut = timedOut || page.timedOut;
     aborted = aborted || page.aborted;
     received += page.events.length;
+
     let newUnique = 0;
     let oldest: number | undefined;
     for (const { event, relayUrl } of page.events) {
@@ -112,20 +143,38 @@ export async function runPagedCatchup(options: {
       insertedCandidates++;
       await options.onEvent(event, relayUrl);
     }
+
+    const pageFailed = page.aborted
+      || page.timedOut
+      || page.failedRelays.size > 0
+      || !page.allRelaysCompleted
+      || !options.isCurrent();
+    if (pageFailed) {
+      // Events received before the failure remain ingested, but the shared
+      // history cursor stays at the page boundary so a retry cannot skip data.
+      currentUntil = pageUntil;
+      break;
+    }
+
     if (oldest === undefined) { naturalEnd = true; break; }
     const didNotAdvance = currentUntil !== undefined && oldest === currentUntil;
     if (didNotAdvance && newUnique === 0) { naturalEnd = true; break; }
     currentUntil = oldest;
-    // Without a full page there cannot be another timestamp boundary hidden by limit.
     const pageLimit = Math.max(...pageFilters.map(filter => Number(filter.limit || 0)));
     if (!pageLimit || page.events.length < pageLimit) { naturalEnd = true; break; }
   }
+
   const hitMaxBatches = !naturalEnd && batches >= maxBatches;
-  const incomplete = aborted || timedOut || !allRelaysCompleted || !options.isCurrent();
+  const incomplete = aborted
+    || timedOut
+    || failedRelays.size > 0
+    || !allRelaysCompleted
+    || !options.isCurrent();
   return {
     received,
     unique: insertedCandidates,
     completedRelays,
+    failedRelays,
     allRelaysCompleted,
     exhaustedHistory: naturalEnd && !incomplete,
     naturalEnd,

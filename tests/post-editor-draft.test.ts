@@ -127,6 +127,19 @@ describe("post editor close and media UX", () => {
     expect(source).toContain("persistDraft();\n        draftPersistenceEnabled = false;");
   });
 
+  it("cancels uploads only for destructive lifecycle events and shares one image cancellation signal", () => {
+    expect(source).toContain("function cancelUpload(id: string, discardResult = true)");
+    expect(source).toContain("if (item) cancelUpload(item.id);");
+    expect(source).toContain("cancelUploadsForAccount(account);");
+    expect(source).toContain("if (active.account !== account) cancelUpload(id);");
+    expect(source).toContain("cancelAllUploads();");
+    expect(source).toContain("clearPostDraft(account);");
+    expect(source).toContain("}, uploadController.signal),");
+    expect(source).toContain("signal: uploadController.signal");
+    expect(source).toContain("function onClose() {\n      ui.closePostEditor();\n    }");
+    expect(source).not.toContain("function onClose() {\n      cancelAllUploads");
+  });
+
   it("releases runtime object URLs without removing restored encrypted references", () => {
     expect(source).toContain("releasePostEditorMediaUrls(uploads.value, videoPreview.value);");
     expect(source).toContain("fullContent += `![](${img.encryptedRef})\\n`");

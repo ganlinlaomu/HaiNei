@@ -26,6 +26,7 @@ type RelayConn = {
     filters: any[];
     handlers: Set<(evt: any, relayUrl: string) => void>;
     eoseHandlers: Set<(relayUrl: string) => void>;
+    failureHandlers: Set<(relayUrl: string, reason: RelaySubscriptionFailureReason) => void>;
     settled: boolean;
     eoseTimer?: ReturnType<typeof setTimeout>;
   }>;
@@ -47,6 +48,8 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 const EOSE_TIMEOUT = 8_000;
 
 const relaysMap: Record<string, RelayConn> = {};
+export type RelaySubscriptionFailureReason = "timeout" | "closed" | "disconnected";
+
 export type RelayConnectionEvent = {
   url: string;
   connected: boolean;
@@ -76,6 +79,29 @@ function emitConnectionState(event: RelayConnectionEvent) {
   for (const listener of connectionListeners) {
     try { listener(event); } catch (e) { logger.warn("[relay] connection listener failed", e); }
   }
+}
+
+function settleSubscription(
+  conn: RelayConn,
+  subId: string,
+  outcome: "eose" | "failure",
+  reason?: RelaySubscriptionFailureReason,
+) {
+  const sub = conn.subs.get(subId);
+  if (!sub || sub.settled) return false;
+  sub.settled = true;
+  if (sub.eoseTimer) clearTimeout(sub.eoseTimer);
+  sub.eoseTimer = undefined;
+  if (outcome === "eose") {
+    for (const handler of sub.eoseHandlers) {
+      try { handler(conn.url); } catch (error) { logger.warn("eose handler error", error); }
+    }
+  } else if (reason) {
+    for (const handler of sub.failureHandlers) {
+      try { handler(conn.url, reason); } catch (error) { logger.warn("subscription failure handler error", error); }
+    }
+  }
+  return true;
 }
 
 function queuedSubscriptionIds(queue: string[]): Set<string> {
@@ -140,10 +166,7 @@ function replaySubscriptions(conn: RelayConn, ws: WebSocket, queuedReqIds: Set<s
       sub.settled = false;
       if (sub.eoseTimer) clearTimeout(sub.eoseTimer);
       sub.eoseTimer = setTimeout(() => {
-        const active = conn.subs.get(subId);
-        if (!active || active.settled) return;
-        active.settled = true;
-        for (const handler of active.eoseHandlers) try { handler(conn.url); } catch {}
+        settleSubscription(conn, subId, "failure", "timeout");
       }, EOSE_TIMEOUT);
       ws.send(JSON.stringify(["REQ", subId, ...sub.filters]));
       debugLog("subscription", "subscription_replayed", subscriptionDiagnostic(conn, subId, sub.filters), "info");
@@ -258,10 +281,7 @@ function ensureRelayConn(url: string): RelayConn {
           sub.settled = false;
           if (sub.eoseTimer) clearTimeout(sub.eoseTimer);
           sub.eoseTimer = setTimeout(() => {
-            const active = conn.subs.get(subId);
-            if (!active || active.settled) return;
-            active.settled = true;
-            for (const handler of active.eoseHandlers) try { handler(url); } catch {}
+            settleSubscription(conn, subId, "failure", "timeout");
           }, EOSE_TIMEOUT);
         }
         const queuedReqIds = queuedSubscriptionIds(conn.queue);
@@ -326,14 +346,7 @@ function ensureRelayConn(url: string): RelayConn {
       } else if (t === "EOSE") {
           const subId = data[1];
           debugLog("subscription", "eose_received", subscriptionDiagnostic(conn, subId));
-          const s = conn.subs.get(subId);
-          if (s && !s.settled) {
-            s.settled = true;
-            if (s.eoseTimer) clearTimeout(s.eoseTimer);
-            for (const eh of s.eoseHandlers) {
-              try { eh(url); } catch (e) { logger.warn("eose handler error", e); }
-            }
-          }
+          settleSubscription(conn, subId, "eose");
       } else if (t === "OK") {
           const id = data[1];
           const ok = data[2];
@@ -346,14 +359,7 @@ function ensureRelayConn(url: string): RelayConn {
         } else {
           if (t === "CLOSED") {
             const subId = data[1];
-            const s = conn.subs.get(subId);
-            if (s && !s.settled) {
-              s.settled = true;
-              if (s.eoseTimer) clearTimeout(s.eoseTimer);
-              for (const eh of s.eoseHandlers) {
-              try { eh(url); } catch (e) { logger.warn("closed handler error", e); }
-              }
-            }
+            settleSubscription(conn, subId, "failure", "closed");
           }
         }
       };
@@ -374,10 +380,8 @@ function ensureRelayConn(url: string): RelayConn {
         });
         debugLog("relay", "relay_disconnected", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "warn");
         if (!conn.shouldReconnect) return;
-        for (const sub of conn.subs.values()) if (!sub.settled) {
-          sub.settled = true;
-          if (sub.eoseTimer) clearTimeout(sub.eoseTimer);
-          for (const eh of sub.eoseHandlers) try { eh(url); } catch {}
+        for (const subId of conn.subs.keys()) {
+          settleSubscription(conn, subId, "failure", "disconnected");
         }
         scheduleReconnect(create);
       };
@@ -457,16 +461,11 @@ export function subscribe(relays: string[], filtersArray: any[]) {
     const url = rawUrl;
     const conn = ensureRelayConn(url);
     const subId = "sub_" + Math.random().toString(36).slice(2, 10);
-    conn.subs.set(subId, { filters, handlers: new Set(), eoseHandlers: new Set(), settled: false });
+    conn.subs.set(subId, { filters, handlers: new Set(), eoseHandlers: new Set(), failureHandlers: new Set(), settled: false });
     debugLog("subscription", "subscription_created", subscriptionDiagnostic(conn, subId, filters), "info");
     sendRaw(conn, ["REQ", subId, ...filters]);
     const timer = setTimeout(() => {
-      const active = conn.subs.get(subId);
-      if (!active || active.settled) return;
-      active.settled = true;
-      for (const handler of active.eoseHandlers) {
-        try { handler(url); } catch {}
-      }
+      settleSubscription(conn, subId, "failure", "timeout");
     }, EOSE_TIMEOUT);
     conn.subs.get(subId)!.eoseTimer = timer;
     perRelaySubIds.push({ url, subId, timer });
@@ -487,6 +486,13 @@ export function subscribe(relays: string[], filtersArray: any[]) {
           if (!conn) continue;
           const s = conn.subs.get(subId);
           if (s) s.eoseHandlers.add(cb as any);
+        }
+      } else if (eventName === "failure") {
+        for (const { url, subId } of perRelaySubIds) {
+          const conn = relaysMap[url];
+          if (!conn) continue;
+          const s = conn.subs.get(subId);
+          if (s) s.failureHandlers.add(cb as any);
         }
       }
     },

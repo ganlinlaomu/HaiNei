@@ -63,6 +63,12 @@ export function validEncryptedMedia(value: unknown): boolean {
     return false;
   return true;
 }
+function mediaDownloadError(name: "AbortError" | "TimeoutError", message: string) {
+  const error = new Error(message);
+  error.name = name;
+  return error;
+}
+
 export async function downloadMedia(
   url: string,
   maxBytes: number,
@@ -70,11 +76,19 @@ export async function downloadMedia(
 ): Promise<ArrayBuffer> {
   if (!safeMediaUrl(url)) throw new Error("invalid_media_url");
   const controller = new AbortController();
-  const abort = () => controller.abort();
-  if (signal?.aborted) controller.abort();
-  signal?.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(abort, 20000);
+  let timedOut = false;
+  const abortFromCaller = () => {
+    if (!controller.signal.aborted) controller.abort();
+  };
+  if (signal?.aborted) abortFromCaller();
+  signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timer = setTimeout(() => {
+    if (controller.signal.aborted) return;
+    timedOut = true;
+    controller.abort();
+  }, 20_000);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
   try {
     const response = await fetch(url, {
       signal: controller.signal,
@@ -83,12 +97,12 @@ export async function downloadMedia(
       redirect: "error",
       cache: "no-store",
     });
-    if (!response.ok || !response.body)
-      throw new Error("media_download_failed");
+    if (!response.ok || !response.body) throw new Error("media_download_failed");
     if (Number(response.headers.get("Content-Length")) > maxBytes) {
       controller.abort();
       throw new Error("media_too_large");
     }
+
     reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -102,6 +116,7 @@ export async function downloadMedia(
       }
       chunks.push(part.value);
     }
+
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) {
@@ -109,10 +124,13 @@ export async function downloadMedia(
       offset += chunk.length;
     }
     return bytes.buffer;
+  } catch (error) {
+    if (timedOut) throw mediaDownloadError("TimeoutError", "media_download_timeout");
+    if (signal?.aborted) throw mediaDownloadError("AbortError", "media_download_aborted");
+    throw error;
   } finally {
     reader?.releaseLock();
     clearTimeout(timer);
-    signal?.removeEventListener("abort", abort);
-    controller.abort();
+    signal?.removeEventListener("abort", abortFromCaller);
   }
 }

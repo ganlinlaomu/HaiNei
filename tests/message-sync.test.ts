@@ -362,6 +362,68 @@ describe("relay catch-up", () => {
     expect(page.events.map(item => item.event.id)).toEqual(["slow"]);
   });
 
+  it("ignores duplicate and unknown Relay completion notifications", async () => {
+    const subscribeFake = () => {
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name === "eose") queueMicrotask(() => {
+            callback("wss://unknown");
+            callback("wss://a");
+            callback("wss://a");
+            callback("wss://b");
+          });
+        },
+        unsub() {}
+      };
+    };
+    const page = await fetchCatchupPage(["wss://a", "wss://b", "wss://a"], [{}], 100, subscribeFake);
+    expect([...page.completedRelays]).toEqual(["wss://a", "wss://b"]);
+    expect(page.failedRelays.size).toBe(0);
+    expect(page.allRelaysCompleted).toBe(true);
+  });
+
+  it("keeps received events but does not advance the page cursor after Relay failure", async () => {
+    const subscribeFake = () => {
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name === "failure") queueMicrotask(() => {
+            handlers.event?.forEach(handler => handler({ id: "before-failure", created_at: 150 }, "wss://a"));
+            callback("wss://b", "closed");
+          });
+        },
+        unsub() {}
+      };
+    };
+    const ingested: string[] = [];
+    const result = await runPagedCatchup({
+      relays: ["wss://a", "wss://b"],
+      filters: [{ until: 200, limit: 1 }],
+      subscribeFn: subscribeFake,
+      isCurrent: () => true,
+      onEvent: async event => { ingested.push(event.id); }
+    });
+    expect(ingested).toEqual(["before-failure"]);
+    expect(result.nextUntil).toBe(200);
+    expect(result.failedRelays.get("wss://b")).toBe("closed");
+    expect(result.incomplete).toBe(true);
+  });
+
+  it("reports pending relays as timed out instead of completed", async () => {
+    const subscribeFake = () => ({ on() {}, unsub() {} });
+    const page = await fetchCatchupPage(["wss://a", "wss://b"], [{}], 1, subscribeFake);
+    expect(page.completedRelays.size).toBe(0);
+    expect(page.failedRelays).toEqual(new Map([
+      ["wss://a", "timeout"],
+      ["wss://b", "timeout"]
+    ]));
+    expect(page.timedOut).toBe(true);
+    expect(page.allRelaysCompleted).toBe(false);
+  });
+
   it("keeps a shared timestamp boundary, deduplicates IDs, and terminates", async () => {
     let calls = 0;
     const pages = [
@@ -436,11 +498,17 @@ describe("message sync session", () => {
       authors: [PEER, ACCOUNT_A],
       decodeContext: { accountPubkey: ACCOUNT_A },
     });
-    expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillCompletedAt).toBeUndefined();
+    const partialState = await repo.getSyncState(ACCOUNT_A);
+    expect(partialState.historyBackfillCompletedAt).toBeUndefined();
+    expect(partialState.lastSuccessfulSyncAt).toBeUndefined();
+    expect(partialState.lastCatchupCompletedAt).toBeUndefined();
     expect((await repo.list(ACCOUNT_A)).map(item => item.id)).toEqual(["old-from-a"]);
 
     await manager.resume("manual");
-    expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillCompletedAt).toBe(2_000_000);
+    const repairedState = await repo.getSyncState(ACCOUNT_A);
+    expect(repairedState.historyBackfillCompletedAt).toBe(2_000_000);
+    expect(repairedState.lastSuccessfulSyncAt).toBe(2_000_000);
+    expect(repairedState.lastCatchupCompletedAt).toBe(2_000_000);
     expect(subscriptionIndex).toBeGreaterThanOrEqual(3);
     manager.stop();
   });
@@ -684,17 +752,18 @@ describe("message sync session", () => {
     const subscriptions: Array<Record<string, Array<(...args: any[]) => void>>> = [];
     let relayObserver: ((event: any) => void) | undefined;
     const canonical = message("during-history", 1000);
-    const subscribeFake = () => {
+    const subscribeFake = (relays: string[]) => {
       const handlers: Record<string, Array<(...args: any[]) => void>> = {};
       const index = subscriptions.push(handlers) - 1;
+      const relay = relays[0];
       return {
         on(name: string, callback: (...args: any[]) => void) {
           (handlers[name] ||= []).push(callback);
           if (index > 0 && name === "eose") queueMicrotask(() => {
             // The same logical message arrives live while historical replay is active.
-            if (index === 1) subscriptions[0].event?.forEach(handler => handler({ canonical }, "wss://a"));
-            handlers.event?.forEach(handler => handler({ canonical }, "wss://a"));
-            callback("wss://a");
+            if (index === 1) subscriptions[0].event?.forEach(handler => handler({ canonical }, relay));
+            handlers.event?.forEach(handler => handler({ canonical }, relay));
+            callback(relay);
           });
         },
         unsub() {}

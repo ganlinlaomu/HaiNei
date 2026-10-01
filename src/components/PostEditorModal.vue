@@ -292,6 +292,7 @@ export default defineComponent({
     }
 
     const stopBeforeLock = onBeforeAccountLock(account => {
+      cancelUploadsForAccount(account);
       if (draftAccount !== account) return;
       persistDraft(account);
       draftPersistenceEnabled = false;
@@ -343,9 +344,44 @@ export default defineComponent({
 
     const uploads = ref<PostEditorUploadItem[]>([]);
     const discardedUploadIds = new Set<string>();
-    const activeUploadAccounts = new Map<string, string>();
+    const activeUploads = new Map<string, { account: string; controller: AbortController }>();
     const uploadEnabled = ref(false);
     const uploadingAny = computed(() => uploads.value.some(u => u.status === "uploading"));
+
+    function beginUpload(id: string, account: string) {
+      activeUploads.get(id)?.controller.abort();
+      const controller = new AbortController();
+      activeUploads.set(id, { account, controller });
+      return controller;
+    }
+
+    function cancelUpload(id: string, discardResult = true) {
+      if (discardResult) discardedUploadIds.add(id);
+      const active = activeUploads.get(id);
+      active?.controller.abort();
+      activeUploads.delete(id);
+    }
+
+    function cancelUploadsForAccount(account: string, discardResult = true) {
+      for (const [id, active] of activeUploads) {
+        if (active.account !== account) continue;
+        if (discardResult) discardedUploadIds.add(id);
+        active.controller.abort();
+        activeUploads.delete(id);
+      }
+    }
+
+    function cancelAllUploads(discardResult = true) {
+      for (const [id, active] of activeUploads) {
+        if (discardResult) discardedUploadIds.add(id);
+        active.controller.abort();
+        activeUploads.delete(id);
+      }
+    }
+
+    function uploadWasCancelled(error: unknown) {
+      return error instanceof Error && error.name === "AbortError";
+    }
 
     // Video support
     const videoPreview = ref<PostDraftVideo | null>(null);
@@ -479,7 +515,7 @@ export default defineComponent({
     async function startUpload(item: PostEditorUploadItem, accountAtStart: string) {
       const file = item.file;
       if (!accountAtStart || !file) return;
-      activeUploadAccounts.set(item.id, accountAtStart);
+      const uploadController = beginUpload(item.id, accountAtStart);
       updateUploadItem(item.id, { status: "uploading", progress: 0, errorShort: undefined, errorDetails: undefined });
 
       try {
@@ -498,6 +534,7 @@ export default defineComponent({
           `迭代次数: ${compressionResult.iterations}`
         );
         
+        if (uploadController.signal.aborted) return;
         const compressedFile = compressionResult.file;
         const previewFile = await resizeImageFile(compressedFile, { maxSize: 960, quality: 0.76 });
         const [width, height] = await imageDimensions(compressedFile);
@@ -515,12 +552,13 @@ export default defineComponent({
           uploadPreparedImage(preparedOriginal, accountAtStart, signEventWrapper, progress => {
             originalProgress = progress;
             reportProgress();
-          }),
+          }, uploadController.signal),
           uploadPreparedImage(preparedPreview, accountAtStart, signEventWrapper, progress => {
             previewProgress = progress;
             reportProgress();
-          }),
+          }, uploadController.signal),
         ]);
+        if (uploadController.signal.aborted || discardedUploadIds.has(item.id)) return;
         const previewMetadata: EncryptedImageVariant = {
           url: preview.url,
           mime: preview.mime,
@@ -581,6 +619,7 @@ export default defineComponent({
         else uploads.value.push({ id: item.id, name: item.name, preview: null, status: "done", progress: 100, ...patch });
         persistDraft(accountAtStart);
       } catch (err:any) {
+        if (uploadWasCancelled(err) || uploadController.signal.aborted) return;
         console.error("upload error raw:", err);
         const errorShort = err && err.message ? String(err.message) : "上传失败";
         let errorDetails: string;
@@ -590,26 +629,31 @@ export default defineComponent({
           ui.addToast(`上传失败: ${errorShort}`, 3000, "error");
         }
       } finally {
-        activeUploadAccounts.delete(item.id);
+        if (activeUploads.get(item.id)?.controller === uploadController) activeUploads.delete(item.id);
       }
     }
 
     async function startVideoUpload(item: PostEditorUploadItem, accountAtStart: string) {
       const file = item.file;
       if (!accountAtStart || !file) return;
-      activeUploadAccounts.set(item.id, accountAtStart);
+      const uploadController = beginUpload(item.id, accountAtStart);
       updateUploadItem(item.id, { status: "uploading", progress: 0, errorShort: undefined, errorDetails: undefined });
 
       try {
         const prepared = await prepareEncryptedVideo(file);
+        if (uploadController.signal.aborted) return;
         
         // Upload encrypted file with fallback to multiple servers
         const descriptor = await uploadImageToBlossomWithFallback(prepared.encryptedFile, {
           accountPubkey: accountAtStart,
           signEvent: signEventWrapper,
-          onProgress: (p:number) => { updateUploadItem(item.id, { progress: p }); }
+          signal: uploadController.signal,
+          onProgress: (p:number) => {
+            if (!uploadController.signal.aborted) updateUploadItem(item.id, { progress: p });
+          }
         });
         
+        if (uploadController.signal.aborted || discardedUploadIds.has(item.id)) return;
         // Export encryption key to base64
         const keyBase64 = await exportKeyToBase64(prepared.key);
         
@@ -647,6 +691,7 @@ export default defineComponent({
         if (idx !== -1) uploads.value.splice(idx, 1);
         persistDraft(accountAtStart);
       } catch (err:any) {
+        if (uploadWasCancelled(err) || uploadController.signal.aborted) return;
         console.error("video upload error:", err);
         const errorShort = err && err.message ? String(err.message) : "上传失败";
         let errorDetails: string;
@@ -656,7 +701,7 @@ export default defineComponent({
           ui.addToast(`视频上传失败: ${errorShort}`, 3000, "error");
         }
       } finally {
-        activeUploadAccounts.delete(item.id);
+        if (activeUploads.get(item.id)?.controller === uploadController) activeUploads.delete(item.id);
       }
     }
 
@@ -669,7 +714,7 @@ export default defineComponent({
 
     function removeUpload(idx:number) {
       const item = uploads.value[idx];
-      if (item) discardedUploadIds.add(item.id);
+      if (item) cancelUpload(item.id);
       releaseObjectUrl(item?.preview);
       uploads.value.splice(idx, 1);
     }
@@ -694,9 +739,7 @@ export default defineComponent({
 
     function clearPersistentDraft(account: string) {
       for (const item of uploads.value) discardedUploadIds.add(item.id);
-      for (const [id, uploadAccount] of activeUploadAccounts) {
-        if (uploadAccount === account) discardedUploadIds.add(id);
-      }
+      cancelUploadsForAccount(account);
       draftPersistenceEnabled = false;
       clearPostDraft(account);
     }
@@ -857,12 +900,16 @@ export default defineComponent({
       if (ui.showPostEditor) onClose();
     });
     watch(() => keys.pkHex, account => {
+      for (const [id, active] of activeUploads) {
+        if (active.account !== account) cancelUpload(id);
+      }
       if (ui.showPostEditor && draftAccount && account !== draftAccount) onClose();
     });
 
     onBeforeUnmount(()=>{
       stopBeforeLock();
       openGeneration += 1;
+      cancelAllUploads();
       persistDraft();
       if (dismissTimer !== null) window.clearTimeout(dismissTimer);
       window.removeEventListener("pagehide", persistOnPageHide);

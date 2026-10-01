@@ -553,7 +553,8 @@ export function relayConfigsFromNip65(
 export async function runMediaFailover<T>(
   servers: MediaServer[],
   attempt: (server: MediaServer) => Promise<T>,
-  report?: (server: MediaServer, ok: boolean) => void
+  report?: (server: MediaServer, ok: boolean) => void,
+  stopOnError?: (error: unknown) => boolean
 ): Promise<{ result: T; server: MediaServer }> {
   const ranked = rankMediaServers(servers);
   let lastError: unknown;
@@ -564,6 +565,7 @@ export async function runMediaFailover<T>(
       return { result, server };
     } catch (error) {
       lastError = error;
+      if (stopOnError?.(error)) throw error;
       report?.(server, false);
     }
   }

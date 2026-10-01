@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>HaiNei media browser validation</title></head>
+<body>
+  <div id="app"></div>
+  <pre id="result">RUNNING</pre>
+  <script type="module">
+    import { createApp, h, nextTick } from "vue";
+    import EncryptedVideoPlayer from "/src/components/EncryptedVideoPlayer.vue";
+    import {
+      encryptVideoFile,
+      exportKeyToBase64,
+      generateVideoEncryptionKey,
+    } from "/src/utils/videoCrypto.ts";
+
+    const result = document.querySelector("#result");
+    const waitFor = async (predicate, label, timeout = 6000) => {
+      const started = performance.now();
+      while (performance.now() - started < timeout) {
+        const value = predicate();
+        if (value) return value;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      throw new Error("timeout waiting for " + label);
+    };
+    const decode = value => Uint8Array.from(atob(value), char => char.charCodeAt(0));
+
+    try {
+      const file = new File([decode("GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAMlEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHWTbuMU6uEElTDZ1OsggEjTbuMU6uEHFO7a1OsggMP7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsCrXsYMPQkBNgIxMYXZmNjEuNy4xMDNXQYxMYXZmNjEuNy4xMDNEiYhAgEAAAAAAABZUrmvIrgEAAAAAAAA/14EBc8WIRkvIGJiKEGucgQAitZyDdW5kiIEAhoVWX1ZQOYOBASPjg4QCYloA4JCwgSC6gSCagQJVsIRVuYEBElTDZ0B/c3OfY8CAZ8iZRaOHRU5DT0RFUkSHjExhdmY2MS43LjEwM3Nz2mPAi2PFiEZLyBiYihBrZ8ilRaOHRU5DT0RFUkSHmExhdmM2MS4xOS4xMDEgbGlidnB4LXZwOWfIoUWjiERVUkFUSU9ORIeTMDA6MDA6MDAuNTIwMDAwMDAwAB9DtnVBYeeBAKPggQAAgIJJg0IAAfAB9gY4JBwYSgAAIEAAItv//5V29t/0rJIV6+83T8qAkchIzbj8ppDSUIBEwUeNuAQr//61whyynaZXajlxWXWlpNZ1Ym47JgHd6Rno85TtPnZcoAAAo5OBACgAhgBAkpxIUAAAA3AAAENAo5OBAFAAhgBAkpxATuAAA3AAAENAo5OBAHgAhgBAkpxIUAAAA3AAAENAo5OBAKAAhgBAkpw4TUAAA3AAAENAo5OBAMgAhgBAkpxIUAAAA3AAAENAo5OBAPAAhgBAkpxATuAAA3AAAENAo5OBARgAhgBAkpxIUAAAA3AAAENAo5OBAUAAhgBAkpwsSiAAA3AAAENAo5OBAWgAhgBAkpxIUAAAA3AAAENAo5OBAZAAhgDAkpwsSiAAA3AAAENAo5OBAbgAhgBAkpxIUAAAA3AAAENAo5OBAeAAhgBAkpw4TUAAA3AAAENAHFO7a5G7j7OBALeK94EB8YIBqPCBAw==")], "fixture.webm", { type: "video/webm" });
+      const key = await generateVideoEncryptionKey();
+      const prepared = await encryptVideoFile(file, key);
+      const metadata = {
+        v: 1,
+        url: "https://media.example/video.enc",
+        mime: "video/webm",
+        alg: "AES-GCM",
+        iv: prepared.iv,
+        key: await exportKeyToBase64(key),
+        size: file.size,
+      };
+
+      let fetchCount = 0;
+      globalThis.fetch = async () => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          const error = new Error("simulated timeout");
+          error.name = "TimeoutError";
+          throw error;
+        }
+        return new Response(prepared.encryptedBytes, {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" },
+        });
+      };
+
+      const realCreate = URL.createObjectURL.bind(URL);
+      const realRevoke = URL.revokeObjectURL.bind(URL);
+      const created = [];
+      const revoked = [];
+      URL.createObjectURL = blob => {
+        const url = realCreate(blob);
+        created.push({ url, type: blob.type });
+        return url;
+      };
+      URL.revokeObjectURL = url => {
+        revoked.push(url);
+        realRevoke(url);
+      };
+
+      const app = createApp({
+        render: () => h(EncryptedVideoPlayer, { metadata, dataSaver: true }),
+      });
+      app.mount("#app");
+      await nextTick();
+
+      const load = await waitFor(
+        () => [...document.querySelectorAll("button")].find(button => button.textContent?.includes("加载视频")),
+        "initial load button"
+      );
+      load.click();
+
+      const timeoutError = await waitFor(
+        () => document.querySelector(".video-error"),
+        "timeout error"
+      );
+      if (!timeoutError.textContent.includes("视频加载超时，请重新加载")) {
+        throw new Error("missing timeout-specific message");
+      }
+
+      const retry = [...timeoutError.querySelectorAll("button")].find(button => button.textContent?.includes("重新加载"));
+      if (!retry) throw new Error("missing retry button");
+      retry.click();
+
+      const video = await waitFor(() => document.querySelector("video"), "decrypted video");
+      if (created.length !== 1 || created[0].type !== "video/webm") {
+        throw new Error("decrypted Blob metadata is incorrect");
+      }
+
+      video.preload = "metadata";
+      video.load();
+      if (video.readyState < 1) {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("loadedmetadata timeout")), 5000);
+          video.addEventListener("loadedmetadata", () => {
+            clearTimeout(timer);
+            resolve();
+          }, { once: true });
+          video.addEventListener("error", () => {
+            clearTimeout(timer);
+            reject(new Error("video metadata load failed"));
+          }, { once: true });
+        });
+      }
+      if (video.readyState < 1 || video.videoWidth !== 32 || video.videoHeight !== 32) {
+        throw new Error(`unexpected video metadata readyState=${video.readyState} size=${video.videoWidth}x${video.videoHeight}`);
+      }
+
+      const blobUrl = created[0].url;
+      app.unmount();
+      await nextTick();
+      if (!revoked.includes(blobUrl)) throw new Error("Blob URL was not released on unmount");
+      if (fetchCount !== 2) throw new Error(`expected exactly two downloads, got ${fetchCount}`);
+
+      result.textContent = "PASS: encrypted video timeout retry, AES-GCM metadata load, Blob release";
+      document.title = "PASS";
+    } catch (error) {
+      result.textContent = "FAIL: " + (error?.stack || error);
+      document.title = "FAIL";
+    }
+  </script>
+</body>
+</html>

@@ -4,22 +4,89 @@ export type CommentThread = { root: Comment; replies: Comment[] };
 
 export function buildCommentThreads(comments: Comment[]): CommentThread[] {
   const byId = new Map(comments.map(comment => [comment.id, comment]));
-  const rootIdFor = (comment: Comment) => {
+  type RootResolution = { rootId: string; kind: "normal" | "orphan" | "cycle" };
+  const rootCache = new Map<string, RootResolution>();
+
+  const resolveRoot = (comment: Comment): RootResolution => {
+    const cached = rootCache.get(comment.id);
+    if (cached) return cached;
+
+    const path: Comment[] = [];
+    const pathIndex = new Map<string, number>();
     let current = comment;
-    const visited = new Set([comment.id]);
-    while (current.parentCommentId) {
-      const parent = byId.get(current.parentCommentId);
-      if (!parent || visited.has(parent.id)) break;
-      visited.add(parent.id);
+
+    while (true) {
+      const known = rootCache.get(current.id);
+      if (known) {
+        if (known.kind === "orphan") {
+          // Preserve the previous missing-parent behavior: every descendant of
+          // an orphan chain becomes its own root instead of being grouped under
+          // the first locally available orphan.
+          for (const node of path) rootCache.set(node.id, { rootId: node.id, kind: "orphan" });
+        } else {
+          for (const node of path) rootCache.set(node.id, known);
+        }
+        break;
+      }
+
+      pathIndex.set(current.id, path.length);
+      path.push(current);
+      const parentId = current.parentCommentId;
+
+      if (!parentId) {
+        const resolved: RootResolution = { rootId: current.id, kind: "normal" };
+        for (const node of path) rootCache.set(node.id, resolved);
+        break;
+      }
+
+      const parent = byId.get(parentId);
+      if (!parent) {
+        for (const node of path) rootCache.set(node.id, { rootId: node.id, kind: "orphan" });
+        break;
+      }
+
+      const cycleIndex = pathIndex.get(parent.id);
+      if (cycleIndex !== undefined) {
+        const cycle = path.slice(cycleIndex);
+        if (cycle.length === 1) {
+          rootCache.set(cycle[0].id, { rootId: cycle[0].id, kind: "cycle" });
+        } else {
+          for (let index = 0; index < cycle.length; index += 1) {
+            rootCache.set(cycle[index].id, {
+              rootId: cycle[(index - 1 + cycle.length) % cycle.length].id,
+              kind: "cycle"
+            });
+          }
+        }
+        const entryResolution = rootCache.get(cycle[0].id)!;
+        for (let index = 0; index < cycleIndex; index += 1) {
+          rootCache.set(path[index].id, entryResolution);
+        }
+        break;
+      }
+
       current = parent;
     }
-    return current.parentCommentId && !byId.has(current.parentCommentId) ? comment.id : current.id;
+
+    return rootCache.get(comment.id)!;
   };
 
-  const roots = comments.filter(comment => rootIdFor(comment) === comment.id);
+  const roots: Comment[] = [];
+  const repliesByRoot = new Map<string, Comment[]>();
+  for (const comment of comments) {
+    const rootId = resolveRoot(comment).rootId;
+    if (rootId === comment.id) {
+      roots.push(comment);
+      continue;
+    }
+    const replies = repliesByRoot.get(rootId);
+    if (replies) replies.push(comment);
+    else repliesByRoot.set(rootId, [comment]);
+  }
+
   return roots.map(root => ({
     root,
-    replies: comments.filter(comment => comment.id !== root.id && rootIdFor(comment) === root.id)
+    replies: repliesByRoot.get(root.id) || []
   }));
 }
 

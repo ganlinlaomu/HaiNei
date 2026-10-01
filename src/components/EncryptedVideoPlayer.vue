@@ -11,8 +11,11 @@
 
     <!-- Error state -->
     <div v-else-if="error" class="video-error">
-      <div class="error-icon">⚠️</div>
-      <div class="error-text">{{ error }}</div>
+      <div class="error-content">
+        <div class="error-icon">⚠️</div>
+        <div class="error-text">{{ error }}</div>
+        <button v-if="retryable" type="button" class="retry-btn" @click="retryLoad">重新加载</button>
+      </div>
     </div>
 
     <!-- Video player -->
@@ -53,6 +56,7 @@ export default defineComponent({
   setup(props) {
     const loading = ref(true);
     const error = ref<string | null>(null);
+    const retryable = ref(false);
     const decryptedUrl = ref<string | null>(null);
     const videoElement = ref<HTMLVideoElement | null>(null);
     const container = ref<HTMLElement | null>(null);
@@ -67,16 +71,15 @@ export default defineComponent({
       const run = ++generation;
       loading.value = true;
       error.value = null;
-      controller = new AbortController();
+      retryable.value = false;
+      const runController = new AbortController();
+      controller = runController;
 
       try {
-        // Fetch the encrypted video from Blossom
-        const encryptedBytes = new Uint8Array(await downloadMedia(props.metadata.url, 32 * 1024 * 1024, controller.signal));
-
-        // Import the decryption key
+        const encryptedBytes = new Uint8Array(
+          await downloadMedia(props.metadata.url, 32 * 1024 * 1024, runController.signal)
+        );
         const key = await importKeyFromBase64(props.metadata.key);
-
-        // Decrypt and create blob URL
         const blobUrl = await decryptVideoToBlob(
           encryptedBytes,
           key,
@@ -88,18 +91,36 @@ export default defineComponent({
           URL.revokeObjectURL(blobUrl);
           return;
         }
+        if (decryptedUrl.value) URL.revokeObjectURL(decryptedUrl.value);
         decryptedUrl.value = blobUrl;
       } catch (e: any) {
-        if (e?.name === 'AbortError') return;
-        if (run !== generation) return;
-        console.error('Failed to decrypt video:', e);
-        error.value = e.message || '解密视频失败';
+        if (run !== generation || e?.name === "AbortError") return;
+        console.error("Failed to decrypt video:", e);
+        retryable.value = true;
+        error.value = e?.name === "TimeoutError"
+          ? "视频加载超时，请重新加载"
+          : (e?.message || "解密视频失败");
       } finally {
         if (run === generation) {
-          controller = null;
+          if (controller === runController) controller = null;
           loading.value = false;
         }
       }
+    }
+
+    function retryLoad() {
+      generation += 1;
+      controller?.abort();
+      controller = null;
+      if (decryptedUrl.value) URL.revokeObjectURL(decryptedUrl.value);
+      decryptedUrl.value = null;
+      started.value = false;
+      loading.value = true;
+      error.value = null;
+      retryable.value = false;
+      error.value = null;
+      retryable.value = false;
+      void decryptAndLoad();
     }
 
     function observeVisibility() {
@@ -132,6 +153,7 @@ export default defineComponent({
     function onVideoError(e: Event) {
       console.error('Video playback error:', e);
       error.value = '视频播放失败';
+      retryable.value = true;
     }
 
     onMounted(() => {
@@ -141,6 +163,13 @@ export default defineComponent({
     onActivated(observeVisibility);
     onDeactivated(releaseVideo);
     watch(() => props.dataSaver, enabled => { if (!enabled) observeVisibility(); });
+    watch(
+      () => [props.metadata.url, props.metadata.key, props.metadata.iv, props.metadata.mime].join("|"),
+      () => {
+        releaseVideo();
+        if (!props.dataSaver) observeVisibility();
+      }
+    );
 
     onBeforeUnmount(() => {
       releaseVideo();
@@ -149,11 +178,13 @@ export default defineComponent({
     return {
       loading,
       error,
+      retryable,
       decryptedUrl,
       container,
       videoElement,
       started,
       decryptAndLoad,
+      retryLoad,
       onVideoLoaded,
       onVideoError
     };
@@ -230,9 +261,16 @@ export default defineComponent({
   flex-direction: column;
 }
 
+.error-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(88%, 360px);
+}
+
 .error-icon {
   font-size: 48px;
-  margin-bottom: 12px;
 }
 
 .error-text {
@@ -240,6 +278,16 @@ export default defineComponent({
   font-size: 14px;
   text-align: center;
   padding: 0 20px;
+}
+
+.retry-btn {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid rgba(255,255,255,.5);
+  border-radius: 20px;
+  color: #fff;
+  background: rgba(15,23,42,.72);
+  cursor: pointer;
 }
 
 .video-player {

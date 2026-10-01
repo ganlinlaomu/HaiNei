@@ -13,7 +13,7 @@ type QueryOptions = { relays?: string[]; timeoutMs?: number };
 
 function relaySet(input?: string[]) {
   return [...new Set((input || getRelaysFromStorage("read"))
-    .map(normalizeRelayUrl).filter(Boolean))].slice(0, 5);
+    .map(normalizeRelayUrl).filter(Boolean))];
 }
 
 /** Unified read/publish facade. Stores can migrate to this incrementally. */
