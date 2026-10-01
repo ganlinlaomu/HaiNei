@@ -71,6 +71,7 @@ describe("bottom-tab activation loading", () => {
     const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
     const routes = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
     const lazyViews = readFileSync(join(process.cwd(), "src/router/lazyViews.ts"), "utf8");
+    const header = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
 
     expect(conversations).toContain("loadAccountStoresOnce(account, [messages, friendships, friends, profiles])");
     expect(systemSettings).toContain("isAccountResourceStale(");
@@ -90,5 +91,10 @@ describe("bottom-tab activation loading", () => {
     expect(lazyViews).toContain("loadSystemSettingsView,");
     expect(lazyViews).toContain("await yieldToMainThread()");
     expect(lazyViews).toContain('import("@/views/SystemSettings.vue")');
+    expect(lazyViews.indexOf("loadSettingsView,")).toBeLessThan(lazyViews.indexOf("loadConversationsView,"));
+    expect(header).toContain('@pointerdown="preloadBottomTab(\'conversations\')"');
+    expect(header).toContain('@pointerdown="preloadBottomTab(\'notifications\')"');
+    expect(header).toContain('@pointerdown="preloadBottomTab(\'settings\')"');
+    expect(header).toContain("loadConversationsView, loadNotificationsView, loadSettingsView");
   });
 });
