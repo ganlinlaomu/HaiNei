@@ -43,12 +43,17 @@ export async function prepareEncryptedCommentImage(file: File): Promise<Prepared
 
 export async function uploadPreparedEncryptedCommentImage(
   prepared: PreparedEncryptedImage,
-  options: { accountPubkey: string; signEvent: (event: EventTemplate) => Promise<VerifiedEvent> }
+  options: {
+    accountPubkey: string;
+    signEvent: (event: EventTemplate) => Promise<VerifiedEvent>;
+    signal?: AbortSignal;
+  }
 ) {
   const encryptedFile = new File([prepared.encryptedBytes], prepared.encryptedName, { type: "application/octet-stream" });
   const descriptor = await uploadImageToBlossomWithFallback(encryptedFile, {
     accountPubkey: options.accountPubkey,
-    signEvent: options.signEvent
+    signEvent: options.signEvent,
+    signal: options.signal
   });
   const ref = encodeEncryptedImageRef({
     v: 1,
@@ -74,6 +79,7 @@ export async function uploadEncryptedCommentImage(
     signEvent: (event: EventTemplate) => Promise<VerifiedEvent>;
     prepared?: PreparedEncryptedImage;
     onPrepared?: (prepared: PreparedEncryptedImage) => void | Promise<void>;
+    signal?: AbortSignal;
   }
 ) {
   const prepared = options.prepared || await prepareEncryptedCommentImage(file);
