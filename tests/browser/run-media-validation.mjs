@@ -26,7 +26,10 @@ const child = spawn(chrome, [
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function targetInfo() {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`Chrome exited before DevTools became available (code=${child.exitCode}, signal=${child.signalCode})`);
+    }
     try {
       const response = await fetch("http://127.0.0.1:9222/json");
       const targets = await response.json();
@@ -35,7 +38,7 @@ async function targetInfo() {
     } catch {}
     await sleep(100);
   }
-  throw new Error("Chrome DevTools target did not become available");
+  throw new Error("Chrome DevTools target did not become available within 20 seconds");
 }
 
 async function evaluate(ws, expression, id) {
@@ -92,7 +95,30 @@ try {
 } finally {
   try { ws?.close(); } catch {}
   try { child.kill("SIGTERM"); } catch {}
-  await sleep(100);
-  try { child.kill("SIGKILL"); } catch {}
-  rmSync(profile, { recursive: true, force: true });
+  await Promise.race([
+    new Promise(resolve => child.once("exit", resolve)),
+    sleep(500),
+  ]);
+  if (child.exitCode === null && child.signalCode === null) {
+    try { child.kill("SIGKILL"); } catch {}
+    await Promise.race([
+      new Promise(resolve => child.once("exit", resolve)),
+      sleep(500),
+    ]);
+  }
+  let cleanupError;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      rmSync(profile, { recursive: true, force: true });
+      cleanupError = undefined;
+      break;
+    } catch (error) {
+      cleanupError = error;
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(error?.code)) throw error;
+      await sleep(200);
+    }
+  }
+  if (cleanupError) {
+    console.warn(`Browser validation passed but Chrome profile cleanup was incomplete: ${cleanupError.code}`);
+  }
 }

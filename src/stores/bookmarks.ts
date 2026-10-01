@@ -3,6 +3,7 @@ import type { BookmarkRecord } from "@/db/dexie";
 import { bookmarkRepository } from "@/repositories/bookmarkRepository";
 import { useKeyStore } from "@/stores/keys";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
+import { schedulePrivateBookmarkMirror } from "@/services/privateBookmarkMirror";
 
 export const useBookmarksStore = defineStore("bookmarks", {
   state: () => ({ records: [] as BookmarkRecord[], loadedFor: "" }),
@@ -31,7 +32,9 @@ export const useBookmarksStore = defineStore("bookmarks", {
         this.records = this.records.filter(item => item.messageId !== messageId);
         try {
           await bookmarkRepository.put({ ...existing, deleted: true, updatedAt: Date.now() });
-          scheduleAccountStateSync(useKeyStore(), "bookmarks");
+          const keys = useKeyStore();
+          scheduleAccountStateSync(keys, "bookmarks");
+          schedulePrivateBookmarkMirror(keys);
           return false;
         } catch (error) {
           this.records = [existing, ...this.records];
@@ -43,7 +46,9 @@ export const useBookmarksStore = defineStore("bookmarks", {
       this.records = [record, ...this.records];
       try {
         await bookmarkRepository.put(record);
-        scheduleAccountStateSync(useKeyStore(), "bookmarks");
+        const keys = useKeyStore();
+        scheduleAccountStateSync(keys, "bookmarks");
+        schedulePrivateBookmarkMirror(keys);
         return true;
       } catch (error) {
         this.records = this.records.filter(item => item.messageId !== messageId);
