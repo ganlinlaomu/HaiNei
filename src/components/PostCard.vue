@@ -34,7 +34,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z"/></svg>
         <span v-if="likeCount">{{ likeCount }}</span>
       </button>
-      <button class="action icon-action" type="button" aria-label="评论" :aria-expanded="commentsOpen" @click="toggleComments">
+      <button class="action icon-action" type="button" aria-label="评论" :aria-expanded="commentsOpen" @pointerdown="preloadComments" @focus="preloadComments" @click="toggleComments">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.5 9.6 9.6 0 0 1-4-.9L3 21l1.7-4.2A8.2 8.2 0 0 1 3 11.5a8.5 8.5 0 0 1 9-8.5 8.5 8.5 0 0 1 9 8.5Z"/></svg>
         <span v-if="commentCount">{{ commentCount }}</span>
       </button>
@@ -76,9 +76,10 @@ import { extractImageUrls } from "@/utils/extractImageUrls";
 import { loadProfileView } from "@/router/lazyViews";
 import { feedScrollAfterSheetClose } from "@/utils/commentThreads";
 
+const loadCommentSheet = () => import("./CommentSheet.vue");
 const PostImagePreview = defineAsyncComponent(() => import("./PostImagePreview.vue"));
 const VideoPlayer = defineAsyncComponent(() => import("./VideoPlayer.vue"));
-const CommentSheet = defineAsyncComponent(() => import("./CommentSheet.vue"));
+const CommentSheet = defineAsyncComponent(loadCommentSheet);
 
 const props = withDefaults(defineProps<{ message: InboxItem; openCommentId?: string; flat?: boolean }>(), { flat: false });
 const emit = defineEmits<{ height: [id: string, height: number] }>();
@@ -155,6 +156,7 @@ function openComments() {
   metaOpen.value = false;
   commentsOpen.value = true;
 }
+function preloadComments() { void loadCommentSheet(); }
 function toggleComments() { openComments(); }
 function closeComments() {
   commentsOpen.value = false;
