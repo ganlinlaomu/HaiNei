@@ -179,15 +179,98 @@ export function buildBud11AuthorizationHeader(event: unknown): string {
   return `Nostr ${base64url}`;
 }
 
-async function headProbe(uploadUrl: string, headers: Record<string,string>) {
+function uploadAbortError(message = "upload_aborted") {
+  const error: any = new Error(message);
+  error.name = "AbortError";
+  error.phase = "aborted";
+  return error;
+}
+
+function uploadTimeoutError(phase: string, message: string) {
+  const error: any = makePhaseError(phase, message);
+  error.name = "TimeoutError";
+  return error;
+}
+
+function signalError(signal: AbortSignal, fallback = uploadAbortError()) {
+  return signal.reason instanceof Error ? signal.reason : fallback;
+}
+
+function createUploadBudget(parentSignal: AbortSignal | undefined, timeoutMs: number) {
+  const controller = new AbortController();
+  const deadline = Date.now() + Math.max(1, timeoutMs);
+  const abortFromParent = () => {
+    if (!controller.signal.aborted) controller.abort(uploadAbortError());
+  };
+  if (parentSignal?.aborted) abortFromParent();
+  parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  const timer = setTimeout(() => {
+    if (!controller.signal.aborted) {
+      controller.abort(uploadTimeoutError("attempt_timeout", `媒体服务尝试超时 (${timeoutMs} ms)`));
+    }
+  }, Math.max(1, timeoutMs));
+  return {
+    signal: controller.signal,
+    remaining: () => Math.max(0, deadline - Date.now()),
+    cleanup() {
+      clearTimeout(timer);
+      parentSignal?.removeEventListener("abort", abortFromParent);
+    }
+  };
+}
+
+async function withUploadSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw signalError(signal);
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signalError(signal));
+    signal.addEventListener("abort", abort, { once: true });
+    operation.then(
+      value => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      error => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function headProbe(
+  uploadUrl: string,
+  headers: Record<string,string>,
+  parentSignal: AbortSignal,
+  timeoutMs: number,
+) {
+  if (parentSignal.aborted) throw signalError(parentSignal);
+  const controller = new AbortController();
+  let stageTimedOut = false;
+  const abortFromParent = () => {
+    if (!controller.signal.aborted) controller.abort(signalError(parentSignal));
+  };
+  parentSignal.addEventListener("abort", abortFromParent, { once: true });
+  const timer = setTimeout(() => {
+    if (controller.signal.aborted) return;
+    stageTimedOut = true;
+    controller.abort(uploadTimeoutError("head_timeout", "HEAD /upload 超时"));
+  }, Math.max(1, Math.min(8_000, timeoutMs)));
+
   let resp: Response;
   try {
-    resp = await fetch(uploadUrl, { method: "HEAD", headers });
+    resp = await fetch(uploadUrl, { method: "HEAD", headers, signal: controller.signal });
   } catch (error) {
+    if (parentSignal.aborted) throw signalError(parentSignal);
+    if (stageTimedOut) throw uploadTimeoutError("head_timeout", "HEAD /upload 超时");
+    if (controller.signal.aborted && controller.signal.reason instanceof Error) throw controller.signal.reason;
     throw makePhaseError("head_failed", "HEAD /upload 网络请求失败", {
       error: error instanceof Error ? error.message : String(error),
     });
+  } finally {
+    clearTimeout(timer);
+    parentSignal.removeEventListener("abort", abortFromParent);
   }
+
   const xReason = resp.headers.get("X-Reason") || undefined;
   const details = {
     status: resp.status,
@@ -244,6 +327,7 @@ export async function uploadImageToBlossom(
     signEvent?: (evt:any) => Promise<any> | any;
     onProgress?: (p:number)=>void;
     timeoutMs?: number;
+    signal?: AbortSignal;
   }
 ): Promise<{ url: string; sha256?: string; size?: number; type?: string; uploaded?: number }> {
   const cfg = await getBlossomConfig();
@@ -251,204 +335,290 @@ export async function uploadImageToBlossom(
   const uploadToken = options?.uploadToken ?? cfg.token ?? "";
   const serverBaseUrl = normalizeMediaUrl(options?.serverBaseUrl || uploadUrl || "")
     || String(options?.serverBaseUrl || uploadUrl || "").replace(/\/upload\/?$/i, "").replace(/\/+$/, "");
-  
+
   if (!uploadUrl) throw makeDetailedError("未配置 blossom_upload_url");
 
   const timeoutMs = options?.timeoutMs ?? cfg.timeoutMs;
-  const size = file.size;
-  const type = file.type || "application/octet-stream";
-  const shaHex = await sha256HexFromFile(file);
-
-  // base headers for HEAD probe (BUD-06)
-  const baseHeaders: Record<string,string> = {
-    "X-SHA-256": shaHex,
-    "X-Content-Length": String(size),
-    "X-Content-Type": type
+  const budget = createUploadBudget(options?.signal, timeoutMs);
+  const remaining = () => {
+    const value = budget.remaining();
+    if (value <= 0) throw uploadTimeoutError("attempt_timeout", `媒体服务尝试超时 (${timeoutMs} ms)`);
+    return value;
   };
-  let bearerAuthorizationHeaderValue: string | undefined;
-  if (uploadToken) {
-    baseHeaders["Authorization"] = uploadToken;
-  } else if (options?.managedHaiNeiServer) {
-    if (!serverBaseUrl || !options.accountPubkey || typeof options.signEvent !== "function") {
-      throw makeDetailedError("HaiNei 默认媒体服务需要已登录的 Nostr 账号");
-    }
-    const record = await getMediaSession(serverBaseUrl, options.accountPubkey, options.signEvent, false, size, shaHex);
-    bearerAuthorizationHeaderValue = ["Bearer", record.token].join(" ");
-    baseHeaders["Authorization"] = bearerAuthorizationHeaderValue;
-  }
 
-  // 1) HEAD probe without auth
-  let head = await headProbe(uploadUrl, baseHeaders);
+  try {
+    if (budget.signal.aborted) throw signalError(budget.signal);
 
-  // 2) If server requires auth (401/403) and signEvent provided, create authorization event, sign it,
-  //    then put Authorization: Nostr <base64(json)> header and retry HEAD.
-  let authorizationHeaderValue: string | undefined = undefined;
-  if (head.status === 401 && !uploadToken && typeof options?.signEvent === "function") {
-    if (options.managedHaiNeiServer && bearerAuthorizationHeaderValue && serverBaseUrl && options.accountPubkey) {
-      clearMediaSession(serverBaseUrl, options.accountPubkey);
-      const refreshed = await getMediaSession(serverBaseUrl, options.accountPubkey, options.signEvent, true, size, shaHex);
-      bearerAuthorizationHeaderValue = ["Bearer", refreshed.token].join(" ");
-      const refreshedHeadHeaders = { ...baseHeaders, Authorization: bearerAuthorizationHeaderValue };
-      head = await headProbe(uploadUrl, refreshedHeadHeaders);
-    }
-  }
+    const size = file.size;
+    const type = file.type || "application/octet-stream";
+    const shaHex = await withUploadSignal(sha256HexFromFile(file), budget.signal);
 
-  if ((head.status === 401 || head.status === 403) && !uploadToken && !bearerAuthorizationHeaderValue && typeof options?.signEvent === "function") {
-    // create event skeleton per BUD-01/BUD-02: t tag "upload", x tag sha
-    const evtSkeleton: any = {
-      // kind, created_at and expiration handled in normalizeAuthEventForSigning
-      content: `Upload ${file.name}`,
-      tags: [["t", "upload"], ["x", shaHex]]
+    const baseHeaders: Record<string,string> = {
+      "X-SHA-256": shaHex,
+      "X-Content-Length": String(size),
+      "X-Content-Type": type
     };
-    // normalize + add expiration if missing, set kind/created_at
-    const evtToSign = normalizeAuthEventForSigning(evtSkeleton, 3600);
-    let signed: any;
-    try {
-      signed = await options!.signEvent!(evtToSign);
-    } catch (e: any) {
-      throw makeDetailedError("签名授权事件失败", { error: e && e.message ? e.message : String(e) });
+    let bearerAuthorizationHeaderValue: string | undefined;
+
+    if (uploadToken) {
+      baseHeaders["Authorization"] = uploadToken;
+    } else if (options?.managedHaiNeiServer) {
+      if (!serverBaseUrl || !options.accountPubkey || typeof options.signEvent !== "function") {
+        throw makeDetailedError("HaiNei 默认媒体服务需要已登录的 Nostr 账号");
+      }
+      const record = await getMediaSession(
+        serverBaseUrl,
+        options.accountPubkey,
+        options.signEvent,
+        false,
+        size,
+        shaHex,
+        budget.signal
+      );
+      bearerAuthorizationHeaderValue = `Bearer ${record.token}`;
+      baseHeaders["Authorization"] = bearerAuthorizationHeaderValue;
     }
-    // Validate signed event minimally
-    if (!signed || signed.kind !== 24242 || !signed.sig || !signed.pubkey) {
-      // still allow but warn - server will likely reject
-      // throw helpful error
-      throw makeDetailedError("签名事件无效：期望返回含有 kind=24242, pubkey, sig 的签名事件", { signed });
+
+    let head = await headProbe(uploadUrl, baseHeaders, budget.signal, Math.min(8_000, remaining()));
+
+    let authorizationHeaderValue: string | undefined;
+    if (head.status === 401 && !uploadToken && typeof options?.signEvent === "function") {
+      if (options.managedHaiNeiServer && bearerAuthorizationHeaderValue && serverBaseUrl && options.accountPubkey) {
+        clearMediaSession(serverBaseUrl, options.accountPubkey);
+        const refreshed = await getMediaSession(
+          serverBaseUrl,
+          options.accountPubkey,
+          options.signEvent,
+          true,
+          size,
+          shaHex,
+          budget.signal
+        );
+        bearerAuthorizationHeaderValue = `Bearer ${refreshed.token}`;
+        head = await headProbe(
+          uploadUrl,
+          { ...baseHeaders, Authorization: bearerAuthorizationHeaderValue },
+          budget.signal,
+          Math.min(8_000, remaining())
+        );
+      }
     }
 
-    // BUD-11 requires URL-safe Base64 without padding.
-    authorizationHeaderValue = buildBud11AuthorizationHeader(signed);
+    if ((head.status === 401 || head.status === 403)
+      && !uploadToken
+      && !bearerAuthorizationHeaderValue
+      && typeof options?.signEvent === "function") {
+      const evtToSign = normalizeAuthEventForSigning({
+        content: `Upload ${file.name}`,
+        tags: [["t", "upload"], ["x", shaHex]]
+      }, 3600);
 
-    // retry HEAD with Authorization header
-    const headersWithAuth = { ...baseHeaders };
-    // If config.token is set as Authorization bearer, keep it in a separate header name scenario is unlikely.
-    // BUD-11 fixes the header name to Authorization. Do not allow a stale
-    // local preference to silently move the signed event to another header.
-    headersWithAuth["Authorization"] = authorizationHeaderValue;
-    head = await headProbe(uploadUrl, headersWithAuth);
-  }
-
-  if (!head.ok) {
-    // If HEAD failed, surface X-Reason if available (BUD-06)
-    throw makePhaseError("head_failed", `HEAD /upload 被拒绝，HTTP ${head.status}` + (head.details?.reason ? `: ${head.details.reason}` : ""), head.details);
-  }
-
-  // 3) Proceed to PUT /upload with raw file body (BUD-02). Include Authorization header if we have it.
-  const sendPut = (authHeaderValue?: string) => new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    let timer: any = null;
-    let settled = false;
-    const finish = (err?: any, result?: any) => {
-      if (settled) return;
-      settled = true;
-      if (timer) { clearTimeout(timer); timer = null; }
-      if (err) reject(err); else resolve(result);
-    };
-
-    try {
-      xhr.open("PUT", uploadUrl, true);
-      try { xhr.setRequestHeader("Content-Type", type); } catch {}
-      try { xhr.setRequestHeader("X-SHA-256", shaHex); } catch {}
-      if (authHeaderValue) {
-        try { xhr.setRequestHeader("Authorization", authHeaderValue); } catch {}
+      let signed: any;
+      try {
+        signed = await withUploadSignal(Promise.resolve(options.signEvent(evtToSign)), budget.signal);
+      } catch (error: any) {
+        if (error?.name === "AbortError" || error?.name === "TimeoutError") throw error;
+        throw makeDetailedError("签名授权事件失败", {
+          error: error?.message ? error.message : String(error)
+        });
+      }
+      if (!signed || signed.kind !== 24242 || !signed.sig || !signed.pubkey) {
+        throw makeDetailedError("签名事件无效：期望返回含有 kind=24242, pubkey, sig 的签名事件", { signed });
       }
 
-      xhr.upload.onprogress = (ev) => {
+      authorizationHeaderValue = buildBud11AuthorizationHeader(signed);
+      head = await headProbe(
+        uploadUrl,
+        { ...baseHeaders, Authorization: authorizationHeaderValue },
+        budget.signal,
+        Math.min(8_000, remaining())
+      );
+    }
+
+    if (!head.ok) {
+      throw makePhaseError(
+        "head_failed",
+        `HEAD /upload 被拒绝，HTTP ${head.status}${head.details?.reason ? `: ${head.details.reason}` : ""}`,
+        head.details
+      );
+    }
+
+    const sendPut = (authHeaderValue?: string) => new Promise<any>((resolve, reject) => {
+      if (budget.signal.aborted) {
+        reject(signalError(budget.signal));
+        return;
+      }
+
+      const xhr = new XMLHttpRequest();
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let settled = false;
+
+      const finish = (error?: any, result?: any) => {
         if (settled) return;
-        if (typeof options?.onProgress === "function") {
-          if (ev.lengthComputable) {
-            const p = Math.round((ev.loaded / ev.total) * 100);
-            try { options!.onProgress!(p); } catch {}
-          }
-        }
+        settled = true;
+        if (timer) clearTimeout(timer);
+        budget.signal.removeEventListener("abort", onBudgetAbort);
+        if (error) reject(error);
+        else resolve(result);
       };
 
-      xhr.onreadystatechange = () => {
+      const onBudgetAbort = () => {
         if (settled) return;
-        if (xhr.readyState !== 4) return;
-        const status = xhr.status;
-        const text = xhr.responseText || "";
-        const respHeaders = xhr.getAllResponseHeaders ? xhr.getAllResponseHeaders() : undefined;
-        if (status >= 200 && status < 300) {
-          // Ensure progress is set to 100% on success
-          if (typeof options?.onProgress === "function") {
-            try { options!.onProgress!(100); } catch {}
-          }
-          let json: any = null;
-          try { json = text ? JSON.parse(text) : null; } catch (e) {
-            return finish(makePhaseError("descriptor_invalid", "上传成功但服务器返回无法解析的 JSON 描述", { responseText: text, responseHeaders: respHeaders }));
-          }
-          if (!json || typeof json.url !== "string" || !json.url.trim()) {
-            return finish(makePhaseError("descriptor_invalid", "服务器返回的 Blob descriptor 缺少 url 字段", { descriptor: json, responseHeaders: respHeaders }));
-          }
-          return finish(undefined, json);
+        const reason = signalError(budget.signal);
+        if (reason.name === "TimeoutError") {
+          finish(uploadTimeoutError("put_timeout", "上传超时"));
         } else {
-          let errMsg = `上传失败，HTTP ${status}`;
-          try {
-            const j = text ? JSON.parse(text) : null;
-            if (j && (j.error || j.message)) errMsg += `: ${j.error || j.message}`;
-            else if (text) errMsg += `: ${text}`;
-          } catch {
-            if (text) errMsg += `: ${text}`;
-          }
-          return finish(makePhaseError("put_network_error", errMsg, { status, responseText: text, responseHeaders: respHeaders }));
+          finish(reason);
         }
-      };
-
-      xhr.onerror = () => {
-        if (settled) return;
-        finish(makePhaseError("put_network_error", "网络错误：XHR 上传失败（可能为 CORS 或 网络问题）"));
-      };
-      xhr.onabort = () => {
-        if (settled) return;
-        finish(makePhaseError("put_network_error", "上传被中止"));
-      };
-
-      timer = setTimeout(() => {
-        if (settled) return;
-        finish(makePhaseError("put_timeout", `上传超时 (${timeoutMs} ms)`));
         try { xhr.abort(); } catch {}
-      }, timeoutMs);
+      };
 
       try {
-        xhr.send(file);
-      } catch (sendErr) {
-        finish(makePhaseError("put_network_error", "XHR 发送失败", { sendErr: sendErr instanceof Error ? sendErr.message : String(sendErr) }));
-      }
-    } catch (outerErr: any) {
-      finish(makePhaseError("put_network_error", "上传流程异常", { error: outerErr && outerErr.message ? outerErr.message : String(outerErr) }));
-    }
-  });
+        xhr.open("PUT", uploadUrl, true);
+        try { xhr.setRequestHeader("Content-Type", type); } catch {}
+        try { xhr.setRequestHeader("X-SHA-256", shaHex); } catch {}
+        if (authHeaderValue) {
+          try { xhr.setRequestHeader("Authorization", authHeaderValue); } catch {}
+        }
 
-  let effectiveAuthorizationHeaderValue = authorizationHeaderValue || bearerAuthorizationHeaderValue || (uploadToken || undefined);
-  let putResult: any;
-  try {
-    putResult = await sendPut(effectiveAuthorizationHeaderValue);
-  } catch (error: any) {
-    const status = Number(error?.details?.status);
-    if (
-      status === 401
-      && !uploadToken
-      && !authorizationHeaderValue
-      && bearerAuthorizationHeaderValue
-      && options?.managedHaiNeiServer
-      && serverBaseUrl
-      && options?.accountPubkey
-      && typeof options?.signEvent === "function"
-    ) {
-      clearMediaSession(serverBaseUrl, options.accountPubkey);
-      const refreshed = await getMediaSession(serverBaseUrl, options.accountPubkey, options.signEvent, true, size, shaHex);
-      effectiveAuthorizationHeaderValue = ["Bearer", refreshed.token].join(" ");
-      const retryHead = await headProbe(uploadUrl, { ...baseHeaders, Authorization: effectiveAuthorizationHeaderValue });
-      if (!retryHead.ok) {
-        throw makePhaseError("head_failed", `HEAD /upload 被拒绝，HTTP ${retryHead.status}` + (retryHead.details?.reason ? `: ${retryHead.details.reason}` : ""), retryHead.details);
+        xhr.upload.onprogress = (event) => {
+          if (settled || typeof options?.onProgress !== "function") return;
+          if (event.lengthComputable) {
+            const progress = Math.round((event.loaded / event.total) * 100);
+            try { options.onProgress(progress); } catch {}
+          }
+        };
+
+        xhr.onreadystatechange = () => {
+          if (settled || xhr.readyState !== 4) return;
+          const status = xhr.status;
+          const text = xhr.responseText || "";
+          const responseHeaders = xhr.getAllResponseHeaders ? xhr.getAllResponseHeaders() : undefined;
+          if (status >= 200 && status < 300) {
+            if (typeof options?.onProgress === "function") {
+              try { options.onProgress(100); } catch {}
+            }
+            let json: any = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch {
+              finish(makePhaseError("descriptor_invalid", "上传成功但服务器返回无法解析的 JSON 描述", {
+                responseText: text,
+                responseHeaders
+              }));
+              return;
+            }
+            if (!json || typeof json.url !== "string" || !json.url.trim()) {
+              finish(makePhaseError("descriptor_invalid", "服务器返回的 Blob descriptor 缺少 url 字段", {
+                descriptor: json,
+                responseHeaders
+              }));
+              return;
+            }
+            finish(undefined, json);
+            return;
+          }
+
+          let message = `上传失败，HTTP ${status}`;
+          try {
+            const body = text ? JSON.parse(text) : null;
+            if (body && (body.error || body.message)) message += `: ${body.error || body.message}`;
+            else if (text) message += `: ${text}`;
+          } catch {
+            if (text) message += `: ${text}`;
+          }
+          finish(makePhaseError("put_network_error", message, {
+            status,
+            responseText: text,
+            responseHeaders
+          }));
+        };
+
+        xhr.onerror = () => finish(makePhaseError(
+          "put_network_error",
+          "网络错误：XHR 上传失败（可能为 CORS 或 网络问题）"
+        ));
+        xhr.onabort = () => {
+          if (!settled) finish(makePhaseError("put_network_error", "上传被中止"));
+        };
+
+        budget.signal.addEventListener("abort", onBudgetAbort, { once: true });
+        timer = setTimeout(() => {
+          if (settled) return;
+          finish(uploadTimeoutError("put_timeout", `上传超时 (${timeoutMs} ms 总预算)`));
+          try { xhr.abort(); } catch {}
+        }, Math.max(1, remaining()));
+
+        if (budget.signal.aborted) {
+          onBudgetAbort();
+          return;
+        }
+
+        try {
+          xhr.send(file);
+        } catch (sendError) {
+          finish(makePhaseError("put_network_error", "XHR 发送失败", {
+            sendErr: sendError instanceof Error ? sendError.message : String(sendError)
+          }));
+        }
+      } catch (error: any) {
+        finish(makePhaseError("put_network_error", "上传流程异常", {
+          error: error?.message ? error.message : String(error)
+        }));
       }
+    });
+
+    let effectiveAuthorizationHeaderValue =
+      authorizationHeaderValue || bearerAuthorizationHeaderValue || (uploadToken || undefined);
+    let putResult: any;
+    try {
       putResult = await sendPut(effectiveAuthorizationHeaderValue);
-    } else {
-      throw error;
+    } catch (error: any) {
+      const status = Number(error?.details?.status);
+      if (
+        status === 401
+        && !uploadToken
+        && !authorizationHeaderValue
+        && bearerAuthorizationHeaderValue
+        && options?.managedHaiNeiServer
+        && serverBaseUrl
+        && options?.accountPubkey
+        && typeof options?.signEvent === "function"
+      ) {
+        clearMediaSession(serverBaseUrl, options.accountPubkey);
+        const refreshed = await getMediaSession(
+          serverBaseUrl,
+          options.accountPubkey,
+          options.signEvent,
+          true,
+          size,
+          shaHex,
+          budget.signal
+        );
+        effectiveAuthorizationHeaderValue = `Bearer ${refreshed.token}`;
+        const retryHead = await headProbe(
+          uploadUrl,
+          { ...baseHeaders, Authorization: effectiveAuthorizationHeaderValue },
+          budget.signal,
+          Math.min(8_000, remaining())
+        );
+        if (!retryHead.ok) {
+          throw makePhaseError(
+            "head_failed",
+            `HEAD /upload 被拒绝，HTTP ${retryHead.status}${retryHead.details?.reason ? `: ${retryHead.details.reason}` : ""}`,
+            retryHead.details
+          );
+        }
+        putResult = await sendPut(effectiveAuthorizationHeaderValue);
+      } else {
+        throw error;
+      }
     }
-  }
 
-  return putResult;
+    return putResult;
+  } finally {
+    budget.cleanup();
+  }
 }
 
 /**
@@ -465,6 +635,7 @@ export async function uploadImageToBlossomWithFallback(
     signEvent?: (evt:any) => Promise<any> | any;
     onProgress?: (p:number)=>void;
     timeoutMs?: number;
+    signal?: AbortSignal;
     servers?: Array<Partial<MediaServer> & { url: string; token?: string }>;
   }
 ): Promise<{ url: string; sha256?: string; size?: number; type?: string; uploaded?: number; serverUsed?: string }> {
@@ -501,13 +672,15 @@ export async function uploadImageToBlossomWithFallback(
       signEvent: options?.signEvent,
       onProgress: options?.onProgress,
       timeoutMs: options?.timeoutMs,
+      signal: options?.signal,
       uploadUrl: normalizeBlossomUploadUrl(current.url),
       uploadToken: managedHaiNeiServer ? "" : current.token || "",
       serverBaseUrl: current.url,
       managedHaiNeiServer,
     });
     },
-    (current, ok) => reportHealth?.(current.id, ok, Date.now())
+    (current, ok) => reportHealth?.(current.id, ok, Date.now()),
+    error => error instanceof Error && error.name === "AbortError"
   );
   return { ...result, serverUsed: normalizeBlossomUploadUrl(server.url) };
 }
