@@ -104,7 +104,10 @@ async function fetchLatestSnapshot(keys: PrivateBookmarkMirrorKeys): Promise<{
       clearTimeout(timer);
       subscription.unsub();
       if (!best) {
-        resolve({ snapshot: null, available: eose.size > 0 });
+        // Do not create a brand-new global list unless every configured read relay
+        // completed the query. A partial empty result could otherwise overwrite a
+        // list that only exists on a temporarily unavailable relay.
+        resolve({ snapshot: null, available: eose.size === relays.length });
         return;
       }
       try {
