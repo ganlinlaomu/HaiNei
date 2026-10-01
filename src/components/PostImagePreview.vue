@@ -52,7 +52,16 @@
       :images="viewerImageUrls"
       :initialIndex="viewerIndex"
       @close="closeViewer"
+      @index-change="handleViewerIndexChange"
     />
+    <button
+      v-if="viewerOriginalFailed"
+      class="viewer-original-retry"
+      type="button"
+      @click.stop="retryViewerOriginal"
+    >
+      原图加载失败，正在显示预览 · 重试
+    </button>
   </div>
 </template>
 
@@ -66,6 +75,7 @@ import { base64ToBytes } from "@/nostr/crypto";
 import { decodeEncryptedImageRef, isEncryptedImageRef, variantToEncryptedImageRef } from "@/utils/encryptedImageRef";
 import { extractImageUrls } from "@/utils/extractImageUrls";
 import { getImageFromCache, storeImageInCache } from "@/utils/imageCache";
+import { PriorityTaskQueue, type QueuedTask } from "@/utils/priorityTaskQueue";
 import {
   adjacentSlideIndexes,
   carouselActiveIndex,
@@ -87,46 +97,32 @@ interface ImageItem {
 }
 
 const MAX_DECRYPT_CONCURRENCY = 3;
-let activeDecrypts = 0;
 type DecryptPriority = 0 | 1 | 2;
-type DecryptJob = { priority: DecryptPriority; order: number; run: () => void };
-const decryptQueue: DecryptJob[] = [];
-let decryptOrder = 0;
 type SharedDecryptJob = {
   controller: AbortController;
+  queued: QueuedTask<Blob>;
   promise: Promise<Blob>;
   consumers: number;
 };
+
+const decryptWorkQueue = new PriorityTaskQueue(MAX_DECRYPT_CONCURRENCY);
 const inFlightDecrypts = new Map<string, SharedDecryptJob>();
 
-function drainDecryptQueue() {
-  while (activeDecrypts < MAX_DECRYPT_CONCURRENCY && decryptQueue.length) {
-    decryptQueue.sort((a, b) => a.priority - b.priority || a.order - b.order);
-    decryptQueue.shift()?.run();
-  }
+function decryptTaskKey(account: string, encryptedRef: string) {
+  return `${account.toLowerCase()}:${encryptedRef}`;
 }
 
-function withDecryptSlot<T>(task: () => Promise<T>, priority: DecryptPriority): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    decryptQueue.push({
-      priority,
-      order: decryptOrder++,
-      run: () => {
-        activeDecrypts += 1;
-        task().then(resolve, reject).finally(() => {
-          activeDecrypts -= 1;
-          drainDecryptQueue();
-        });
-      }
-    });
-    drainDecryptQueue();
-  });
+function promoteDecryptJob(account: string, encryptedRef: string, priority: DecryptPriority) {
+  inFlightDecrypts.get(decryptTaskKey(account, encryptedRef))?.queued.promote(priority);
 }
 
 function cancelAccountDecrypts(account: string) {
   if (!account) return;
+  const prefix = `${account.toLowerCase()}:`;
   for (const [key, job] of inFlightDecrypts) {
-    if (key.startsWith(`${account}:`)) job.controller.abort();
+    if (!key.startsWith(prefix)) continue;
+    job.controller.abort();
+    job.queued.cancel();
   }
 }
 
@@ -141,6 +137,7 @@ function consumeDecryptJob(taskKey: string, job: SharedDecryptJob, signal?: Abor
       job.consumers = Math.max(0, job.consumers - 1);
       if (abortIfUnused && job.consumers === 0 && inFlightDecrypts.get(taskKey) === job) {
         job.controller.abort();
+        job.queued.cancel();
       }
     };
     const onAbort = () => {
@@ -174,16 +171,16 @@ function getDecryptedBlob(
   signal?: AbortSignal,
 ): Promise<Blob> {
   if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
-  const taskKey = `${account}:${encryptedRef}`;
+  const taskKey = decryptTaskKey(account, encryptedRef);
   let job = inFlightDecrypts.get(taskKey);
+  if (job?.controller.signal.aborted) {
+    if (inFlightDecrypts.get(taskKey) === job) inFlightDecrypts.delete(taskKey);
+    job = undefined;
+  }
   if (!job) {
     const controller = new AbortController();
-    const shared: SharedDecryptJob = {
-      controller,
-      consumers: 0,
-      promise: Promise.resolve(new Blob()),
-    };
-    shared.promise = withDecryptSlot(async () => {
+    let shared!: SharedDecryptJob;
+    const queued = decryptWorkQueue.enqueue(async () => {
       if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
       const cached = await getImageFromCache(account, encryptedRef);
       if (cached) return cached.blob;
@@ -201,11 +198,20 @@ function getDecryptedBlob(
       const blob = new Blob([decrypted], { type: metadata.mime });
       await storeImageInCache(account, encryptedRef, blob, metadata.mime);
       return blob;
-    }, priority).finally(() => {
+    }, priority);
+    shared = {
+      controller,
+      queued,
+      consumers: 0,
+      promise: queued.promise,
+    };
+    shared.promise = queued.promise.finally(() => {
       if (inFlightDecrypts.get(taskKey) === shared) inFlightDecrypts.delete(taskKey);
     });
     job = shared;
     inFlightDecrypts.set(taskKey, job);
+  } else {
+    job.queued.promote(priority);
   }
   return consumeDecryptJob(taskKey, job, signal);
 }
@@ -224,18 +230,19 @@ export default defineComponent({
     const keys = useKeyStore();
     const settings = useSettingsStore();
     const images = ref<ImageItem[]>([]);
-    const objectUrls = new Set<string>();
+    const previewObjectUrls = new Set<string>();
+    const originalObjectUrls = new Set<string>();
     const carousel = ref<HTMLElement | null>(null);
     const rootVisible = ref(false);
     let visibilityObserver: IntersectionObserver | null = null;
     const activeIndex = ref(0);
     const loadGeneration = ref(0);
     const itemLoadPromises = new WeakMap<ImageItem, Promise<void>>();
-    const originalLoadPromises = new WeakMap<ImageItem, Promise<void>>();
     const viewerVisible = ref(false);
     const viewerIndex = ref(0);
+    const viewerCurrentIndex = ref(0);
     const viewerImageUrls = ref<string[]>([]);
-    const viewerAnchorIndex = ref<number | null>(null);
+    const viewerOriginalControllers = new Map<number, AbortController>();
     const heartVisible = ref(false);
     let loadController = new AbortController();
     const heartAnimationKey = ref(0);
@@ -243,17 +250,58 @@ export default defineComponent({
       const item = images.value[0];
       return { aspectRatio: item?.width && item.height ? `${item.width} / ${item.height}` : "1 / 1" };
     });
+    const viewerOriginalFailed = computed(() => {
+      const item = images.value[viewerCurrentIndex.value];
+      return viewerVisible.value && item?.originalStatus === "error";
+    });
 
-    function revokeObjectUrls() {
-      objectUrls.forEach(url => URL.revokeObjectURL(url));
-      objectUrls.clear();
+    function revokePreviewObjectUrls() {
+      previewObjectUrls.forEach(url => URL.revokeObjectURL(url));
+      previewObjectUrls.clear();
+    }
+
+    function releaseOriginalUrl(idx: number) {
+      const item = images.value[idx];
+      if (!item) return;
+      if (item.originalSourceUrl === item.sourceUrl) {
+        item.originalUrl = item.url;
+        item.originalStatus = item.status === "loaded" ? "loaded" : "idle";
+        return;
+      }
+      if (originalObjectUrls.delete(item.originalUrl)) URL.revokeObjectURL(item.originalUrl);
+      item.originalUrl = item.originalSourceUrl;
+      if (item.originalStatus === "loaded") item.originalStatus = "idle";
+    }
+
+    function releaseAllOriginalUrls() {
+      for (let idx = 0; idx < images.value.length; idx += 1) releaseOriginalUrl(idx);
+      originalObjectUrls.forEach(url => URL.revokeObjectURL(url));
+      originalObjectUrls.clear();
+    }
+
+    function previewUrl(item: ImageItem) {
+      if (item.status === "loaded") return item.url;
+      return item.isEncrypted ? "" : item.url;
+    }
+
+    function buildViewerUrls() {
+      return images.value.map(item =>
+        item.originalStatus === "loaded" ? item.originalUrl : previewUrl(item)
+      );
+    }
+
+    function refreshViewerUrls() {
+      if (viewerVisible.value) viewerImageUrls.value = buildViewerUrls();
     }
 
     function loadImage(idx: number, priority: DecryptPriority = rootVisible.value ? 0 : 2): Promise<void> {
       const item = images.value[idx];
       if (!item || item.status === "loaded") return Promise.resolve();
       const existing = itemLoadPromises.get(item);
-      if (existing) return existing;
+      if (existing) {
+        if (item.isEncrypted && keys.pkHex) promoteDecryptJob(keys.pkHex, item.sourceUrl, priority);
+        return existing;
+      }
       const task = performLoadImage(item, idx, priority).finally(() => itemLoadPromises.delete(item));
       itemLoadPromises.set(item, task);
       return task;
@@ -277,50 +325,73 @@ export default defineComponent({
         const blob = await getDecryptedBlob(accountAtStart, item.sourceUrl, priority, loadController.signal);
         if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
         const objectUrl = URL.createObjectURL(blob);
-        objectUrls.add(objectUrl);
+        previewObjectUrls.add(objectUrl);
         item.url = objectUrl;
         item.status = "loaded";
       } catch (error) {
         if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
-        if (!(error instanceof DOMException && error.name === "AbortError")) console.warn("Failed to load encrypted image", error);
+        if (error instanceof DOMException && error.name === "AbortError") {
+          if (item.status === "loading") item.status = "idle";
+          return;
+        }
+        console.warn("Failed to load encrypted image", error);
         item.status = "error";
       }
     }
 
-    function loadOriginal(idx: number): Promise<void> {
-      const item = images.value[idx];
-      if (!item || item.originalStatus === "loaded") return Promise.resolve();
-      const existing = originalLoadPromises.get(item);
-      if (existing) return existing;
-      const task = performLoadOriginal(item, idx).finally(() => originalLoadPromises.delete(item));
-      originalLoadPromises.set(item, task);
-      return task;
-    }
-
-    async function performLoadOriginal(item: ImageItem, idx: number) {
+    async function performLoadOriginal(
+      item: ImageItem,
+      idx: number,
+      priority: DecryptPriority,
+      signal: AbortSignal,
+    ) {
+      if (signal.aborted) return;
       if (item.originalSourceUrl === item.sourceUrl) {
-        await loadImage(idx);
-        if (item.status === "loaded") {
+        await loadImage(idx, priority);
+        if (!signal.aborted && images.value[idx] === item && item.status === "loaded") {
           item.originalUrl = item.url;
           item.originalStatus = "loaded";
+          refreshViewerUrls();
         }
         return;
       }
+
       const generation = loadGeneration.value;
       const accountAtStart = keys.pkHex;
-      if (!accountAtStart) { item.originalStatus = "error"; return; }
+      if (!accountAtStart) {
+        item.originalStatus = "error";
+        refreshViewerUrls();
+        return;
+      }
       item.originalStatus = "loading";
       try {
-        const blob = await getDecryptedBlob(accountAtStart, item.originalSourceUrl, 2, loadController.signal);
-        if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
+        const blob = await getDecryptedBlob(accountAtStart, item.originalSourceUrl, priority, signal);
+        if (
+          signal.aborted
+          || generation !== loadGeneration.value
+          || keys.pkHex !== accountAtStart
+          || images.value[idx] !== item
+        ) return;
+        if (item.originalStatus === "loaded" && originalObjectUrls.has(item.originalUrl)) return;
+        if (originalObjectUrls.delete(item.originalUrl)) URL.revokeObjectURL(item.originalUrl);
         const objectUrl = URL.createObjectURL(blob);
-        objectUrls.add(objectUrl);
+        originalObjectUrls.add(objectUrl);
         item.originalUrl = objectUrl;
         item.originalStatus = "loaded";
+        refreshViewerUrls();
       } catch (error) {
-        if (generation !== loadGeneration.value || keys.pkHex !== accountAtStart || images.value[idx] !== item) return;
-        if (!(error instanceof DOMException && error.name === "AbortError")) console.warn("Failed to load original image", error);
+        if (
+          generation !== loadGeneration.value
+          || keys.pkHex !== accountAtStart
+          || images.value[idx] !== item
+        ) return;
+        if (error instanceof DOMException && error.name === "AbortError") {
+          if (item.originalStatus === "loading") item.originalStatus = "idle";
+          return;
+        }
+        console.warn("Failed to load original image", error);
         item.originalStatus = "error";
+        refreshViewerUrls();
       }
     }
 
@@ -345,34 +416,98 @@ export default defineComponent({
       void loadImage(idx);
     }
 
-    async function openViewer(index: number) {
-      await loadOriginal(index);
-      if (images.value[index]?.originalStatus !== "loaded") return;
+    function abortViewerRequestsOutside(wanted: Set<number>) {
+      for (const [idx, controller] of viewerOriginalControllers) {
+        if (wanted.has(idx)) continue;
+        controller.abort();
+        viewerOriginalControllers.delete(idx);
+      }
+    }
 
-      viewerAnchorIndex.value = index;
-      viewerImageUrls.value = images.value.map((item, itemIndex) =>
-        itemIndex === index || item.originalStatus === "loaded" ? item.originalUrl : item.url
-      );
-      viewerIndex.value = index;
-      viewerVisible.value = true;
-
-      // Keep the clicked image stable at index 0 while the existing bounded
-      // decrypt queue fills in the rest of the viewer in the background.
-      images.value.forEach((_, itemIndex) => {
-        if (itemIndex === index) return;
-        const backgroundLoad = settings.dataSaver ? loadImage(itemIndex) : loadOriginal(itemIndex);
-        void backgroundLoad.then(() => {
-          if (!viewerVisible.value || viewerAnchorIndex.value !== index) return;
-          viewerImageUrls.value = images.value.map((item, candidateIndex) =>
-            candidateIndex === index || item.originalStatus === "loaded" ? item.originalUrl : item.url
-          );
-        });
+    function releaseViewerOriginalsOutside(wanted: Set<number>) {
+      images.value.forEach((item, idx) => {
+        if (!wanted.has(idx) && item.originalSourceUrl !== item.sourceUrl) releaseOriginalUrl(idx);
       });
+    }
+
+    function requestViewerOriginal(idx: number, priority: DecryptPriority) {
+      const item = images.value[idx];
+      if (!item || item.originalStatus === "loaded") return;
+
+      if (item.originalSourceUrl === item.sourceUrl) {
+        void loadImage(idx, priority).then(() => {
+          if (!viewerVisible.value || images.value[idx] !== item || item.status !== "loaded") return;
+          item.originalUrl = item.url;
+          item.originalStatus = "loaded";
+          refreshViewerUrls();
+        });
+        return;
+      }
+
+      const existing = viewerOriginalControllers.get(idx);
+      if (existing) {
+        if (keys.pkHex) promoteDecryptJob(keys.pkHex, item.originalSourceUrl, priority);
+        return;
+      }
+
+      const requestController = new AbortController();
+      viewerOriginalControllers.set(idx, requestController);
+      void performLoadOriginal(item, idx, priority, requestController.signal).finally(() => {
+        if (viewerOriginalControllers.get(idx) === requestController) viewerOriginalControllers.delete(idx);
+      });
+    }
+
+    function syncViewerLoads(index: number) {
+      if (!viewerVisible.value || !images.value[index]) return;
+      viewerCurrentIndex.value = index;
+
+      const neighborhood = new Set(adjacentSlideIndexes(index, images.value.length));
+      const originalWanted = settings.dataSaver ? new Set([index]) : neighborhood;
+      abortViewerRequestsOutside(originalWanted);
+      releaseViewerOriginalsOutside(originalWanted);
+
+      neighborhood.forEach(itemIndex => {
+        const priority: DecryptPriority = itemIndex === index ? 0 : 1;
+        void loadImage(itemIndex, priority).then(refreshViewerUrls);
+      });
+
+      requestViewerOriginal(index, 0);
+      if (!settings.dataSaver) {
+        neighborhood.forEach(itemIndex => {
+          if (itemIndex !== index) requestViewerOriginal(itemIndex, 1);
+        });
+      }
+    }
+
+    function openViewer(index: number) {
+      const item = images.value[index];
+      if (!item || item.status !== "loaded") return;
+      viewerIndex.value = index;
+      viewerCurrentIndex.value = index;
+      viewerImageUrls.value = buildViewerUrls();
+      viewerVisible.value = true;
+      syncViewerLoads(index);
+    }
+
+    function handleViewerIndexChange(index: number) {
+      if (!viewerVisible.value) return;
+      syncViewerLoads(index);
     }
 
     function closeViewer() {
       viewerVisible.value = false;
-      viewerAnchorIndex.value = null;
+      for (const controller of viewerOriginalControllers.values()) controller.abort();
+      viewerOriginalControllers.clear();
+      releaseAllOriginalUrls();
+      viewerImageUrls.value = [];
+    }
+
+    function retryViewerOriginal() {
+      const index = viewerCurrentIndex.value;
+      const item = images.value[index];
+      if (!viewerVisible.value || !item) return;
+      item.originalStatus = "idle";
+      requestViewerOriginal(index, 0);
     }
 
     function loadAround(index: number) {
@@ -421,7 +556,7 @@ export default defineComponent({
       if (tapTimer) clearTimeout(tapTimer);
       tapTimer = setTimeout(() => {
         tapTimer = null;
-        void openViewer(index);
+        openViewer(index);
       }, 300);
     }
 
@@ -430,8 +565,7 @@ export default defineComponent({
       loadController.abort();
       loadController = new AbortController();
       closeViewer();
-      viewerImageUrls.value = [];
-      revokeObjectUrls();
+      revokePreviewObjectUrls();
       activeIndex.value = 0;
       const urls = extractImageUrls(props.content || "");
       const selected = props.showAll ? urls : urls.slice(0, 1);
@@ -488,10 +622,11 @@ export default defineComponent({
       visibilityObserver = null;
       loadGeneration.value += 1;
       loadController.abort();
+      closeViewer();
       if (scrollFrame) cancelAnimationFrame(scrollFrame);
       if (tapTimer) clearTimeout(tapTimer);
       if (heartTimer) clearTimeout(heartTimer);
-      revokeObjectUrls();
+      revokePreviewObjectUrls();
     });
 
     return {
@@ -504,13 +639,16 @@ export default defineComponent({
       viewerImageUrls,
       viewerVisible,
       viewerIndex,
+      viewerOriginalFailed,
       captureImageDimensions,
       markFailed,
       retryImage,
       handleImageTap,
       handleCarouselScroll,
       goToSlide,
+      handleViewerIndexChange,
       closeViewer,
+      retryViewerOriginal,
     };
   }
 });
@@ -592,6 +730,23 @@ export default defineComponent({
 .carousel-nav.previous { left:8px; }.carousel-nav.next { right:8px; }
 .heart-burst { position:absolute;left:50%;top:50%;color:#fff;font-size:72px;line-height:1;filter:drop-shadow(0 2px 8px rgba(0,0,0,.3));transform:translate(-50%,-50%);animation:heart-pop 650ms ease both;pointer-events:none; }
 @keyframes heart-pop { 0%{opacity:0;transform:translate(-50%,-50%) scale(.35)} 35%{opacity:1;transform:translate(-50%,-50%) scale(1.12)} 100%{opacity:0;transform:translate(-50%,-50%) scale(1)} }
+.viewer-original-retry {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom) + 86px);
+  z-index: 10001;
+  transform: translateX(-50%);
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 14px;
+  background: rgba(15, 23, 42, .82);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
 @media (hover:none) {
   .carousel-nav { display:none; }
 }

@@ -66,6 +66,19 @@ describe("feed media carousel and actions", () => {
     expect(source).toContain("extractImageUrls(props.message.content");
   });
 
+  it("opens the viewer from the loaded preview, promotes the current original, and only keeps adjacent originals warm", () => {
+    const source = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
+    const viewer = readFileSync(join(process.cwd(), "src/components/ImageViewer.vue"), "utf8");
+    expect(source).toContain("viewerVisible.value = true;");
+    expect(source.indexOf("viewerVisible.value = true;")).toBeLessThan(source.indexOf("syncViewerLoads(index);"));
+    expect(source).toContain("new Set(adjacentSlideIndexes(index, images.value.length))");
+    expect(source).toContain("job.queued.promote(priority)");
+    expect(source).toContain("viewerOriginalFailed");
+    expect(source).toContain("requestController.abort()");
+    expect(source).not.toContain("images.value.forEach((_, itemIndex) =>");
+    expect(viewer).toContain('emit("index-change", next)');
+  });
+
   it("shows no counter or dots for a single image", () => {
     const source = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
     expect(source).toContain('v-if="images.length > 1" class="carousel-counter"');

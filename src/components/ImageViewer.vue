@@ -82,7 +82,8 @@
           :class="{ active: idx === currentIndex }"
           @click.stop="goToImage(idx)"
         >
-          <img :src="img" :alt="`缩略图 ${idx + 1}`" />
+          <img v-if="img" :src="img" :alt="`缩略图 ${idx + 1}`" />
+          <span v-else class="thumbnail-placeholder" aria-hidden="true"></span>
         </div>
       </div>
     </div>
@@ -115,7 +116,7 @@ export default defineComponent({
       default: 0
     }
   },
-  emits: ["close"],
+  emits: ["close", "index-change"],
   setup(props, { emit }) {
     const ui = useUIStore();
     const overlayId = `image-viewer-${getCurrentInstance()?.uid}`;
@@ -156,29 +157,26 @@ export default defineComponent({
       }
     }
 
-    function previousImage() {
-      if (currentIndex.value > 0) {
-        currentIndex.value--;
-        resetTransform();
-        loading.value = true;
-        error.value = false;
-      }
-    }
-
-    function nextImage() {
-      if (currentIndex.value < props.images.length - 1) {
-        currentIndex.value++;
-        resetTransform();
-        loading.value = true;
-        error.value = false;
-      }
-    }
-
-    function goToImage(index: number) {
-      currentIndex.value = index;
+    function setCurrentIndex(index: number) {
+      const next = Math.max(0, Math.min(props.images.length - 1, index));
+      if (next === currentIndex.value) return;
+      currentIndex.value = next;
+      emit("index-change", next);
       resetTransform();
       loading.value = true;
       error.value = false;
+    }
+
+    function previousImage() {
+      if (currentIndex.value > 0) setCurrentIndex(currentIndex.value - 1);
+    }
+
+    function nextImage() {
+      if (currentIndex.value < props.images.length - 1) setCurrentIndex(currentIndex.value + 1);
+    }
+
+    function goToImage(index: number) {
+      setCurrentIndex(index);
     }
 
     function toggleZoom() {
@@ -275,7 +273,8 @@ export default defineComponent({
     watch(() => props.visible, async (newVal) => {
       ui.setBlockingOverlay(overlayId, newVal);
       if (newVal) {
-        currentIndex.value = props.initialIndex;
+        currentIndex.value = Math.max(0, Math.min(props.images.length - 1, props.initialIndex));
+        emit("index-change", currentIndex.value);
         resetTransform();
         loading.value = true;
         error.value = false;
@@ -486,6 +485,13 @@ export default defineComponent({
 
 .thumbnail.active {
   border-color: white;
+}
+
+.thumbnail-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: rgba(255, 255, 255, .08);
 }
 
 .thumbnail img {
