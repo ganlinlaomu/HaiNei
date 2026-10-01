@@ -176,11 +176,20 @@ export default defineComponent({
     transform 0.22s ease;
 }
 
-/* hover / active（桌面 & Android） */
-.nav-item:hover {
+.nav-item:active {
   background: rgba(59, 130, 246, 0.08);
   color: #3b82f6;
-  transform: translateY(-2px);
+  transform: scale(.97);
+}
+
+/* Only real hover-capable pointers get hover styling. On iOS PWA a tap can
+   otherwise leave :hover stuck while the route chunk is still resolving. */
+@media (hover: hover) and (pointer: fine) {
+  .nav-item:hover {
+    background: rgba(59, 130, 246, 0.08);
+    color: #3b82f6;
+    transform: translateY(-2px);
+  }
 }
 
 /* 路由激活 */
@@ -248,6 +257,7 @@ export default defineComponent({
 .bottom-nav,
 .nav-item {
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 /* iOS Safari 滚动稳定性 */
