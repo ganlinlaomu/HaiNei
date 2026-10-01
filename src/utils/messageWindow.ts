@@ -38,25 +38,14 @@ export type BoundedMessageWindow = {
   end: number;
 };
 
-function includePinnedIndexes(range: BoundedMessageWindow, total: number, pinnedIndexes: number[]) {
-  let { start, end } = range;
-  for (const index of pinnedIndexes) {
-    if (!Number.isInteger(index) || index < 0 || index >= total) continue;
-    start = Math.min(start, index);
-    end = Math.max(end, index + 1);
-  }
-  return { start, end };
-}
-
 export function initialBoundedMessageWindow(
   total: number,
   size = 60,
-  pinnedIndexes: number[] = [],
 ): BoundedMessageWindow {
   const safeTotal = Math.max(0, total);
   const end = safeTotal;
   const start = Math.max(0, end - Math.max(1, size));
-  return includePinnedIndexes({ start, end }, safeTotal, pinnedIndexes);
+  return { start, end };
 }
 
 export function shiftBoundedMessageWindow(
@@ -65,7 +54,6 @@ export function shiftBoundedMessageWindow(
   direction: "older" | "newer",
   batchSize = 40,
   maxSize = 100,
-  pinnedIndexes: number[] = [],
 ): BoundedMessageWindow {
   const safeTotal = Math.max(0, total);
   const limit = Math.max(1, maxSize);
@@ -81,7 +69,7 @@ export function shiftBoundedMessageWindow(
     start = Math.max(0, end - limit);
   }
 
-  return includePinnedIndexes({ start, end }, safeTotal, pinnedIndexes);
+  return { start, end };
 }
 
 export function focusBoundedMessageWindow(
@@ -89,7 +77,6 @@ export function focusBoundedMessageWindow(
   targetIndex: number,
   leadingContext = 6,
   maxSize = 100,
-  pinnedIndexes: number[] = [],
 ): BoundedMessageWindow {
   const safeTotal = Math.max(0, total);
   if (safeTotal === 0) return { start: 0, end: 0 };
@@ -98,7 +85,25 @@ export function focusBoundedMessageWindow(
   let start = Math.max(0, target - Math.max(0, leadingContext));
   let end = Math.min(safeTotal, start + limit);
   if (end - start < limit) start = Math.max(0, end - limit);
-  return includePinnedIndexes({ start, end }, safeTotal, pinnedIndexes);
+  return { start, end };
+}
+
+export function mergeBoundedMessageIndexes(
+  range: BoundedMessageWindow,
+  total: number,
+  retainedIndexes: number[] = [],
+): number[] {
+  const safeTotal = Math.max(0, total);
+  const start = Math.max(0, Math.min(range.start, safeTotal));
+  const end = Math.max(start, Math.min(range.end, safeTotal));
+  const indexes = new Set<number>();
+
+  for (let index = start; index < end; index += 1) indexes.add(index);
+  for (const index of retainedIndexes) {
+    if (Number.isInteger(index) && index >= 0 && index < safeTotal) indexes.add(index);
+  }
+
+  return [...indexes].sort((left, right) => left - right);
 }
 
 export function scrollTopAfterAnchorShift(

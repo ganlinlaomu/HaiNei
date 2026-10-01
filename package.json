@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.13",
-  "releaseSummary": "长聊天搜索与有界渲染优化",
+  "version": "0.1.14",
+  "releaseSummary": "长聊天有界渲染播放节点修正",
   "private": true,
   "scripts": {
     "dev": "vite",

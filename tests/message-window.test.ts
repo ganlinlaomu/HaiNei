@@ -3,6 +3,7 @@ import {
   focusBoundedMessageWindow,
   initialBoundedMessageWindow,
   initialMessageWindowStart,
+  mergeBoundedMessageIndexes,
   prependMessageWindowStart,
   scrollTopAfterAnchorShift,
   scrollTopAfterNewMessages,
@@ -50,11 +51,18 @@ describe("DM message window", () => {
     expect(scrollTopAfterAnchorShift(12, 50, 10)).toBe(0);
   });
 
-  it("keeps a pinned playback or interaction row mounted even outside the normal window", () => {
-    const range = shiftBoundedMessageWindow({ start: 100, end: 200 }, 1_000, "newer", 40, 100, [120]);
-    expect(range).toEqual({ start: 120, end: 240 });
-    expect(range.start).toBeLessThanOrEqual(120);
-    expect(range.end).toBeGreaterThan(120);
+  it("keeps distant retained nodes without expanding the continuous 100-message window", () => {
+    const range = shiftBoundedMessageWindow({ start: 100, end: 200 }, 1_000, "newer", 40, 100);
+    expect(range).toEqual({ start: 140, end: 240 });
+
+    const indexes = mergeBoundedMessageIndexes(range, 1_000, [10, 180, 900]);
+    expect(indexes.filter(index => index >= 140 && index < 240)).toHaveLength(100);
+    expect(indexes).toContain(10);
+    expect(indexes).toContain(180);
+    expect(indexes).toContain(900);
+    expect(indexes).not.toContain(11);
+    expect(indexes).not.toContain(899);
+    expect(indexes).toHaveLength(102);
   });
 
   it("centers historical focus with context without exceeding the normal cap", () => {
