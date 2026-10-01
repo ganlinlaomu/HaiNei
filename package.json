@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.14",
-  "releaseSummary": "长聊天有界渲染播放节点修正",
+  "version": "0.1.15",
+  "releaseSummary": "评论面板下拉关闭优化",
   "private": true,
   "scripts": {
     "dev": "vite",
