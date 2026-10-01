@@ -342,7 +342,8 @@ import {
   type RelayConfig,
   type RelaySource
 } from "@/services/connectionSettings";
-import { isAccountResourceStale, runAfterFirstPaint, runWhenIdle } from "@/utils/bottomTabActivation";
+import { isAccountResourceStale, runAfterFirstPaint } from "@/utils/bottomTabActivation";
+import { scheduleBackgroundWork } from "@/services/backgroundWorkScheduler";
 import {
   checkAndroidUpdate,
   getCurrentAndroidVersion,
@@ -607,14 +608,14 @@ function stopStatusPolling() {
 
 function scheduleDeferredRuntimeRefresh() {
   if (!viewActive || cancelDeferredRuntimeRefresh) return;
-  cancelDeferredRuntimeRefresh = runWhenIdle(() => {
+  cancelDeferredRuntimeRefresh = scheduleBackgroundWork(() => {
     cancelDeferredRuntimeRefresh = null;
     if (!viewActive || !keyStore.pkHex) return;
     startStatusPolling();
     scheduleCacheStatsRefresh();
     void refreshBiometricSupport();
     if (isNativeAndroid) void refreshAndroidVersion();
-  }, 1_000);
+  }, { priority: "low", delayMs: 80, timeoutMs: 1_200 });
 }
 
 async function refreshCacheStats(force = false) {
