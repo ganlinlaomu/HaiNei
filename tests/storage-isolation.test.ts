@@ -72,7 +72,7 @@ describe("account-scoped repositories", () => {
     await meta.put(ACCOUNT_A, `unread:${PEER_C}`, 5);
     await meta.put(ACCOUNT_B, `unread:${PEER_C}`, 2);
     await images.put(ACCOUNT_A, {
-      cacheId: "same-cache-id",
+      url: "same-cache-id",
       sealedBytes: new Uint8Array([1]).buffer,
       iv: new Uint8Array(12).buffer,
       mime: "image/jpeg",
@@ -82,7 +82,7 @@ describe("account-scoped repositories", () => {
       version: 1,
     });
     await images.put(ACCOUNT_B, {
-      cacheId: "same-cache-id",
+      url: "same-cache-id",
       sealedBytes: new Uint8Array([2, 3]).buffer,
       iv: new Uint8Array(12).buffer,
       mime: "image/jpeg",
