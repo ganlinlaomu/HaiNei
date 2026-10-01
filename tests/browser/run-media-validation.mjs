@@ -92,7 +92,16 @@ try {
 } finally {
   try { ws?.close(); } catch {}
   try { child.kill("SIGTERM"); } catch {}
-  await sleep(100);
-  try { child.kill("SIGKILL"); } catch {}
-  rmSync(profile, { recursive: true, force: true });
+  await Promise.race([
+    new Promise(resolve => child.once("exit", resolve)),
+    sleep(500),
+  ]);
+  if (child.exitCode === null && child.signalCode === null) {
+    try { child.kill("SIGKILL"); } catch {}
+    await Promise.race([
+      new Promise(resolve => child.once("exit", resolve)),
+      sleep(500),
+    ]);
+  }
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
