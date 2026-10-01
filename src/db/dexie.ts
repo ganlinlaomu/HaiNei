@@ -2,7 +2,7 @@ import { installLocalVault } from "@/services/localVault";
 import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 
-export const APP_VERSION = "0.1.17";
+export const APP_VERSION = "0.1.18";
 export const DB_VERSION = 15;
 export const DATABASE_NAME = "closed_community_db";
 
