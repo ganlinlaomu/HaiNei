@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.12",
-  "releaseSummary": "后台任务与互动保存调度优化",
+  "version": "0.1.13",
+  "releaseSummary": "长聊天搜索与有界渲染优化",
   "private": true,
   "scripts": {
     "dev": "vite",
