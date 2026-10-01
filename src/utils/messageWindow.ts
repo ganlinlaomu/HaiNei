@@ -31,3 +31,80 @@ export function scrollTopAfterNewMessages(
 ): number {
   return isNearMessageBottom(previous, threshold) ? nextScrollHeight : previous.scrollTop;
 }
+
+
+export type BoundedMessageWindow = {
+  start: number;
+  end: number;
+};
+
+function includePinnedIndexes(range: BoundedMessageWindow, total: number, pinnedIndexes: number[]) {
+  let { start, end } = range;
+  for (const index of pinnedIndexes) {
+    if (!Number.isInteger(index) || index < 0 || index >= total) continue;
+    start = Math.min(start, index);
+    end = Math.max(end, index + 1);
+  }
+  return { start, end };
+}
+
+export function initialBoundedMessageWindow(
+  total: number,
+  size = 60,
+  pinnedIndexes: number[] = [],
+): BoundedMessageWindow {
+  const safeTotal = Math.max(0, total);
+  const end = safeTotal;
+  const start = Math.max(0, end - Math.max(1, size));
+  return includePinnedIndexes({ start, end }, safeTotal, pinnedIndexes);
+}
+
+export function shiftBoundedMessageWindow(
+  range: BoundedMessageWindow,
+  total: number,
+  direction: "older" | "newer",
+  batchSize = 40,
+  maxSize = 100,
+  pinnedIndexes: number[] = [],
+): BoundedMessageWindow {
+  const safeTotal = Math.max(0, total);
+  const limit = Math.max(1, maxSize);
+  const batch = Math.max(1, batchSize);
+  let start = Math.max(0, Math.min(range.start, safeTotal));
+  let end = Math.max(start, Math.min(range.end, safeTotal));
+
+  if (direction === "older") {
+    start = Math.max(0, start - batch);
+    end = Math.min(safeTotal, start + limit);
+  } else {
+    end = Math.min(safeTotal, end + batch);
+    start = Math.max(0, end - limit);
+  }
+
+  return includePinnedIndexes({ start, end }, safeTotal, pinnedIndexes);
+}
+
+export function focusBoundedMessageWindow(
+  total: number,
+  targetIndex: number,
+  leadingContext = 6,
+  maxSize = 100,
+  pinnedIndexes: number[] = [],
+): BoundedMessageWindow {
+  const safeTotal = Math.max(0, total);
+  if (safeTotal === 0) return { start: 0, end: 0 };
+  const target = Math.max(0, Math.min(targetIndex, safeTotal - 1));
+  const limit = Math.max(1, maxSize);
+  let start = Math.max(0, target - Math.max(0, leadingContext));
+  let end = Math.min(safeTotal, start + limit);
+  if (end - start < limit) start = Math.max(0, end - limit);
+  return includePinnedIndexes({ start, end }, safeTotal, pinnedIndexes);
+}
+
+export function scrollTopAfterAnchorShift(
+  previousScrollTop: number,
+  previousAnchorOffset: number,
+  nextAnchorOffset: number,
+): number {
+  return Math.max(0, previousScrollTop + (nextAnchorOffset - previousAnchorOffset));
+}

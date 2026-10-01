@@ -539,6 +539,21 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("if (composerFocused) setMessageListToBottom()");
   });
 
+  it("keeps long DM rendering bounded while preserving playback, anchors, and latest-read semantics", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    expect(chat).toContain("const windowEnd = ref(initialWindowRange.end)");
+    expect(chat).toContain("messages.value.slice(windowStart.value, windowEnd.value)");
+    expect(chat).toContain("MAX_RENDERED_MESSAGES = 100");
+    expect(chat).toContain("shiftBoundedMessageWindow");
+    expect(chat).toContain("captureMessageDomAnchor");
+    expect(chat).toContain("restoreMessageDomAnchor");
+    expect(chat).toContain('querySelector<HTMLElement>(".voice-shell.playing")');
+    expect(chat).toContain('messageList.value?.addEventListener("load", handleMessageMediaLoad, true)');
+    expect(chat).toContain('messageList.value?.removeEventListener("load", handleMessageMediaLoad, true)');
+    expect(chat).toContain("windowEnd.value >= messages.value.length");
+    expect(chat).toContain("if (!loadingConversation) void markVisibleMessagesRead()");
+  });
+
   it("offers a jump-to-latest control without changing DM read or sync semantics", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain('class="jump-to-latest"');

@@ -271,11 +271,12 @@ import { useUIStore } from "@/stores/ui";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import {
-  initialMessageWindowStart,
+  focusBoundedMessageWindow,
+  initialBoundedMessageWindow,
   isNearMessageBottom,
-  prependMessageWindowStart,
+  scrollTopAfterAnchorShift,
   scrollTopAfterNewMessages,
-  scrollTopAfterPrepend,
+  shiftBoundedMessageWindow,
   type MessageScrollMetrics,
 } from "@/utils/messageWindow";
 import { classifyVoiceGesture } from "@/utils/voiceGesture";
@@ -311,8 +312,10 @@ async function fetchOlderPage(reset = false) {
 }
 const searchContextMessages = ref<InboxItem[]>([]);
 const searchContextActive = ref(false);
-const windowStart = ref(initialMessageWindowStart(messages.value.length));
-const windowMessages = computed(() => searchContextActive.value ? searchContextMessages.value : messages.value.slice(windowStart.value));
+const initialWindowRange = initialBoundedMessageWindow(messages.value.length, 60);
+const windowStart = ref(initialWindowRange.start);
+const windowEnd = ref(initialWindowRange.end);
+const windowMessages = computed(() => searchContextActive.value ? searchContextMessages.value : messages.value.slice(windowStart.value, windowEnd.value));
 const draft = ref("");
 const replyingToId = ref("");
 const draftReplyMessage = ref<InboxItem | undefined>();
@@ -364,6 +367,7 @@ const voiceCaptureOwnsAudioSession = computed(() => startingRecording.value || !
 const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
 const INITIAL_MESSAGE_COUNT = 60;
 const OLDER_MESSAGE_BATCH = 40;
+const MAX_RENDERED_MESSAGES = 100;
 const TOP_LOAD_THRESHOLD = 120;
 const BOTTOM_FOLLOW_THRESHOLD = 120;
 const SWIPE_INTENT_THRESHOLD = 8;
@@ -384,6 +388,8 @@ let messageGesture: {
 let longPressTimer: number | null = null;
 let replyHighlightTimer: number | null = null;
 let prependingOlder = false;
+let windowMutationInProgress = false;
+let followLatestTail = true;
 let loadingConversation = false;
 let loadGeneration = 0;
 let restoreOverflowAnchorFrame: number | null = null;
@@ -589,7 +595,15 @@ async function focusMessage(messageId: string) {
   if (targetIndex >= 0) {
     searchContextActive.value = false;
     searchContextMessages.value = [];
-    if (targetIndex < windowStart.value) windowStart.value = Math.max(0, targetIndex - 6);
+    const range = focusBoundedMessageWindow(
+      messages.value.length,
+      targetIndex,
+      6,
+      MAX_RENDERED_MESSAGES,
+      currentPinnedMessageIndexes(),
+    );
+    windowStart.value = range.start;
+    windowEnd.value = range.end;
     await nextTick();
   } else {
     const context = await directMessages.loadPeerMessageContext(peerPubkey.value, messageId, 20);
@@ -796,7 +810,19 @@ async function restoreDraft(account: string, peer: string) {
 }
 function setMessageListToBottom() {
   const list = messageList.value;
+  const range = initialBoundedMessageWindow(
+    messages.value.length,
+    INITIAL_MESSAGE_COUNT,
+    currentPinnedMessageIndexes(),
+  );
+  if (windowStart.value !== range.start || windowEnd.value !== range.end) {
+    windowStart.value = range.start;
+    windowEnd.value = range.end;
+    void nextTick(setMessageListToBottom);
+    return;
+  }
   if (list) list.scrollTop = list.scrollHeight;
+  followLatestTail = true;
   showJumpToLatest.value = false;
   pendingTailCount.value = 0;
 }
@@ -831,35 +857,133 @@ function scrollMetrics(element: HTMLElement): MessageScrollMetrics {
   return { scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight };
 }
 
+type MessageDomAnchor = { id: string; offset: number; scrollTop: number };
+
+function currentPinnedMessageIndexes() {
+  const ids = new Set<string>();
+  for (const id of [actionMenuMessageId.value, swipingMessageId.value, highlightedMessageId.value]) {
+    if (id) ids.add(id);
+  }
+  const playingShell = messageList.value?.querySelector<HTMLElement>(".voice-shell.playing");
+  const playingLine = playingShell?.closest<HTMLElement>(".message-line[data-message-id]");
+  if (playingLine?.dataset.messageId) ids.add(playingLine.dataset.messageId);
+  return [...ids]
+    .map(id => messages.value.findIndex(message => message.id === id))
+    .filter(index => index >= 0);
+}
+
+function captureMessageDomAnchor(list: HTMLElement): MessageDomAnchor | undefined {
+  const listTop = list.getBoundingClientRect().top;
+  const rows = [...list.querySelectorAll<HTMLElement>(".message-line[data-message-id]")];
+  const row = rows.find(candidate => candidate.getBoundingClientRect().bottom > listTop + 1) || rows[0];
+  const id = row?.dataset.messageId;
+  if (!row || !id) return undefined;
+  return { id, offset: row.getBoundingClientRect().top - listTop, scrollTop: list.scrollTop };
+}
+
+function restoreMessageDomAnchor(list: HTMLElement, anchor?: MessageDomAnchor) {
+  if (!anchor) return;
+  const row = [...list.querySelectorAll<HTMLElement>(".message-line[data-message-id]")]
+    .find(candidate => candidate.dataset.messageId === anchor.id);
+  if (!row) return;
+  const nextOffset = row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+  list.scrollTop = scrollTopAfterAnchorShift(anchor.scrollTop, anchor.offset, nextOffset);
+}
+
+function restoreNativeOverflowAnchor(list: HTMLElement) {
+  if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
+  restoreOverflowAnchorFrame = requestAnimationFrame(() => {
+    restoreOverflowAnchorFrame = null;
+    list.style.removeProperty("overflow-anchor");
+  });
+}
+
 function resetMessageWindow() {
-  windowStart.value = initialMessageWindowStart(messages.value.length, INITIAL_MESSAGE_COUNT);
+  const range = initialBoundedMessageWindow(
+    messages.value.length,
+    INITIAL_MESSAGE_COUNT,
+    currentPinnedMessageIndexes(),
+  );
+  windowStart.value = range.start;
+  windowEnd.value = range.end;
 }
 
 async function prependOlderMessages() {
   const list = messageList.value;
   if (!list || prependingOlder || (windowStart.value === 0 && historyExhausted.value)) return;
-  const nextStart = prependMessageWindowStart(windowStart.value, OLDER_MESSAGE_BATCH);
 
   prependingOlder = true;
+  windowMutationInProgress = true;
   const peerAtStart = peerPubkey.value;
-  const previousScrollTop = list.scrollTop;
-  const previousScrollHeight = list.scrollHeight;
+  const anchor = captureMessageDomAnchor(list);
+  const needsHistoryPage = windowStart.value === 0 && !historyExhausted.value;
   list.style.overflowAnchor = "none";
-  if (windowStart.value === 0) await fetchOlderPage();
-  windowStart.value = nextStart;
-  await nextTick();
-  if (disposed || peerAtStart !== peerPubkey.value) {
-    list.style.removeProperty("overflow-anchor");
-    prependingOlder = false;
-    return;
-  }
-  list.scrollTop = scrollTopAfterPrepend(previousScrollTop, previousScrollHeight, list.scrollHeight);
-  prependingOlder = false;
 
-  if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
-  restoreOverflowAnchorFrame = requestAnimationFrame(() => {
-    restoreOverflowAnchorFrame = null;
-    list.style.removeProperty("overflow-anchor");
+  try {
+    if (needsHistoryPage) await fetchOlderPage();
+    if (disposed || peerAtStart !== peerPubkey.value) return;
+
+    const pinned = currentPinnedMessageIndexes();
+    const anchorIndex = anchor ? messages.value.findIndex(message => message.id === anchor.id) : -1;
+    const range = needsHistoryPage && anchorIndex >= 0
+      ? focusBoundedMessageWindow(messages.value.length, anchorIndex, OLDER_MESSAGE_BATCH, MAX_RENDERED_MESSAGES, pinned)
+      : shiftBoundedMessageWindow(
+        { start: windowStart.value, end: windowEnd.value },
+        messages.value.length,
+        "older",
+        OLDER_MESSAGE_BATCH,
+        MAX_RENDERED_MESSAGES,
+        pinned,
+      );
+
+    windowStart.value = range.start;
+    windowEnd.value = range.end;
+    await nextTick();
+    if (disposed || peerAtStart !== peerPubkey.value) return;
+    restoreMessageDomAnchor(list, anchor);
+  } finally {
+    windowMutationInProgress = false;
+    prependingOlder = false;
+    restoreNativeOverflowAnchor(list);
+  }
+}
+
+async function appendNewerMessages() {
+  const list = messageList.value;
+  if (!list || prependingOlder || windowEnd.value >= messages.value.length) return;
+
+  prependingOlder = true;
+  windowMutationInProgress = true;
+  const peerAtStart = peerPubkey.value;
+  const anchor = captureMessageDomAnchor(list);
+  list.style.overflowAnchor = "none";
+
+  try {
+    const range = shiftBoundedMessageWindow(
+      { start: windowStart.value, end: windowEnd.value },
+      messages.value.length,
+      "newer",
+      OLDER_MESSAGE_BATCH,
+      MAX_RENDERED_MESSAGES,
+      currentPinnedMessageIndexes(),
+    );
+    windowStart.value = range.start;
+    windowEnd.value = range.end;
+    await nextTick();
+    if (disposed || peerAtStart !== peerPubkey.value) return;
+    restoreMessageDomAnchor(list, anchor);
+  } finally {
+    windowMutationInProgress = false;
+    prependingOlder = false;
+    restoreNativeOverflowAnchor(list);
+  }
+}
+
+function handleMessageMediaLoad() {
+  const list = messageList.value;
+  if (!list || searchContextActive.value || !followLatestTail || windowEnd.value < messages.value.length) return;
+  requestAnimationFrame(() => {
+    if (!disposed && followLatestTail && windowEnd.value >= messages.value.length) setMessageListToBottom();
   });
 }
 
@@ -874,18 +998,27 @@ function handleMessageScroll() {
   if (!list) return;
   if (actionMenuMessageId.value) closeMessageActionMenu();
   if (searchContextActive.value) {
+    followLatestTail = false;
     showJumpToLatest.value = true;
     return;
   }
-  if (list.scrollTop <= TOP_LOAD_THRESHOLD) void prependOlderMessages();
 
+  if (list.scrollTop <= TOP_LOAD_THRESHOLD) void prependOlderMessages();
   const metrics = scrollMetrics(list);
-  if (isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD)) {
+  const nearBottom = isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD);
+  if (nearBottom && windowEnd.value < messages.value.length) void appendNewerMessages();
+
+  const atConversationTail = windowEnd.value >= messages.value.length;
+  if (atConversationTail && nearBottom) {
+    followLatestTail = true;
     showJumpToLatest.value = false;
     pendingTailCount.value = 0;
     if (!loadingConversation) void markVisibleMessagesRead();
-  } else if (list.scrollHeight > list.clientHeight + BOTTOM_FOLLOW_THRESHOLD) {
-    showJumpToLatest.value = true;
+  } else {
+    followLatestTail = false;
+    if (list.scrollHeight > list.clientHeight + BOTTOM_FOLLOW_THRESHOLD || !atConversationTail) {
+      showJumpToLatest.value = true;
+    }
   }
 }
 
@@ -1215,6 +1348,7 @@ function handlePageHide() {
 onMounted(() => {
   window.visualViewport?.addEventListener("resize", handleVisualViewportResize);
   window.addEventListener("pagehide", handlePageHide);
+  messageList.value?.addEventListener("load", handleMessageMediaLoad, true);
   void load();
 });
 watch([draft, replyingToId], scheduleDraftSave);
@@ -1235,6 +1369,7 @@ watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
   void load();
 });
 watch(() => messages.value.map(message => message.id).join("\0"), async (nextSignature, previousSignature) => {
+  if (windowMutationInProgress) return;
   const nextIds = nextSignature ? nextSignature.split("\0") : [];
   const previousIds = previousSignature ? previousSignature.split("\0") : [];
   if (loadingConversation) {
@@ -1244,17 +1379,19 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
 
   const list = messageList.value;
   const previousMetrics = list ? scrollMetrics(list) : undefined;
-  const previousFirstId = previousIds?.[windowStart.value];
-  const preservedStart = previousFirstId ? nextIds.indexOf(previousFirstId) : -1;
-  if (preservedStart >= 0) windowStart.value = preservedStart;
-  else windowStart.value = Math.min(windowStart.value, initialMessageWindowStart(nextIds.length, INITIAL_MESSAGE_COUNT));
-
-  const previousLastId = previousIds?.at(-1);
-  const previousLastIndex = previousLastId ? nextIds.indexOf(previousLastId) : -1;
-  const hasNewTail = !!nextIds.length && (!previousLastId || previousLastIndex < nextIds.length - 1);
+  const previousWindowEnd = Math.min(windowEnd.value, previousIds.length);
+  const previousFirstId = previousIds[windowStart.value];
+  const previousWindowLastId = previousIds[Math.max(windowStart.value, previousWindowEnd - 1)];
+  const previousConversationLastId = previousIds.at(-1);
+  const previousConversationLastIndex = previousConversationLastId ? nextIds.indexOf(previousConversationLastId) : -1;
+  const hasNewTail = !!nextIds.length
+    && (!previousConversationLastId || previousConversationLastIndex < nextIds.length - 1);
   const newTailCount = hasNewTail
-    ? Math.max(1, previousLastIndex >= 0 ? nextIds.length - previousLastIndex - 1 : nextIds.length - previousIds.length)
+    ? Math.max(1, previousConversationLastIndex >= 0
+      ? nextIds.length - previousConversationLastIndex - 1
+      : nextIds.length - previousIds.length)
     : 0;
+
   if (searchContextActive.value) {
     if (hasNewTail) {
       showJumpToLatest.value = true;
@@ -1262,15 +1399,39 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
     }
     return;
   }
-  const followingLatest = !!list && !!previousMetrics
+
+  const wasAtConversationTail = previousWindowEnd >= previousIds.length;
+  const followingLatest = !!list && !!previousMetrics && wasAtConversationTail
     && isNearMessageBottom(previousMetrics, BOTTOM_FOLLOW_THRESHOLD);
+
   if (list && previousMetrics && hasNewTail && followingLatest) {
+    const range = initialBoundedMessageWindow(
+      nextIds.length,
+      INITIAL_MESSAGE_COUNT,
+      currentPinnedMessageIndexes(),
+    );
+    windowStart.value = range.start;
+    windowEnd.value = range.end;
     await nextTick();
     list.scrollTop = scrollTopAfterNewMessages(previousMetrics, list.scrollHeight, BOTTOM_FOLLOW_THRESHOLD);
+    followLatestTail = true;
     showJumpToLatest.value = false;
     pendingTailCount.value = 0;
     await markVisibleMessagesRead();
-  } else if (hasNewTail) {
+    return;
+  }
+
+  const preservedStart = previousFirstId ? nextIds.indexOf(previousFirstId) : -1;
+  const preservedLast = previousWindowLastId ? nextIds.indexOf(previousWindowLastId) : -1;
+  if (preservedStart >= 0 && preservedLast >= preservedStart) {
+    windowStart.value = preservedStart;
+    windowEnd.value = preservedLast + 1;
+  } else {
+    resetMessageWindow();
+  }
+
+  if (hasNewTail) {
+    followLatestTail = false;
     showJumpToLatest.value = true;
     pendingTailCount.value += newTailCount;
   }
@@ -1284,6 +1445,7 @@ onBeforeUnmount(() => {
   cancelSearchRequest();
   window.removeEventListener("pagehide", handlePageHide);
   window.visualViewport?.removeEventListener("resize", handleVisualViewportResize);
+  messageList.value?.removeEventListener("load", handleMessageMediaLoad, true);
   handleComposerBlur();
   loadGeneration += 1;
   if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
