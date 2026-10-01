@@ -64,7 +64,7 @@ describe("P3 media privacy hardening", () => {
 
     const first = loadPrivateProfileAvatar(ACCOUNT, ref);
     const second = loadPrivateProfileAvatar(ACCOUNT, ref);
-    expect(mocks.downloadMedia).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(mocks.downloadMedia).toHaveBeenCalledTimes(1));
 
     release(encrypted);
     const [a, b] = await Promise.all([first, second]);
