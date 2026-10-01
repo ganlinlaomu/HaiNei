@@ -114,6 +114,19 @@ function mergeReadState(left: any[] = [], right: any[] = []) {
   return [...merged.values()];
 }
 
+function mergeNotificationReadCursor(left: any, right: any) {
+  const leftAt = Number(left?.lastReadCreatedAt || 0);
+  const rightAt = Number(right?.lastReadCreatedAt || 0);
+  if (!leftAt) return rightAt ? right : undefined;
+  if (!rightAt) return left;
+  if (leftAt !== rightAt) return leftAt > rightAt ? left : right;
+  const leftId = String(left?.lastReadMessageId || "");
+  const rightId = String(right?.lastReadMessageId || "");
+  // Older clients used an empty id to mean the complete timestamp.
+  if (!leftId || !rightId) return { lastReadCreatedAt: leftAt, lastReadMessageId: "" };
+  return leftId.localeCompare(rightId) >= 0 ? left : right;
+}
+
 export function mergeNamespaceData(namespace: AccountStateNamespace, local: any, remote: any) {
   if (namespace === "friendships") return mergeFriendshipSnapshots(local || [], remote || []);
   if (namespace === "friend_metadata") return mergeByKey(local || [], remote || [], (item: any) => item.pubkey);
@@ -121,11 +134,9 @@ export function mergeNamespaceData(namespace: AccountStateNamespace, local: any,
   if (namespace === "read_state") return mergeReadState(local || [], remote || []);
   if (namespace === "notification_state") {
     const dismissedIds = [...new Set([...(local?.dismissedIds || []), ...(remote?.dismissedIds || [])])];
-    const cursor = mergeReadState([
-      { conversationId: "notification", ...(local?.readCursor || {}) },
-      { conversationId: "notification", ...(remote?.readCursor || {}) },
-    ]).at(-1);
-    return { dismissedIds, readCursor: cursor ? { lastReadCreatedAt: cursor.lastReadCreatedAt, lastReadMessageId: cursor.lastReadMessageId } : undefined };
+    const readIds = [...new Set([...(local?.readIds || []), ...(remote?.readIds || [])])].slice(-512);
+    const readCursor = mergeNotificationReadCursor(local?.readCursor, remote?.readCursor);
+    return { dismissedIds, readIds, readCursor };
   }
   if (namespace === "settings") {
     const localSettings = migrateConnectionSettings(local, { deviceId: "account-state" });
@@ -199,6 +210,9 @@ export async function materializeAccountState(account: string, namespace: Accoun
       if (materializedData.length) await db.conversationReadStates.bulkPut(materializedData);
     });
   } else if (namespace === "notification_state") {
+    const existing = (await db.accountMeta.get([account, "notification_state"]))?.value;
+    if (!isCurrent()) return;
+    materializedData = mergeNamespaceData("notification_state", existing, materializedData);
     await db.accountMeta.put({ accountPubkey: account, key: "notification_state", value: materializedData });
   }
   if (!isCurrent()) return;
@@ -300,18 +314,24 @@ export async function syncAccountStateNamespace(keys: AccountStateKeys, namespac
 }
 
 const timers = new Map<string, number>();
-export function scheduleAccountStateSync(keys: AccountStateKeys, namespace: AccountStateNamespace, deviceId?: string) {
+export function scheduleAccountStateSync(
+  keys: AccountStateKeys,
+  namespace: AccountStateNamespace,
+  deviceId?: string,
+  options: { delayMs?: number } = {},
+) {
   if (!keys.supportsNip44 || typeof window === "undefined" || typeof indexedDB === "undefined") return;
   const scheduledAccount = keys.pkHex;
   const scheduledGeneration = keys.sessionGeneration;
   const id = `${keys.pkHex}:${namespace}`;
   const existing = timers.get(id);
   if (existing) window.clearTimeout(existing);
+  const delayMs = Math.max(0, Math.min(5_000, Number(options.delayMs ?? 500)));
   timers.set(id, window.setTimeout(() => {
     timers.delete(id);
     if (keys.pkHex !== scheduledAccount || keys.sessionGeneration !== scheduledGeneration || !keys.supportsNip44) return;
     void syncAccountStateNamespace(keys, namespace, deviceId).catch(error => {
       console.warn("[account-state] sync failed", namespace, error instanceof Error ? error.message : "unknown");
     });
-  }, 500));
+  }, delayMs));
 }
