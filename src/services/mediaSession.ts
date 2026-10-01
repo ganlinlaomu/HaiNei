@@ -40,7 +40,7 @@ async function withAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promis
   if (!signal) return operation;
   if (signal.aborted) throw abortError();
   return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(abortError());
+    const abort = () => reject(signal.reason instanceof Error ? signal.reason : abortError());
     signal.addEventListener("abort", abort, { once: true });
     operation.then(
       value => {
