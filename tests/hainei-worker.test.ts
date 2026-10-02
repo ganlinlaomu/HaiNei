@@ -184,7 +184,7 @@ describe("HaiNei Worker authentication and quota", () => {
     db.users.set(pubkey, { revoked_at: null });
     await expect(assertUserAndQuota({ ...baseEnv(db), MAX_FILE_SIZE_BYTES: "10" }, pubkey, 11, 1000))
       .rejects.toMatchObject({ status: 413 });
-    db.usage.set("a".repeat(64) + "|1970-01-01", { upload_count: 100, upload_bytes: 100 });
+    db.usage.set("a".repeat(64) + "|1970-01-01", { upload_count: 500, upload_bytes: 100 });
     await expect(assertUserAndQuota(baseEnv(db), pubkey, 1, 1000)).rejects.toMatchObject({ status: 429 });
   });
 
