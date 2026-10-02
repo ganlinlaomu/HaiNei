@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.22",
-  "releaseSummary": "首页启动时静默重试本机历史加载，避免暂时状态误报失败",
+  "version": "0.1.23",
+  "releaseSummary": "新增可选 NIP-46 远程签名器 Beta，不影响现有私钥登录",
   "private": true,
   "scripts": {
     "dev": "vite",
