@@ -2,7 +2,7 @@ import { deviceStorage, putDeviceValue } from "@/services/deviceStorage";
 
 const ACCOUNT_REGISTRY_KEY = "hainei_device_accounts";
 
-export type AccountAuthType = "private-key";
+export type AccountAuthType = "private-key" | "nip46";
 export type AccountCredentialMode = "device" | "password" | "passkey" | "session";
 
 export interface DeviceAccount {
@@ -22,7 +22,7 @@ function validAccount(value: unknown): value is DeviceAccount {
   const account = value as Partial<DeviceAccount>;
   return typeof account.pubkey === "string"
     && /^[0-9a-f]{64}$/i.test(account.pubkey)
-    && account.authType === "private-key"
+    && (account.authType === "private-key" || account.authType === "nip46")
     && typeof account.hasEncryptedKey === "boolean"
     && Number.isFinite(account.lastUsedAt);
 }
