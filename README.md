@@ -50,6 +50,22 @@ Blossom 端对应变量为 `HAINEI_MAX_FILE_SIZE_BYTES`、`HAINEI_DAILY_UPLOAD_C
 
 Pages 构建可设置 `VITE_HAINEI_WORKER_URL` 指向已部署 Worker；它只是公开 API 地址，不是凭据。
 
+### Google 账号恢复（P0 + P1）
+
+Web/PWA 登录页支持可选的「使用 Google 继续」。它不会把 Google 设为 Nostr 登录方式：Google 只负责取得稳定账号标识与 `drive.appdata` 授权，恢复出的私钥最终仍进入现有 `loginWithNsec()` / `private-key` signer 路径。
+
+配置步骤：
+
+1. 在 Google Cloud Console 启用 Google Drive API。
+2. 创建 OAuth 2.0 **Web application** Client ID，并把 HaiNei 的 HTTPS Pages 域名加入 Authorized JavaScript origins。
+3. 在 OAuth consent screen 声明 `openid` 与 `https://www.googleapis.com/auth/drive.appdata`。
+4. 在 Cloudflare Pages 构建环境设置 `VITE_GOOGLE_WEB_CLIENT_ID`。Web Client ID 是公开客户端标识，不是 secret；不要把 client secret 放进 Vite 环境。
+5. 重新构建 Pages。未配置该变量时 Google 按钮不会显示，现有 Nostr / 通行密钥登录行为保持不变。
+
+Google Drive 只保存随机文件名 `hainei_bk_<uuid>.bin` 的加密 blob，不在文件名或明文元数据中保存 npub。恢复密钥由 Google `sub` + 6–8 位恢复 PIN 经 PBKDF2-SHA256（600,000 次）派生，再用于 NIP-44 v2 加密私钥；access token 仅保留在当前页面会话内。
+
+当前这一路径只在正常浏览器 / PWA 中启用。Capacitor Android APK 是嵌入式 WebView，而 Google OAuth 不支持在嵌入式 user-agent 中直接完成网页登录，因此原生容器会隐藏该按钮；Android 原生 Google Sign-In bridge 后续单独接入。
+
 后台推送的生产迁移、VAPID 配置、Worker/Pages 部署与冒烟检查见 [`worker/PUSH_DEPLOYMENT.md`](worker/PUSH_DEPLOYMENT.md)。
 
 ## 环境要求
