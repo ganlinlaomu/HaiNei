@@ -28,11 +28,12 @@ export function useMentionComposer<T extends HTMLInputElement | HTMLTextAreaElem
     activeIndex.value = 0;
   }
 
-  function sync() {
-    const element = input.value;
+  function sync(elementOverride?: T | null) {
+    const element = elementOverride || input.value;
     if (!element) return close();
-    const cursor = element.selectionStart ?? model.value.length;
-    const next = mentionQueryAtCursor(model.value, cursor);
+    const value = element.value;
+    const cursor = element.selectionStart ?? value.length;
+    const next = mentionQueryAtCursor(value, cursor);
     if (!next) return close();
     range.value = next;
     query.value = next.query;
@@ -40,8 +41,11 @@ export function useMentionComposer<T extends HTMLInputElement | HTMLTextAreaElem
     if (activeIndex.value >= matches.value.length) activeIndex.value = 0;
   }
 
-  function onInput() {
-    sync();
+  function onInput(event?: Event) {
+    const element = event?.currentTarget instanceof HTMLInputElement || event?.currentTarget instanceof HTMLTextAreaElement
+      ? event.currentTarget as T
+      : input.value;
+    sync(element);
   }
 
   function onFocus() {
