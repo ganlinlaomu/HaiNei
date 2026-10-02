@@ -296,7 +296,7 @@ describe("comment bottom sheet", () => {
     expect(sheet).not.toMatch(/:deep\(\.comment-avatar\)\{[^}]*background/);
     expect(sheet).toContain("还没有评论");
     expect(sheet).toContain("开始对话。");
-    expect(sheet).toContain('class: "comment-mention"');
+    expect(sheet).toContain('h(MentionText, { text: rowProps.comment.text })');
   });
 
   it("uses a wide two-sided root separator and a shorter reply separator", () => {

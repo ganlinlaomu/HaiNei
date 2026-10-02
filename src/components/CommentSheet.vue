@@ -100,6 +100,18 @@
               autocomplete="off"
               :placeholder="replyTarget ? `回复 @${displayName(replyTarget.author)}` : '添加评论...'"
               aria-label="添加评论"
+              @input="onMentionInput"
+              @focus="onMentionFocus"
+              @blur="onMentionBlur"
+              @click="onMentionClick"
+              @keydown="onMentionKeydown"
+            />
+            <MentionSuggestions
+              v-if="mentionOpen"
+              :items="mentionMatches"
+              :active-index="mentionActiveIndex"
+              placement="above"
+              @select="selectMention"
             />
             <input ref="imageInput" class="image-input" type="file" accept="image/*" @change="selectImage" />
             <button class="image-button" type="button" aria-label="添加图片" :disabled="sending" @click="imageInput?.click()">
@@ -119,6 +131,7 @@ import type { InboxItem } from "@/stores/messages";
 import type { Comment, CommentMedia } from "@/stores/interactions";
 import { useInteractionsStore } from "@/stores/interactions";
 import { useFriendsStore } from "@/stores/friends";
+import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { formatRelativeTime } from "@/utils/format";
@@ -138,12 +151,17 @@ import { uploadEncryptedCommentImage } from "@/utils/commentImage";
 import { useRouter } from "vue-router";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import PostImagePreview from "@/components/PostImagePreview.vue";
+import MentionSuggestions from "@/components/MentionSuggestions.vue";
+import MentionText from "@/components/MentionText.vue";
+import { useMentionComposer } from "@/composables/useMentionComposer";
+import type { MentionCandidate } from "@/utils/mentions";
 import { useUIStore } from "@/stores/ui";
 
 const props = defineProps<{ visible: boolean; message: InboxItem; targetCommentId?: string }>();
 const emit = defineEmits<{ close: [] }>();
 const interactions = useInteractionsStore();
 const friends = useFriendsStore();
+const friendships = useFriendshipsStore();
 const keys = useKeyStore();
 const profiles = useProfilesStore();
 const router = useRouter();
@@ -169,6 +187,38 @@ const expandedReplyRoots = ref(new Set<string>());
 const remainingRootCount = computed(() => Math.max(0, threads.value.length - INITIAL_ROOT_COUNT));
 const panelStyle = computed(() => dragY.value > 0 ? ({ transform: `translateY(${dragY.value}px)` }) : undefined);
 const canSend = computed(() => canSubmitComment(draft.value, !!selectedImage.value));
+const mentionCandidates = computed<MentionCandidate[]>(() => {
+  const priorities = new Map<string, number>();
+  priorities.set(props.message.pubkey.toLowerCase(), 0);
+  if (replyTarget.value?.author) priorities.set(replyTarget.value.author.toLowerCase(), -1);
+  for (const comment of interactions.getComments(props.message.id)) {
+    if (!priorities.has(comment.author.toLowerCase())) priorities.set(comment.author.toLowerCase(), 1);
+  }
+  return friends.getAcceptedList(friendships.isAccepted)
+    .map(friend => {
+      const profileName = profiles.getProfile(friend.pubkey)?.nickname?.trim();
+      const label = profileName || friend.name?.trim() || `${friend.pubkey.slice(0, 8)}…`;
+      return {
+        pubkey: friend.pubkey,
+        label,
+        secondary: profileName && profileName !== label ? profileName : undefined,
+        searchText: [friend.name || "", friend.note || "", profileName || ""].join(" "),
+      };
+    })
+    .sort((a, b) => (priorities.get(a.pubkey.toLowerCase()) ?? 2) - (priorities.get(b.pubkey.toLowerCase()) ?? 2));
+});
+const {
+  mentionOpen,
+  mentionMatches,
+  mentionActiveIndex,
+  onMentionInput,
+  onMentionFocus,
+  onMentionClick,
+  onMentionBlur,
+  onMentionKeydown,
+  selectMention,
+  closeMention,
+} = useMentionComposer(draft, composer, mentionCandidates);
 
 function localName(pubkey: string) {
   if (pubkey === keys.pkHex) return "自己";
@@ -198,7 +248,7 @@ const CommentRow = defineComponent({
           h("button", { class: "comment-name", type: "button", onClick: (event: Event) => navigateProfile(rowProps.comment.author, event) }, displayName(rowProps.comment.author)),
           h("time", formatRelativeTime(rowProps.comment.timestamp))
         ]),
-        rowProps.comment.text ? h("div", { class: "comment-text" }, renderCommentText(rowProps.comment.text)) : null,
+        rowProps.comment.text ? h("div", { class: "comment-text" }, [h(MentionText, { text: rowProps.comment.text })]) : null,
         rowProps.comment.media?.[0] ? h("div", { class: "comment-image" }, [
           h(PostImagePreview, {
             content: `![](${rowProps.comment.media[0].ref})`,
@@ -217,7 +267,7 @@ const CommentRow = defineComponent({
   }
 });
 
-function close() { emit("close"); }
+function close() { closeMention(); emit("close"); }
 function startReply(comment: Comment) {
   replyTarget.value = comment;
   sendError.value = "";
@@ -232,15 +282,6 @@ function toggleReplyThread(rootId: string) {
   const next = new Set(expandedReplyRoots.value);
   next.has(rootId) ? next.delete(rootId) : next.add(rootId);
   expandedReplyRoots.value = next;
-}
-function renderCommentText(text: string) {
-  const match = /@[\p{L}\p{N}_.-]+/u.exec(text);
-  if (!match || match.index === undefined) return text;
-  return [
-    text.slice(0, match.index),
-    h("span", { class: "comment-mention" }, match[0]),
-    text.slice(match.index + match[0].length)
-  ];
 }
 function revealTargetComment(targetCommentId?: string) {
   if (!targetCommentId) return;
