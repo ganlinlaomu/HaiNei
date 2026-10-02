@@ -3,7 +3,7 @@ import { nostrClient } from "@/services/nostrClient";
 import { debugLog } from "@/utils/debugLog";
 import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./protocol";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
-import type { OutgoingQueueRecord } from "@/db/dexie";
+import type { OutgoingQueueRecord, OutgoingRelayResult } from "@/db/dexie";
 import { triggerGenericPush } from "@/services/pushNotifications";
 import type { PushCategory } from "@/services/pushNotifications";
 import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/directMessages";
@@ -27,14 +27,7 @@ export interface SendDirectMessageOptions {
 export interface PublishedMessage {
   message: CanonicalMessage;
   events: NostrEvent[];
-  relayResults: Array<{
-    relay: string;
-    ok: boolean;
-    reason?: unknown;
-    ts: number;
-    eventId: string;
-    targetPubkey?: string;
-  }>;
+  relayResults: OutgoingRelayResult[];
 }
 
 function eventTarget(event: NostrEvent) {
@@ -54,16 +47,28 @@ export async function buildMessageEvents(options: Omit<SendDirectMessageOptions,
   return nip17Adapter.encode!(outgoing, options.context);
 }
 
-export async function publishMessageEvents(events: NostrEvent[], relays: string[]) {
+export async function publishMessageEvents(
+  events: NostrEvent[],
+  relays: string[],
+  previousResults: OutgoingRelayResult[] = []
+) {
   const batches = await Promise.all(events.map(async event => {
     const targetPubkey = eventTarget(event);
+    // Once any relay accepted a gift-wrap copy, that copy is terminal. On a
+    // retry publish only copies that have never been accepted, preserving the
+    // original signed event and avoiding duplicate delivery to other peers.
+    if (previousResults.some(result => result.eventId === event.id && result.ok)) return [];
+    const pendingRelays = relays.filter(relay => !previousResults.some(
+      result => result.eventId === event.id && result.relay === relay && result.ok
+    ));
+    if (!pendingRelays.length) return [];
     debugLog("publish", "gift_wrap_publish_start", {
       eventId: event.id.slice(0, 12),
       kind: event.kind,
       target: targetPubkey?.slice(0, 12) || "missing",
-      relayCount: relays.length
+      relayCount: pendingRelays.length
     });
-    const results = await nostrClient.publish(event, relays);
+    const results = await nostrClient.publish(event, pendingRelays);
     return results.map(result => {
       debugLog("publish", "gift_wrap_publish_result", {
         eventId: event.id.slice(0, 12),
@@ -75,6 +80,18 @@ export async function publishMessageEvents(events: NostrEvent[], relays: string[
     });
   }));
   return batches.flat();
+}
+
+function mergeRelayResults(previous: OutgoingRelayResult[], current: OutgoingRelayResult[]) {
+  const merged = new Map<string, OutgoingRelayResult>();
+  for (const result of [...previous, ...current]) {
+    const key = `${result.eventId}\u0000${result.relay}`;
+    const existing = merged.get(key);
+    // A recorded acknowledgement is terminal and cannot be downgraded by a
+    // later timeout or disconnect report.
+    if (!existing?.ok || result.ok) merged.set(key, result);
+  }
+  return [...merged.values()];
 }
 
 export async function sendDirectMessage(options: SendDirectMessageOptions): Promise<PublishedMessage> {
@@ -180,7 +197,9 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     const events = record.events as NostrEvent[];
     let relayResults: PublishedMessage["relayResults"];
     try {
-      relayResults = await publishMessageEvents(events, record.relays);
+      const previousResults = record.relayResults || [];
+      const currentResults = await publishMessageEvents(events, record.relays, previousResults);
+      relayResults = mergeRelayResults(previousResults, currentResults);
     } catch (error) {
       const state = attempts >= 3 ? "failed" : "waiting_network";
       const delay = Math.min(60_000, 2 ** attempts * 1_000);

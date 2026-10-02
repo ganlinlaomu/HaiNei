@@ -1,6 +1,7 @@
 import type { EventTemplate, NostrEvent, VerifiedEvent } from "nostr-tools";
 import type { BookmarkRecord } from "@/db/dexie";
 import { bookmarkRepository } from "@/repositories/bookmarkRepository";
+import { replaceableEventOutboxRepository } from "@/repositories/replaceableEventOutboxRepository";
 import { getRelaysFromStorage, publish, subscribe } from "@/nostr/relays";
 import { verifySignedEvent } from "@/nostr/messaging/protocol/common";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
@@ -9,6 +10,9 @@ import { logger } from "@/utils/logger";
 export const NIP51_BOOKMARK_KIND = 10003;
 const QUERY_TIMEOUT_MS = 8_000;
 const MIRROR_DEBOUNCE_MS = 700;
+const OUTBOX_RETRY_MS = 5_000;
+const MIRROR_RECOVERY_RETRY_MS = 60_000;
+const BOOKMARK_OUTBOX_KEY = String(NIP51_BOOKMARK_KIND);
 const HEX_64 = /^[0-9a-f]{64}$/i;
 
 export type PrivateBookmarkMirrorKeys = {
@@ -239,10 +243,62 @@ function isCurrent(keys: PrivateBookmarkMirrorKeys, account: string, generation:
     (generation === undefined || keys.sessionGeneration === generation);
 }
 
+async function flushBookmarkOutbox(account: string) {
+  const queued = await replaceableEventOutboxRepository.get(account, BOOKMARK_OUTBOX_KEY);
+  if (!queued) return true;
+  if ((queued.nextAttemptAt || 0) > Date.now()) return false;
+
+  const relays = getRelaysFromStorage("write");
+  const targets = relays.length ? relays : queued.relays;
+  if (!targets.length) return false;
+  const attempts = queued.attempts + 1;
+  try {
+    const results = await publish(targets, queued.event);
+    if (!results.some(result => result.ok)) throw new Error("nip51_bookmark_publish_failed");
+    // Delete only if this exact event is still current. A newer local snapshot
+    // may have replaced it while the network request was in flight.
+    const current = await replaceableEventOutboxRepository.get(account, BOOKMARK_OUTBOX_KEY);
+    if (current?.event.id === queued.event.id) {
+      await replaceableEventOutboxRepository.delete(account, BOOKMARK_OUTBOX_KEY);
+    }
+    return true;
+  } catch (error) {
+    const current = await replaceableEventOutboxRepository.get(account, BOOKMARK_OUTBOX_KEY);
+    if (current?.event.id === queued.event.id) {
+      const delay = Math.min(5 * 60_000, 2 ** Math.min(attempts, 8) * 1_000);
+      await replaceableEventOutboxRepository.update(account, BOOKMARK_OUTBOX_KEY, {
+        attempts,
+        nextAttemptAt: Date.now() + delay,
+        lastError: error instanceof Error ? error.message : "publish_failed",
+        updatedAt: Date.now(),
+      });
+    }
+    return false;
+  }
+}
+
 export async function syncPrivateBookmarkMirror(keys: PrivateBookmarkMirrorKeys) {
   const account = keys.pkHex.toLowerCase();
   const generation = keys.sessionGeneration;
   if (!account || !keys.supportsNip44) return false;
+
+  const pending = await replaceableEventOutboxRepository.get(account, BOOKMARK_OUTBOX_KEY);
+  if (pending) {
+    const newestLocalChange = (await bookmarkRepository.list(account)).reduce(
+      (latest, record) => Math.max(latest, Number(record.updatedAt ?? record.createdAt ?? 0)),
+      0,
+    );
+    if (newestLocalChange > pending.createdAt) {
+      // The queued signed snapshot is stale. Drop it before it reaches a relay;
+      // this replaceable key is latest-wins and will be rebuilt below.
+      await replaceableEventOutboxRepository.delete(account, BOOKMARK_OUTBOX_KEY);
+    }
+  }
+
+  // A signed replacement survives reload/offline periods. Publish it before
+  // reading the old remote snapshot so stale relay state cannot undo a newer
+  // local bookmark change.
+  if (!(await flushBookmarkOutbox(account))) return false;
 
   const { snapshot, available } = await fetchLatestSnapshot(keys);
   if (!isCurrent(keys, account, generation)) return false;
@@ -295,14 +351,21 @@ export async function syncPrivateBookmarkMirror(keys: PrivateBookmarkMirrorKeys)
   });
   if (!isCurrent(keys, account, generation)) return false;
 
-  const results = await publish(writeRelays, event);
-  if (!results.some(result => result.ok)) {
-    throw new Error("nip51_bookmark_publish_failed");
-  }
+  const queuedAt = Date.now();
+  await replaceableEventOutboxRepository.putLatest({
+    accountPubkey: account,
+    key: BOOKMARK_OUTBOX_KEY,
+    event,
+    relays: writeRelays,
+    attempts: 0,
+    createdAt: queuedAt,
+    updatedAt: queuedAt,
+  });
+  if (!(await flushBookmarkOutbox(account))) throw new Error("nip51_bookmark_publish_failed");
   return true;
 }
 
-export function schedulePrivateBookmarkMirror(keys: PrivateBookmarkMirrorKeys) {
+export function schedulePrivateBookmarkMirror(keys: PrivateBookmarkMirrorKeys, delay = MIRROR_DEBOUNCE_MS) {
   if (typeof window === "undefined" || !keys.pkHex || !keys.supportsNip44) return;
   const account = keys.pkHex.toLowerCase();
   const generation = keys.sessionGeneration;
@@ -313,8 +376,15 @@ export function schedulePrivateBookmarkMirror(keys: PrivateBookmarkMirrorKeys) {
   scheduled.set(id, setTimeout(() => {
     scheduled.delete(id);
     if (!isCurrent(keys, account, generation)) return;
-    void syncPrivateBookmarkMirror(keys).catch(error => {
+    void syncPrivateBookmarkMirror(keys).then(async success => {
+      if (!success && isCurrent(keys, account, generation)) {
+        const pending = await replaceableEventOutboxRepository.get(account, BOOKMARK_OUTBOX_KEY);
+        schedulePrivateBookmarkMirror(keys, pending ? OUTBOX_RETRY_MS : MIRROR_RECOVERY_RETRY_MS);
+      }
+    }).catch(async error => {
       logger.warn("[bookmarks] NIP-51 mirror sync failed", error);
+      const pending = await replaceableEventOutboxRepository.get(account, BOOKMARK_OUTBOX_KEY);
+      schedulePrivateBookmarkMirror(keys, pending ? OUTBOX_RETRY_MS : MIRROR_RECOVERY_RETRY_MS);
     });
-  }, MIRROR_DEBOUNCE_MS));
+  }, delay));
 }

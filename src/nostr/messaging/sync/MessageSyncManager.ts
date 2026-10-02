@@ -264,6 +264,9 @@ export class MessageSyncManager {
         const result = await runPagedCatchup({
           relays,
           filters,
+          initialUntilByRelay: freshHistoryRepair
+            ? Object.fromEntries(relays.map(url => [url, state.relayStates[url]?.historyBackfillUntil ?? until]))
+            : undefined,
           subscribeFn: this.subscribeFn,
           trackSubscription: subscription => {
             this.activeCatchupSubscriptions.add(subscription);
@@ -321,8 +324,14 @@ export class MessageSyncManager {
         }
 
         for (const completedRelay of result.completedRelays) {
+          const progress = result.relayProgress[completedRelay];
           await this.repository.updateRelayState(options.accountPubkey, completedRelay, {
             lastEOSEAt: completedAt,
+            ...(freshHistoryRepair && progress?.naturalEnd && !progress.incomplete
+              ? { historyBackfillCompletedAt: completedAt, historyBackfillUntil: undefined }
+              : freshHistoryRepair && typeof progress?.nextUntil === "number"
+                ? { historyBackfillUntil: progress.nextUntil }
+                : {}),
             ...((completedFreshHistory || completedIncremental)
               ? { lastSuccessfulCatchupAt: completedAt }
               : {})

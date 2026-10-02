@@ -1,9 +1,10 @@
 import { installLocalVault } from "@/services/localVault";
 import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
+import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.18";
-export const DB_VERSION = 15;
+export const APP_VERSION = "0.1.19";
+export const DB_VERSION = 16;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -102,6 +103,10 @@ export type RelaySyncStateRecord = {
   lastEOSEAt?: number;
   lastEventCreatedAt?: number;
   lastSuccessfulCatchupAt?: number;
+  /** Relay-local resume cursor for an incomplete initial history repair. */
+  historyBackfillUntil?: number;
+  /** Marks that this relay independently reached the end of initial history. */
+  historyBackfillCompletedAt?: number;
 };
 
 export type MessageSyncStateRecord = {
@@ -175,6 +180,14 @@ export type HaiNeiProfile = {
 export type AccountProfileRecord = HaiNeiProfile & { accountPubkey: string };
 
 export type OutgoingQueueState = "pending" | "sending" | "waiting_network" | "failed" | "sent";
+export type OutgoingRelayResult = {
+  relay: string;
+  ok: boolean;
+  reason?: unknown;
+  ts: number;
+  eventId: string;
+  targetPubkey?: string;
+};
 export type OutgoingQueueRecord = {
   accountPubkey: string;
   outgoingId: string;
@@ -182,7 +195,7 @@ export type OutgoingQueueRecord = {
   message: unknown;
   events: unknown[];
   relays: string[];
-  relayResults?: unknown[];
+  relayResults?: OutgoingRelayResult[];
   // Separate from relay delivery so a suspended PWA can retry the push request.
   pushState?: "pending" | "accepted";
   pushAttempts?: number;
@@ -256,6 +269,18 @@ export type AccountStateMirrorRecord = {
   namespace: AccountStateNamespace;
   version: number;
   data: unknown;
+  updatedAt: number;
+};
+
+export type ReplaceableEventOutboxRecord = {
+  accountPubkey: string;
+  key: string;
+  event: NostrEvent;
+  relays: string[];
+  attempts: number;
+  nextAttemptAt?: number;
+  lastError?: string;
+  createdAt: number;
   updatedAt: number;
 };
 
@@ -351,6 +376,7 @@ export class HaiNeiDatabase extends Dexie {
   accountBookmarks!: Table<BookmarkRecord, [string, string]>;
   deviceKeyValues!: Table<DeviceKeyValueRecord, string>;
   accountStateMirrors!: Table<AccountStateMirrorRecord, [string, AccountStateNamespace]>;
+  replaceableEventOutbox!: Table<ReplaceableEventOutboxRecord, [string, string]>;
 
   constructor(name = DATABASE_NAME, requireVault = import.meta.env.MODE !== "test") {
     super(name);
@@ -605,6 +631,10 @@ export class HaiNeiDatabase extends Dexie {
     this.version(15).stores({
       accountImageCache: "[accountPubkey+url], accountPubkey, [accountPubkey+timestamp], [accountPubkey+lastAccess]"
     }).upgrade(transaction => transaction.table("accountImageCache").clear());
+
+    this.version(16).stores({
+      replaceableEventOutbox: "[accountPubkey+key], accountPubkey, [accountPubkey+nextAttemptAt]"
+    });
 
   }
 }
