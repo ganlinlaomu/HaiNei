@@ -138,6 +138,13 @@ export default defineComponent({
       });
     }
 
+    function prewarmRemoteSignerOnForeground() {
+      if (document.visibilityState === "hidden" || keys.loginMethod !== "nip46" || !keys.isUnlocked) return;
+      void keys.prewarmRemoteSigner().catch(error => {
+        console.warn("[nip46] foreground reconnect unavailable", error instanceof Error ? error.message : "unknown");
+      });
+    }
+
     watch(
       () => [
         keys.pkHex,
@@ -197,7 +204,10 @@ export default defineComponent({
       stopActivityMonitor = installForegroundActivityMonitor();
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked && keys.credentialMode !== "device",lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
-      stopForegroundResume = onAppResume(() => reconcileFriendStateOnForeground());
+      stopForegroundResume = onAppResume(() => {
+        reconcileFriendStateOnForeground();
+        prewarmRemoteSignerOnForeground();
+      });
     });
     onBeforeUnmount(() => {
       stopAutoLock?.();
