@@ -56,6 +56,22 @@ import {
   unlockDevicePrivateKey,
 } from "@/services/devicePrivateKey";
 import type { AccountCredentialMode } from "@/services/accountRegistry";
+import {
+  hasRemoteSignerCredential,
+  removeRemoteSignerCredential,
+  storeRemoteSignerCredential,
+  unlockRemoteSignerCredential,
+} from "@/services/remoteSignerCredential";
+import {
+  connectRemoteSignerFromInput,
+  disconnectRemoteSigner,
+  isRemoteSignerConnected,
+  nip46FeatureEnabled,
+  reconnectRemoteSignerFromCredential,
+  remoteNip44Decrypt,
+  remoteNip44Encrypt,
+  remoteSignEvent,
+} from "@/services/nip46RemoteSigner";
 
 let restoreSessionFlight: Promise<void> | null = null;
 
@@ -79,7 +95,8 @@ export const useKeyStore = defineStore("keys", {
   state: () => ({
     skHex: "" as string,
     pkHex: "" as string,
-    loginMethod: "" as "private-key" | "",
+    loginMethod: "" as "private-key" | "nip46" | "",
+    remoteSignerConnected: false as boolean,
     accounts: listDeviceAccounts() as DeviceAccount[],
     sessionGeneration: 0,
     loginTimestamp: 0 as number, // Unix timestamp when user logged in
@@ -98,15 +115,16 @@ export const useKeyStore = defineStore("keys", {
     },
     supportsNip44(): boolean {
       if (!this.isLoggedIn) return false;
-      return this.loginMethod === "private-key" && !!this.skHex;
+      if (this.loginMethod === "private-key") return !!this.skHex;
+      return this.loginMethod === "nip46" && this.remoteSignerConnected;
     }
   },
   actions: {
-    async loadAccountStores(pk: string) {
+    async loadAccountStores(pk: string, localVaultSecretHex = this.skHex) {
       if (this.pkHex && this.pkHex !== pk) clearAccountScopedCaches(this.pkHex);
       const generation = ++this.sessionGeneration;
       const isCurrent = () => this.pkHex === pk && this.sessionGeneration === generation && this.isUnlocked;
-      await unlockLocalVault(pk, this.skHex, isCurrent);
+      await unlockLocalVault(pk, localVaultSecretHex, isCurrent);
       if (!isCurrent()) return;
       await migrateLocalVault(db, pk);
       if (!isCurrent()) return;
@@ -332,10 +350,13 @@ export const useKeyStore = defineStore("keys", {
 
     async clearActiveSession() {
       const currentPk = this.pkHex;
+      const currentMethod = this.loginMethod;
       if (currentPk) { await prepareAccountLock(currentPk); await flushDeviceWrites(); this.resetAccountStores(currentPk); }
+      if (currentPk && currentMethod === "nip46") await disconnectRemoteSigner(currentPk);
       this.skHex = "";
       this.pkHex = "";
       this.loginMethod = "";
+      this.remoteSignerConnected = false;
       this.loginTimestamp = 0;
       this.isEncrypted = false;
       this.credentialMode = "session";
@@ -346,6 +367,27 @@ export const useKeyStore = defineStore("keys", {
     async selectRememberedAccount(pubkey: string) {
       const account = listDeviceAccounts().find(item => item.pubkey === pubkey.toLowerCase());
       if (!account) throw new Error("未找到已记住的账号");
+
+      if (account.authType === "nip46") {
+        if (!nip46FeatureEnabled()) throw new Error("远程签名器 Beta 当前未启用");
+        if (!await hasRemoteSignerCredential(account.pubkey)) throw new Error("远程签名器本机凭据已丢失，请重新连接");
+        const credential = await unlockRemoteSignerCredential(account.pubkey);
+        if (this.pkHex) { await prepareAccountLock(this.pkHex); await flushDeviceWrites(); this.resetAccountStores(this.pkHex); }
+        this.skHex = "";
+        this.pkHex = account.pubkey;
+        this.loginMethod = "nip46";
+        this.remoteSignerConnected = false;
+        this.loginTimestamp = Math.floor(Date.now() / 1000);
+        this.isEncrypted = true;
+        this.isUnlocked = true;
+        this.credentialMode = "device";
+        await this.persistActiveSession();
+        await this.rememberCurrentAccount();
+        await this.loadAccountStores(this.pkHex, credential.clientSecretHex);
+        void this.reconnectRemoteSigner().catch(() => undefined);
+        return "connected" as const;
+      }
+
       if (account.credentialMode === "device") {
         if (!await hasDevicePrivateKey(account.pubkey)) throw new Error("本机登录凭据已丢失，请重新输入私钥");
       } else if (account.credentialMode === "password") {
@@ -357,6 +399,7 @@ export const useKeyStore = defineStore("keys", {
       this.skHex = "";
       this.pkHex = account.pubkey;
       this.loginMethod = "private-key";
+      this.remoteSignerConnected = false;
       this.loginTimestamp = Math.floor(Date.now() / 1000);
       this.isEncrypted = true;
       this.isUnlocked = false;
@@ -443,6 +486,7 @@ export const useKeyStore = defineStore("keys", {
         removeEncryptedKey(normalized),
         removeBiometricUnlock(normalized),
         removeDevicePrivateKey(normalized),
+        removeRemoteSignerCredential(normalized),
       ]);
       this.accounts = await forgetDeviceAccount(normalized);
       if (this.pkHex === normalized) await this.clearActiveSession();
