@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HaiNei — Nostr social client</title><meta name="description" content="HaiNei is a privacy-focused Nostr social and private messaging client with encrypted Google Account recovery.">
+<style>
+    :root{color-scheme:dark;--bg:#0b1017;--panel:#111923;--text:#e5e9f0;--muted:#98a4b5;--line:#293445;--link:#c9d4e3}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    a{color:var(--link)}header,main,footer{width:min(920px,calc(100% - 32px));margin:auto}
+    header{padding:44px 0 24px;border-bottom:1px solid var(--line)}header h1{margin:0;font-size:2.2rem;font-weight:500;letter-spacing:.05em}
+    header p{margin:.4rem 0 0;color:var(--muted)}nav{display:flex;flex-wrap:wrap;gap:14px;margin-top:20px}
+    main{padding:30px 0 50px}section{padding:24px 0;border-bottom:1px solid var(--line)}h2{font-size:1.3rem;margin:0 0 12px}h3{font-size:1rem;margin:20px 0 8px}
+    p,li{color:#c8d0dc}ul{padding-left:1.25rem}code{background:#151f2b;padding:.12rem .35rem;border-radius:5px}
+    .lang{color:var(--muted);font-size:.85rem;text-transform:uppercase;letter-spacing:.08em}.notice{padding:16px;border:1px solid var(--line);background:var(--panel);border-radius:12px}
+    footer{padding:24px 0 40px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+    @media(max-width:600px){header{padding-top:28px}header h1{font-size:1.8rem}main{padding-top:18px}section{padding:20px 0}}
+</style></head><body>
+<header><h1>HaiNei</h1><p>A Nostr-based social client focused on privacy and user control.</p>
+<nav><a href="/">Open HaiNei</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a><a href="mailto:kudos-zap-citrus@duck.com">Contact</a></nav></header>
+<main>
+<section><div class="lang">English</div><h2>About HaiNei</h2>
+<p>HaiNei is a social and private messaging application built on the Nostr protocol and operated by <strong>Hainei</strong>. It provides Nostr account management, posts and comments, friend management, NIP-17 private messaging, encrypted local storage, multi-device synchronization, passkey-based unlocking, and optional Google Account recovery.</p>
+<h3>Google Account recovery</h3>
+<p>The “Continue with Google” feature exists only to help a user create or recover a HaiNei/Nostr account across devices. HaiNei uses the Google Account identity associated with the recovery session and Google Drive <code>appDataFolder</code> to store and retrieve HaiNei-created encrypted backup files.</p>
+<div class="notice"><strong>HaiNei does not access ordinary Google Drive files, Google Photos, Gmail, contacts, or Google Calendar.</strong> A Nostr private key is encrypted on the user’s device before upload. The recovery PIN and unencrypted Nostr private key are not uploaded to Google Drive.</div>
+<p>A Google Account is a recovery mechanism only. The user’s Nostr identity remains controlled by Nostr keys.</p></section>
+
+<section><div class="lang">繁體中文</div><h2>關於 HaiNei</h2>
+<p>HaiNei（海內）是由 <strong>Hainei</strong> 營運、基於 Nostr 協議的社交與私人通訊應用。功能包括 Nostr 帳號管理、貼文與留言、好友管理、NIP-17 私人訊息、本機加密儲存、多裝置同步、通行密鑰解鎖，以及可選的 Google 帳號恢復。</p>
+<h3>Google 帳號恢復</h3><p>「使用 Google 繼續」僅用於協助使用者在不同裝置建立或恢復 HaiNei/Nostr 帳號。HaiNei 僅使用恢復工作階段中的 Google 帳號識別資訊，以及 Google Drive <code>appDataFolder</code> 儲存和讀取 HaiNei 建立的加密備份。</p>
+<p>HaiNei 不會讀取一般 Google Drive 文件、Google Photos、Gmail、聯絡人或 Google Calendar。Nostr 私鑰會先在使用者裝置上加密；恢復 PIN 與未加密私鑰不會上傳到 Google Drive。Google 帳號只是恢復機制，Nostr 身份仍由 Nostr 金鑰控制。</p></section>
+
+<section><div class="lang">日本語</div><h2>HaiNei について</h2>
+<p>HaiNei（海内）は <strong>Hainei</strong> が運営する Nostr ベースのソーシャル・プライベートメッセージングアプリです。Nostr アカウント管理、投稿・コメント、フレンド管理、NIP-17 プライベートメッセージ、ローカル暗号化、複数端末同期、パスキー、Google アカウント復元などを提供します。</p>
+<h3>Google アカウント復元</h3><p>「Google で続ける」は、端末間で HaiNei/Nostr アカウントを作成または復元するためだけに使用します。HaiNei は復元セッションの Google アカウント識別情報と Google Drive <code>appDataFolder</code> のみを利用して、HaiNei が作成した暗号化バックアップを保存・取得します。</p>
+<p>通常の Google Drive ファイル、Google Photos、Gmail、連絡先、Google Calendar にはアクセスしません。Nostr 秘密鍵は端末上で暗号化され、復元 PIN と平文の秘密鍵は Google Drive にアップロードされません。</p></section>
+</main><footer>Operator: Hainei · Contact: <a href="mailto:kudos-zap-citrus@duck.com">kudos-zap-citrus@duck.com</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></footer>
+</body></html>

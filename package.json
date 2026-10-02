@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.28",
-  "releaseSummary": "修复 Google 登录组件被 CSP 阻止，并支持加载失败后重试",
+  "version": "0.1.29",
+  "releaseSummary": "新增公开 About、Privacy Policy 与 Terms 页面，满足 Google OAuth Branding 公布要求",
   "private": true,
   "scripts": {
     "dev": "vite",
