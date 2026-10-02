@@ -104,7 +104,7 @@ export async function verifyAndConsumeChallenge(
     if (payloads.length !== 1 || payloads[0] !== expectedPayload) throw new HttpError(401, "auth_payload_mismatch");
   }
 
-  const authLimit = integerSetting(env.AUTH_REQUESTS_PER_MINUTE_PER_PUBKEY, 120, 10, 2000);
+  const authLimit = integerSetting(env.AUTH_REQUESTS_PER_MINUTE_PER_PUBKEY, 480, 10, 2000);
   await consumeRateLimit(env, `auth:${expectedAction}:${event.pubkey}`, authLimit, 60, now);
 
   const challengeHash = await sha256(challenge);
