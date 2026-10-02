@@ -49,6 +49,14 @@ function normalizeRelays(relays: string[]) {
   });
 }
 
+export function isRemoteSignerConnectivityError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (!message) return false;
+  if (/remote_signer_(?:offline|timeout)/i.test(message)) return true;
+  if (/remote_signer_session_changed/i.test(message)) return true;
+  return /(?:websocket|socket|relay|connection).*(?:closed|closing|failed|lost|reset|unavailable)|(?:not connected|disconnected|connection closed|request timed out|timed out|timeout)/i.test(message);
+}
+
 function showAuthorization(url: string) {
   try {
     const parsed = new URL(url);
@@ -213,7 +221,14 @@ async function withSession<T>(
     }
     return result;
   } catch (error) {
-    if (error instanceof Error && error.message === "remote_signer_timeout") {
+    const current = sessions.get(account);
+    const isSameSession = current?.generation === expectedGeneration;
+    const message = error instanceof Error ? error.message : "";
+    if (
+      isSameSession
+      && message !== "remote_signer_session_changed"
+      && isRemoteSignerConnectivityError(error)
+    ) {
       await disconnectRemoteSigner(account);
     }
     throw error;
