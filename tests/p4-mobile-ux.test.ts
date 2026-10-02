@@ -12,6 +12,7 @@ describe("P4 mobile UX regression contract", () => {
   it("keeps Pages privacy headers compatible with HTTPS media and WSS relays", () => {
     const headers = readFileSync("public/_headers", "utf8");
     expect(headers).toContain("Content-Security-Policy:");
+    expect(headers).toContain("script-src 'self' https://accounts.google.com/gsi/client");
     expect(headers).toContain("connect-src 'self' https: wss:");
     expect(headers).toContain("frame-src https:");
     expect(headers).toContain("Referrer-Policy: no-referrer");

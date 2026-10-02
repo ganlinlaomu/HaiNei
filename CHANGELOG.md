@@ -1,5 +1,9 @@
 # HaiNei 更新记录
 
+## 0.1.28 — 2026-10-02
+
+- 修复 Google Identity Services 被 Pages CSP 的 `script-src 'self'` 阻止而无法加载的问题；按 Google 官方要求放行 GIS 脚本/样式来源，并在 GIS 加载失败时移除失效脚本节点，允许同一页面重试。
+
 ## 0.1.27 — 2026-10-02
 
 - Google 账号恢复 P0/P1：新增统一恢复层、Google Identity Services 授权与 Drive `appDataFolder` 加密备份；使用 Google `sub` + 6–8 位恢复 PIN 经 PBKDF2-SHA256（600,000 次）派生密钥并以 NIP-44 v2 加密 nsec，恢复后仍复用现有 `private-key` signer 与 `loginWithNsec()`，不改 NIP-17、Relay 或本机通行密钥语义。
