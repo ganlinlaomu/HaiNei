@@ -384,16 +384,17 @@ describe("relay catch-up", () => {
     expect(page.allRelaysCompleted).toBe(true);
   });
 
-  it("keeps received events but does not advance the page cursor after Relay failure", async () => {
-    const subscribeFake = () => {
+  it("advances healthy Relay cursors while preserving the failed Relay boundary", async () => {
+    const subscribeFake = (relays: string[]) => {
       const handlers: Record<string, Array<(...args: any[]) => void>> = {};
       return {
         on(name: string, callback: (...args: any[]) => void) {
           (handlers[name] ||= []).push(callback);
-          if (name === "failure") queueMicrotask(() => {
-            handlers.event?.forEach(handler => handler({ id: "before-failure", created_at: 150 }, "wss://a"));
-            callback("wss://b", "closed");
+          if (relays[0] === "wss://a" && name === "eose") queueMicrotask(() => {
+            handlers.event?.forEach(handler => handler({ id: "from-healthy", created_at: 150 }, "wss://a"));
+            callback("wss://a");
           });
+          if (relays[0] === "wss://b" && name === "failure") queueMicrotask(() => callback("wss://b", "closed"));
         },
         unsub() {}
       };
@@ -406,8 +407,8 @@ describe("relay catch-up", () => {
       isCurrent: () => true,
       onEvent: async event => { ingested.push(event.id); }
     });
-    expect(ingested).toEqual(["before-failure"]);
-    expect(result.nextUntil).toBe(200);
+    expect(ingested).toEqual(["from-healthy"]);
+    expect(result.nextUntilByRelay).toEqual({ "wss://a": 150, "wss://b": 200 });
     expect(result.failedRelays.get("wss://b")).toBe("closed");
     expect(result.incomplete).toBe(true);
   });
@@ -462,22 +463,23 @@ describe("message sync session", () => {
   it("does not complete fresh history after partial Relay EOSE and resumes repair later", async () => {
     const repo = new SyncedMessageRepository(database());
     let subscriptionIndex = 0;
+    let relayBAttempts = 0;
     const subscribeFake = (relays: string[], filters: any[]) => {
-      const index = subscriptionIndex++;
+      subscriptionIndex++;
       const handlers: Record<string, Array<(...args: any[]) => void>> = {};
       return {
         on(name: string, callback: (...args: any[]) => void) {
           (handlers[name] ||= []).push(callback);
-          if (name !== "eose" || filters.every(filter => filter.until === undefined)) return;
-          queueMicrotask(() => {
-            if (index === 1) {
+          if (filters.every(filter => filter.until === undefined)) return;
+          if (relays[0] === "wss://a" && name === "eose") queueMicrotask(() => {
               handlers.event?.forEach(handler => handler({ canonical: message("old-from-a", 1), id: "wrap-old", created_at: 1 }, "wss://a"));
               callback("wss://a");
-            } else {
-              callback("wss://a");
-              callback("wss://b");
-            }
           });
+          if (relays[0] === "wss://b" && name === "failure" && relayBAttempts++ === 0) {
+            queueMicrotask(() => callback("wss://b", "closed"));
+          } else if (relays[0] === "wss://b" && name === "eose" && relayBAttempts > 0) {
+            queueMicrotask(() => callback("wss://b"));
+          }
         },
         unsub() {},
       };

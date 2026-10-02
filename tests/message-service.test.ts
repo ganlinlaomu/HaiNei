@@ -5,7 +5,7 @@ import { finalizeEvent, getPublicKey, nip44, utils, type EventTemplate } from "n
 const { publishMock } = vi.hoisted(() => ({ publishMock: vi.fn() }));
 vi.mock("@/nostr/relays", () => ({ publish: publishMock }));
 
-import { buildMessageEvents, sendDirectMessage } from "@/nostr/messaging/service";
+import { buildMessageEvents, publishQueuedOutgoing, sendDirectMessage } from "@/nostr/messaging/service";
 import { db } from "@/db/dexie";
 
 const senderSecret = utils.hexToBytes("1".padStart(64, "0"));
@@ -53,6 +53,25 @@ describe("NIP-17 message publication", () => {
       relays: ["wss://one.test"],
       context
     })).rejects.toThrow("收件人副本未被任何 relay 接收");
+  });
+
+  it("retries only the gift-wrap copies that have never been acknowledged", async () => {
+    publishMock
+      .mockResolvedValueOnce([{ relay: "wss://one.test", ok: false, reason: "timeout", ts: 1 }])
+      .mockResolvedValueOnce([{ relay: "wss://one.test", ok: true, ts: 2 }]);
+
+    await expect(sendDirectMessage({
+      recipientPubkeys: [recipientPubkey],
+      content: "retry one copy",
+      relays: ["wss://one.test"],
+      context
+    })).rejects.toThrow();
+    const [queued] = await db.outgoingQueue.toArray();
+
+    publishMock.mockReset().mockResolvedValue([{ relay: "wss://one.test", ok: true, ts: 3 }]);
+    await expect(publishQueuedOutgoing(senderPubkey, queued.outgoingId)).resolves.toBeTruthy();
+    expect(publishMock).toHaveBeenCalledTimes(1);
+    expect(publishMock.mock.calls[0][1].tags[0][1]).toBe(recipientPubkey);
   });
 
   it("returns success when recipient and sender copies are acknowledged", async () => {

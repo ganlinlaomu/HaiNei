@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.18",
-  "releaseSummary": "修复新设备通知已读状态恢复",
+  "version": "0.1.19",
+  "releaseSummary": "增强私信补拉、失败重试与收藏同步可靠性",
   "private": true,
   "scripts": {
     "dev": "vite",

@@ -21,6 +21,7 @@ const fields: Record<string, string[]> = {
     "lastError",
   ],
   accountStateMirrors: ["data"],
+  replaceableEventOutbox: ["event", "lastError"],
   accountProfiles: ["nickname", "bio", "avatar"],
 };
 export function lockLocalVault(account: string) {
