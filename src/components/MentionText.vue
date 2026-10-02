@@ -29,11 +29,21 @@ const friends = useFriendsStore();
 const friendships = useFriendshipsStore();
 const profiles = useProfilesStore();
 
-const known = computed<KnownMention[]>(() => friends.getAcceptedList(friendships.isAccepted).map(friend => {
-  const profileName = profiles.getProfile(friend.pubkey)?.nickname?.trim();
-  const labels = [...new Set([friend.name?.trim(), profileName].filter((value): value is string => !!value))];
-  return { pubkey: friend.pubkey, labels };
-}).filter(item => item.labels.length > 0));
+const known = computed<KnownMention[]>(() => {
+  const peerMentions = friends.getAcceptedList(friendships.isAccepted).map(friend => {
+    const profileName = profiles.getProfile(friend.pubkey)?.nickname?.trim();
+    const fallback = `${friend.pubkey.slice(0, 8)}…`;
+    const labels = [...new Set([profileName, friend.name?.trim(), fallback].filter((value): value is string => !!value))];
+    return { pubkey: friend.pubkey, labels };
+  });
+  const account = keys.pkHex.toLowerCase();
+  if (!account) return peerMentions;
+  const ownName = profiles.getProfile(account)?.nickname?.trim();
+  return [
+    ...peerMentions,
+    { pubkey: account, labels: [...new Set([ownName, `${account.slice(0, 8)}…`].filter((value): value is string => !!value))] },
+  ];
+});
 
 const segments = computed(() => splitKnownMentions(props.text, known.value));
 
