@@ -49,6 +49,13 @@ import {
   supportsBiometricUnlock,
   unlockPrivateKeyWithBiometric
 } from "@/services/biometricUnlock";
+import {
+  hasDevicePrivateKey,
+  removeDevicePrivateKey,
+  storeDevicePrivateKey,
+  unlockDevicePrivateKey,
+} from "@/services/devicePrivateKey";
+import type { AccountCredentialMode } from "@/services/accountRegistry";
 
 let restoreSessionFlight: Promise<void> | null = null;
 
@@ -77,6 +84,7 @@ export const useKeyStore = defineStore("keys", {
     sessionGeneration: 0,
     loginTimestamp: 0 as number, // Unix timestamp when user logged in
     isEncrypted: false as boolean, // Whether the current login uses encrypted storage
+    credentialMode: "session" as AccountCredentialMode,
     isUnlocked: false as boolean, // Whether the encrypted key has been unlocked
     isRestoring: false as boolean, // Whether session restoration is in progress
     isRestored: false as boolean // Whether session restoration has completed
@@ -293,7 +301,7 @@ export const useKeyStore = defineStore("keys", {
 
     async clearPersistedSession() {
       await Promise.all(
-        ["skHex", "pkHex", "loginMethod", "loginTimestamp", "isEncrypted", "bunkerInput", "bunkerClientSecretKey"]
+        ["skHex", "pkHex", "loginMethod", "loginTimestamp", "isEncrypted", "credentialMode", "bunkerInput", "bunkerClientSecretKey"]
           .map(key => removeDeviceValue(key))
       );
     },
@@ -305,16 +313,19 @@ export const useKeyStore = defineStore("keys", {
         putDeviceValue("loginMethod", this.loginMethod),
         putDeviceValue("loginTimestamp", String(this.loginTimestamp)),
         putDeviceValue("isEncrypted", "true"),
+        putDeviceValue("credentialMode", this.credentialMode),
         removeDeviceValue("skHex"),
       ]);
     },
 
     async rememberCurrentAccount() {
       if (!this.pkHex || !this.loginMethod) return;
+      if (this.credentialMode === "session") return;
       this.accounts = await rememberDeviceAccount({
         pubkey: this.pkHex,
         authType: this.loginMethod,
         hasEncryptedKey: hasEncryptedKey(this.pkHex),
+        credentialMode: this.credentialMode,
         lastUsedAt: Date.now(),
       });
     },
@@ -327,6 +338,7 @@ export const useKeyStore = defineStore("keys", {
       this.loginMethod = "";
       this.loginTimestamp = 0;
       this.isEncrypted = false;
+      this.credentialMode = "session";
       this.isUnlocked = false;
       await this.clearPersistedSession();
     },
@@ -334,8 +346,12 @@ export const useKeyStore = defineStore("keys", {
     async selectRememberedAccount(pubkey: string) {
       const account = listDeviceAccounts().find(item => item.pubkey === pubkey.toLowerCase());
       if (!account) throw new Error("未找到已记住的账号");
-      if (!account.hasEncryptedKey || !hasEncryptedKey(account.pubkey)) {
-        throw new Error("该私钥账号未在本机加密保存，请重新输入私钥");
+      if (account.credentialMode === "device") {
+        if (!await hasDevicePrivateKey(account.pubkey)) throw new Error("本机登录凭据已丢失，请重新输入私钥");
+      } else if (account.credentialMode === "password") {
+        if (!hasEncryptedKey(account.pubkey)) throw new Error("本机登录凭据已丢失，请重新输入私钥");
+      } else if (account.credentialMode === "passkey") {
+        if (!hasBiometricUnlock(account.pubkey)) throw new Error("通行密钥凭据已丢失，请重新输入私钥");
       }
       if (this.pkHex) { await prepareAccountLock(this.pkHex); await flushDeviceWrites(); this.resetAccountStores(this.pkHex); }
       this.skHex = "";
@@ -344,7 +360,12 @@ export const useKeyStore = defineStore("keys", {
       this.loginTimestamp = Math.floor(Date.now() / 1000);
       this.isEncrypted = true;
       this.isUnlocked = false;
+      this.credentialMode = account.credentialMode;
       await this.persistActiveSession();
+      if (account.credentialMode === "device") {
+        await this.unlockWithDeviceCredential();
+        return "connected" as const;
+      }
       return "unlock" as const;
     },
 
@@ -360,11 +381,24 @@ export const useKeyStore = defineStore("keys", {
     async enableBiometricUnlock() {
       if (!this.pkHex || !this.skHex || !this.isUnlocked) throw new Error("请先解锁当前账号");
       await enrollBiometricUnlock(this.pkHex, this.skHex);
+      if (this.credentialMode === "device") {
+        await removeDevicePrivateKey(this.pkHex);
+        this.credentialMode = "passkey";
+        await this.persistActiveSession();
+        await this.rememberCurrentAccount();
+      }
     },
 
     async disableBiometricUnlock(pubkey?: string) {
       const target = pubkey || this.pkHex;
       if (!target) return;
+      if (target === this.pkHex && this.credentialMode === "passkey") {
+        if (!this.skHex || !this.isUnlocked) throw new Error("请先解锁当前账号");
+        await storeDevicePrivateKey(target, this.skHex);
+        this.credentialMode = "device";
+        await this.persistActiveSession();
+        await this.rememberCurrentAccount();
+      }
       await removeBiometricUnlock(target);
     },
 
@@ -376,6 +410,20 @@ export const useKeyStore = defineStore("keys", {
 
       this.skHex = skHex;
       this.isUnlocked = true;
+      this.loginTimestamp = Math.floor(Date.now() / 1000);
+      await this.persistActiveSession();
+      await this.rememberCurrentAccount();
+      await this.loadAccountStores(this.pkHex);
+    },
+
+    async unlockWithDeviceCredential() {
+      if (!this.pkHex) throw new Error("未找到公钥信息");
+      const skHex = await unlockDevicePrivateKey(this.pkHex);
+      if (await safeGetPublicKey(skHex) !== this.pkHex) throw new Error("本机登录凭据与当前账号不匹配");
+      this.skHex = skHex;
+      this.isEncrypted = true;
+      this.isUnlocked = true;
+      this.credentialMode = "device";
       this.loginTimestamp = Math.floor(Date.now() / 1000);
       await this.persistActiveSession();
       await this.rememberCurrentAccount();
@@ -394,6 +442,7 @@ export const useKeyStore = defineStore("keys", {
       await Promise.all([
         removeEncryptedKey(normalized),
         removeBiometricUnlock(normalized),
+        removeDevicePrivateKey(normalized),
       ]);
       this.accounts = await forgetDeviceAccount(normalized);
       if (this.pkHex === normalized) await this.clearActiveSession();
@@ -446,6 +495,7 @@ export const useKeyStore = defineStore("keys", {
       this.loginMethod = "private-key";
       this.loginTimestamp = Math.floor(Date.now() / 1000);
       this.isEncrypted = false;
+      this.credentialMode = "session";
       try {
         this.pkHex = await safeGetPublicKey(sk);
         this.isUnlocked = true;
@@ -467,7 +517,7 @@ export const useKeyStore = defineStore("keys", {
      * @param nsecOrHex - nsec1... string or 64-character hex private key
      * @param password - Optional password to encrypt the private key. If provided, key will be encrypted.
      */
-    async loginWithNsec(nsecOrHex: string, password?: string) {
+    async loginWithNsec(nsecOrHex: string, password?: string, keepOnDevice = true) {
       const previousPubkey = this.pkHex;
       try {
         let skHex: string;
@@ -500,22 +550,40 @@ export const useKeyStore = defineStore("keys", {
         if (password && password.trim()) {
           const encrypted = await encryptPrivateKey(skHex, password);
           await storeEncryptedKey(pk, encrypted);
+          await removeDevicePrivateKey(pk);
           if (previousPubkey) { await prepareAccountLock(previousPubkey); await flushDeviceWrites(); this.resetAccountStores(previousPubkey); }
           
           this.skHex = skHex;
           this.pkHex = pk;
           this.loginMethod = "private-key";
           this.isEncrypted = true;
+          this.credentialMode = "password";
           this.isUnlocked = true;
           this.loginTimestamp = Math.floor(Date.now() / 1000);
 
           await this.persistActiveSession();
           await this.rememberCurrentAccount();
-        } else {
-          // No password, use regular login
-          await this.loginWithSk(skHex);
-          this.isEncrypted = false;
+        } else if (keepOnDevice) {
+          await storeDevicePrivateKey(pk, skHex);
+          await Promise.all([removeEncryptedKey(pk), removeBiometricUnlock(pk)]);
+          if (previousPubkey) { await prepareAccountLock(previousPubkey); await flushDeviceWrites(); this.resetAccountStores(previousPubkey); }
+          this.skHex = skHex;
+          this.pkHex = pk;
+          this.loginMethod = "private-key";
+          this.isEncrypted = true;
           this.isUnlocked = true;
+          this.credentialMode = "device";
+          this.loginTimestamp = Math.floor(Date.now() / 1000);
+          await this.persistActiveSession();
+          await this.rememberCurrentAccount();
+        } else {
+          await Promise.all([
+            removeEncryptedKey(pk),
+            removeBiometricUnlock(pk),
+            removeDevicePrivateKey(pk),
+          ]);
+          this.accounts = await forgetDeviceAccount(pk);
+          await this.loginWithSk(skHex);
           return;
         }
 
@@ -527,6 +595,7 @@ export const useKeyStore = defineStore("keys", {
         this.loginMethod = "";
         this.loginTimestamp = 0;
         this.isEncrypted = false;
+        this.credentialMode = "session";
         this.isUnlocked = false;
         throw e;
       }
@@ -561,6 +630,7 @@ export const useKeyStore = defineStore("keys", {
 
         this.skHex = skHex;
         this.isUnlocked = true;
+        this.credentialMode = "password";
         this.loginTimestamp = Math.floor(Date.now() / 1000);
         await this.persistActiveSession();
         await this.rememberCurrentAccount();
@@ -590,6 +660,7 @@ export const useKeyStore = defineStore("keys", {
         const storedMethod = deviceStorage.getItem("loginMethod");
         const pk = deviceStorage.getItem("pkHex");
         const isEncrypted = deviceStorage.getItem("isEncrypted") === "true";
+        const storedCredentialMode = deviceStorage.getItem("credentialMode") as AccountCredentialMode | null;
 
         if (!storedMethod || !pk) {
           this.isRestored = true;
@@ -620,9 +691,19 @@ export const useKeyStore = defineStore("keys", {
         this.loginTimestamp = parseInt(deviceStorage.getItem("loginTimestamp") || "0", 10) || 0;
 
         if (isEncrypted) {
-          if (!hasEncryptedKey(this.pkHex)) throw new Error("未找到加密的私钥");
+          const credentialMode = storedCredentialMode || (hasEncryptedKey(this.pkHex) ? "password" : "session");
+          if (credentialMode === "device") {
+            this.credentialMode = "device";
+            await this.unlockWithDeviceCredential();
+            this.isRestored = true;
+            debugLog("account", "session_restore_success", { pubkeyPrefix: this.pkHex, loginMethod: method }, "info");
+            return;
+          }
+          if (credentialMode === "password" && !hasEncryptedKey(this.pkHex)) throw new Error("未找到加密的私钥");
+          if (credentialMode === "passkey" && !hasBiometricUnlock(this.pkHex)) throw new Error("未找到通行密钥凭据");
           this.isEncrypted = true;
           this.isUnlocked = false;
+          this.credentialMode = credentialMode;
           await this.persistActiveSession();
           await this.rememberCurrentAccount();
           this.isRestored = true;
@@ -633,6 +714,7 @@ export const useKeyStore = defineStore("keys", {
         if (!sk || await safeGetPublicKey(sk) !== this.pkHex) throw new Error("本地私钥与公钥不匹配");
         this.skHex = sk;
         this.isEncrypted = false;
+        this.credentialMode = "session";
         this.isUnlocked = true;
         await this.clearPersistedSession();
         await this.rememberCurrentAccount();

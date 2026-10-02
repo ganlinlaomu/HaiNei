@@ -8,13 +8,14 @@ import { listDeviceAccounts } from "@/services/accountRegistry";
 import { deviceStorage } from "@/services/deviceStorage";
 import { useKeyStore } from "@/stores/keys";
 import { hasEncryptedKey } from "@/utils/crypto";
+import { hasDevicePrivateKey, removeDevicePrivateKey } from "@/services/devicePrivateKey";
 
 const STALE_PUBKEY = "a".repeat(64);
 const PRIVATE_KEY = "01".padStart(64, "0");
 const PRIVATE_PUBKEY = getPublicKey(hexToBytes(PRIVATE_KEY));
 const SESSION_KEYS = [
   "hainei_device_accounts", "skHex", "pkHex", "loginMethod", "loginTimestamp",
-  "isEncrypted", "bunkerInput", "bunkerClientSecretKey",
+  "isEncrypted", "credentialMode", "bunkerInput", "bunkerClientSecretKey",
 ];
 
 class MemoryStorage implements Storage {
@@ -34,14 +35,15 @@ function createStore() {
   return store;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: new MemoryStorage() });
   for (const key of [...SESSION_KEYS, `encrypted_sk_${PRIVATE_PUBKEY}`]) deviceStorage.removeItem(key);
+  await removeDevicePrivateKey(PRIVATE_PUBKEY);
   setActivePinia(createPinia());
 });
 
 describe("private-key authentication", () => {
-  it("keeps a one-time private-key login in memory without persisting plaintext", async () => {
+  it("keeps a private-key login on this device by default without persisting plaintext", async () => {
     const store = createStore();
 
     await store.loginWithNsec(PRIVATE_KEY);
@@ -50,14 +52,30 @@ describe("private-key authentication", () => {
     expect(store.pkHex).toBe(PRIVATE_PUBKEY);
     expect(store.supportsNip44).toBe(true);
     expect(store.skHex).toBe(PRIVATE_KEY);
-    expect(store.isEncrypted).toBe(false);
+    expect(store.isEncrypted).toBe(true);
+    expect(store.credentialMode).toBe("device");
     expect(deviceStorage.getItem("skHex")).toBeNull();
-    expect(deviceStorage.getItem("pkHex")).toBeNull();
+    expect(deviceStorage.getItem("pkHex")).toBe(PRIVATE_PUBKEY);
+    expect(await hasDevicePrivateKey(PRIVATE_PUBKEY)).toBe(true);
     expect(listDeviceAccounts()[0]).toMatchObject({
       pubkey: PRIVATE_PUBKEY,
       authType: "private-key",
       hasEncryptedKey: false,
+      credentialMode: "device",
     });
+  });
+
+  it("retains an explicit one-time login only in memory and does not list it as remembered", async () => {
+    const store = createStore();
+
+    await store.loginWithNsec(PRIVATE_KEY, undefined, false);
+
+    expect(store.isEncrypted).toBe(false);
+    expect(store.credentialMode).toBe("session");
+    expect(deviceStorage.getItem("skHex")).toBeNull();
+    expect(deviceStorage.getItem("pkHex")).toBeNull();
+    expect(await hasDevicePrivateKey(PRIVATE_PUBKEY)).toBe(false);
+    expect(listDeviceAccounts()).toEqual([]);
   });
 
   it("stores an encrypted private key and unlocks it without nsec re-entry", async () => {
@@ -136,6 +154,21 @@ describe("session restoration", () => {
     expect(restored.skHex).toBe("");
     expect(restored.isEncrypted).toBe(true);
     expect(restored.isUnlocked).toBe(false);
+    expect(deviceStorage.getItem("skHex")).toBeNull();
+  });
+
+  it("restores a device-kept account without asking for the private key again", async () => {
+    const first = createStore();
+    await first.loginWithNsec(PRIVATE_KEY);
+
+    setActivePinia(createPinia());
+    const restored = createStore();
+    await restored.restoreSession();
+
+    expect(restored.pkHex).toBe(PRIVATE_PUBKEY);
+    expect(restored.skHex).toBe(PRIVATE_KEY);
+    expect(restored.credentialMode).toBe("device");
+    expect(restored.isUnlocked).toBe(true);
     expect(deviceStorage.getItem("skHex")).toBeNull();
   });
 

@@ -21,12 +21,15 @@
           <button class="btn btn-primary biometric-login-button" type="button" :disabled="loading" @click="doBiometricUnlock(false)">
             {{ loading ? `正在验证 ${biometricLabel}…` : `使用 ${biometricLabel} 登录` }}
           </button>
-          <button class="btn btn-text" type="button" :disabled="loading" @click="showPasswordFallback">
+          <button v-if="hasPasswordFallback" class="btn btn-text" type="button" :disabled="loading" @click="showPasswordFallback">
             使用本地密码
+          </button>
+          <button v-else class="btn btn-text" type="button" :disabled="loading" @click="switchAccount">
+            重新输入私钥
           </button>
         </template>
 
-        <template v-else>
+        <template v-else-if="hasPasswordFallback">
           <label class="field-label" for="unlock-password">本地保护密码</label>
           <input
             id="unlock-password"
@@ -50,6 +53,13 @@
           </button>
         </template>
 
+        <template v-else>
+          <p class="password-note">此账号由通行密钥保护。若无法验证，可重新输入私钥恢复。</p>
+          <button class="btn btn-primary biometric-login-button" type="button" :disabled="loading" @click="doBiometricUnlock(false)">
+            {{ loading ? `正在验证 ${biometricLabel}…` : `使用 ${biometricLabel} 登录` }}
+          </button>
+        </template>
+
         <button class="btn btn-text" type="button" :disabled="loading" @click="switchAccount">
           切换账号
         </button>
@@ -61,7 +71,7 @@
           <div v-for="account in ks.accounts" :key="account.pubkey" class="account-option">
             <button type="button" class="account-select" :disabled="loading" @click="selectAccount(account.pubkey)">
               <strong>{{ shortPubkey(account.pubkey) }}</strong>
-              <small>{{ account.hasEncryptedKey ? "私钥 · 已加密保存" : "私钥 · 需重新输入" }}</small>
+              <small>{{ accountCredentialLabel(account.credentialMode) }}</small>
             </button>
             <div class="account-device-actions">
               <button type="button" class="account-device-action" :disabled="loading" @click="removeAccount(account.pubkey)">忘记此账号</button>
@@ -87,15 +97,7 @@
               {{ copiedNsec ? "已复制" : "复制私钥" }}
             </button>
           </div>
-          <div class="password-fields">
-            <label class="field-label" for="registration-password">本地保护密码</label>
-            <input id="registration-password" v-model="registrationPassword" class="input" type="password"
-              autocomplete="new-password" placeholder="至少 8 位" :disabled="loading" />
-            <label class="field-label" for="registration-confirm-password">确认密码</label>
-            <input id="registration-confirm-password" v-model="registrationConfirmPassword" class="input" type="password"
-              autocomplete="new-password" placeholder="再次输入密码" :disabled="loading" />
-            <p class="password-note">私钥会先加密再保存到此设备。这个密码不会上传，也无法找回。</p>
-          </div>
+          <p class="password-note">确认后会在此设备保持登录，无需另设密码；以后可在设置中开启通行密钥保护。</p>
           <label class="registration-confirm">
             <input v-model="registrationConfirmed" type="checkbox" :disabled="loading" />
             <span>我已安全保存这份私钥</span>
@@ -124,12 +126,15 @@
           </div>
 
           <div class="encryption-section">
-            <button class="accordion-button" type="button" :aria-expanded="saveEncrypted" aria-controls="local-password-fields"
-              :disabled="loading" @click="saveEncrypted = !saveEncrypted">
-              <span class="disclosure" aria-hidden="true">{{ saveEncrypted ? "▾" : "▸" }}</span>在本机加密保存私钥
-            </button>
-            <p v-if="!saveEncrypted" class="password-note muted">当前为仅此次登录：私钥只保留在内存中，关闭或重启应用后需要重新输入。</p>
-            <div v-if="saveEncrypted" id="local-password-fields" class="password-fields">
+            <p class="device-login-title">在此设备保持登录</p>
+            <p class="password-note">默认安全保存在独立的设备凭据库，下次打开可直接进入，不需要另设密码。</p>
+            <details class="login-options">
+              <summary>其他登录保护方式</summary>
+              <label class="login-option"><input v-model="loginStorageMode" type="radio" value="device" /> 在此设备保持登录（推荐）</label>
+              <label class="login-option"><input v-model="loginStorageMode" type="radio" value="password" /> 使用本地保护密码</label>
+              <label class="login-option"><input v-model="loginStorageMode" type="radio" value="session" /> 仅此次登录</label>
+            </details>
+            <div v-if="loginStorageMode === 'password'" id="local-password-fields" class="password-fields">
               <label class="field-label" for="local-password">本地保护密码</label>
               <input id="local-password" v-model="nsecPassword" class="input" type="password" autocomplete="new-password" placeholder="至少 8 位" :disabled="loading" />
               <label class="field-label" for="confirm-password">确认密码</label>
@@ -137,9 +142,10 @@
               <p class="password-note">下次选择此账号后，只需输入这个密码解锁。</p>
               <p class="password-note muted">密码只用于本机加密，不会上传。</p>
             </div>
+            <p v-else-if="loginStorageMode === 'session'" class="password-note muted">私钥只保留在内存中，关闭或重启应用后需要重新输入。</p>
           </div>
           <button class="btn btn-primary login-button" type="submit" :disabled="loading">{{ loading ? "正在登录…" : "登录" }}</button>
-          <p class="privacy-note">{{ saveEncrypted ? "私钥加密后保存在此设备" : "私钥不会以明文写入本机存储" }}</p>
+          <p class="privacy-note">私钥不会以明文写入本机存储</p>
         </form>
       </section>
 
@@ -174,7 +180,7 @@ const errorMessage = ref("");
 const loginStatus = ref("");
 const nsecInput = ref("");
 const showPrivateKey = ref(false);
-const saveEncrypted = ref(false);
+const loginStorageMode = ref<"device" | "password" | "session">("device");
 const nsecPassword = ref("");
 const confirmPassword = ref("");
 const unlockPassword = ref("");
@@ -186,14 +192,13 @@ const showRegister = ref(false);
 const generatedNsec = ref("");
 const registrationConfirmed = ref(false);
 const copiedNsec = ref(false);
-const registrationPassword = ref("");
-const registrationConfirmPassword = ref("");
 
 const nsecInputEl = ref<HTMLInputElement | null>(null);
 const unlockPasswordEl = ref<HTMLInputElement | null>(null);
 
 const needsUnlock = computed(() => !!ks.pkHex && ks.isEncrypted && !ks.isUnlocked);
 const biometricEnabled = computed(() => !!ks.pkHex && ks.hasBiometricUnlock(ks.pkHex));
+const hasPasswordFallback = computed(() => ks.credentialMode === "password");
 const biometricLabel = computed(() => "通行密钥");
 const addingAccount = computed(() => route.query.mode === "add");
 const pageMode = computed<"restoring" | "unlock" | "login">(() => {
@@ -204,9 +209,13 @@ const pageMode = computed<"restoring" | "unlock" | "login">(() => {
 
 const registrationReady = computed(() =>
   registrationConfirmed.value
-  && registrationPassword.value.length >= 8
-  && registrationPassword.value === registrationConfirmPassword.value
 );
+
+function accountCredentialLabel(mode: "device" | "password" | "passkey" | "session") {
+  if (mode === "device") return "私钥 · 本机保持登录";
+  if (mode === "passkey") return "私钥 · 通行密钥保护";
+  return "私钥 · 本地密码保护";
+}
 
 const recognizedKeyType = computed(() => {
   const value = nsecInput.value.trim();
@@ -248,7 +257,7 @@ async function presentUnlockMethod() {
   }
 
   if (!biometricEnabled.value) {
-    passwordFallbackVisible.value = true;
+    passwordFallbackVisible.value = hasPasswordFallback.value;
     await nextTick();
     unlockPasswordEl.value?.focus();
   }
@@ -279,10 +288,8 @@ function clearSensitiveInputs() {
   generatedNsec.value = "";
   registrationConfirmed.value = false;
   copiedNsec.value = false;
-  registrationPassword.value = "";
-  registrationConfirmPassword.value = "";
   showPrivateKey.value = false;
-  saveEncrypted.value = false;
+  loginStorageMode.value = "device";
   showRegister.value = false;
 }
 
@@ -349,11 +356,11 @@ async function doLoginNsec() {
     errorMessage.value = "私钥格式不正确\n请输入 nsec1... 或 64 位十六进制私钥。";
     return;
   }
-  if (saveEncrypted.value && nsecPassword.value.length < 8) {
+  if (loginStorageMode.value === "password" && nsecPassword.value.length < 8) {
     errorMessage.value = "本地保护密码至少需要 8 位";
     return;
   }
-  if (saveEncrypted.value && nsecPassword.value !== confirmPassword.value) {
+  if (loginStorageMode.value === "password" && nsecPassword.value !== confirmPassword.value) {
     errorMessage.value = "两次输入的密码不一致";
     return;
   }
@@ -361,11 +368,17 @@ async function doLoginNsec() {
   loading.value = true;
   loginStatus.value = "正在登录…";
   try {
-    await ks.loginWithNsec(privateKey, saveEncrypted.value ? nsecPassword.value : undefined);
+    await ks.loginWithNsec(
+      privateKey,
+      loginStorageMode.value === "password" ? nsecPassword.value : undefined,
+      loginStorageMode.value !== "session",
+    );
     await finishLogin();
   } catch (error) {
     logLoginFailure("private-key", "login", error);
-    errorMessage.value = "登录失败，请重试。";
+    errorMessage.value = loginStorageMode.value === "device"
+      ? "无法安全保存本机登录凭据。可在“其他登录保护方式”中改用本地密码或仅此次登录。"
+      : "登录失败，请重试。";
   } finally {
     loading.value = false;
     loginStatus.value = "";
@@ -438,9 +451,11 @@ async function doBiometricUnlock(automatic = false) {
     if (!isBiometricCancellation(error)) {
       logLoginFailure("unlock", "biometric", error);
       errorMessage.value = error instanceof Error ? error.message : `${biometricLabel.value} 登录失败`;
-      passwordFallbackVisible.value = true;
-      await nextTick();
-      unlockPasswordEl.value?.focus();
+      passwordFallbackVisible.value = hasPasswordFallback.value;
+      if (hasPasswordFallback.value) {
+        await nextTick();
+        unlockPasswordEl.value?.focus();
+      }
     } else if (!automatic) {
       errorMessage.value = "";
     }
@@ -502,8 +517,6 @@ function startRegistration() {
   showRegister.value = true;
   registrationConfirmed.value = false;
   copiedNsec.value = false;
-  registrationPassword.value = "";
-  registrationConfirmPassword.value = "";
   generatedNsec.value = nip19.nsecEncode(generateSecretKey());
 }
 
@@ -521,26 +534,16 @@ function cancelRegistration() {
   generatedNsec.value = "";
   registrationConfirmed.value = false;
   copiedNsec.value = false;
-  registrationPassword.value = "";
-  registrationConfirmPassword.value = "";
   showRegister.value = false;
 }
 
 async function finishRegistration() {
   if (loading.value || !generatedNsec.value || !registrationConfirmed.value) return;
-  if (registrationPassword.value.length < 8) {
-    errorMessage.value = "本地保护密码至少需要 8 位";
-    return;
-  }
-  if (registrationPassword.value !== registrationConfirmPassword.value) {
-    errorMessage.value = "两次输入的密码不一致";
-    return;
-  }
   loading.value = true;
   errorMessage.value = "";
   loginStatus.value = "正在加密并创建账号…";
   try {
-    await ks.loginWithNsec(generatedNsec.value, registrationPassword.value);
+    await ks.loginWithNsec(generatedNsec.value);
     await finishLogin();
   } catch (error) {
     logLoginFailure("register", "create-account", error);
@@ -729,6 +732,32 @@ async function switchAccount() {
 
 .encryption-section {
   margin: 2px 0 18px;
+}
+
+.device-login-title {
+  margin: 0 0 5px;
+  color: #d8dee9;
+  font-size: .9rem;
+  font-weight: 650;
+}
+
+.login-options {
+  margin-top: 10px;
+  color: #9da8b8;
+  font-size: .82rem;
+}
+
+.login-options summary {
+  min-height: 40px;
+  cursor: pointer;
+}
+
+.login-option {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 9px;
+  color: #b8c1cf;
 }
 
 .accordion-button {
