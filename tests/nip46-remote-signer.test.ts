@@ -63,12 +63,12 @@ describe("NIP-46 remote signer beta contract", () => {
     expect(settings).toContain("@click=\"reconnectRemoteSigner\"");
   });
 
-  it("publishes the feature as version 0.1.24", () => {
+  it("publishes the feature as version 0.1.25", () => {
     const pkg = JSON.parse(source("package.json"));
     const changelog = source("CHANGELOG.md");
 
-    expect(pkg.version).toBe("0.1.24");
+    expect(pkg.version).toBe("0.1.25");
     expect(pkg.releaseSummary).toContain("NIP-46");
-    expect(changelog).toContain("## 0.1.24 — 2026-10-02");
+    expect(changelog).toContain("## 0.1.25 — 2026-10-02");
   });
 });
