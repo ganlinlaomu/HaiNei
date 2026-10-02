@@ -17,6 +17,12 @@ import { useProfilesStore } from "@/stores/profiles";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { onMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 import { pushEnabledForAccount, syncPushAuthorizationPolicy } from "@/services/pushNotifications";
+import {
+  cancelDmRelayDirectoryWork,
+  ensureOwnDmRelayList,
+  logDmRelayDirectoryFailure,
+  selectOwnDmRelays,
+} from "@/services/dmRelayDirectory";
 
 export type AccountSyncKeys = {
   pkHex: string;
@@ -132,9 +138,18 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
 
   try {
     let homeHandler: ReturnType<typeof createHomeMessageHandler>;
+    const legacyReadRelays = getRelaysFromStorage("read");
+    const dmRelays = selectOwnDmRelays(legacyReadRelays);
+    const messageRelays = [...new Set([...dmRelays, ...legacyReadRelays])];
+    // Publication is durable and deliberately does not block login. The same
+    // selected relays are already included in the legacy subscription, so the
+    // first migration adds no extra long-lived sockets.
+    if (keys.supportsNip44) {
+      void ensureOwnDmRelayList(account, assertCurrentSigner).catch(logDmRelayDirectoryFailure);
+    }
     await accountMessageSyncManager.start({
       accountPubkey: account,
-      relays: getRelaysFromStorage("read"),
+      relays: messageRelays,
       authors: [...new Set([...accepted, account])],
       decodeContext: {
         accountPubkey: account,
@@ -257,6 +272,7 @@ export function stopAccountMessageSync() {
   const account = activeKeys?.pkHex.toLowerCase() || accountSyncSnapshot.accountPubkey;
   accountSyncGeneration++;
   activeKeys = null;
+  if (account) cancelDmRelayDirectoryWork(account);
   accountMessageSyncManager.stop();
   setAccountMessageSyncStatus(account, "idle");
 }

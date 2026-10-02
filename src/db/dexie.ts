@@ -3,8 +3,8 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.19";
-export const DB_VERSION = 16;
+export const APP_VERSION = "0.1.20";
+export const DB_VERSION = 17;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -188,6 +188,13 @@ export type OutgoingRelayResult = {
   eventId: string;
   targetPubkey?: string;
 };
+export type OutgoingEventRoute = {
+  eventId: string;
+  targetPubkey: string;
+  relays: string[];
+  source: "nip17-10050" | "own-10050" | "legacy-fallback";
+  resolvedAt: number;
+};
 export type OutgoingQueueRecord = {
   accountPubkey: string;
   outgoingId: string;
@@ -195,6 +202,10 @@ export type OutgoingQueueRecord = {
   message: unknown;
   events: unknown[];
   relays: string[];
+  /** Per-gift-wrap route. Absent on v16 rows, which continue using `relays`. */
+  eventRoutes?: OutgoingEventRoute[];
+  /** New messages must finish discovery before any durable retry publishes. */
+  dmRelayRoutesPending?: boolean;
   relayResults?: OutgoingRelayResult[];
   // Separate from relay delivery so a suspended PWA can retry the push request.
   pushState?: "pending" | "accepted";
@@ -282,6 +293,19 @@ export type ReplaceableEventOutboxRecord = {
   lastError?: string;
   createdAt: number;
   updatedAt: number;
+};
+
+export type DmRelayDirectoryRecord = {
+  accountPubkey: string;
+  ownerPubkey: string;
+  relays: string[];
+  eventId?: string;
+  eventCreatedAt?: number;
+  fetchedAt: number;
+  expiresAt: number;
+  publishedAt?: number;
+  source: "own" | "nip17" | "negative";
+  sourceRelays?: string[];
 };
 
 const ACCOUNT_SCOPED_KEY_PATTERNS = [
@@ -377,6 +401,7 @@ export class HaiNeiDatabase extends Dexie {
   deviceKeyValues!: Table<DeviceKeyValueRecord, string>;
   accountStateMirrors!: Table<AccountStateMirrorRecord, [string, AccountStateNamespace]>;
   replaceableEventOutbox!: Table<ReplaceableEventOutboxRecord, [string, string]>;
+  dmRelayDirectory!: Table<DmRelayDirectoryRecord, [string, string]>;
 
   constructor(name = DATABASE_NAME, requireVault = import.meta.env.MODE !== "test") {
     super(name);
@@ -634,6 +659,10 @@ export class HaiNeiDatabase extends Dexie {
 
     this.version(16).stores({
       replaceableEventOutbox: "[accountPubkey+key], accountPubkey, [accountPubkey+nextAttemptAt]"
+    });
+
+    this.version(17).stores({
+      dmRelayDirectory: "[accountPubkey+ownerPubkey], accountPubkey, [accountPubkey+expiresAt]"
     });
 
   }

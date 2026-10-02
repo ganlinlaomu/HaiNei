@@ -16,6 +16,24 @@
         </summary>
         <p class="section-detail">HaiNei System Relay 固定保持读取/写入，确保用户之间至少有共同投递点；自定义 Relay 作为额外冗余。</p>
 
+        <article class="item-card dm-relay-card">
+          <div class="item-header">
+            <div class="item-main">
+              <div class="item-url">私信 Relay / kind 10050</div>
+              <div class="meta-row">
+                <span class="pill">NIP-17</span>
+                <span class="pill" :class="dmRelayStatusTone">{{ dmRelayStatusLabel }}</span>
+                <span class="pill">最多 2 个接收点</span>
+              </div>
+            </div>
+          </div>
+          <p class="dm-relay-copy">自动从现有读取 Relay 中选择接收点，并将 kind 10050 发布到公共目录。发信时优先使用对方列表；未找到时兼容传统 Relay。公共目录仅用于列表发现，不传送私信；不会为每位联系人保持额外长连接。</p>
+          <div class="dm-relay-list">
+            <span v-for="relay in dmRelayStatus.relays" :key="relay">{{ relay }}</span>
+            <span v-if="!dmRelayStatus.relays.length">等待可用的安全 Relay</span>
+          </div>
+        </article>
+
         <form class="add-form" @submit.prevent="addRelay">
           <input
             v-model="newRelay"
@@ -354,6 +372,7 @@ import {
   getCurrentAndroidVersion,
   isNativeAndroidApp,
 } from "@/services/androidUpdater";
+import { getOwnDmRelayStatus } from "@/services/dmRelayDirectory";
 
 const keyStore = useKeyStore();
 const friendships = useFriendshipsStore();
@@ -418,6 +437,26 @@ const diagnostics = reactive({
   lastCatchupCompletedAt: 0,
   pendingOutgoing: 0,
 });
+const dmRelayStatus = reactive<{
+  relays: string[];
+  eventId?: string;
+  publishedAt?: number;
+  pending: boolean;
+  attempts: number;
+  lastError?: string;
+}>({ relays: [], pending: false, attempts: 0 });
+const dmRelayStatusLabel = computed(() =>
+  dmRelayStatus.pending
+    ? "等待发布重试"
+    : dmRelayStatus.publishedAt
+      ? "已发布"
+      : "自动配置中"
+);
+const dmRelayStatusTone = computed(() => ({
+  healthy: !!dmRelayStatus.publishedAt && !dmRelayStatus.pending,
+  pending: dmRelayStatus.pending || !dmRelayStatus.publishedAt,
+  failed: !!dmRelayStatus.lastError && dmRelayStatus.pending,
+}));
 function syncStatusText(status: string) {
   if (status === "idle") return "Idle";
   if (status === "connecting") return "连接中";
@@ -504,17 +543,20 @@ async function refreshDiagnostics() {
   const account = keyStore.pkHex;
   if (!account) {
     Object.assign(diagnostics, { syncStatus: "idle", lastCatchupCompletedAt: 0, pendingOutgoing: 0 });
+    Object.assign(dmRelayStatus, { relays: [], eventId: undefined, publishedAt: undefined, pending: false, attempts: 0, lastError: undefined });
     return;
   }
   try {
-    const [syncState, pending] = await Promise.all([
+    const [syncState, pending, ownDmRelays] = await Promise.all([
       syncedMessageRepository.getSyncState(account),
       outgoingQueueRepository.listRetryable(account, true),
+      getOwnDmRelayStatus(account).catch(() => null),
     ]);
     if (keyStore.pkHex !== account) return;
     diagnostics.syncStatus = syncState.status || "idle";
     diagnostics.lastCatchupCompletedAt = syncState.lastCatchupCompletedAt || 0;
     diagnostics.pendingOutgoing = pending.length;
+    if (ownDmRelays) Object.assign(dmRelayStatus, ownDmRelays);
   } catch {
     if (keyStore.pkHex === account) diagnostics.syncStatus = "error";
   }
@@ -819,6 +861,7 @@ async function retryFailedQueue() {
 watch(() => keyStore.pkHex, async pk => {
   cacheRequestId += 1;
   cacheRefresh = null;
+  Object.assign(dmRelayStatus, { relays: [], eventId: undefined, publishedAt: undefined, pending: false, attempts: 0, lastError: undefined });
   cancelScheduledCacheRefresh?.();
   cancelScheduledCacheRefresh = null;
   loadingCache.value = false;
@@ -1089,6 +1132,10 @@ h3 {
   border-radius: 12px;
   background: #f8fafc;
 }
+
+.dm-relay-card { margin-bottom: 14px; }
+.dm-relay-copy { margin: 10px 0 8px; color: #64748b; font-size: .75rem; line-height: 1.5; }
+.dm-relay-list { display: grid; gap: 4px; color: #475569; font: .7rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 
 .item-header,
 .control-row,

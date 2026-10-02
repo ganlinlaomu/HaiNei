@@ -23,6 +23,13 @@ describe("System Settings status UX", () => {
     expect(source).toContain("void refreshDiagnostics()");
   });
 
+  it("shows automatic NIP-17 DM relay publication without per-contact connections", () => {
+    expect(source).toContain("私信 Relay / kind 10050");
+    expect(source).toContain("getOwnDmRelayStatus(account)");
+    expect(source).toContain("未找到时兼容传统 Relay");
+    expect(source).toContain("不会为每位联系人保持额外长连接");
+  });
+
   it("does not present browser Web Push controls inside the Capacitor Android shell", () => {
     expect(source).toContain('Capacitor?: { isNativePlatform?: () => boolean }');
     expect(source).toContain('后台推送 / {{ isNativeApp ? "Android Push" : "Web Push" }}');

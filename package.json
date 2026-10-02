@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.19",
-  "releaseSummary": "增强私信补拉、失败重试与收藏同步可靠性",
+  "version": "0.1.20",
+  "releaseSummary": "新增 kind 10050 私信 Relay 自动发现与传统 Relay 兼容回退",
   "private": true,
   "scripts": {
     "dev": "vite",
