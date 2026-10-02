@@ -94,8 +94,10 @@ async function withStore<T>(
 }
 
 async function readRecord(accountPubkey: string) {
-  return withStore("readonly", store => store.get(accountPubkey.toLowerCase()))
-    as Promise<RemoteSignerCredentialRecord | undefined>;
+  return withStore(
+    "readonly",
+    store => store.get(accountPubkey.toLowerCase()),
+  ) as Promise<RemoteSignerCredentialRecord | undefined>;
 }
 
 function serializeCredential(input: RemoteSignerCredential) {
