@@ -782,7 +782,6 @@ export default defineComponent({
 
     function onClose() {
       ui.closePostEditor();
-      closeMention();
     }
 
     function clearPersistentDraft(account: string) {
@@ -902,6 +901,7 @@ export default defineComponent({
         // Don't auto-focus textarea to avoid mobile keyboard popup
         // Users can manually click the textarea when ready to type
       } else {
+        closeMention();
         // The editor may also be closed by bottom navigation or another
         // programmatic route change, so cleanup cannot live only in onClose().
         persistDraft();
