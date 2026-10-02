@@ -1,10 +1,10 @@
 <template>
   <Teleport to="body">
     <Transition name="new-conversation">
-      <div v-if="visible" class="sheet-backdrop" role="presentation" @click.self="emit('close')">
+      <div v-if="visible" class="sheet-backdrop" role="presentation" @click.self="closeSheet">
         <section ref="dialog" tabindex="-1" class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="new-conversation-title">
           <header class="sheet-header">
-            <button type="button" class="close-button" aria-label="关闭" @click="emit('close')">
+            <button type="button" class="close-button" aria-label="关闭" @click="closeSheet">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
             </button>
             <h2 id="new-conversation-title">新私信</h2>
@@ -70,7 +70,12 @@ const friendships = useFriendshipsStore();
 const profiles = useProfilesStore();
 const ui = useUIStore();
 const dialog = ref<HTMLElement | null>(null);
-useDialogFocus(dialog, () => props.visible, () => emit("close"));
+function closeSheet() {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && dialog.value?.contains(active)) active.blur();
+  emit("close");
+}
+useDialogFocus(dialog, () => props.visible, closeSheet);
 const query = ref("");
 const loading = ref(false);
 const loadError = ref("");
@@ -126,7 +131,7 @@ function selectFriend(pubkey: string) {
     void load();
     return;
   }
-  emit("close");
+  closeSheet();
   emit("select", pubkey);
 }
 
@@ -145,7 +150,7 @@ watch(() => props.visible, visible => {
 .sheet-backdrop{position:fixed;inset:0;z-index:120000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.36)}
 .sheet-panel{display:flex;width:100%;max-height:min(72dvh,620px);padding-bottom:env(safe-area-inset-bottom);flex-direction:column;border-radius:20px 20px 0 0;background:#fff;box-shadow:0 -12px 36px rgba(15,23,42,.16);overflow:hidden}
 .sheet-header{display:grid;grid-template-columns:44px minmax(0,1fr) 44px;align-items:center;min-height:56px;padding:0 10px;border-bottom:1px solid #eff1f3}.sheet-header h2{margin:0;text-align:center;font-size:18px}.close-button{display:grid;width:40px;height:40px;padding:9px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.close-button svg,.friend-search svg,.row-arrow{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.close-button svg{width:22px;height:22px}
-.friend-search{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:9px;margin:12px 16px;padding:0 13px;border-radius:999px;background:#eff3f4;color:#536471}.friend-search svg{width:19px;height:19px}.friend-search input{width:100%;height:42px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:15px}.friend-search input::placeholder{color:#536471}
+.friend-search{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:9px;margin:12px 16px;padding:0 13px;border-radius:999px;background:#eff3f4;color:#536471}.friend-search svg{width:19px;height:19px}.friend-search input{width:100%;height:42px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}.friend-search input::placeholder{color:#536471}
 .friend-list{min-height:120px;overflow-y:auto}.sheet-state{display:flex;min-height:180px;align-items:center;justify-content:center;flex-direction:column;gap:10px;padding:28px 20px;color:#536471;font-size:14px;text-align:center}.loading-spinner{width:22px;height:22px;border:2px solid #d7dde3;border-top-color:#1687e8;border-radius:50%;animation:sheet-spin .8s linear infinite}.error-state strong{color:#0f1419;font-size:15px}.error-state>span{max-width:320px;line-height:1.5}.error-state button{min-height:38px;margin-top:4px;padding:0 16px;border:0;border-radius:999px;background:#0f1419;color:#fff;font-weight:650}.friend-row{display:grid;grid-template-columns:44px minmax(0,1fr) 20px;align-items:center;gap:12px;width:100%;min-height:66px;padding:10px 16px;border:0;border-bottom:1px solid #eff1f3;background:#fff;color:#0f1419;text-align:left}.friend-row:active{background:#f7f9f9}.friend-copy{display:flex;min-width:0;flex-direction:column;gap:3px}.friend-copy strong,.friend-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.friend-copy strong{font-size:15px}.friend-copy small{color:#536471;font-size:12px}.row-arrow{width:18px;height:18px;color:#8b98a5}.empty-friends{padding:36px 20px 48px;color:#536471;font-size:14px;text-align:center}
 @keyframes sheet-spin{to{transform:rotate(360deg)}}
 .new-conversation-enter-active,.new-conversation-leave-active{transition:opacity 160ms ease}.new-conversation-enter-active .sheet-panel,.new-conversation-leave-active .sheet-panel{transition:transform 160ms ease}.new-conversation-enter-from,.new-conversation-leave-to{opacity:0}.new-conversation-enter-from .sheet-panel,.new-conversation-leave-to .sheet-panel{transform:translateY(18px)}
