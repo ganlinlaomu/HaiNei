@@ -229,8 +229,8 @@
               :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'"
               :disabled="!accepted || !keys.pkHex"
               @input="onMentionInput"
-              @focus="handleComposerFocus(); onMentionFocus()"
-              @blur="handleComposerBlur(); onMentionBlur()"
+              @focus="handleComposerFocus"
+              @blur="handleComposerBlur"
               @click="onMentionClick"
               @keydown="onMentionKeydown"
             />
@@ -893,6 +893,7 @@ function scrollToBottom() {
   void nextTick(setMessageListToBottom);
 }
 function handleComposerFocus() {
+  onMentionFocus();
   composerFocused = true;
   scrollToBottom();
 
@@ -907,6 +908,7 @@ function handleComposerFocus() {
   }, 320);
 }
 function handleComposerBlur() {
+  onMentionBlur();
   composerFocused = false;
   if (composerFocusSettleTimer !== null) window.clearTimeout(composerFocusSettleTimer);
   composerFocusSettleTimer = null;
