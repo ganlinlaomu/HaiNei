@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.23",
-  "releaseSummary": "新增可选 NIP-46 远程签名器 Beta，不影响现有私钥登录",
+  "version": "0.1.24",
+  "releaseSummary": "修复 iOS PWA 的 NIP-46 易断线：前台恢复预热并自动重连、单次重试签名与 NIP-44",
   "private": true,
   "scripts": {
     "dev": "vite",

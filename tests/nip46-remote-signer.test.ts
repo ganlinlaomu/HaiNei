@@ -23,10 +23,10 @@ describe("NIP-46 remote signer beta contract", () => {
     const keys = source("src/stores/keys.ts");
 
     expect(keys).toContain('loginMethod: "" as "private-key" | "nip46" | ""');
-    expect(keys).toContain('return this.loginMethod === "nip46" && this.remoteSignerConnected');
-    expect(keys).toContain("return await remoteNip44Encrypt(this.pkHex");
-    expect(keys).toContain("return await remoteNip44Decrypt(this.pkHex");
-    expect(keys).toContain("const signed = await remoteSignEvent(this.pkHex, event)");
+    expect(keys).toContain('return this.loginMethod === "nip46" && this.isUnlocked');
+    expect(keys).toContain("return this.runRemoteSignerOperation(() => remoteNip44Encrypt(account");
+    expect(keys).toContain("return this.runRemoteSignerOperation(() => remoteNip44Decrypt(account");
+    expect(keys).toContain("const signed = await this.runRemoteSignerOperation(() => remoteSignEvent(account, event))");
     expect(keys).toContain("signed.id !== expectedId");
     expect(keys).toContain("!nostr.verifyEvent(signed)");
   });
@@ -43,25 +43,32 @@ describe("NIP-46 remote signer beta contract", () => {
     expect(runtime).toContain("secret: credential.bunkerSecret");
   });
 
-  it("bounds remote requests and keeps offline sessions cache-only", () => {
+  it("bounds remote requests and automatically recovers signer sessions", () => {
     const runtime = source("src/services/nip46RemoteSigner.ts");
-    const sync = source("src/services/accountMessageSync.ts");
+    const keys = source("src/stores/keys.ts");
+    const app = source("src/App.vue");
     const settings = source("src/views/SystemSettings.vue");
 
     expect(runtime).toContain("const MAX_ACTIVE_OPERATIONS = 2");
     expect(runtime).toContain("const MAX_WAITING_OPERATIONS = 16");
     expect(runtime).toContain("const OPERATION_TIMEOUT_MS = 60_000");
-    expect(sync).toContain("if (!account || !keys.isLoggedIn || !keys.supportsNip44) return false");
-    expect(settings).toContain("当前离线 · 可浏览本机缓存，签名与加密操作暂停");
+    expect(keys).toContain("async ensureRemoteSignerConnected");
+    expect(keys).toContain("async runRemoteSignerOperation<T>");
+    expect(keys).toContain("await this.ensureRemoteSignerConnected({ force: true, bypassCooldown: true })");
+    expect(keys).toContain("return this.ensureRemoteSignerConnected({ force: true, bypassCooldown: true });");
+    expect(keys).not.toContain("await this.loadAccountStores(account, credential.clientSecretHex);");
+    expect(app).toContain("prewarmRemoteSignerOnForeground");
+    expect(app).toContain("keys.prewarmRemoteSigner()");
+    expect(settings).toContain("发送时会自动重连");
     expect(settings).toContain("@click=\"reconnectRemoteSigner\"");
   });
 
-  it("publishes the feature as version 0.1.23", () => {
+  it("publishes the feature as version 0.1.24", () => {
     const pkg = JSON.parse(source("package.json"));
     const changelog = source("CHANGELOG.md");
 
-    expect(pkg.version).toBe("0.1.23");
+    expect(pkg.version).toBe("0.1.24");
     expect(pkg.releaseSummary).toContain("NIP-46");
-    expect(changelog).toContain("## 0.1.23 — 2026-10-02");
+    expect(changelog).toContain("## 0.1.24 — 2026-10-02");
   });
 });
