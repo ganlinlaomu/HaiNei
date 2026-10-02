@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.25",
-  "releaseSummary": "修复切换账号时通行密钥重复验证，并在切换成功后返回首页",
+  "version": "0.1.26",
+  "releaseSummary": "新增 Google 账号恢复：Drive appData 加密备份、恢复 PIN 与现有 Nostr 私钥登录衔接",
   "private": true,
   "scripts": {
     "dev": "vite",
