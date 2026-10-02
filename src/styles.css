@@ -150,6 +150,21 @@ textarea {
   touch-action: manipulation;
 }
 
+/* iOS Safari/PWA auto-zooms focused form controls below 16px. Keep text-entry controls readable without disabling user zoom. */
+@media (max-width: 767px) {
+  input[type="text"],
+  input[type="search"],
+  input[type="email"],
+  input[type="password"],
+  input[type="url"],
+  input[type="tel"],
+  input[type="number"],
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
 /* 列表 */
 .list {
   display: flex;
