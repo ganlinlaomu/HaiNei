@@ -1,5 +1,9 @@
 # HaiNei 更新记录
 
+## 0.1.29 — 2026-10-02
+
+- 新增无需登录即可访问的公开 `about`、`privacy`、`terms` 页面，说明 HaiNei、Google Drive `appDataFolder` 加密恢复的数据用途与限制，并在登录页加入公开政策入口，供 Google OAuth Branding / Production 使用。
+
 ## 0.1.28 — 2026-10-02
 
 - 修复 Google Identity Services 被 Pages CSP 的 `script-src 'self'` 阻止而无法加载的问题；按 Google 官方要求放行 GIS 脚本/样式来源，并在 GIS 加载失败时移除失效脚本节点，允许同一页面重试。
