@@ -422,6 +422,7 @@ export const useKeyStore = defineStore("keys", {
     },
 
     async enableBiometricUnlock() {
+      if (this.loginMethod !== "private-key") throw new Error("远程签名器账号不使用本机私钥登录保护");
       if (!this.pkHex || !this.skHex || !this.isUnlocked) throw new Error("请先解锁当前账号");
       await enrollBiometricUnlock(this.pkHex, this.skHex);
       if (this.credentialMode === "device") {
@@ -826,7 +827,7 @@ export const useKeyStore = defineStore("keys", {
           return;
         }
 
-        if (storedMethod === "nip07" || storedMethod === "nip46") {
+        if (storedMethod === "nip07") {
           debugLog("account", "session_restore_failed", {
             pubkeyPrefix: pk,
             loginMethod: storedMethod,
@@ -834,6 +835,44 @@ export const useKeyStore = defineStore("keys", {
           }, "warn");
           await this.clearActiveSession();
           this.isRestored = true;
+          return;
+        }
+
+        if (storedMethod === "nip46") {
+          if (!nip46FeatureEnabled() || !await hasRemoteSignerCredential(pk)) {
+            debugLog("account", "session_restore_failed", {
+              pubkeyPrefix: pk,
+              loginMethod: storedMethod,
+              reason: nip46FeatureEnabled() ? "missing_remote_signer_credential" : "remote_signer_disabled"
+            }, "warn");
+            await this.clearActiveSession();
+            this.isRestored = true;
+            return;
+          }
+          const credential = await unlockRemoteSignerCredential(pk);
+          this.skHex = "";
+          this.pkHex = pk.toLowerCase();
+          this.loginMethod = "nip46";
+          this.remoteSignerConnected = false;
+          this.loginTimestamp = parseInt(deviceStorage.getItem("loginTimestamp") || "0", 10) || 0;
+          this.isEncrypted = true;
+          this.credentialMode = "device";
+          this.isUnlocked = true;
+          await this.persistActiveSession();
+          await this.rememberCurrentAccount();
+          await this.loadAccountStores(this.pkHex, credential.clientSecretHex);
+          this.isRestored = true;
+          debugLog("account", "session_restore_success", {
+            pubkeyPrefix: this.pkHex,
+            loginMethod: this.loginMethod,
+            remoteSignerConnected: false
+          }, "info");
+          void this.reconnectRemoteSigner().catch(error => {
+            debugLog("account", "remote_signer_reconnect_unavailable", {
+              pubkeyPrefix: this.pkHex,
+              reason: error instanceof Error ? error.name : "unknown"
+            }, "warn");
+          });
           return;
         }
 
