@@ -287,7 +287,7 @@
             <div v-if="keyStore.loginMethod === 'nip46'" class="account-setting-row biometric-row">
               <div class="privacy-copy">
                 <strong>远程签名器（Beta）</strong>
-                <span class="small">{{ keyStore.remoteSignerConnected ? "已连接 · 发帖、评论、私信与加密操作由远程签名器授权" : "当前离线 · 可浏览本机缓存，签名与加密操作暂停" }}</span>
+                <span class="small">{{ keyStore.remoteSignerConnected ? "已连接 · 发帖、评论、私信与加密操作由远程签名器授权" : "当前未连接 · 发送时会自动重连，本机缓存仍可浏览" }}</span>
               </div>
               <button
                 class="account-inline-action"
