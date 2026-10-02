@@ -205,7 +205,7 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { usePostsStore } from "@/stores/posts";
 import { useMessagesStore } from "@/stores/messages";
 import { useUIStore } from "@/stores/ui";
-import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
+import { useProfilesStore } from "@/stores/profiles";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import type { MentionCandidate } from "@/utils/mentions";
