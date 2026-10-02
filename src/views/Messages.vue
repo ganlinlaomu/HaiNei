@@ -367,7 +367,7 @@ const mentionCandidates = computed<MentionCandidate[]>(() => {
   return friends.getAcceptedList(friendships.isAccepted)
     .map(friend => {
       const profileName = profiles.getProfile(friend.pubkey)?.nickname?.trim();
-      const label = privateProfileDisplayName(profileName, friend.pubkey, friend.name);
+      const label = profileName || friend.name?.trim() || `${friend.pubkey.slice(0, 8)}…`;
       return {
         pubkey: friend.pubkey,
         label,
