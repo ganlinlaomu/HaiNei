@@ -1,6 +1,6 @@
 <template>
   <button
-    v-if="phase === 'idle' && clientId"
+    v-if="phase === 'idle' && googleWebSupported"
     class="google-login-button"
     type="button"
     :disabled="busy"
@@ -144,6 +144,10 @@ const emit = defineEmits<{
 }>();
 
 const phase = ref<Phase>("idle");
+const nativeContainer = (window as Window & {
+  Capacitor?: { isNativePlatform?: () => boolean };
+}).Capacitor?.isNativePlatform?.() === true;
+const googleWebSupported = computed(() => !!props.clientId && !nativeContainer);
 const busy = computed(() => phase.value === "signing-in" || phase.value === "checking" || phase.value === "working");
 const pin = ref("");
 const setupPin = ref("");
@@ -162,7 +166,7 @@ const workingLabel = computed(() => {
 });
 
 onMounted(() => {
-  if (props.clientId) void preloadGoogleIdentityServices();
+  if (googleWebSupported.value) void preloadGoogleIdentityServices();
 });
 
 function bytesToHex(bytes: Uint8Array) {
@@ -184,7 +188,7 @@ function shortNpub(npub: string) {
 }
 
 async function beginGoogle() {
-  if (!props.clientId || busy.value) return;
+  if (!googleWebSupported.value || busy.value) return;
   errorMessage.value = "";
   phase.value = "signing-in";
   try {
