@@ -23,15 +23,28 @@
         </header>
 
         <main ref="editorBody" class="editor-body">
-          <textarea
-            v-model="content"
-            ref="textarea"
-            class="editor-textarea"
-            placeholder="分享此刻…"
-            rows="8"
-            :disabled="!!pendingPostRetry"
-            @paste="onPaste"
-          ></textarea>
+          <div class="editor-textarea-wrap">
+            <textarea
+              v-model="content"
+              ref="textarea"
+              class="editor-textarea"
+              placeholder="分享此刻…"
+              rows="8"
+              :disabled="!!pendingPostRetry"
+              @paste="onPaste"
+              @input="onMentionInput"
+              @focus="onMentionFocus"
+              @blur="onMentionBlur"
+              @click="onMentionClick"
+              @keydown="onMentionKeydown"
+            ></textarea>
+            <MentionSuggestions
+              v-if="mentionOpen"
+              :items="mentionMatches"
+              :active-index="mentionActiveIndex"
+              @select="selectMention"
+            />
+          </div>
 
           <!-- 图片/视频上传区域 -->
           <div class="upload-panel">
@@ -182,6 +195,7 @@
 
 <script lang="ts">
 import { useDialogFocus } from "@/composables/useDialogFocus";
+import { useMentionComposer } from "@/composables/useMentionComposer";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { defineComponent, ref, onBeforeUnmount, watch, nextTick, computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -191,7 +205,10 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { usePostsStore } from "@/stores/posts";
 import { useMessagesStore } from "@/stores/messages";
 import { useUIStore } from "@/stores/ui";
+import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import PostImagePreview from "@/components/PostImagePreview.vue";
+import MentionSuggestions from "@/components/MentionSuggestions.vue";
+import type { MentionCandidate } from "@/utils/mentions";
 import { uploadImageToBlossomWithFallback, getBlossomConfig } from "@/utils/blossom";
 import { resizeImageFile } from "@/utils/imageResize";
 import { compressImageToTargetSize } from "@/utils/imageCompression";
@@ -242,7 +259,7 @@ const VIDEO_METADATA_SUFFIX = ']';
 
 export default defineComponent({
   name: "PostEditorModal",
-  components: { PostImagePreview },
+  components: { PostImagePreview, MentionSuggestions },
   setup() {
     const router = useRouter();
     const route = useRoute();
@@ -252,6 +269,7 @@ export default defineComponent({
     const posts = usePostsStore();
     const msgs = useMessagesStore();
     const ui = useUIStore();
+    const profiles = useProfilesStore();
 
     const visible = computed(() => ui.showPostEditor);
     const content = ref("");
@@ -317,6 +335,33 @@ export default defineComponent({
       selectedGroups.value
     ));
     const recipientsCount = computed(() => recipients.value.length);
+    const mentionCandidates = computed<MentionCandidate[]>(() => {
+      const allowed = new Set(recipients.value.map(pubkey => pubkey.toLowerCase()));
+      return acceptedFriends.value
+        .filter(friend => allowed.has(friend.pubkey.toLowerCase()))
+        .map(friend => {
+          const profileName = profiles.getProfile(friend.pubkey)?.nickname?.trim();
+          const label = privateProfileDisplayName(profileName, friend.pubkey, friend.name);
+          return {
+            pubkey: friend.pubkey,
+            label,
+            secondary: profileName && profileName !== label ? profileName : undefined,
+            searchText: [friend.name || "", friend.note || "", profileName || ""].join(" "),
+          };
+        });
+    });
+    const {
+      mentionOpen,
+      mentionMatches,
+      mentionActiveIndex,
+      onMentionInput,
+      onMentionFocus,
+      onMentionClick,
+      onMentionBlur,
+      onMentionKeydown,
+      selectMention,
+      closeMention,
+    } = useMentionComposer(content, textarea, mentionCandidates);
 
     const visibilitySummary = computed(() => allFriends.value
       ? "全部好友"
@@ -327,11 +372,13 @@ export default defineComponent({
     }
 
     function toggleAll() {
+      closeMention();
       allFriends.value = !allFriends.value;
       selectedGroups.value = [];
     }
 
     function toggleGroup(g: string) {
+      closeMention();
       if (allFriends.value) {
         allFriends.value = false;
         selectedGroups.value = [g];
@@ -734,6 +781,7 @@ export default defineComponent({
     }
 
     function onClose() {
+      closeMention();
       ui.closePostEditor();
     }
 
@@ -1159,6 +1207,7 @@ export default defineComponent({
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
+.editor-textarea-wrap{position:relative}
 .editor-textarea {
   width: 100%;
   min-height: 140px;
