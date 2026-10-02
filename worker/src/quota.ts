@@ -3,8 +3,8 @@ import { HttpError, integerSetting, type Env } from "./types";
 export function quotaPolicy(env: Env) {
   return {
     maxFileSize: integerSetting(env.MAX_FILE_SIZE_BYTES, 25 * 1024 * 1024, 1, 1024 * 1024 * 1024),
-    dailyUploadCount: integerSetting(env.DAILY_UPLOAD_COUNT, 100, 1, 100000),
-    dailyUploadBytes: integerSetting(env.DAILY_UPLOAD_BYTES, 1024 * 1024 * 1024, 1, 1024 * 1024 * 1024 * 1024),
+    dailyUploadCount: integerSetting(env.DAILY_UPLOAD_COUNT, 500, 1, 100000),
+    dailyUploadBytes: integerSetting(env.DAILY_UPLOAD_BYTES, 5 * 1024 * 1024 * 1024, 1, 1024 * 1024 * 1024 * 1024),
   };
 }
 
