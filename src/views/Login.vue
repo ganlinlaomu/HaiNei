@@ -81,6 +81,12 @@
         </div>
 
         <p v-if="addingAccount" class="picker-title account-mode-title">添加其他账号</p>
+        <GoogleRecoveryPanel
+          v-if="googleRecoveryEnabled"
+          :client-id="googleClientId"
+          @complete="finishGoogleRecovery"
+        />
+        <div v-if="googleRecoveryEnabled" class="login-divider"><span>或</span></div>
         <button class="btn btn-primary" type="button" :disabled="loading" @click="openPrivateLogin">
           使用私钥登录
         </button>
@@ -193,9 +199,10 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { generateSecretKey, nip19 } from "nostr-tools";
 import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
+import GoogleRecoveryPanel from "@/components/GoogleRecoveryPanel.vue";
 import { logger } from "@/utils/logger";
 
-type LoginMethod = "private-key" | "nip46" | "unlock" | "switch" | "register";
+type LoginMethod = "private-key" | "nip46" | "unlock" | "switch" | "register" | "google";
 
 const ks = useKeyStore();
 const route = useRoute();
@@ -218,6 +225,8 @@ const showRemoteSigner = ref(false);
 const bunkerInput = ref("");
 const showRegister = ref(false);
 const nip46Enabled = import.meta.env.VITE_ENABLE_NIP46 === "true";
+const googleClientId = (import.meta.env.VITE_GOOGLE_WEB_CLIENT_ID || "").trim();
+const googleRecoveryEnabled = !!googleClientId;
 const generatedNsec = ref("");
 const registrationConfirmed = ref(false);
 const copiedNsec = ref(false);
@@ -375,6 +384,26 @@ async function pastePrivateKey() {
   } catch (error) {
     logLoginFailure("private-key", "clipboard-read", error);
     errorMessage.value = "无法自动读取剪贴板，请长按输入框粘贴私钥。";
+  }
+}
+
+async function finishGoogleRecovery(payload: { skHex: string; backupId: string; isNewAccount: boolean }) {
+  if (loading.value || !payload.skHex) return;
+  loading.value = true;
+  errorMessage.value = "";
+  loginStatus.value = payload.isNewAccount ? "正在创建海内账号…" : "正在恢复海内账号…";
+  try {
+    await ks.loginWithNsec(payload.skHex);
+    await finishLogin();
+  } catch (error) {
+    logLoginFailure("google", payload.isNewAccount ? "create-account" : "restore-account", error);
+    errorMessage.value = payload.isNewAccount
+      ? "Google 备份已创建，但本机账号初始化失败，请重新使用 Google 登录恢复。"
+      : "Google 账号恢复失败，请重试。";
+  } finally {
+    payload.skHex = "";
+    loading.value = false;
+    loginStatus.value = "";
   }
 }
 
@@ -697,6 +726,9 @@ async function switchAccount() {
   animation: slide-up 200ms ease-out;
 }
 .login-form { display: grid; gap: 12px; }
+.login-divider{display:flex;align-items:center;gap:10px;color:#5f6b7c;font-size:.72rem;text-align:center}
+.login-divider::before,.login-divider::after{content:"";height:1px;flex:1;background:#273142}
+.login-divider span{flex:0 0 auto}
 .account-picker { display: grid; gap: 8px; margin-bottom: 10px; }
 .picker-title { margin: 0 0 2px; color: #8d99aa; font-size: .78rem; }
 .account-mode-title{margin-top:2px;margin-bottom:0;text-align:center}
