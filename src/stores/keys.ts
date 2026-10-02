@@ -574,7 +574,14 @@ export const useKeyStore = defineStore("keys", {
         throw new Error("当前账号不是可用的远程签名器账号");
       }
       const account = this.pkHex.toLowerCase();
-      await this.ensureRemoteSignerConnected({ bypassCooldown: true });
+      try {
+        await this.ensureRemoteSignerConnected({ bypassCooldown: true });
+      } catch (error) {
+        if (isRemoteSignerConnectivityError(error)) {
+          throw new Error("远程签名器连接中断，请打开签名器后重试");
+        }
+        throw error;
+      }
 
       try {
         const result = await operation();
@@ -600,7 +607,10 @@ export const useKeyStore = defineStore("keys", {
           this.remoteSignerConnected = true;
           return result;
         } catch (retryError) {
-          if (isRemoteSignerConnectivityError(retryError)) this.remoteSignerConnected = false;
+          if (isRemoteSignerConnectivityError(retryError)) {
+            this.remoteSignerConnected = false;
+            throw new Error("远程签名器连接中断，请打开签名器后重试");
+          }
           throw retryError;
         }
       }
