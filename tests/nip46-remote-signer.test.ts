@@ -24,9 +24,9 @@ describe("NIP-46 remote signer beta contract", () => {
 
     expect(keys).toContain('loginMethod: "" as "private-key" | "nip46" | ""');
     expect(keys).toContain('return this.loginMethod === "nip46" && this.isUnlocked');
-    expect(keys).toContain("return await remoteNip44Encrypt(this.pkHex");
-    expect(keys).toContain("return await remoteNip44Decrypt(this.pkHex");
-    expect(keys).toContain("const signed = await remoteSignEvent(this.pkHex, event)");
+    expect(keys).toContain("return this.runRemoteSignerOperation(() => remoteNip44Encrypt(account");
+    expect(keys).toContain("return this.runRemoteSignerOperation(() => remoteNip44Decrypt(account");
+    expect(keys).toContain("const signed = await this.runRemoteSignerOperation(() => remoteSignEvent(account, event))");
     expect(keys).toContain("signed.id !== expectedId");
     expect(keys).toContain("!nostr.verifyEvent(signed)");
   });
