@@ -51,8 +51,8 @@ export async function consumeRateLimit(
 
 export async function enforceChallengeRateLimit(env: Env, request: Request, now = Math.floor(Date.now() / 1000)) {
   const source = await requestSourceFingerprint(request);
-  const perSource = integerSetting(env.AUTH_CHALLENGE_PER_MINUTE_PER_SOURCE, 30, 5, 600);
-  const global = integerSetting(env.AUTH_CHALLENGE_PER_MINUTE_GLOBAL, 600, 30, 10000);
+  const perSource = integerSetting(env.AUTH_CHALLENGE_PER_MINUTE_PER_SOURCE, 120, 5, 600);
+  const global = integerSetting(env.AUTH_CHALLENGE_PER_MINUTE_GLOBAL, 2400, 30, 10000);
   await consumeRateLimit(env, `challenge:source:${source}`, perSource, 60, now);
   await consumeRateLimit(env, "challenge:global", global, 60, now);
 }
