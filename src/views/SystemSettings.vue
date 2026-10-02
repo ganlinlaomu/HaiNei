@@ -284,7 +284,21 @@
         </summary>
         <div class="account-panel">
           <div class="account-control-card">
-            <div v-if="keyStore.isEncrypted" class="account-setting-row biometric-row">
+            <div v-if="keyStore.loginMethod === 'nip46'" class="account-setting-row biometric-row">
+              <div class="privacy-copy">
+                <strong>远程签名器（Beta）</strong>
+                <span class="small">{{ keyStore.remoteSignerConnected ? "已连接 · 发帖、评论、私信与加密操作由远程签名器授权" : "当前离线 · 可浏览本机缓存，签名与加密操作暂停" }}</span>
+              </div>
+              <button
+                class="account-inline-action"
+                type="button"
+                :disabled="remoteSignerBusy || keyStore.remoteSignerConnected"
+                @click="reconnectRemoteSigner"
+              >
+                {{ remoteSignerBusy ? "连接中…" : keyStore.remoteSignerConnected ? "已连接" : "重新连接" }}
+              </button>
+            </div>
+            <div v-if="keyStore.loginMethod === 'private-key' && keyStore.isEncrypted" class="account-setting-row biometric-row">
               <div class="privacy-copy">
                 <strong>{{ biometricLabel }} 登录保护</strong>
                 <span class="small">{{ biometricEnabled ? "已开启，重新打开时需验证后进入海内" : biometricSupported ? "开启后用 Face ID、指纹或设备锁保护登录" : "当前环境未通过预检，仍可尝试启用" }}</span>
@@ -403,6 +417,7 @@ const retryingQueue = ref(false);
 const pushEnabled = ref(false);
 const biometricSupported = ref(false);
 const biometricBusy = ref(false);
+const remoteSignerBusy = ref(false);
 const biometricRevision = ref(0);
 const isNativeApp = (() => {
   const capacitor = (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
@@ -431,13 +446,16 @@ const biometricEnabled = computed(() => {
   return keyStore.hasBiometricUnlock();
 });
 const biometricLabel = computed(() => "通行密钥");
-const accountProtectionText = computed(() =>
-  biometricEnabled.value
+const accountProtectionText = computed(() => {
+  if (keyStore.loginMethod === "nip46") {
+    return keyStore.remoteSignerConnected ? "远程签名器 · 已连接" : "远程签名器 · 离线";
+  }
+  return biometricEnabled.value
     ? `${biometricLabel.value}保护`
     : keyStore.credentialMode === "device"
       ? "本机保持登录"
-      : keyStore.credentialMode === "password" ? "本地密码保护" : "仅当前会话"
-);
+      : keyStore.credentialMode === "password" ? "本地密码保护" : "仅当前会话";
+});
 const enabledRelayCount = computed(() => relayList.value.filter(relay => relay.enabled).length);
 const connectedRelayCount = computed(() => relayList.value.filter(relay => relay.enabled && statuses[relay.url]?.state === "connected").length);
 const diagnostics = reactive({
@@ -742,6 +760,19 @@ function formatSize(bytes: number) {
 
 async function refreshBiometricSupport() {
   biometricSupported.value = await keyStore.supportsBiometricUnlock();
+}
+
+async function reconnectRemoteSigner() {
+  if (remoteSignerBusy.value || keyStore.loginMethod !== "nip46") return;
+  remoteSignerBusy.value = true;
+  try {
+    await keyStore.reconnectRemoteSigner();
+    ui.addToast("远程签名器已重新连接", 2_000, "success");
+  } catch {
+    ui.addToast("远程签名器连接失败，请稍后重试", 2_500, "error");
+  } finally {
+    remoteSignerBusy.value = false;
+  }
 }
 
 async function toggleBiometricUnlock() {
