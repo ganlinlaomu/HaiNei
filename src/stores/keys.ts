@@ -75,6 +75,7 @@ import {
 } from "@/services/nip46RemoteSigner";
 
 let restoreSessionFlight: Promise<void> | null = null;
+let biometricUnlockFlight: { account: string; promise: Promise<void> } | null = null;
 const remoteSignerReconnectFlights = new Map<string, Promise<boolean>>();
 const remoteSignerLastReconnectAt = new Map<string, number>();
 const REMOTE_SIGNER_PREWARM_COOLDOWN_MS = 15_000;
@@ -455,17 +456,36 @@ export const useKeyStore = defineStore("keys", {
     },
 
     async unlockWithBiometric() {
-      if (!this.pkHex) throw new Error("未找到公钥信息");
-      const skHex = await unlockPrivateKeyWithBiometric(this.pkHex);
-      const pk = await safeGetPublicKey(skHex);
-      if (pk !== this.pkHex) throw new Error("通行密钥解锁的私钥与当前账号不匹配");
+      const account = this.pkHex.toLowerCase();
+      if (!account) throw new Error("未找到公钥信息");
 
-      this.skHex = skHex;
-      this.isUnlocked = true;
-      this.loginTimestamp = Math.floor(Date.now() / 1000);
-      await this.persistActiveSession();
-      await this.rememberCurrentAccount();
-      await this.loadAccountStores(this.pkHex);
+      if (biometricUnlockFlight) {
+        if (biometricUnlockFlight.account === account) return biometricUnlockFlight.promise;
+        throw new Error("通行密钥验证正在进行，请稍后重试");
+      }
+
+      const task = (async () => {
+        const skHex = await unlockPrivateKeyWithBiometric(account);
+        const pk = await safeGetPublicKey(skHex);
+        if (pk !== account) throw new Error("通行密钥解锁的私钥与当前账号不匹配");
+        if (this.pkHex.toLowerCase() !== account || this.loginMethod !== "private-key") {
+          throw new Error("account_session_changed");
+        }
+
+        this.skHex = skHex;
+        this.isUnlocked = true;
+        this.loginTimestamp = Math.floor(Date.now() / 1000);
+        await this.persistActiveSession();
+        await this.rememberCurrentAccount();
+        await this.loadAccountStores(account);
+      })();
+
+      biometricUnlockFlight = { account, promise: task };
+      try {
+        await task;
+      } finally {
+        if (biometricUnlockFlight?.promise === task) biometricUnlockFlight = null;
+      }
     },
 
     async unlockWithDeviceCredential() {
