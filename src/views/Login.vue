@@ -278,7 +278,7 @@ function shortPubkey(pubkey: string) {
 }
 
 async function presentUnlockMethod() {
-  if (pageMode.value !== "unlock") return;
+  if (pageMode.value !== "unlock" || loading.value || unlockInProgress.value) return;
   errorMessage.value = "";
   loginStatus.value = "";
 
