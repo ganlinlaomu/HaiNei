@@ -44,7 +44,7 @@ HaiNei Pages/PWA 只包含前端代码。受管默认媒体服务使用独立的
 - D1 binding `DB`：必须填写 Blossom 已有 `blossom-imgbed-db` 的同一个 `database_id`，禁止创建第二个数据库；
 - Service Binding `BLOSSOM`：service 为 `blossom-imgbed`；
 - secret `BLOSSOM_SERVICE_TOKEN`：对应 Blossom 中 `type=service` 且权限仅为 `issue_upload_token` 的 API Token；
-- 配额变量：`MAX_FILE_SIZE_BYTES`、`DAILY_UPLOAD_COUNT`、`DAILY_UPLOAD_BYTES`；默认分别为 25 MiB、100 次/日、1 GiB/日。
+- 配额变量：`MAX_FILE_SIZE_BYTES`、`DAILY_UPLOAD_COUNT`、`DAILY_UPLOAD_BYTES`；默认分别为 25 MiB、500 次/日、5 GiB/日。
 
 Blossom 端对应变量为 `HAINEI_MAX_FILE_SIZE_BYTES`、`HAINEI_DAILY_UPLOAD_COUNT`、`HAINEI_DAILY_UPLOAD_BYTES`，部署时应保持相同值；Blossom 会基于实际上传字节进行最终的原子配额预留。
 
