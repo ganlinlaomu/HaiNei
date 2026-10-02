@@ -182,12 +182,12 @@
         </div>
       </details>
 
-      <section v-if="keyStore.isEncrypted" class="technical-section">
+      <section v-if="keyStore.credentialMode === 'password' || keyStore.credentialMode === 'passkey'" class="technical-section">
         <label class="account-row">
           <span>进入后台 5 分钟后锁定</span>
           <input type="checkbox" :checked="backgroundLock" @change="toggleBackgroundLock" />
         </label>
-        <p class="section-detail">短暂切换应用不会锁定。再次打开时可用本地密码或通行密钥解锁。</p>
+        <p class="section-detail">短暂切换应用不会锁定。再次打开时使用本地密码或通行密钥解锁。</p>
       </section>
 
       <details class="technical-section">
@@ -286,8 +286,8 @@
           <div class="account-control-card">
             <div v-if="keyStore.isEncrypted" class="account-setting-row biometric-row">
               <div class="privacy-copy">
-                <strong>{{ biometricLabel }} 快速登录</strong>
-                <span class="small">{{ biometricEnabled ? "已开启，下次可直接验证后进入海内" : biometricSupported ? "开启后不再需要每次输入本地密码" : "当前环境未通过预检，仍可尝试启用" }}</span>
+                <strong>{{ biometricLabel }} 登录保护</strong>
+                <span class="small">{{ biometricEnabled ? "已开启，重新打开时需验证后进入海内" : biometricSupported ? "开启后用 Face ID、指纹或设备锁保护登录" : "当前环境未通过预检，仍可尝试启用" }}</span>
               </div>
               <button
                 class="account-inline-action"
@@ -403,6 +403,7 @@ const retryingQueue = ref(false);
 const pushEnabled = ref(false);
 const biometricSupported = ref(false);
 const biometricBusy = ref(false);
+const biometricRevision = ref(0);
 const isNativeApp = (() => {
   const capacitor = (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
   return capacitor?.isNativePlatform?.() === true;
@@ -425,10 +426,17 @@ function toggleBackgroundLock(event: Event) {
  backgroundLock.value=(event.target as HTMLInputElement).checked;
  deviceStorage.setItem(autoLockKey(keyStore.pkHex),backgroundLock.value ? "1" : "0");
 }
-const biometricEnabled = computed(() => keyStore.hasBiometricUnlock());
+const biometricEnabled = computed(() => {
+  void biometricRevision.value;
+  return keyStore.hasBiometricUnlock();
+});
 const biometricLabel = computed(() => "通行密钥");
 const accountProtectionText = computed(() =>
-  biometricEnabled.value ? `${biometricLabel.value} · 本机加密` : keyStore.isEncrypted ? "本机加密保存" : "仅当前会话"
+  biometricEnabled.value
+    ? `${biometricLabel.value}保护`
+    : keyStore.credentialMode === "device"
+      ? "本机保持登录"
+      : keyStore.credentialMode === "password" ? "本地密码保护" : "仅当前会话"
 );
 const enabledRelayCount = computed(() => relayList.value.filter(relay => relay.enabled).length);
 const connectedRelayCount = computed(() => relayList.value.filter(relay => relay.enabled && statuses[relay.url]?.state === "connected").length);
@@ -742,10 +750,12 @@ async function toggleBiometricUnlock() {
   try {
     if (biometricEnabled.value) {
       await keyStore.disableBiometricUnlock();
-      ui.addToast(`${biometricLabel.value} 快速登录已关闭`, 2_000, "success");
+      biometricRevision.value += 1;
+      ui.addToast(`${biometricLabel.value}登录保护已关闭`, 2_000, "success");
     } else {
       await keyStore.enableBiometricUnlock();
-      ui.addToast(`${biometricLabel.value} 快速登录已开启`, 2_000, "success");
+      biometricRevision.value += 1;
+      ui.addToast(`${biometricLabel.value}登录保护已开启`, 2_000, "success");
     }
   } catch (error) {
     const cancelled = error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError");

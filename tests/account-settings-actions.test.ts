@@ -31,6 +31,8 @@ describe("account actions in Settings", () => {
     expect(login).toContain("添加其他账号");
     expect(login).toContain('addingAccount ? "创建新账号" : "还没有账号？注册"');
     expect(login).toContain("使用私钥登录");
-    expect(login).toContain("在本机加密保存私钥");
+    expect(login).toContain("在此设备保持登录（推荐）");
+    expect(login).toContain("使用本地保护密码");
+    expect(login).toContain("仅此次登录");
   });
 });

@@ -38,8 +38,10 @@ describe("System Settings status UX", () => {
     expect(source).toContain("Android APK 已禁用 PWA Service Worker");
   });
 
-  it("shows whether the current private key is encrypted on this device", () => {
-    expect(source).toContain('keyStore.isEncrypted ? "本机加密保存" : "仅当前会话"');
+  it("shows how the current private key is protected on this device", () => {
+    expect(source).toContain('keyStore.credentialMode === "device"');
+    expect(source).toContain('"本机保持登录"');
+    expect(source).toContain('"本地密码保护"');
     expect(source).toContain("{{ accountProtectionText }}");
     expect(source).toContain("identity-section");
   });

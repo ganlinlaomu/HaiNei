@@ -238,7 +238,7 @@ export async function unlockPrivateKeyWithBiometric(pubkey: string) {
   try {
     return await decryptPrivateKey(record, secret);
   } catch {
-    throw new Error("通行密钥解锁数据失败，请使用本地密码登录");
+    throw new Error("通行密钥解锁数据失败，请重新输入私钥恢复账号");
   }
 }
 
