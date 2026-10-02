@@ -115,7 +115,7 @@
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else :content="message.content" :show-all="true" alt-text="私信图片" />
                 <div class="caption-area">
-                  <span class="bubble-text">{{ messageText(message.content) }}</span>
+                  <MentionText class="bubble-text" :text="messageText(message.content)" />
                   <span class="caption-meta" :class="{ failed: isFailed(message), read: statusKind(message) === 'read' }">
                     <time>{{ formatBubbleTime(message.created_at) }}</time>
                     <template v-if="isOwn(message)">
@@ -126,7 +126,7 @@
                 </div>
               </template>
               <template v-else>
-                <span v-if="messageText(message.content)" class="bubble-text">{{ messageText(message.content) }}</span>
+                <MentionText v-if="messageText(message.content)" class="bubble-text" :text="messageText(message.content)" />
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else-if="hasImage(message.content)" :content="message.content" :show-all="true" alt-text="私信图片" />
               </template>
@@ -183,6 +183,13 @@
       <p v-if="voiceError" class="voice-error" role="alert">{{ voiceError }}</p>
       <form class="chat-composer" @submit.prevent="submitMessage">
         <input ref="imageInput" class="image-input" type="file" accept="image/*" @change="selectImage" />
+        <MentionSuggestions
+          v-if="mentionOpen"
+          :items="mentionMatches"
+          :active-index="mentionActiveIndex"
+          placement="above"
+          @select="selectMention"
+        />
         <div v-if="recordedAudio && !voiceCaptureOwnsAudioSession" class="composer-preview">
           <DmAudioMessage class="composer-voice-preview" :preview-url="recordedAudio.preview" :duration="recordedAudio.duration" :own="true" />
           <button class="composer-icon-button remove-audio" type="button" aria-label="删除录音" @click="clearRecordedAudio">×</button>
@@ -221,8 +228,11 @@
               autocomplete="off"
               :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'"
               :disabled="!accepted || !keys.pkHex"
-              @focus="handleComposerFocus"
-              @blur="handleComposerBlur"
+              @input="onMentionInput"
+              @focus="handleComposerFocus(); onMentionFocus()"
+              @blur="handleComposerBlur(); onMentionBlur()"
+              @click="onMentionClick"
+              @keydown="onMentionKeydown"
             />
             <button
               v-if="draft.trim() || selectedImage"
@@ -261,6 +271,8 @@ import { useRoute, useRouter } from "vue-router";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import DmAudioMessage from "@/components/DmAudioMessage.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import MentionSuggestions from "@/components/MentionSuggestions.vue";
+import MentionText from "@/components/MentionText.vue";
 import { directMessagePreview } from "@/nostr/messaging/directMessages";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { useDirectMessagesStore, type DmSearchResult } from "@/stores/directMessages";
@@ -283,6 +295,8 @@ import {
 import { classifyVoiceGesture } from "@/utils/voiceGesture";
 import { createVoiceRecordingSession, type VoiceRecordingResult, type VoiceRecordingSession } from "@/utils/voiceRecorder";
 import { openProfile } from "@/utils/profileNavigation";
+import { useMentionComposer } from "@/composables/useMentionComposer";
+import type { MentionCandidate } from "@/utils/mentions";
 
 const route = useRoute();
 const router = useRouter();
@@ -348,6 +362,33 @@ const recordedAudio = ref<(VoiceRecordingResult & { preview: string }) | null>(n
 const voiceError = ref("");
 const imageInput = ref<HTMLInputElement | null>(null);
 const textInput = ref<HTMLInputElement | null>(null);
+const mentionCandidates = computed<MentionCandidate[]>(() => {
+  const peer = peerPubkey.value;
+  return friends.getAcceptedList(friendships.isAccepted)
+    .map(friend => {
+      const profileName = profiles.getProfile(friend.pubkey)?.nickname?.trim();
+      const label = privateProfileDisplayName(profileName, friend.pubkey, friend.name);
+      return {
+        pubkey: friend.pubkey,
+        label,
+        secondary: profileName && profileName !== label ? profileName : undefined,
+        searchText: [friend.name || "", friend.note || "", profileName || ""].join(" "),
+      };
+    })
+    .sort((a, b) => Number(b.pubkey === peer) - Number(a.pubkey === peer));
+});
+const {
+  mentionOpen,
+  mentionMatches,
+  mentionActiveIndex,
+  onMentionInput,
+  onMentionFocus,
+  onMentionClick,
+  onMentionBlur,
+  onMentionKeydown,
+  selectMention,
+  closeMention,
+} = useMentionComposer(draft, textInput, mentionCandidates);
 const messageList = ref<HTMLElement | null>(null);
 const showJumpToLatest = ref(false);
 const pendingTailCount = ref(0);
@@ -713,6 +754,7 @@ function openSearch() {
   void nextTick(() => searchInput.value?.focus());
 }
 function closeSearch() {
+  closeMention();
   searchInput.value?.blur();
   cancelSearchRequest();
   searchOpen.value = false;
