@@ -361,6 +361,12 @@ describe("direct-message navigation and UI contract", () => {
     expect(home).toContain("IntersectionObserver");
     expect(home).toContain('rootMargin: "420px 0px"');
     expect(home).toContain('v-else-if="!autoLoadSupported" class="load-more-btn"');
+    expect(home).toContain('loadMoreMessages({ notifyOnError: true })');
+    expect(home).toContain('if (options.notifyOnError) ui.addToast("历史消息加载失败，请重试"');
+    expect(home).toContain("|| !readyForPending.value");
+    expect(home).toContain("|| homeAccountPk !== keys.pkHex");
+    expect(home).toContain("if (!readyForPending.value || homeAccountPk !== keys.pkHex) return");
+    expect(home).toContain("if (initialized) await nextTick(attachLoadMoreObserver)");
     expect(home).toContain('homeSyncStatus.value === "offline"');
     expect(home).toContain("暂时离线，正在显示已缓存内容");
     expect(home).toContain("正在重新连接…");

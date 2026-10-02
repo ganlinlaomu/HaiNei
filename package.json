@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.21",
-  "releaseSummary": "登录默认在本机安全保持，支持通行密钥保护与传统本地密码",
+  "version": "0.1.22",
+  "releaseSummary": "首页启动时静默重试本机历史加载，避免暂时状态误报失败",
   "private": true,
   "scripts": {
     "dev": "vite",
