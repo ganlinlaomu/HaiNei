@@ -42,6 +42,7 @@
               v-if="mentionOpen"
               :items="mentionMatches"
               :active-index="mentionActiveIndex"
+              inline
               @select="selectMention"
             />
           </div>
