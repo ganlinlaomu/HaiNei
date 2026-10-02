@@ -166,6 +166,7 @@ export async function connectRemoteSignerFromInput(input: string) {
     accountPubkey,
     bunkerPubkey: normalizePubkey(pointer.pubkey, "bunker_pubkey"),
     relays: pointer.relays,
+    bunkerSecret: pointer.secret,
     clientSecretHex,
   };
   return credential;
@@ -177,7 +178,7 @@ export async function reconnectRemoteSignerFromCredential(credential: RemoteSign
   const { accountPubkey } = await establish(credential.clientSecretHex, {
     pubkey: credential.bunkerPubkey,
     relays: credential.relays,
-    secret: null,
+    secret: credential.bunkerSecret,
   });
   if (accountPubkey !== account) {
     await disconnectRemoteSigner(accountPubkey);
