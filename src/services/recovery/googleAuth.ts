@@ -52,15 +52,22 @@ function loadGoogleIdentityServices() {
       script.removeEventListener("load", onLoad);
       script.removeEventListener("error", onError);
     };
-    const onLoad = () => {
-      cleanup();
-      if (window.google?.accounts?.oauth2) resolve();
-      else reject(new Error("Google 登录组件加载失败"));
-    };
-    const onError = () => {
+    const fail = (message: string) => {
       cleanup();
       scriptPromise = null;
-      reject(new Error("无法加载 Google 登录组件"));
+      script.remove();
+      reject(new Error(message));
+    };
+    const onLoad = () => {
+      if (window.google?.accounts?.oauth2) {
+        cleanup();
+        resolve();
+        return;
+      }
+      fail("Google 登录组件加载失败");
+    };
+    const onError = () => {
+      fail("无法加载 Google 登录组件");
     };
 
     script.addEventListener("load", onLoad, { once: true });
