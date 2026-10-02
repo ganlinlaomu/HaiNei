@@ -462,6 +462,8 @@ export default defineComponent({
     };
 
     const closeModal = () => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.closest(".modal-content")) active.blur();
       showModal.value = false;
       editingPending.value = false;
       formData.value = {
@@ -949,7 +951,7 @@ export default defineComponent({
   padding: 10px;
   border-radius: 8px;
   border: 1px solid #e5e7eb;
-  font-size: 14px;
+  font-size: 16px;
   box-sizing: border-box;
 }
 
