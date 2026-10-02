@@ -41,6 +41,7 @@ jobs:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       VITE_HAINEI_WORKER_URL: https://hainei-media.noster.workers.dev
+      VITE_ENABLE_NIP46: "true"
       HAINEI_KEYSTORE_BASE64: ${{ secrets.HAINEI_ANDROID_KEYSTORE_BASE64 }}
       HAINEI_KEYSTORE_PASSWORD: ${{ secrets.HAINEI_ANDROID_KEYSTORE_PASSWORD }}
       HAINEI_KEY_ALIAS: ${{ secrets.HAINEI_ANDROID_KEY_ALIAS }}
