@@ -76,7 +76,7 @@ export function onAccountMessageSyncStatus(listener: (snapshot: AccountMessageSy
 
 export async function startAccountMessageSync(keys: AccountSyncKeys) {
   const account = keys.pkHex.toLowerCase();
-  if (!account || !keys.isLoggedIn) return false;
+  if (!account || !keys.isLoggedIn || !keys.supportsNip44) return false;
 
   const generation = ++accountSyncGeneration;
   activeKeys = keys;
