@@ -781,8 +781,8 @@ export default defineComponent({
     }
 
     function onClose() {
-      closeMention();
       ui.closePostEditor();
+      closeMention();
     }
 
     function clearPersistentDraft(account: string) {
