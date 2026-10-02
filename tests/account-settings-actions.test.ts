@@ -18,7 +18,7 @@ describe("account actions in Settings", () => {
     expect(settings).toContain("<p>{{ nickname }} · {{ shortPk }} · {{ accountProtectionText }}</p>");
     expect(settings).toContain('goToAccountLogin("switch")');
     expect(settings).toContain('goToAccountLogin("add")');
-    expect(settings).toContain('redirect: "/settings/system"');
+    expect(settings).toContain('redirect: mode === "switch" ? "/" : "/settings/system"');
     expect(settings).toContain("await keyStore.clearActiveSession()");
     expect(settings).toContain("keyStore.refreshAccounts()");
     expect(settings).toContain("await keyStore.logout()");
