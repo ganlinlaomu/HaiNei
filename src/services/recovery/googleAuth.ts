@@ -101,7 +101,7 @@ async function fetchGoogleSubject(accessToken: string) {
 export async function signInWithGoogle(clientId: string): Promise<RecoveryProviderSession> {
   const normalizedClientId = clientId.trim();
   if (!normalizedClientId) throw new Error("Google 登录尚未配置");
-  await loadGoogleIdentityServices();
+  if (!window.google?.accounts?.oauth2) await loadGoogleIdentityServices();
 
   const oauth2 = window.google?.accounts?.oauth2;
   if (!oauth2) throw new Error("Google 登录组件不可用");
