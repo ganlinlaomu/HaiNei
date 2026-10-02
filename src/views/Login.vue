@@ -190,6 +190,12 @@
           {{ errorMessage }}
         </div>
       </transition>
+
+      <footer class="public-links" aria-label="HaiNei 公开信息">
+        <a href="/about">关于 HaiNei</a>
+        <a href="/privacy">隐私政策</a>
+        <a href="/terms">服务条款</a>
+      </footer>
     </div>
   </main>
 </template>
@@ -969,6 +975,26 @@ async function switchAccount() {
   color: #697589;
   font-size: 0.76rem;
   text-align: center;
+}
+
+.public-links {
+  margin-top: 30px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 14px;
+  color: #697589;
+  font-size: 0.72rem;
+}
+
+.public-links a {
+  color: #7f8b9d;
+  text-decoration: none;
+}
+
+.public-links a:hover {
+  color: #b8c1cf;
+  text-decoration: underline;
 }
 
 .welcome-block {
