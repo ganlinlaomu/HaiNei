@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HaiNei Privacy Policy</title><meta name="description" content="HaiNei Privacy Policy, including Google API data access, use, storage, and sharing."><style>
+    :root{color-scheme:dark;--bg:#0b1017;--panel:#111923;--text:#e5e9f0;--muted:#98a4b5;--line:#293445;--link:#c9d4e3}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    a{color:var(--link)}header,main,footer{width:min(920px,calc(100% - 32px));margin:auto}
+    header{padding:44px 0 24px;border-bottom:1px solid var(--line)}header h1{margin:0;font-size:2.2rem;font-weight:500;letter-spacing:.05em}
+    header p{margin:.4rem 0 0;color:var(--muted)}nav{display:flex;flex-wrap:wrap;gap:14px;margin-top:20px}
+    main{padding:30px 0 50px}section{padding:24px 0;border-bottom:1px solid var(--line)}h2{font-size:1.3rem;margin:0 0 12px}h3{font-size:1rem;margin:20px 0 8px}
+    p,li{color:#c8d0dc}ul{padding-left:1.25rem}code{background:#151f2b;padding:.12rem .35rem;border-radius:5px}
+    .lang{color:var(--muted);font-size:.85rem;text-transform:uppercase;letter-spacing:.08em}.notice{padding:16px;border:1px solid var(--line);background:var(--panel);border-radius:12px}
+    footer{padding:24px 0 40px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+    @media(max-width:600px){header{padding-top:28px}header h1{font-size:1.8rem}main{padding-top:18px}section{padding:20px 0}}
+</style></head><body>
+<header><h1>HaiNei Privacy Policy</h1><p>Last updated: October 2, 2026</p>
+<nav><a href="/about">About</a><a href="/">Open HaiNei</a><a href="/terms">Terms of Service</a><a href="mailto:kudos-zap-citrus@duck.com">Contact</a></nav></header>
+<main>
+<section><div class="lang">English</div><h2>1. About this policy</h2><p>HaiNei is a Nostr-based social and private messaging application operated by <strong>Hainei</strong>. This policy explains how HaiNei handles service data and how it accesses, uses, stores, and shares Google user data.</p>
+<h2>2. Google user data</h2><p>When a user selects “Continue with Google,” HaiNei uses Google OAuth with <code>openid</code> and <code>https://www.googleapis.com/auth/drive.appdata</code>.</p>
+<p>HaiNei uses Google data only to identify the Google Account selected for recovery and to create, read, and manage HaiNei encrypted backup files in Google Drive <code>appDataFolder</code>.</p>
+<p><strong>HaiNei does not access regular Google Drive files, Google Photos, Gmail, Google Contacts, Google Calendar, or unrelated Google content.</strong></p>
+<h2>3. Purpose and storage</h2><p>Google user data is used only to provide account recovery: identify the recovery account, find encrypted backups, create encrypted backups, restore a Nostr account on another device, and manage the user’s own recovery data.</p>
+<p>The Nostr private key is encrypted locally before backup. HaiNei does not upload the recovery PIN or an unencrypted Nostr private key to Google Drive. Backup filenames do not contain the user’s Nostr public key.</p>
+<h2>4. Google OAuth access tokens</h2><p>Google OAuth access tokens are used only for required API requests during the current authorization session. HaiNei does not persist these tokens in browser Local Storage, Session Storage, or IndexedDB.</p>
+<h2>5. Sharing and Limited Use</h2><p>HaiNei does not sell Google user data. Data obtained through Google APIs is not shared with third parties except when necessary to provide a feature expressly requested by the user, with explicit user consent, or where required by law.</p>
+<p>HaiNei uses Google user data only to provide or improve user-facing HaiNei functionality and intends to comply with the Google API Services User Data Policy, including applicable Limited Use requirements. Google user data is not used for advertising, sale of data, user profiling for advertising, or training general-purpose AI models.</p>
+<h2>6. Nostr and local data</h2><p>Nostr is decentralized. Public posts, profile information, and other Nostr events may be transmitted to Nostr Relays and retained by third-party Relays or clients. HaiNei cannot guarantee deletion of already-published information from every participant in the Nostr network.</p>
+<p>HaiNei may store account information, friends, messages, read state, application settings, encrypted media cache, and encrypted key material locally on the user’s device.</p>
+<h2>7. User controls and deletion</h2><p>Users may stop using Google recovery, revoke HaiNei OAuth access from their Google Account, clear local HaiNei data, or stop using the service. Revoking OAuth access does not necessarily delete an existing backup already stored in Google Drive <code>appDataFolder</code>.</p>
+<p>For questions or requests concerning recovery data or deletion, contact <a href="mailto:kudos-zap-citrus@duck.com">kudos-zap-citrus@duck.com</a>.</p>
+<h2>8. Security and changes</h2><p>HaiNei uses reasonable safeguards including HTTPS, local encryption, encrypted Nostr protocols, minimal Google OAuth scopes, session-only Google access tokens, and encryption before Google Drive upload. No networked system can guarantee absolute security.</p>
+<p>Material changes to data handling or Google API use will be reflected in this policy.</p></section>
+
+<section><div class="lang">繁體中文</div><h2>隱私權政策摘要</h2>
+<p>HaiNei 由 <strong>Hainei</strong> 營運。使用「使用 Google 繼續」時，HaiNei 僅使用 <code>openid</code> 與 <code>drive.appdata</code>，用途是識別恢復帳號以及在 Google Drive <code>appDataFolder</code> 中建立、讀取及管理 HaiNei 的加密備份。</p>
+<p>HaiNei 不會存取一般 Google Drive 文件、Google Photos、Gmail、聯絡人或 Google Calendar。Nostr 私鑰會先在裝置上加密；恢復 PIN 與未加密私鑰不會上傳。Google access token 不會永久儲存在 Local Storage、Session Storage 或 IndexedDB。</p>
+<p>HaiNei 不出售 Google 使用者資料，不將其用於廣告、廣告側寫、資料販售或通用 AI 模型訓練。除提供使用者明確要求的功能、使用者明確同意或法律要求外，不向第三方分享透過 Google API 取得的資料。</p>
+<p>Nostr 為分散式協議，已公開到 Relay 的內容可能被第三方保存。使用者可撤銷 Google OAuth、清除本機資料或停止使用服務。資料相關問題請聯絡 <a href="mailto:kudos-zap-citrus@duck.com">kudos-zap-citrus@duck.com</a>。</p></section>
+
+<section><div class="lang">日本語</div><h2>プライバシーポリシー概要</h2>
+<p>HaiNei は <strong>Hainei</strong> が運営しています。「Google で続ける」を利用する場合、HaiNei は <code>openid</code> と <code>drive.appdata</code> のみを使用し、復元用アカウントの識別、および Google Drive <code>appDataFolder</code> にある HaiNei の暗号化バックアップの作成・取得・管理に利用します。</p>
+<p>通常の Google Drive ファイル、Google Photos、Gmail、連絡先、Google Calendar にはアクセスしません。Nostr 秘密鍵は端末上で暗号化され、復元 PIN と平文秘密鍵はアップロードされません。Google access token は Local Storage、Session Storage、IndexedDB に永続保存しません。</p>
+<p>Google ユーザーデータを販売せず、広告、広告目的のプロファイリング、データ販売、汎用 AI モデルの学習には使用しません。必要なユーザー機能、明示的な同意、または法令上の義務がある場合を除き、第三者に共有しません。</p>
+<p>お問い合わせ: <a href="mailto:kudos-zap-citrus@duck.com">kudos-zap-citrus@duck.com</a></p></section>
+</main><footer>Operator: Hainei · <a href="/about">About</a> · <a href="/terms">Terms</a> · <a href="/">Open HaiNei</a></footer></body></html>
