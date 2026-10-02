@@ -9,6 +9,7 @@
     <span class="google-mark" aria-hidden="true">G</span>
     <span>使用 Google 继续</span>
   </button>
+  <p v-if="phase === 'idle' && errorMessage" class="inline-google-error" role="alert">{{ errorMessage }}</p>
 
   <div v-if="phase !== 'idle'" class="recovery-overlay" role="dialog" aria-modal="true" aria-labelledby="google-recovery-title">
     <section class="recovery-sheet">
@@ -166,7 +167,7 @@ const workingLabel = computed(() => {
 });
 
 onMounted(() => {
-  if (googleWebSupported.value) void preloadGoogleIdentityServices();
+  if (googleWebSupported.value) void preloadGoogleIdentityServices().catch(() => undefined);
 });
 
 function bytesToHex(bytes: Uint8Array) {
@@ -252,8 +253,8 @@ async function restoreBackups() {
     const recovered: RecoveredAccount[] = [];
 
     for (const backup of backups.value) {
+      const payload = await provider.downloadBackup(backup.id);
       try {
-        const payload = await provider.downloadBackup(backup.id);
         const skHex = decryptRecoveryPrivateKey(payload, recoveryKey, "google");
         const account = accountFromPrivateKey(skHex, backup.id);
         if (!recovered.some(item => item.pubkey === account.pubkey)) recovered.push(account);
@@ -284,7 +285,8 @@ async function createAndUploadAccount(isFirst: boolean) {
   const payload = encryptRecoveryPrivateKey(skHex, recoveryKey, "google");
   const backup = await provider.uploadBackup(payload);
   emit("complete", { skHex, backupId: backup.id, isNewAccount: true });
-  if (!isFirst) clearSensitiveState();
+  void isFirst;
+  resetAfterComplete();
 }
 
 async function createAnotherAccount() {
@@ -305,6 +307,15 @@ function complete(account: RecoveredAccount) {
     backupId: account.backupId,
     isNewAccount: false,
   });
+  resetAfterComplete();
+}
+
+function resetAfterComplete() {
+  clearSensitiveState();
+  provider = null;
+  backups.value = [];
+  errorMessage.value = "";
+  phase.value = "idle";
 }
 
 function clearRecoveredAccounts() {
@@ -339,6 +350,7 @@ onBeforeUnmount(() => {
 .google-login-button{display:flex;width:100%;min-height:48px;align-items:center;justify-content:center;gap:10px;padding:0 18px;border:1px solid #3b4657;border-radius:12px;background:#fff;color:#1f2937;font-size:.94rem;font-weight:650;cursor:pointer}
 .google-login-button:active{transform:scale(.99)}
 .google-login-button:disabled{opacity:.55;cursor:not-allowed}
+.inline-google-error{margin:0;padding:8px 10px;border:1px solid #5b3138;border-radius:9px;background:#26171b;color:#f0b7bd;font-size:.76rem;line-height:1.4}
 .google-mark{display:grid;width:22px;height:22px;place-items:center;border-radius:50%;background:#fff;color:#4285f4;font-family:Arial,sans-serif;font-size:18px;font-weight:800;line-height:1}
 .google-mark.large{width:36px;height:36px;flex:0 0 36px;border:1px solid #dbe2ea;font-size:24px}
 .recovery-overlay{position:fixed;inset:0;z-index:14000;display:flex;align-items:flex-end;justify-content:center;background:rgba(2,6,23,.72);backdrop-filter:blur(4px)}
