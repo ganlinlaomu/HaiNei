@@ -55,7 +55,7 @@
       
       <div v-if="hasMore" ref="loadMoreSentinel" class="load-more-sentinel" aria-live="polite">
         <span v-if="isLoadingMore">正在加载…</span>
-        <button v-else-if="!autoLoadSupported" class="load-more-btn" type="button" @click="loadMoreMessages">
+        <button v-else-if="!autoLoadSupported" class="load-more-btn" type="button" @click="loadMoreMessages({ notifyOnError: true })">
           加载更多
         </button>
       </div>
@@ -585,8 +585,13 @@ async function safeUpdateLocalRefs() {
   });
 }
     // 加载更多消息
-    async function loadMoreMessages() {
-      if (isLoadingMore.value || !hasMore.value) return;
+    async function loadMoreMessages(options: { notifyOnError?: boolean } = {}) {
+      if (
+        isLoadingMore.value
+        || !hasMore.value
+        || !readyForPending.value
+        || homeAccountPk !== keys.pkHex
+      ) return;
       isLoadingMore.value=true;
       const account=keys.pkHex;
       try {
@@ -601,13 +606,20 @@ async function safeUpdateLocalRefs() {
           rebuildVisibleInbox();
         }
         displayedMessages.value=messagesRef.value.slice(0,displayedMessages.value.length+PAGE_SIZE);
-      } catch { ui.addToast("历史消息加载失败，请重试",1800,"error"); }
+      } catch (error) {
+        if (keys.pkHex !== account) return;
+        logger.warn("[home] local history page unavailable; will retry", error);
+        if (options.notifyOnError) ui.addToast("历史消息加载失败，请重试", 1800, "error");
+      }
       finally {isLoadingMore.value=false;}
     }
 
     function attachLoadMoreObserver() {
       loadMoreObserver?.disconnect();
       loadMoreObserver = null;
+      // The sentinel can be visible on first paint. Do not let it race account
+      // vault hydration and turn a transient startup state into an error toast.
+      if (!readyForPending.value || homeAccountPk !== keys.pkHex) return;
       if (typeof IntersectionObserver === "undefined") {
         autoLoadSupported.value = false;
         return;
@@ -739,11 +751,10 @@ async function safeUpdateLocalRefs() {
      stopSyncStatusListener = onAccountMessageSyncStatus(applyAccountSyncStatus);
      applyAccountSyncStatus();
      attachVirtualScroll();
-     await nextTick();
-     attachLoadMoreObserver();
      if (!keys.pkHex || homeAccountPk === keys.pkHex) return;
      try {
-       await initializeHomeRuntime(keys.pkHex);
+       const initialized = await initializeHomeRuntime(keys.pkHex);
+       if (initialized) await nextTick(attachLoadMoreObserver);
        await restoreCurrentHomeScroll();
      } catch (err) {
        logger.error("[account] Home initialization failed", err);
@@ -760,7 +771,7 @@ async function safeUpdateLocalRefs() {
    });
    onActivated(() => {
      attachVirtualScroll();
-     void nextTick(attachLoadMoreObserver);
+     if (readyForPending.value && homeAccountPk === keys.pkHex) void nextTick(attachLoadMoreObserver);
      void restoreCurrentHomeScroll();
    });
    onDeactivated(() => {
