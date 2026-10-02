@@ -188,6 +188,10 @@ const remainingRootCount = computed(() => Math.max(0, threads.value.length - INI
 const panelStyle = computed(() => dragY.value > 0 ? ({ transform: `translateY(${dragY.value}px)` }) : undefined);
 const canSend = computed(() => canSubmitComment(draft.value, !!selectedImage.value));
 const mentionCandidates = computed<MentionCandidate[]>(() => {
+  const allowed = new Set([
+    props.message.pubkey,
+    ...(props.message.recipientPubkeys || []),
+  ].map(pubkey => pubkey.toLowerCase()).filter(Boolean));
   const priorities = new Map<string, number>();
   priorities.set(props.message.pubkey.toLowerCase(), 0);
   if (replyTarget.value?.author) priorities.set(replyTarget.value.author.toLowerCase(), -1);
@@ -195,6 +199,7 @@ const mentionCandidates = computed<MentionCandidate[]>(() => {
     if (!priorities.has(comment.author.toLowerCase())) priorities.set(comment.author.toLowerCase(), 1);
   }
   return friends.getAcceptedList(friendships.isAccepted)
+    .filter(friend => allowed.has(friend.pubkey.toLowerCase()))
     .map(friend => {
       const profileName = profiles.getProfile(friend.pubkey)?.nickname?.trim();
       const label = profileName || friend.name?.trim() || `${friend.pubkey.slice(0, 8)}…`;

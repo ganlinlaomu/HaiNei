@@ -58,10 +58,16 @@ describe("user mentions", () => {
     expect(dm).toContain('placement="above"');
     expect(comment).toContain('placement="above"');
     expect(post).toContain("const allowed = new Set(recipients.value");
+    expect(post).toContain("inline");
+    expect(comment).toContain("...(props.message.recipientPubkeys || [])");
+    expect(comment).toContain(".filter(friend => allowed.has(friend.pubkey.toLowerCase()))");
     expect(postCard).toContain('<MentionText :text="displayedText" />');
     expect(comment).toContain('h(MentionText, { text: rowProps.comment.text })');
     expect(dm).toContain('<MentionText class="bubble-text"');
     expect(directStore).toContain("const text = content.trim()");
+    const composer = readFileSync(join(process.cwd(), "src/composables/useMentionComposer.ts"), "utf8");
+    expect(composer).toContain("const value = element.value");
+    expect(composer).toContain("event?.currentTarget");
     expect(directStore).not.toContain("mentionPubkeys");
   });
 });
