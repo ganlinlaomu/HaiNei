@@ -54,7 +54,7 @@ export function isRemoteSignerConnectivityError(error: unknown) {
   if (!message) return false;
   if (/remote_signer_(?:offline|timeout)/i.test(message)) return true;
   if (/remote_signer_session_changed/i.test(message)) return true;
-  return /(?:websocket|socket|relay|connection).*(?:closed|closing|failed|lost|reset|unavailable)|(?:not connected|disconnected|connection closed|request timed out|timed out|timeout)/i.test(message);
+  return /(?:websocket|socket|relay|connection).*(?:closed|closing|failed|lost|reset|unavailable)|(?:failed|unable) to connect|no response|(?:not connected|disconnected|connection closed|request timed out|timed out|timeout)/i.test(message);
 }
 
 function showAuthorization(url: string) {
