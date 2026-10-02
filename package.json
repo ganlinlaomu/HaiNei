@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.26",
-  "releaseSummary": "Android APK 构建默认开启 NIP-46 远程签名器入口",
+  "version": "0.1.27",
+  "releaseSummary": "新增 Google 账号恢复：Drive appData 加密备份、恢复 PIN 与现有 Nostr 私钥登录衔接",
   "private": true,
   "scripts": {
     "dev": "vite",

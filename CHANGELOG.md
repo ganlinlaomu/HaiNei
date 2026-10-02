@@ -1,5 +1,10 @@
 # HaiNei 更新记录
 
+## 0.1.27 — 2026-10-02
+
+- Google 账号恢复 P0/P1：新增统一恢复层、Google Identity Services 授权与 Drive `appDataFolder` 加密备份；使用 Google `sub` + 6–8 位恢复 PIN 经 PBKDF2-SHA256（600,000 次）派生密钥并以 NIP-44 v2 加密 nsec，恢复后仍复用现有 `private-key` signer 与 `loginWithNsec()`，不改 NIP-17、Relay 或本机通行密钥语义。
+- 原生 Capacitor WebView 暂不启用 Google Web OAuth，避免触发 Google 的 embedded user-agent 限制；当前 Google 恢复面向浏览器 / PWA。
+
 ## 0.1.26 — 2026-10-02
 
 - Android APK 构建默认注入 `VITE_ENABLE_NIP46=true`，使 Android 与已启用的 PWA 一样显示并使用 NIP-46 远程签名器入口。
