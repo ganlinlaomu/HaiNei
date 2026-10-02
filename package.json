@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.25",
-  "releaseSummary": "修复切换账号时通行密钥重复验证，并在切换成功后返回首页",
+  "version": "0.1.26",
+  "releaseSummary": "Android APK 构建默认开启 NIP-46 远程签名器入口",
   "private": true,
   "scripts": {
     "dev": "vite",
