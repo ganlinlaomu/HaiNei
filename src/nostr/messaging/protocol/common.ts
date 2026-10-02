@@ -1,4 +1,4 @@
-import { verifyEvent, type NostrEvent } from "nostr-tools";
+import { getEventHash, verifyEvent, type NostrEvent } from "nostr-tools";
 import { verifiedEventCache } from "@/services/nostrCache";
 
 const HEX_64 = /^[0-9a-f]{64}$/;
@@ -33,11 +33,8 @@ export async function deriveConversationId(participants: string[]): Promise<stri
 
 /** Rebuild the signed fields so nostr-tools cannot reuse a stale verifiedSymbol cache. */
 export function verifySignedEvent(event: NostrEvent): boolean {
-  const verificationKey = event.id ? `${event.id}:${event.sig}` : "";
-  const cached = verificationKey ? verifiedEventCache.get(verificationKey) : undefined;
-  if (cached !== undefined) return cached;
   try {
-    const verified = verifyEvent({
+    const canonical = {
       id: event.id,
       pubkey: event.pubkey,
       created_at: event.created_at,
@@ -45,11 +42,19 @@ export function verifySignedEvent(event: NostrEvent): boolean {
       tags: event.tags,
       content: event.content,
       sig: event.sig
-    });
+    };
+    // Always bind the cache lookup to the current signed fields. nostr-tools
+    // marks verified event objects with a symbol, and our cache is keyed by
+    // id/signature; without this hash check, a later mutation could reuse a
+    // stale positive result.
+    if (getEventHash(canonical) !== event.id) return false;
+    const verificationKey = event.id ? `${event.id}:${event.sig}` : "";
+    const cached = verificationKey ? verifiedEventCache.get(verificationKey) : undefined;
+    if (cached !== undefined) return cached;
+    const verified = verifyEvent(canonical);
     if (verificationKey) verifiedEventCache.set(verificationKey, verified);
     return verified;
   } catch {
-    if (verificationKey) verifiedEventCache.set(verificationKey, false);
     return false;
   }
 }

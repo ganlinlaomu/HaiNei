@@ -3,10 +3,14 @@ import { nostrClient } from "@/services/nostrClient";
 import { debugLog } from "@/utils/debugLog";
 import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./protocol";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
-import type { OutgoingQueueRecord, OutgoingRelayResult } from "@/db/dexie";
+import type { OutgoingEventRoute, OutgoingQueueRecord, OutgoingRelayResult } from "@/db/dexie";
 import { triggerGenericPush } from "@/services/pushNotifications";
 import type { PushCategory } from "@/services/pushNotifications";
 import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/directMessages";
+import {
+  cancelDmRelayDirectoryWork,
+  resolveDmRelays,
+} from "@/services/dmRelayDirectory";
 
 export type MessageProtocolPolicy = "nip17";
 
@@ -34,6 +38,22 @@ function eventTarget(event: NostrEvent) {
   return event.tags.find(tag => tag[0] === "p")?.[1];
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await worker(items[index], index);
+    }
+  }));
+  return results;
+}
+
 export async function buildMessageEvents(options: Omit<SendDirectMessageOptions, "relays">) {
   const outgoing = {
     recipientPubkeys: options.recipientPubkeys,
@@ -50,15 +70,21 @@ export async function buildMessageEvents(options: Omit<SendDirectMessageOptions,
 export async function publishMessageEvents(
   events: NostrEvent[],
   relays: string[],
-  previousResults: OutgoingRelayResult[] = []
+  previousResults: OutgoingRelayResult[] = [],
+  eventRoutes: OutgoingEventRoute[] = [],
+  assertCurrent: () => void = () => {},
 ) {
-  const batches = await Promise.all(events.map(async event => {
+  const routes = new Map(eventRoutes.map(route => [route.eventId, route]));
+  const batches = await mapWithConcurrency(events, 2, async event => {
+    assertCurrent();
     const targetPubkey = eventTarget(event);
     // Once any relay accepted a gift-wrap copy, that copy is terminal. On a
     // retry publish only copies that have never been accepted, preserving the
     // original signed event and avoiding duplicate delivery to other peers.
     if (previousResults.some(result => result.eventId === event.id && result.ok)) return [];
-    const pendingRelays = relays.filter(relay => !previousResults.some(
+    const route = routes.get(event.id);
+    const targetRelays = route ? route.relays : relays;
+    const pendingRelays = targetRelays.filter(relay => !previousResults.some(
       result => result.eventId === event.id && result.relay === relay && result.ok
     ));
     if (!pendingRelays.length) return [];
@@ -66,7 +92,8 @@ export async function publishMessageEvents(
       eventId: event.id.slice(0, 12),
       kind: event.kind,
       target: targetPubkey?.slice(0, 12) || "missing",
-      relayCount: pendingRelays.length
+      relayCount: pendingRelays.length,
+      routeSource: route?.source || "legacy-fallback",
     });
     const results = await nostrClient.publish(event, pendingRelays);
     return results.map(result => {
@@ -78,8 +105,54 @@ export async function publishMessageEvents(
       });
       return { ...result, eventId: event.id, targetPubkey };
     });
-  }));
+  });
   return batches.flat();
+}
+
+export async function resolveMessageEventRoutes(
+  accountPubkey: string,
+  events: NostrEvent[],
+  fallbackRelays: string[],
+  assertCurrent: () => void = () => {},
+) {
+  const targets = [...new Set(events.map(eventTarget).filter((value): value is string => !!value))];
+  const byTarget = new Map<string, Awaited<ReturnType<typeof resolveDmRelays>>>();
+  // Bound concurrency, not the audience: later peers must not silently bypass
+  // kind 10050 discovery. The directory also bounds queries across messages.
+  const resolutions = await mapWithConcurrency(targets, 2, target => {
+    assertCurrent();
+    return resolveDmRelays(accountPubkey, target, fallbackRelays);
+  });
+  assertCurrent();
+  targets.forEach((target, index) => byTarget.set(target, resolutions[index]));
+  const resolvedAt = Date.now();
+  return events.flatMap<OutgoingEventRoute>(event => {
+    const targetPubkey = eventTarget(event);
+    const route = targetPubkey ? byTarget.get(targetPubkey) : undefined;
+    if (!targetPubkey || !route) return [];
+    return [{
+      eventId: event.id,
+      targetPubkey,
+      relays: route.relays,
+      source: route.source,
+      resolvedAt,
+    }];
+  });
+}
+
+function legacyMessageEventRoutes(events: NostrEvent[], fallbackRelays: string[]) {
+  const resolvedAt = Date.now();
+  return events.flatMap<OutgoingEventRoute>(event => {
+    const targetPubkey = eventTarget(event);
+    if (!targetPubkey || !fallbackRelays.length) return [];
+    return [{
+      eventId: event.id,
+      targetPubkey,
+      relays: [...new Set(fallbackRelays)],
+      source: "legacy-fallback",
+      resolvedAt,
+    }];
+  });
 }
 
 function mergeRelayResults(previous: OutgoingRelayResult[], current: OutgoingRelayResult[]) {
@@ -95,11 +168,14 @@ function mergeRelayResults(previous: OutgoingRelayResult[], current: OutgoingRel
 }
 
 export async function sendDirectMessage(options: SendDirectMessageOptions): Promise<PublishedMessage> {
-  const encoded = await buildMessageEvents(options);
   const accountPubkey = options.context.senderPubkey.toLowerCase();
   const accountGeneration = accountGenerations.get(accountPubkey) || 0;
+  const encoded = await buildMessageEvents(options);
+  if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");
   registerOutgoingPushSigner(accountPubkey, options.context.signEvent);
   const now = Date.now();
+  // Persist signed copies before discovery. The pending flag survives PWA
+  // suspension so a retry cannot publish the provisional legacy route first.
   await outgoingQueueRepository.putIfAbsent({
     accountPubkey,
     outgoingId: encoded.message.id,
@@ -107,11 +183,14 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
     message: encoded.message,
     events: encoded.events,
     relays: options.relays,
+    eventRoutes: legacyMessageEventRoutes(encoded.events, options.relays),
+    dmRelayRoutesPending: true,
     attempts: 0,
     createdAt: now,
     updatedAt: now
   });
   await options.onQueued?.(encoded.message.id);
+  if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");
   const published = await publishQueuedOutgoing(accountPubkey, encoded.message.id, options.pushCategory);
   if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");
   return published;
@@ -146,6 +225,40 @@ export function cancelOutgoingWorkForAccount(accountPubkey: string) {
   if (timer) clearTimeout(timer);
   retryTimers.delete(account);
   retryDeadlines.delete(account);
+  for (const key of activePublishes.keys()) {
+    if (key.startsWith(`${account}:`)) activePublishes.delete(key);
+  }
+  cancelDmRelayDirectoryWork(account);
+}
+
+async function refreshFailedEventRoutes(
+  record: OutgoingQueueRecord,
+  failedEvents: NostrEvent[],
+  assertCurrent: () => void,
+) {
+  if (!record.eventRoutes?.length || !failedEvents.length) return record.eventRoutes;
+  const failedIds = new Set(failedEvents.map(event => event.id));
+  const refreshed = await mapWithConcurrency(record.eventRoutes, 2, async route => {
+    assertCurrent();
+    if (
+      !failedIds.has(route.eventId)
+      || route.targetPubkey === record.accountPubkey
+      || route.source !== "nip17-10050"
+    ) return route;
+    const resolution = await resolveDmRelays(
+      record.accountPubkey,
+      route.targetPubkey,
+      record.relays,
+      true,
+    );
+    return {
+      ...route,
+      relays: resolution.relays,
+      source: resolution.source,
+      resolvedAt: Date.now(),
+    } satisfies OutgoingEventRoute;
+  });
+  return refreshed;
 }
 
 function scheduleRetry(accountPubkey: string, delay: number) {
@@ -175,11 +288,17 @@ function queuedResult(record: OutgoingQueueRecord): PublishedMessage {
 }
 
 export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: string, _pushCategory?: PushCategory): Promise<PublishedMessage> {
+  accountPubkey = accountPubkey.toLowerCase();
   const key = `${accountPubkey}:${outgoingId}`;
   const existing = activePublishes.get(key);
   if (existing) return existing;
+  const generation = accountGenerations.get(accountPubkey) || 0;
+  const assertCurrent = () => {
+    if ((accountGenerations.get(accountPubkey) || 0) !== generation) throw new Error("账号已切换");
+  };
   const task = (async () => {
-    const record = await outgoingQueueRepository.get(accountPubkey, outgoingId);
+    let record = await outgoingQueueRepository.get(accountPubkey, outgoingId);
+    assertCurrent();
     if (!record) throw new Error("待发送项目不存在");
     if (record.state === "sent") {
       await deliverQueuedPush(record);
@@ -192,15 +311,28 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
       });
       throw new Error("网络不可用，消息将在联网后重试");
     }
+    if (record.dmRelayRoutesPending) {
+      const eventRoutes = await resolveMessageEventRoutes(accountPubkey, record.events as NostrEvent[], record.relays, assertCurrent);
+      assertCurrent();
+      const resolved = await outgoingQueueRepository.update(accountPubkey, outgoingId, {
+        eventRoutes, dmRelayRoutesPending: false, updatedAt: Date.now(),
+      });
+      if (!resolved) throw new Error("待发送项目不存在");
+      record = resolved;
+    }
+    assertCurrent();
     const attempts = record.attempts + 1;
     await outgoingQueueRepository.update(accountPubkey, outgoingId, { state: "sending", attempts, updatedAt: Date.now() });
+    assertCurrent();
     const events = record.events as NostrEvent[];
     let relayResults: PublishedMessage["relayResults"];
     try {
       const previousResults = record.relayResults || [];
-      const currentResults = await publishMessageEvents(events, record.relays, previousResults);
+      const currentResults = await publishMessageEvents(events, record.relays, previousResults, record.eventRoutes, assertCurrent);
+      assertCurrent();
       relayResults = mergeRelayResults(previousResults, currentResults);
     } catch (error) {
+      assertCurrent();
       const state = attempts >= 3 ? "failed" : "waiting_network";
       const delay = Math.min(60_000, 2 ** attempts * 1_000);
       await outgoingQueueRepository.update(accountPubkey, outgoingId, {
@@ -216,9 +348,14 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     if (failedRequiredEvents.length) {
       const state = attempts >= 3 ? "failed" : "waiting_network";
       const delay = Math.min(60_000, 2 ** attempts * 1_000);
+      const refreshedRoutes = attempts === 1
+        ? await refreshFailedEventRoutes(record, failedRequiredEvents, assertCurrent)
+        : record.eventRoutes;
+      assertCurrent();
       await outgoingQueueRepository.update(accountPubkey, outgoingId, {
         state,
         relayResults,
+        eventRoutes: refreshedRoutes,
         nextAttemptAt: Date.now() + delay,
         lastError: `${failedRequiredEvents.length}/${requiredEvents.length} recipient copies failed`,
         updatedAt: Date.now()
@@ -233,7 +370,9 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     });
     if (sent) await deliverQueuedPush(sent);
     return queuedResult(sent!);
-  })().finally(() => activePublishes.delete(key));
+  })().finally(() => {
+    if (activePublishes.get(key) === task) activePublishes.delete(key);
+  });
   activePublishes.set(key, task);
   return task;
 }
@@ -267,8 +406,17 @@ async function deliverQueuedPush(record: OutgoingQueueRecord) {
 }
 
 export async function retryOutgoingQueue(accountPubkey: string, includeFailed = false) {
+  const account = accountPubkey.toLowerCase();
+  const generation = accountGenerations.get(account) || 0;
   const records = await outgoingQueueRepository.listRetryable(accountPubkey, includeFailed);
-  return Promise.allSettled(records.map(record => publishQueuedOutgoing(accountPubkey, record.outgoingId)));
+  return mapWithConcurrency(records, 2, async record => {
+    try {
+      if ((accountGenerations.get(account) || 0) !== generation) throw new Error("账号已切换");
+      return { status: "fulfilled" as const, value: await publishQueuedOutgoing(account, record.outgoingId) };
+    } catch (reason) {
+      return { status: "rejected" as const, reason };
+    }
+  });
 }
 
 export async function retryFailedOutgoing(accountPubkey: string) {

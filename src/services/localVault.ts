@@ -11,7 +11,7 @@ const fields: Record<string, string[]> = {
   deferredAuthorizationMessages: ["message"],
   accountMessages: ["content"],
   accountMeta: ["value"],
-  outgoingQueue: ["message", "events", "lastError"],
+  outgoingQueue: ["message", "events", "eventRoutes", "lastError"],
   outgoingDmTasks: [
     "text",
     "imageBytes",
@@ -22,6 +22,7 @@ const fields: Record<string, string[]> = {
   ],
   accountStateMirrors: ["data"],
   replaceableEventOutbox: ["event", "lastError"],
+  dmRelayDirectory: ["relays", "eventId", "eventCreatedAt", "publishedAt", "source", "sourceRelays"],
   accountProfiles: ["nickname", "bio", "avatar"],
 };
 export function lockLocalVault(account: string) {

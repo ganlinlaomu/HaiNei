@@ -58,6 +58,8 @@ describe("account message sync generation", () => {
     const managerStart = vi.fn(async (_options: any) => undefined);
     const managerStop = vi.fn();
     const registerSigner = vi.fn();
+    const ensureOwnDmRelayList = vi.fn(async () => true);
+    const cancelDmRelayDirectoryWork = vi.fn();
 
     const friendships: any = {
       loadedFor: "",
@@ -97,6 +99,12 @@ describe("account message sync generation", () => {
       },
     }));
     vi.doMock("@/nostr/relays", () => ({ getRelaysFromStorage: () => ["wss://relay.test"] }));
+    vi.doMock("@/services/dmRelayDirectory", () => ({
+      selectOwnDmRelays: (relays: string[]) => relays.slice(0, 2),
+      ensureOwnDmRelayList,
+      cancelDmRelayDirectoryWork,
+      logDmRelayDirectoryFailure: vi.fn(),
+    }));
     vi.doMock("@/stores/friendships", () => ({
       useFriendshipsStore: () => friendships,
       isFriendshipAcceptedAt: () => false,
@@ -149,6 +157,9 @@ describe("account message sync generation", () => {
     await expect(startedB).resolves.toBe(true);
     expect(managerStart).toHaveBeenCalledTimes(1);
     expect(managerStart.mock.calls[0][0].accountPubkey).toBe(accountB);
+    expect(managerStart.mock.calls[0][0].relays).toEqual(["wss://relay.test"]);
+    expect(ensureOwnDmRelayList).toHaveBeenCalledTimes(1);
+    expect(ensureOwnDmRelayList.mock.calls[0][0]).toBe(accountB);
 
     releaseA();
     await expect(pendingA).resolves.toBe(false);
@@ -157,5 +168,6 @@ describe("account message sync generation", () => {
 
     stopAccountMessageSync();
     expect(managerStop).toHaveBeenCalled();
+    expect(cancelDmRelayDirectoryWork).toHaveBeenCalledWith(accountB);
   });
 });

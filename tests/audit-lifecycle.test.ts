@@ -104,6 +104,10 @@ it("deletes only the selected account, including while its vault is locked", asy
       { accountPubkey: a, key: "draft", value: "A" },
       { accountPubkey: b, key: "draft", value: "B" },
     ]);
+    await database.dmRelayDirectory.bulkPut([
+      { accountPubkey: a, ownerPubkey: "a".repeat(64), relays: ["wss://a.test"], fetchedAt: 1, expiresAt: 2, source: "nip17" },
+      { accountPubkey: b, ownerPubkey: "b".repeat(64), relays: ["wss://b.test"], fetchedAt: 1, expiresAt: 2, source: "nip17" },
+    ]);
     await database.deviceKeyValues.bulkPut([
       { key: `hainei_background_lock_${a}`, value: "1", updatedAt: 1 },
       { key: `hainei_background_lock_${b}`, value: "1", updatedAt: 1 },
@@ -114,6 +118,8 @@ it("deletes only the selected account, including while its vault is locked", asy
       await database.accountMeta.where("accountPubkey").equals(a).count(),
     ).toBe(0);
     expect((await database.accountMeta.get([b, "draft"]))?.value).toBe("B");
+    expect(await database.dmRelayDirectory.where("accountPubkey").equals(a).count()).toBe(0);
+    expect((await database.dmRelayDirectory.get([b, "b".repeat(64)]))?.relays).toEqual(["wss://b.test"]);
     expect(
       (await database.deviceKeyValues.get(`hainei_background_lock_${b}`))
         ?.value,

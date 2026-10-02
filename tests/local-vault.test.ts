@@ -54,3 +54,57 @@ it("migrates, encrypts and restores drafts including binary data; rejects reads 
     await db.delete();
   }
 });
+
+it("seals per-recipient DM routes and cached relay URLs", async () => {
+  const db = new HaiNeiDatabase("vault-dm-relays-test");
+  const peer = "b".repeat(64);
+  try {
+    await unlockLocalVault(account, "1".repeat(64));
+    await db.outgoingQueue.put({
+      accountPubkey: account,
+      outgoingId: "logical-1",
+      state: "pending",
+      message: { plaintext: "private" },
+      events: [],
+      relays: ["wss://legacy.test"],
+      eventRoutes: [{
+        eventId: "event-1",
+        targetPubkey: peer,
+        relays: ["wss://peer-dm.test"],
+        source: "nip17-10050",
+        resolvedAt: 1,
+      }],
+      attempts: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await db.dmRelayDirectory.put({
+      accountPubkey: account,
+      ownerPubkey: peer,
+      relays: ["wss://peer-dm.test"],
+      fetchedAt: 1,
+      expiresAt: 2,
+      source: "nip17",
+    });
+
+    const raw = await new Promise<{ outgoing: any; directory: any }>((resolve, reject) => {
+      const tx = db.backendDB().transaction(["outgoingQueue", "dmRelayDirectory"]);
+      const outgoingRequest = tx.objectStore("outgoingQueue").get([account, "logical-1"]);
+      const directoryRequest = tx.objectStore("dmRelayDirectory").get([account, peer]);
+      tx.oncomplete = () => resolve({ outgoing: outgoingRequest.result, directory: directoryRequest.result });
+      tx.onerror = () => reject(tx.error);
+    });
+    expect(JSON.stringify(raw.outgoing)).not.toContain("peer-dm.test");
+    expect(JSON.stringify(raw.outgoing)).not.toContain(peer);
+    expect(JSON.stringify(raw.directory)).not.toContain("peer-dm.test");
+    expect((await db.outgoingQueue.get([account, "logical-1"]))?.eventRoutes?.[0].relays).toEqual(["wss://peer-dm.test"]);
+    expect((await db.dmRelayDirectory.get([account, peer]))?.relays).toEqual(["wss://peer-dm.test"]);
+
+    lockLocalVault(account);
+    await expect(db.outgoingQueue.get([account, "logical-1"])).rejects.toThrow("local_vault_locked");
+    await expect(db.dmRelayDirectory.get([account, peer])).rejects.toThrow("local_vault_locked");
+  } finally {
+    lockLocalVault(account);
+    await db.delete();
+  }
+});
