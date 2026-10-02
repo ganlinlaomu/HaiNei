@@ -1,5 +1,11 @@
 # HaiNei 更新记录
 
+## 0.1.26 — 2026-10-02
+
+- Google 账号恢复 P0/P1：新增统一恢复层、Google Identity Services 授权与 Drive `appDataFolder` 加密备份；使用 Google `sub` + 6–8 位恢复 PIN 经 PBKDF2-SHA256（600,000 次）派生密钥并以 NIP-44 v2 加密 nsec，恢复后仍复用现有 `private-key` signer 与 `loginWithNsec()`，不改 NIP-17、Relay 或本机通行密钥语义。
+- 原生 Capacitor WebView 暂不启用 Google Web OAuth，避免触发 Google 的 embedded user-agent 限制；当前 Google 恢复面向浏览器 / PWA。
+
+
 ## 0.1.25 — 2026-10-02
 
 - 账号切换修复：通行密钥解锁改为单次验证任务，避免切换账号时重复弹出 Face ID；切换账号登录成功后统一进入 Home，添加账号仍可返回账户设置。
