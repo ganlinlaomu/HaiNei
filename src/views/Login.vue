@@ -71,7 +71,7 @@
           <div v-for="account in ks.accounts" :key="account.pubkey" class="account-option">
             <button type="button" class="account-select" :disabled="loading" @click="selectAccount(account.pubkey)">
               <strong>{{ shortPubkey(account.pubkey) }}</strong>
-              <small>{{ accountCredentialLabel(account.credentialMode) }}</small>
+              <small>{{ accountCredentialLabel(account.authType, account.credentialMode) }}</small>
             </button>
             <div class="account-device-actions">
               <button type="button" class="account-device-action" :disabled="loading" @click="removeAccount(account.pubkey)">忘记此账号</button>
@@ -86,6 +86,9 @@
         </button>
         <button class="btn btn-secondary" type="button" :disabled="loading" @click="startRegistration">
           {{ addingAccount ? "创建新账号" : "还没有账号？注册" }}
+        </button>
+        <button v-if="nip46Enabled" class="btn btn-secondary" type="button" :disabled="loading" @click="openRemoteSignerLogin">
+          远程签名器（Beta）
         </button>
 
         <section v-if="showRegister" class="private-login registration-panel">
@@ -108,6 +111,29 @@
           </button>
           <button class="btn btn-text" type="button" :disabled="loading" @click="cancelRegistration">取消</button>
         </section>
+
+        <form v-if="showRemoteSigner && !showRegister" class="private-login" @submit.prevent="doLoginNip46">
+          <div class="field-group">
+            <label class="field-label" for="remote-signer">Bunker URL / NIP-05</label>
+            <input
+              id="remote-signer"
+              v-model="bunkerInput"
+              class="input"
+              type="text"
+              placeholder="bunker://... 或 name@domain"
+              autocapitalize="none"
+              autocomplete="off"
+              autocorrect="off"
+              spellcheck="false"
+              :disabled="loading"
+            />
+          </div>
+          <p class="password-note">私钥始终保留在远程签名器。海内只保存本机加密的连接凭据；签名器离线时仍可浏览已缓存内容。</p>
+          <button class="btn btn-primary login-button" type="submit" :disabled="loading">
+            {{ loading ? "正在连接…" : "连接远程签名器" }}
+          </button>
+          <button class="btn btn-text" type="button" :disabled="loading" @click="showRemoteSigner = false">取消</button>
+        </form>
 
         <form v-if="showPrivateLogin && !showRegister" class="private-login" @submit.prevent="doLoginNsec">
           <div class="field-group">
@@ -169,7 +195,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { logger } from "@/utils/logger";
 
-type LoginMethod = "private-key" | "unlock" | "switch" | "register";
+type LoginMethod = "private-key" | "nip46" | "unlock" | "switch" | "register";
 
 const ks = useKeyStore();
 const route = useRoute();
@@ -188,7 +214,10 @@ const unlockInProgress = ref(false);
 const passwordFallbackVisible = ref(false);
 const autoBiometricAccount = ref("");
 const showPrivateLogin = ref(false);
+const showRemoteSigner = ref(false);
+const bunkerInput = ref("");
 const showRegister = ref(false);
+const nip46Enabled = import.meta.env.VITE_ENABLE_NIP46 === "true";
 const generatedNsec = ref("");
 const registrationConfirmed = ref(false);
 const copiedNsec = ref(false);
@@ -211,7 +240,11 @@ const registrationReady = computed(() =>
   registrationConfirmed.value
 );
 
-function accountCredentialLabel(mode: "device" | "password" | "passkey" | "session") {
+function accountCredentialLabel(
+  authType: "private-key" | "nip46",
+  mode: "device" | "password" | "passkey" | "session",
+) {
+  if (authType === "nip46") return "远程签名器 · 本机加密连接凭据";
   if (mode === "device") return "私钥 · 本机保持登录";
   if (mode === "passkey") return "私钥 · 通行密钥保护";
   return "私钥 · 本地密码保护";
@@ -289,6 +322,8 @@ function clearSensitiveInputs() {
   registrationConfirmed.value = false;
   copiedNsec.value = false;
   showPrivateKey.value = false;
+  bunkerInput.value = "";
+  showRemoteSigner.value = false;
   loginStorageMode.value = "device";
   showRegister.value = false;
 }
@@ -507,13 +542,50 @@ async function doUnlock() {
 
 function openPrivateLogin() {
   showRegister.value = false;
+  showRemoteSigner.value = false;
   showPrivateLogin.value = !showPrivateLogin.value;
+}
+
+function openRemoteSignerLogin() {
+  if (loading.value || !nip46Enabled) return;
+  errorMessage.value = "";
+  showRegister.value = false;
+  showPrivateLogin.value = false;
+  showRemoteSigner.value = !showRemoteSigner.value;
+}
+
+async function doLoginNip46() {
+  if (loading.value || !nip46Enabled) return;
+  const input = bunkerInput.value.trim();
+  if (!input) {
+    errorMessage.value = "请输入 Bunker URL 或 NIP-05 地址";
+    return;
+  }
+  loading.value = true;
+  errorMessage.value = "";
+  loginStatus.value = "正在连接远程签名器…";
+  try {
+    await ks.loginWithNip46(input);
+    await finishLogin();
+  } catch (error) {
+    logLoginFailure("nip46", "connect", error);
+    const reason = error instanceof Error ? error.message : "";
+    errorMessage.value = reason === "remote_signer_feature_disabled"
+      ? "远程签名器 Beta 当前未启用"
+      : reason === "invalid_remote_signer_input" || reason === "invalid_remote_signer_relays"
+        ? "Bunker 地址无效或没有可用的安全 Relay"
+        : "远程签名器连接失败，请检查签名器与 Relay 后重试。";
+  } finally {
+    loading.value = false;
+    loginStatus.value = "";
+  }
 }
 
 function startRegistration() {
   if (loading.value) return;
   errorMessage.value = "";
   showPrivateLogin.value = false;
+  showRemoteSigner.value = false;
   showRegister.value = true;
   registrationConfirmed.value = false;
   copiedNsec.value = false;

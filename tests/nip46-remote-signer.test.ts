@@ -1,0 +1,67 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+function source(path: string) {
+  return readFileSync(join(process.cwd(), path), "utf8");
+}
+
+describe("NIP-46 remote signer beta contract", () => {
+  it("keeps the beta hidden unless explicitly enabled", () => {
+    const login = source("src/views/Login.vue");
+    const runtime = source("src/services/nip46RemoteSigner.ts");
+    const env = source("src/env.d.ts");
+
+    expect(login).toContain('const nip46Enabled = import.meta.env.VITE_ENABLE_NIP46 === "true"');
+    expect(login).toContain('v-if="nip46Enabled"');
+    expect(login).toContain("远程签名器（Beta）");
+    expect(runtime).toContain('import.meta.env.VITE_ENABLE_NIP46 === "true"');
+    expect(env).toContain("VITE_ENABLE_NIP46?: string");
+  });
+
+  it("routes signing and NIP-44 through the same remote signer account", () => {
+    const keys = source("src/stores/keys.ts");
+
+    expect(keys).toContain('loginMethod: "" as "private-key" | "nip46" | ""');
+    expect(keys).toContain('return this.loginMethod === "nip46" && this.remoteSignerConnected');
+    expect(keys).toContain("return await remoteNip44Encrypt(this.pkHex");
+    expect(keys).toContain("return await remoteNip44Decrypt(this.pkHex");
+    expect(keys).toContain("const signed = await remoteSignEvent(this.pkHex, event)");
+    expect(keys).toContain("signed.id !== expectedId");
+    expect(keys).toContain("!nostr.verifyEvent(signed)");
+  });
+
+  it("persists only an encrypted per-account remote credential and preserves reconnect secret", () => {
+    const credential = source("src/services/remoteSignerCredential.ts");
+    const runtime = source("src/services/nip46RemoteSigner.ts");
+
+    expect(credential).toContain("wrappingKey: CryptoKey");
+    expect(credential).toContain("bunkerSecret: string | null");
+    expect(credential).toContain('false,\n    ["encrypt", "decrypt"]');
+    expect(credential).toContain("ciphertext: copyBuffer(ciphertext)");
+    expect(runtime).toContain("bunkerSecret: pointer.secret");
+    expect(runtime).toContain("secret: credential.bunkerSecret");
+  });
+
+  it("bounds remote requests and keeps offline sessions cache-only", () => {
+    const runtime = source("src/services/nip46RemoteSigner.ts");
+    const sync = source("src/services/accountMessageSync.ts");
+    const settings = source("src/views/SystemSettings.vue");
+
+    expect(runtime).toContain("const MAX_ACTIVE_OPERATIONS = 2");
+    expect(runtime).toContain("const MAX_WAITING_OPERATIONS = 16");
+    expect(runtime).toContain("const OPERATION_TIMEOUT_MS = 60_000");
+    expect(sync).toContain("if (!account || !keys.isLoggedIn || !keys.supportsNip44) return false");
+    expect(settings).toContain("当前离线 · 可浏览本机缓存，签名与加密操作暂停");
+    expect(settings).toContain("@click=\"reconnectRemoteSigner\"");
+  });
+
+  it("publishes the feature as version 0.1.23", () => {
+    const pkg = JSON.parse(source("package.json"));
+    const changelog = source("CHANGELOG.md");
+
+    expect(pkg.version).toBe("0.1.23");
+    expect(pkg.releaseSummary).toContain("NIP-46");
+    expect(changelog).toContain("## 0.1.23 — 2026-10-02");
+  });
+});
