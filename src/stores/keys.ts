@@ -120,11 +120,12 @@ export const useKeyStore = defineStore("keys", {
     }
   },
   actions: {
-    async loadAccountStores(pk: string, localVaultSecretHex = this.skHex) {
+    async loadAccountStores(pk: string, localVaultSecretHex?: string) {
+      const vaultSecretHex = localVaultSecretHex ?? this.skHex;
       if (this.pkHex && this.pkHex !== pk) clearAccountScopedCaches(this.pkHex);
       const generation = ++this.sessionGeneration;
       const isCurrent = () => this.pkHex === pk && this.sessionGeneration === generation && this.isUnlocked;
-      await unlockLocalVault(pk, localVaultSecretHex, isCurrent);
+      await unlockLocalVault(pk, vaultSecretHex, isCurrent);
       if (!isCurrent()) return;
       await migrateLocalVault(db, pk);
       if (!isCurrent()) return;
