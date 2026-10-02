@@ -799,7 +799,10 @@ async function toggleBiometricUnlock() {
 async function goToAccountLogin(mode: "switch" | "add") {
   await keyStore.clearActiveSession();
   keyStore.refreshAccounts();
-  await router.push({ path: "/login", query: { mode, redirect: "/settings/system" } });
+  await router.push({
+    path: "/login",
+    query: { mode, redirect: mode === "switch" ? "/" : "/settings/system" },
+  });
 }
 
 function switchAccount() {
