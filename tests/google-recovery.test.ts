@@ -78,6 +78,18 @@ describe("Google recovery foundation", () => {
     expect(new Headers(init.headers).get("Authorization")).toBe("Bearer secret-access-token");
   });
 
+  it("allows Google Identity Services through the Pages CSP", () => {
+    const headers = source("public/_headers");
+    expect(headers).toContain("script-src 'self' https://accounts.google.com/gsi/client");
+    expect(headers).toContain("https://accounts.google.com/gsi/style");
+  });
+
+  it("removes a failed GIS script so the same page can retry", () => {
+    const auth = source("src/services/recovery/googleAuth.ts");
+    expect(auth).toContain("script.remove()");
+    expect(auth).toContain("scriptPromise = null");
+  });
+
   it("types the optional Google web client ID", () => {
     expect(source("src/env.d.ts")).toContain("VITE_GOOGLE_WEB_CLIENT_ID?: string");
   });
