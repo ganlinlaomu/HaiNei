@@ -9,6 +9,24 @@ describe("P4 mobile UX regression contract", () => {
     expect(html).not.toContain("maximum-scale=1");
   });
 
+  it("prevents iOS PWA input auto-zoom without disabling user zoom", () => {
+    const styles = readFileSync("src/styles.css", "utf8");
+    const conversations = readFileSync("src/views/Conversations.vue", "utf8");
+    const messages = readFileSync("src/views/Messages.vue", "utf8");
+    const newDm = readFileSync("src/components/NewConversationSheet.vue", "utf8");
+    const friends = readFileSync("src/views/Friends.vue", "utf8");
+
+    expect(styles).toContain("iOS Safari/PWA auto-zooms focused form controls below 16px");
+    expect(styles).toMatch(/input\[type="search"\][\s\S]*?textarea,[\s\S]*?select\s*\{\s*font-size:\s*16px;/);
+    expect(conversations).toContain("conversation-search input{width:100%;height:42px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}");
+    expect(messages).toContain("chat-search-field input{min-width:0;width:100%;height:38px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}");
+    expect(messages).toContain("searchInput.value?.blur()");
+    expect(newDm).toContain("friend-search input{width:100%;height:42px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}");
+    expect(newDm).toContain("if (active instanceof HTMLElement && dialog.value?.contains(active)) active.blur()");
+    expect(friends).toMatch(/\.input\s*\{[\s\S]*?font-size:\s*16px;/);
+    expect(friends).toContain('if (active instanceof HTMLElement && active.closest(".modal-content")) active.blur()');
+  });
+
   it("keeps Pages privacy headers compatible with HTTPS media and WSS relays", () => {
     const headers = readFileSync("public/_headers", "utf8");
     expect(headers).toContain("Content-Security-Policy:");
