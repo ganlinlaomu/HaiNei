@@ -7,6 +7,7 @@ export type RemoteSignerCredential = {
   accountPubkey: string;
   bunkerPubkey: string;
   relays: string[];
+  bunkerSecret: string | null;
   clientSecretHex: string;
 };
 
@@ -101,6 +102,7 @@ function serializeCredential(input: RemoteSignerCredential) {
   return JSON.stringify({
     bunkerPubkey: normalizeHex(input.bunkerPubkey, "bunker_pubkey"),
     relays: normalizeRelays(input.relays),
+    bunkerSecret: typeof input.bunkerSecret === "string" ? input.bunkerSecret : null,
     clientSecretHex: normalizeHex(input.clientSecretHex, "client_secret"),
   });
 }
@@ -111,6 +113,7 @@ function deserializeCredential(accountPubkey: string, plaintext: string): Remote
     accountPubkey: normalizeHex(accountPubkey, "account_pubkey"),
     bunkerPubkey: normalizeHex(String(parsed.bunkerPubkey || ""), "bunker_pubkey"),
     relays: normalizeRelays(Array.isArray(parsed.relays) ? parsed.relays.map(String) : []),
+    bunkerSecret: typeof parsed.bunkerSecret === "string" ? parsed.bunkerSecret : null,
     clientSecretHex: normalizeHex(String(parsed.clientSecretHex || ""), "client_secret"),
   };
 }
