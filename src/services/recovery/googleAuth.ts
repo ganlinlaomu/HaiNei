@@ -78,6 +78,10 @@ function loadGoogleIdentityServices() {
   return scriptPromise;
 }
 
+export function preloadGoogleIdentityServices() {
+  return loadGoogleIdentityServices();
+}
+
 function hasRequiredScopes(scope: string | undefined) {
   const scopes = new Set((scope || "").split(/\s+/).filter(Boolean));
   return scopes.has(DRIVE_APPDATA_SCOPE);
