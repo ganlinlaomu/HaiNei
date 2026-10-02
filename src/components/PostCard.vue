@@ -25,7 +25,7 @@
       </div>
     </header>
     <div v-if="cleanText" class="message-text">
-      <span>{{ displayedText }}</span><button v-if="isLong" class="text-button" type="button" @click="expanded = !expanded">{{ expanded ? "收起" : "全文" }}</button>
+      <MentionText :text="displayedText" /><button v-if="isLong" class="text-button" type="button" @click="expanded = !expanded">{{ expanded ? "收起" : "全文" }}</button>
     </div>
     <PostImagePreview v-if="hasImages" :content="message.content" :show-all="true" @double-like="likeFromImage" />
     <VideoPlayer v-if="video" :video-data="video" />
@@ -71,6 +71,7 @@ import { useRouter } from "vue-router";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { useBookmarksStore } from "@/stores/bookmarks";
 import ProfileAvatar from "./ProfileAvatar.vue";
+import MentionText from "./MentionText.vue";
 import { shouldSendDoubleTapLike } from "@/utils/feedCarousel";
 import { extractImageUrls } from "@/utils/extractImageUrls";
 import { loadProfileView } from "@/router/lazyViews";
