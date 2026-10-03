@@ -30,16 +30,18 @@ describe("notifications store", () => {
     localStorage.setItem(`nostr_notifications_${account}`, JSON.stringify([
       { id: "post", type: "message", from: "b", messageId: "p1", created_at: 10, read: false },
       { id: "like", type: "like", from: "b", messageId: "p1", created_at: 11, read: false },
-      { id: "reply", type: "comment", from: "c", messageId: "p1", commentId: "c1", replyId: "c0", created_at: 12, read: false }
+      { id: "reply", type: "comment", from: "c", messageId: "p1", commentId: "c1", replyId: "c0", created_at: 12, read: false },
+      { id: "mention-post", type: "mention_post", from: "d", messageId: "p2", created_at: 13, read: false },
+      { id: "mention-comment", type: "mention_comment", from: "e", messageId: "p2", commentId: "c2", created_at: 14, read: false }
     ]));
 
     const notifications = useNotificationsStore();
     await notifications.load(account);
 
-    expect(notifications.list.map(item => item.id)).toEqual(["like:p1:b", "reply"]);
-    expect(notifications.unreadCount).toBe(2);
+    expect(notifications.list.map(item => item.id)).toEqual(["like:p1:b", "reply", "mention-post", "mention-comment"]);
+    expect(notifications.unreadCount).toBe(4);
     expect(JSON.parse(localStorage.getItem(`nostr_notifications_${account}`) || "[]").map((item: { id: string }) => item.id))
-      .toEqual(["like:p1:b", "reply"]);
+      .toEqual(["like:p1:b", "reply", "mention-post", "mention-comment"]);
   });
 
   it("rejects message notifications defensively", async () => {
