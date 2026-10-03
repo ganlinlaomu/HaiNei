@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.29",
-  "releaseSummary": "新增公开 About、Privacy Policy 与 Terms 页面，满足 Google OAuth Branding 公布要求",
+  "version": "0.1.30",
+  "releaseSummary": "新增托管专用 Relay 短效会话：长期 App Token 仅保存在 Worker，系统 Relay 自动接入",
   "private": true,
   "scripts": {
     "dev": "vite",

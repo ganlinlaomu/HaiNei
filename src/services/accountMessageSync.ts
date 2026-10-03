@@ -12,6 +12,7 @@ import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { isFriendshipAcceptedAt, useFriendshipsStore } from "@/stores/friendships";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
 import { useMessagesStore } from "@/stores/messages";
+import { useSettingsStore } from "@/stores/settings";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -108,6 +109,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   }
   if (!isCurrent()) return false;
   const profiles = useProfilesStore();
+  await useSettingsStore().refreshManagedRelay();
+  if (!isCurrent()) return false;
   const initialSyncState = await syncedMessageRepository.getSyncState(account);
   if (!isCurrent()) return false;
   let friendshipHistoryComplete = !!initialSyncState.historyBackfillCompletedAt;

@@ -50,6 +50,27 @@ Blossom 端对应变量为 `HAINEI_MAX_FILE_SIZE_BYTES`、`HAINEI_DAILY_UPLOAD_C
 
 Pages 构建可设置 `VITE_HAINEI_WORKER_URL` 指向已部署 Worker；它只是公开 API 地址，不是凭据。
 
+## 托管专用 Relay 架构
+
+HaiNei 的专用 Relay 采用与受管 Blossom 相同的服务端凭据模式。长期 App Credential 不进入 PWA：
+
+```text
+设备 → HaiNei Worker（Nostr 签名 challenge）
+     → 使用 Worker Secret RELAY_APP_TOKEN
+     → 专用 Relay /api/app/session
+     → 返回绑定当前 pubkey、约 10 分钟有效的 nrs_ 短效 session
+设备 → WebSocket subprotocol relay-app.<nrs_...> → 专用 Relay
+```
+
+Cloudflare 的 `hainei-media` Worker 需要：
+
+- `RELAY_APP_URL`：普通变量，可填 `wss://...` 或对应的 `https://...` Worker 地址；
+- `RELAY_APP_TOKEN`：Secret，只保存 Relay Admin 创建的长期 `nra_...` App Credential。
+
+Worker 对前端仅公开 `GET /api/relay/config` 中的 Relay URL；长期 credential 不会返回浏览器。当前 Nostr 用户通过现有一次性 challenge 签名后调用 `POST /api/relay/session`，Worker 再向 Relay 换取短效 token。短效 token 同时绑定当前 pubkey，过期前 HaiNei 会自动重连刷新。
+
+托管 Relay 会自动加入 HaiNei 的 System Relay 列表并固定 Read / Write；不需要用户在设置页输入 App Token。
+
 ### Google 账号恢复（P0 + P1）
 
 Web/PWA 登录页支持可选的「使用 Google 继续」。它不会把 Google 设为 Nostr 登录方式：Google 只负责取得稳定账号标识与 `drive.appdata` 授权，恢复出的私钥最终仍进入现有 `loginWithNsec()` / `private-key` signer 路径。

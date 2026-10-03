@@ -18,6 +18,8 @@ export interface Env {
   DB: D1Database;
   BLOSSOM: ServiceBinding;
   BLOSSOM_SERVICE_TOKEN: string;
+  RELAY_APP_URL?: string;
+  RELAY_APP_TOKEN?: string;
   AUTH_CHALLENGE_TTL_SECONDS?: string;
   AUTH_CHALLENGE_PER_MINUTE_PER_SOURCE?: string;
   AUTH_CHALLENGE_PER_MINUTE_GLOBAL?: string;

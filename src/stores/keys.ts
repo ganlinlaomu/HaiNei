@@ -35,6 +35,7 @@ import { syncPrivateBookmarkMirror } from "@/services/privateBookmarkMirror";
 import { hydratePrivateDeviceValues, clearPrivateDeviceValues, deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/deviceStorage";
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { startAccountMessageSync, stopAccountMessageSync } from "@/services/accountMessageSync";
+import { clearRelaySessionSigner, registerRelaySessionSigner } from "@/services/relaySession";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import {
   forgetDeviceAccount,
@@ -144,6 +145,7 @@ export const useKeyStore = defineStore("keys", {
       } catch (e) {
         console.error(`[account] settings load failed account=${account}`, e);
       }
+      if (isCurrent()) registerRelaySessionSigner(pk, this.signEvent.bind(this));
       // Warm only after this account's settings have been materialized, otherwise
       // an account switch can briefly reconnect using the previous account's Relay mirror.
       if (!isCurrent()) return;
@@ -260,6 +262,7 @@ export const useKeyStore = defineStore("keys", {
 
     resetAccountStores(currentPk: string) {
       this.sessionGeneration++;
+      clearRelaySessionSigner(currentPk);
       stopAccountMessageSync();
       lockLocalVault(currentPk);
       clearPrivateDeviceValues(currentPk);

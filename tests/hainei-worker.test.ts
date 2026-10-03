@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
 import { createChallenge, verifyAndConsumeChallenge } from "../worker/src/auth";
 import { createMediaSession } from "../worker/src/media";
+import { createRelaySession, relayPublicConfig } from "../worker/src/relay";
 import { assertUserAndQuota } from "../worker/src/quota";
 import type { Env } from "../worker/src/types";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -96,6 +97,7 @@ describe("HaiNei Worker authentication and quota", () => {
     walk(join(process.cwd(), "public"));
     files.push(join(process.cwd(), "index.html"));
     expect(files.every(file => !readFileSync(file, "utf8").includes("BLOSSOM_SERVICE_TOKEN"))).toBe(true);
+    expect(files.every(file => !readFileSync(file, "utf8").includes("RELAY_APP_TOKEN"))).toBe(true);
   });
 
   it("creates, verifies, consumes, and prevents replay of a signed challenge", async () => {
@@ -186,6 +188,46 @@ describe("HaiNei Worker authentication and quota", () => {
       .rejects.toMatchObject({ status: 413 });
     db.usage.set("a".repeat(64) + "|1970-01-01", { upload_count: 500, upload_bytes: 100 });
     await expect(assertUserAndQuota(baseEnv(db), pubkey, 1, 1000)).rejects.toMatchObject({ status: 429 });
+  });
+
+  it("exposes only the managed Relay URL as public configuration", () => {
+    expect(relayPublicConfig({ ...baseEnv(), RELAY_APP_URL: "https://relay.example.com/" })).toEqual({
+      enabled: true,
+      relayUrl: "wss://relay.example.com",
+    });
+    expect(relayPublicConfig(baseEnv())).toEqual({ enabled: false, relayUrl: "" });
+  });
+
+  it("exchanges the server-only Relay credential for a pubkey-bound short session", async () => {
+    const pubkey = "d".repeat(64);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      expect(request.url).toBe("https://relay.example.com/api/app/session");
+      expect(request.headers.get("Authorization")).toBe("Bearer relay-long-lived-secret");
+      expect(await request.json()).toEqual({ subject: pubkey, ttl: 600 });
+      return new Response(JSON.stringify({
+        bindingVersion: 1,
+        token: "nrs_short_lived_session",
+        appId: "app_test",
+        subject: pubkey,
+        scope: "relay",
+        expiresAt: Math.floor(Date.now() / 1000) + 600,
+      }), { status: 201 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const result = await createRelaySession({
+        ...baseEnv(),
+        RELAY_APP_URL: "wss://relay.example.com",
+        RELAY_APP_TOKEN: "relay-long-lived-secret",
+      }, pubkey);
+      expect(result.relayUrl).toBe("wss://relay.example.com");
+      expect(result.token).toBe("nrs_short_lived_session");
+      expect(result.pubkey).toBe(pubkey);
+      expect(result.scope).toBe("relay");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("uses the server-side service credential to obtain a scoped Blossom token", async () => {

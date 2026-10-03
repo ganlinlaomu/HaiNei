@@ -9,6 +9,7 @@ import { setMediaHealthReporter } from "@/utils/blossom";
 import { logger } from "@/utils/logger";
 import { deviceStorage } from "@/services/deviceStorage";
 import { scheduleAccountStateSync, syncAccountStateNamespace } from "@/services/accountStateSync";
+import { getManagedRelayConfig } from "@/services/relaySession";
 import {
   ACTIVE_RELAY_CONFIGS_KEY,
   DEFAULT_RELAY_URLS,
@@ -47,6 +48,18 @@ type StoredSettingsData = {
 };
 
 let relayHealthUnsubscribe: (() => void) | null = null;
+const MANAGED_RELAY_STORAGE_KEY = "hainei_managed_relay_url";
+
+function selectRuntimeRelayConfigs(items: RelayConfig[]) {
+  const required = items.filter(item =>
+    item.enabled && !item.deleted && item.source === "default"
+    && ((DEFAULT_RELAY_URLS as readonly string[]).includes(item.url) || item.updatedBy === "managed-worker")
+  );
+  const ranked = selectRelayConfigs(items, 5);
+  const requiredUrls = new Set(required.map(item => item.url));
+  const others = ranked.filter(item => !requiredUrls.has(item.url));
+  return [...others.slice(0, Math.max(0, 5 - required.length)), ...required].slice(0, 5);
+}
 
 export function storageKeyFor(pkHex?: string | null) {
   const normalized = typeof pkHex === "string" ? pkHex.trim().toLowerCase() : "";
@@ -120,7 +133,7 @@ export const useSettingsStore = defineStore("settings", {
       const enabled = rankMediaServers(visible);
       return enabled.concat(visible.filter(item => !item.enabled));
     },
-    activeRelays: (state) => selectRelayConfigs(state.settings.relays),
+    activeRelays: (state) => selectRuntimeRelayConfigs(state.settings.relays),
     activeMediaServers: (state) => effectiveMediaServers(state.settings.mediaServers)
   },
 
@@ -257,9 +270,78 @@ export const useSettingsStore = defineStore("settings", {
       this.save();
       this.applySettings();
       this.bindHealthTracking();
+      void this.refreshManagedRelay();
 
       // Account settings are restored and synchronized through the encrypted
       // account-state namespace. Relay settings events are legacy import only.
+    },
+
+    async refreshManagedRelay() {
+      const account = this.loadedFor;
+      const generation = this._sessionGeneration;
+      if (!account) return "";
+      try {
+        const config = await getManagedRelayConfig();
+        if (this.loadedFor !== account || this._sessionGeneration !== generation) return "";
+        const previous = normalizeRelayUrl(deviceStorage.getItem(MANAGED_RELAY_STORAGE_KEY) || "");
+        const next = config.enabled ? normalizeRelayUrl(config.relayUrl) : "";
+        let changed = false;
+
+        if (previous && previous !== next && !(DEFAULT_RELAY_URLS as readonly string[]).includes(previous)) {
+          const before = this.settings.relays.length;
+          this.settings.relays = this.settings.relays.filter(item =>
+            !(item.url === previous && item.source === "default" && item.updatedBy === "managed-worker")
+          );
+          changed ||= this.settings.relays.length !== before;
+        }
+
+        if (next) {
+          const existing = this.settings.relays.find(item => item.url === next);
+          if (existing) {
+            const shouldChange = !existing.enabled || existing.deleted || !existing.read || !existing.write
+              || existing.source !== "default" || existing.updatedBy !== "managed-worker";
+            if (shouldChange) {
+              Object.assign(existing, {
+                enabled: true,
+                deleted: false,
+                read: true,
+                write: true,
+                source: "default",
+                updatedBy: "managed-worker",
+              });
+              changed = true;
+            }
+          } else {
+            this.settings.relays.push({
+              url: next,
+              read: true,
+              write: true,
+              enabled: true,
+              deleted: false,
+              source: "default",
+              addedAt: 0,
+              updatedAt: 0,
+              updatedBy: "managed-worker",
+            });
+            changed = true;
+          }
+          deviceStorage.setItem(MANAGED_RELAY_STORAGE_KEY, next);
+        } else if (previous) {
+          deviceStorage.removeItem(MANAGED_RELAY_STORAGE_KEY);
+        }
+
+        if (changed) {
+          this.save();
+          this.applySettings();
+        }
+        return next;
+      } catch (error) {
+        logger.warn("[settings] managed relay configuration unavailable", {
+          account: account.slice(0, 8),
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
+        return "";
+      }
     },
 
     bindHealthTracking() {
@@ -302,7 +384,7 @@ export const useSettingsStore = defineStore("settings", {
 
     applySettings(_connectNewRelays = false) {
       const previousRelays = new Set(getRelaysFromStorage());
-      const activeRelays = selectRelayConfigs(this.settings.relays);
+      const activeRelays = selectRuntimeRelayConfigs(this.settings.relays);
       const activeUrls = activeRelays.map(item => item.url);
       const activeSet = new Set(activeUrls);
 

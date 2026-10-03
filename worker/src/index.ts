@@ -1,5 +1,6 @@
 import { createChallenge, verifyAndConsumeChallenge } from "./auth";
 import { createMediaSession } from "./media";
+import { createRelaySession, relayPublicConfig } from "./relay";
 import {
   getPushPublicKey,
   removePushSubscription,
@@ -14,7 +15,7 @@ import { AccountStateConflict, getAccountState, putAccountState } from "./accoun
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "Cache-Control": "no-store",
 };
@@ -45,8 +46,11 @@ function authBinding(request: Request, payload: Record<string, unknown>) {
 export async function handleRequest(request: Request, env: Env) {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   const path = new URL(request.url).pathname.replace(/\/+$/, "") || "/";
-  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   try {
+    if (path === "/api/relay/config" && request.method === "GET") {
+      return json(relayPublicConfig(env));
+    }
+    if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (path === "/api/auth/challenge") {
       await enforceChallengeRateLimit(env, request);
       return json(await createChallenge(env), 201);
@@ -57,6 +61,13 @@ export async function handleRequest(request: Request, env: Env) {
         env, payload.challenge, payload.event, undefined, "hainei_media_session", authBinding(request, payload),
       );
       return json(await createMediaSession(env, pubkey, payload.fileSize, payload.contentHash), 201);
+    }
+    if (path === "/api/relay/session") {
+      const payload = await body(request, env, 16 * 1024);
+      const pubkey = await verifyAndConsumeChallenge(
+        env, payload.challenge, payload.event, undefined, "hainei_relay_session", authBinding(request, payload),
+      );
+      return json(await createRelaySession(env, pubkey), 201);
     }
     if (path === "/api/account-state/get") {
       const payload = await body(request, env, 32 * 1024);

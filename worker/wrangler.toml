@@ -36,5 +36,7 @@ service = "blossom-imgbed"
 
 # Set server-side only with:
 # npx wrangler secret put BLOSSOM_SERVICE_TOKEN --config worker/wrangler.toml
+# npx wrangler secret put RELAY_APP_TOKEN --config worker/wrangler.toml
+# RELAY_APP_URL is a normal Worker variable; RELAY_APP_TOKEN must remain a secret.
 # npx wrangler secret put VAPID_PRIVATE_KEY --config worker/wrangler.toml
 # VAPID_PRIVATE_KEY must never be added to this file.

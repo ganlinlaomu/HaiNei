@@ -16,6 +16,7 @@ import {
 } from "@/services/connectionSettings";
 import { performanceCounters } from "@/services/nostrCache";
 import { deviceStorage } from "@/services/deviceStorage";
+import { getManagedRelaySessionForUrl } from "@/services/relaySession";
 
 type RelayConn = {
   url: string;
@@ -33,6 +34,8 @@ type RelayConn = {
   okHandlers: Map<string, (res: any) => void>;
   reconnectTimer?: number | null;
   connectTimer?: number | null;
+  sessionRefreshTimer?: number | null;
+  connecting: boolean;
   reconnectAttempts: number;
   hasConnected: boolean;
   shouldReconnect: boolean;
@@ -219,6 +222,8 @@ function ensureRelayConn(url: string): RelayConn {
     okHandlers: new Map(),
     reconnectTimer: null,
     connectTimer: null,
+    sessionRefreshTimer: null,
+    connecting: false,
     reconnectAttempts: 0,
     hasConnected: false,
     shouldReconnect: true,
@@ -247,14 +252,23 @@ function ensureRelayConn(url: string): RelayConn {
     }, delay);
   };
 
-  const create = () => {
+  const create = async () => {
     if (!conn.shouldReconnect) return;
-    if (conn.ws?.readyState === 0 || conn.ws?.readyState === 1) return;
+    if (conn.connecting || conn.ws?.readyState === 0 || conn.ws?.readyState === 1) return;
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    conn.connecting = true;
     debugLog("relay", "relay_connecting", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "info");
     try {
-      const ws = new WebSocket(url);
+      const managedSession = await getManagedRelaySessionForUrl(url);
+      if (!conn.shouldReconnect || conn.ws?.readyState === 0 || conn.ws?.readyState === 1) {
+        conn.connecting = false;
+        return;
+      }
+      const ws = managedSession
+        ? new WebSocket(url, ["nostr", `relay-app.${managedSession.token}`])
+        : new WebSocket(url);
       conn.ws = ws;
+      conn.connecting = false;
       conn.ready = false;
       conn.connectStartedAt = Date.now();
       if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
@@ -276,6 +290,16 @@ function ensureRelayConn(url: string): RelayConn {
         conn.ready = true;
         conn.hasConnected = true;
         conn.reconnectAttempts = 0;
+        if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
+        conn.sessionRefreshTimer = null;
+        if (managedSession) {
+          const refreshIn = Math.max(1_000, managedSession.expiresAt * 1000 - Date.now() - 30_000);
+          conn.sessionRefreshTimer = window.setTimeout(() => {
+            if (conn.ws !== ws || !conn.shouldReconnect) return;
+            debugLog("relay", "relay_session_refresh", { relay: url }, "info");
+            try { ws.close(4001, "relay session refresh"); } catch {}
+          }, refreshIn);
+        }
         debugLog("relay", "relay_connected", { relay: url, reconnectAttempts }, "info");
         for (const [subId, sub] of conn.subs) {
           sub.settled = false;
@@ -370,6 +394,9 @@ function ensureRelayConn(url: string): RelayConn {
         conn.connectTimer = null;
         conn.ready = false;
         conn.ws = null;
+        conn.connecting = false;
+        if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
+        conn.sessionRefreshTimer = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
         emitConnectionState({
           url,
@@ -383,7 +410,7 @@ function ensureRelayConn(url: string): RelayConn {
         for (const subId of conn.subs.keys()) {
           settleSubscription(conn, subId, "failure", "disconnected");
         }
-        scheduleReconnect(create);
+        scheduleReconnect(() => { void create(); });
       };
 
       const onError = () => {
@@ -395,6 +422,7 @@ function ensureRelayConn(url: string): RelayConn {
       ws.addEventListener("close", onClose);
       ws.addEventListener("error", onError);
     } catch (e) {
+      conn.connecting = false;
       debugLog("relay", "relay_error", {
         relay: url,
         reconnectAttempts: conn.reconnectAttempts,
@@ -412,8 +440,8 @@ function ensureRelayConn(url: string): RelayConn {
     }
   };
 
-  conn.connect = create;
-  create();
+  conn.connect = () => { void create(); };
+  void create();
   return conn;
 }
 
@@ -423,7 +451,7 @@ export function warmRelays(relays: string[]) {
   for (const url of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
     const existing = relaysMap[url];
     const conn = existing || ensureRelayConn(url);
-    if (!existing || conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
+    if (!existing || conn.ready || conn.connecting || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
     conn.reconnectAttempts = 0;
@@ -626,7 +654,7 @@ export function inspectRelays(): Record<string, RelayRuntimeStatus> {
       ? "connected"
       : r.reconnectTimer !== null
         ? "waiting-retry"
-        : r.ws?.readyState === 0
+        : r.connecting || r.ws?.readyState === 0
           ? "connecting"
           : "disconnected";
     out[url] = {
@@ -674,8 +702,11 @@ export function reconnectRelay(url: string) {
     r.shouldReconnect = false;
     if (r.reconnectTimer) window.clearTimeout(r.reconnectTimer);
     if (r.connectTimer) window.clearTimeout(r.connectTimer);
+    if (r.sessionRefreshTimer) window.clearTimeout(r.sessionRefreshTimer);
     r.reconnectTimer = null;
     r.connectTimer = null;
+    r.sessionRefreshTimer = null;
+    r.connecting = false;
     try { r.ws?.close(); } catch {}
     r.ready = false;
     r.okHandlers.clear();
@@ -701,8 +732,11 @@ export function disconnectRelay(url: string) {
   conn.shouldReconnect = false;
   if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
   if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
+  if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
   conn.reconnectTimer = null;
   conn.connectTimer = null;
+  conn.sessionRefreshTimer = null;
+  conn.connecting = false;
   conn.queue = [];
   conn.subs.clear();
   conn.okHandlers.clear();
