@@ -7,7 +7,7 @@ import { scheduleAccountStateSync } from "@/services/accountStateSync";
 
 export interface NotificationItem {
   id: string;
-  type: "like" | "comment" | "friend_request";
+  type: "like" | "comment" | "friend_request" | "mention_post" | "mention_comment";
   from: string;
   messageId?: string;
   commentId?: string;
@@ -140,7 +140,8 @@ export const useNotificationsStore = defineStore("notifications", {
         const seen = new Set<string>();
         this.list = Array.isArray(stored)
           ? stored.filter((item: NotificationItem & { type?: string }) =>
-              item?.type === "like" || item?.type === "comment" || item?.type === "friend_request")
+              item?.type === "like" || item?.type === "comment" || item?.type === "friend_request"
+              || item?.type === "mention_post" || item?.type === "mention_comment")
             .map((item: NotificationItem) => item.type === "like" && item.messageId
               ? { ...item, id: likeNotificationId(item.messageId, item.from) }
               : item)
@@ -257,7 +258,8 @@ export const useNotificationsStore = defineStore("notifications", {
     },
 
     addNotification(n: NotificationItem) {
-      if (n.type !== "like" && n.type !== "comment" && n.type !== "friend_request") return;
+      if (n.type !== "like" && n.type !== "comment" && n.type !== "friend_request"
+        && n.type !== "mention_post" && n.type !== "mention_comment") return;
       if (n.type === "like" && n.messageId) n.id = likeNotificationId(n.messageId, n.from);
       // 这里的逻辑修复最重要：
       // 1. 检查是否重复
