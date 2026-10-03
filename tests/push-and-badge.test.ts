@@ -436,6 +436,7 @@ describe("privacy-preserving push and badge", () => {
     expect(pushCategoryForMessage([["l", "hainei-friendship"], ["t", "request"]])).toBeNull();
     expect(shouldTriggerGenericPush([["l", "hainei-interaction"], ["t", "like"]])).toBe(false);
     expect(shouldTriggerGenericPush([["l", "hainei-interaction"], ["t", "comment"]])).toBe(false);
+    expect(shouldTriggerGenericPush([["hainei-mention", OTHER]])).toBe(false);
     expect(shouldTriggerGenericPush([["l", "hainei-friendship"], ["t", "request"]])).toBe(false);
     expect(shouldTriggerGenericPush([["t", "hainei-profile-request"]])).toBe(false);
     expect(shouldTriggerGenericPush([["t", "hainei-tombstone"]])).toBe(false);
