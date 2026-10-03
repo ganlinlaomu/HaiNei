@@ -9,7 +9,7 @@ function source(path: string) {
 describe("notification comment navigation", () => {
   it("targets replies before parent comments", () => {
     const notifications = source("src/views/Notifications.vue");
-    expect(notifications).toContain("const targetCommentId = n.replyId || n.commentId");
+    expect(notifications).toContain('const targetCommentId = n.type === "mention_comment" ? n.commentId : (n.replyId || n.commentId)');
     expect(notifications).toContain("...(targetCommentId ? { iid: targetCommentId } : {})");
     expect(notifications).not.toContain("iid: n.commentId, rid: n.replyId");
   });
