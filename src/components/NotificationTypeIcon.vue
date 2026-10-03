@@ -10,6 +10,7 @@
     <svg v-else-if="kind === 'reply'" viewBox="0 0 24 24">
       <path d="m9 7-5 5 5 5M5 12h7c4.4 0 7 2.1 7 6" />
     </svg>
+    <span v-else-if="kind === 'mention'" class="mention-glyph">@</span>
     <svg v-else viewBox="0 0 24 24">
       <path d="M5 5.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-5 3v-3H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z" />
     </svg>
@@ -17,7 +18,7 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{ kind: "like" | "comment" | "reply" | "friend" }>();
+defineProps<{ kind: "like" | "comment" | "reply" | "friend" | "mention" }>();
 </script>
 
 <style scoped>
@@ -26,5 +27,7 @@ svg { width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9;stro
 .like { color:#ef476f;background:#fff0f4; }.like svg { fill:currentColor;stroke:none; }
 .comment { color:#3b82f6;background:#eff6ff; }
 .reply { color:#8b5cf6;background:#f5f3ff; }
+.mention { color:#7c3aed;background:#f5f3ff; }
+.mention-glyph { font-size:20px;font-weight:800;line-height:1; }
 .friend { color:#10b981;background:#ecfdf5; }
 </style>
