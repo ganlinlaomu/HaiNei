@@ -222,6 +222,7 @@ const {
   onMentionBlur,
   onMentionKeydown,
   selectMention,
+  mentionedPubkeys,
   closeMention,
 } = useMentionComposer(draft, composer, mentionCandidates);
 
@@ -335,7 +336,8 @@ async function submitComment() {
       submission.recipientPubkey,
       submission.text,
       submission.parentCommentId,
-      media
+      media,
+      mentionedPubkeys()
     );
     draft.value = commentDraftAfterSend(draft.value, true);
     removeSelectedImage();
