@@ -209,7 +209,7 @@ import { useUIStore } from "@/stores/ui";
 import { useProfilesStore } from "@/stores/profiles";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
-import type { MentionCandidate } from "@/utils/mentions";
+import { mentionTags, type MentionCandidate } from "@/utils/mentions";
 import { uploadImageToBlossomWithFallback, getBlossomConfig } from "@/utils/blossom";
 import { resizeImageFile } from "@/utils/imageResize";
 import { compressImageToTargetSize } from "@/utils/imageCompression";
@@ -361,6 +361,7 @@ export default defineComponent({
       onMentionBlur,
       onMentionKeydown,
       selectMention,
+      mentionedPubkeys,
       closeMention,
     } = useMentionComposer(content, textarea, mentionCandidates);
 
@@ -1082,8 +1083,16 @@ export default defineComponent({
           fullContent += `${VIDEO_METADATA_PREFIX}${JSON.stringify(videoData)}${VIDEO_METADATA_SUFFIX}\n`;
         }
         
-        // Publish the message to relays
-        const { message } = await posts.sendDirectMessage(recips, fullContent);
+        // Publish the message to relays. Mention metadata stays inside the
+        // encrypted NIP-17 rumor and is not exposed by the gift-wrap envelope.
+        const recipientSet = new Set(recips.map(pubkey => pubkey.toLowerCase()));
+        const mentionRecipients = mentionedPubkeys().filter(pubkey => recipientSet.has(pubkey.toLowerCase()));
+        const { message } = await posts.sendDirectMessage(
+          recips,
+          fullContent,
+          undefined,
+          mentionTags(mentionRecipients),
+        );
 
         // Add message to inbox with _localMeta immediately after publishing
         // This executes as soon as the await resolves, minimizing the race condition
