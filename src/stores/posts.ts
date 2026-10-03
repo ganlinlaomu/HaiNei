@@ -44,7 +44,7 @@ async function savePublishedOutbox(accountAtStart: string, result: PublishedMess
 export const usePostsStore = defineStore("posts", {
   state: () => ({}),
   actions: {
-    async sendDirectMessage(recipients: string[], plaintext: string, replyTo?: string) {
+    async sendDirectMessage(recipients: string[], plaintext: string, replyTo?: string, tags?: string[][]) {
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
       const accountAtStart = key.pkHex;
@@ -64,6 +64,7 @@ export const usePostsStore = defineStore("posts", {
           recipientPubkeys,
           content: plaintext,
           replyTo,
+          tags,
           relays: getRelaysFromStorage(),
           context: {
             senderPubkey: accountAtStart,
