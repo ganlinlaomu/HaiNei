@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   filterMentionCandidates,
   insertMention,
+  mentionTags,
+  mentionedPubkeysFromTags,
   mentionQueryAtCursor,
   splitKnownMentions,
   type MentionCandidate,
@@ -43,6 +45,15 @@ describe("user mentions", () => {
     ]);
   });
 
+  it("encodes mention recipients as private message metadata", () => {
+    expect(mentionTags([ALICE, ALICE.toUpperCase(), "bad"])).toEqual([["hainei-mention", ALICE]]);
+    expect(mentionedPubkeysFromTags([
+      ["hainei-mention", ALICE],
+      ["hainei-mention", BOB.toUpperCase()],
+      ["p", BOB],
+    ])).toEqual([ALICE, BOB]);
+  });
+
   it("wires autocomplete into DMs, posts, and comments while keeping text transport unchanged", () => {
     const dm = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const post = readFileSync(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
@@ -69,5 +80,7 @@ describe("user mentions", () => {
     expect(composer).toContain("const value = element.value");
     expect(composer).toContain("event?.currentTarget");
     expect(directStore).not.toContain("mentionPubkeys");
+    expect(post).toContain("mentionTags(mentionRecipients)");
+    expect(comment).toContain("mentionedPubkeys()");
   });
 });
