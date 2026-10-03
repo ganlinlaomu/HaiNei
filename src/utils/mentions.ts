@@ -20,6 +20,21 @@ export type MentionTextSegment =
   | { type: "text"; text: string }
   | { type: "mention"; text: string; label: string; pubkey: string };
 
+export const HAI_NEI_MENTION_TAG = "hainei-mention";
+
+export function mentionTags(pubkeys: readonly string[]) {
+  return [...new Set(pubkeys.map(value => value.trim().toLowerCase()))]
+    .filter(value => /^[0-9a-f]{64}$/.test(value))
+    .map(value => [HAI_NEI_MENTION_TAG, value]);
+}
+
+export function mentionedPubkeysFromTags(tags: readonly string[][] | undefined) {
+  if (!tags?.length) return [];
+  return [...new Set(tags
+    .filter(tag => tag[0] === HAI_NEI_MENTION_TAG && /^[0-9a-f]{64}$/i.test(tag[1] || ""))
+    .map(tag => tag[1].toLowerCase()))];
+}
+
 function isWordLike(char: string) {
   return !!char && /[\p{L}\p{N}_]/u.test(char);
 }

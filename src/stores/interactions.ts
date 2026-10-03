@@ -11,6 +11,7 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { isEncryptedImageRef } from "@/utils/encryptedImageRef";
 import { cancelBackgroundTask, scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
+import { mentionTags } from "@/utils/mentions";
 
 export const INTERACTION_LABEL = "hainei-interaction";
 
@@ -34,6 +35,7 @@ export interface Comment {
   type: "comment";
   parentCommentId?: string;
   media?: CommentMedia[];
+  mentionedPubkeys?: string[];
   pending?: boolean;
   failed?: boolean;
 }
@@ -139,6 +141,11 @@ function decodeInteractionMessage(message: CanonicalMessage): Interaction | null
         const media = interaction.media[0];
         if (media && (media.type !== "image" || !isEncryptedImageRef(media.ref))) return null;
       }
+      if (interaction.mentionedPubkeys !== undefined) {
+        if (!Array.isArray(interaction.mentionedPubkeys) || interaction.mentionedPubkeys.length > 32) return null;
+        if (interaction.mentionedPubkeys.some(pubkey => !/^[0-9a-f]{64}$/i.test(pubkey))) return null;
+        interaction.mentionedPubkeys = [...new Set(interaction.mentionedPubkeys.map(pubkey => pubkey.toLowerCase()))];
+      }
       if (!interaction.text.trim() && !interaction.media?.length) return null;
     }
     return interaction;
@@ -184,16 +191,21 @@ export const useInteractionsStore = defineStore("interactions", {
       messageAuthor: string,
       text: string,
       parentCommentId?: string,
-      media?: CommentMedia[]
+      media?: CommentMedia[],
+      mentionedPubkeys: string[] = []
     ) {
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
       const normalizedMedia = media?.slice(0, 1).filter(item => item.type === "image" && isEncryptedImageRef(item.ref));
       if (!text.trim() && !normalizedMedia?.length) throw new Error("评论不能为空");
+      const normalizedMentions = [...new Set(mentionedPubkeys
+        .map(pubkey => pubkey.trim().toLowerCase())
+        .filter(pubkey => /^[0-9a-f]{64}$/.test(pubkey) && pubkey !== key.pkHex.toLowerCase()))];
       const interaction: Comment = {
         id: newInteractionId(), messageId, author: key.pkHex, text: text.trim(),
         timestamp: Math.floor(Date.now() / 1000), type: "comment", parentCommentId,
-        ...(normalizedMedia?.length ? { media: normalizedMedia } : {})
+        ...(normalizedMedia?.length ? { media: normalizedMedia } : {}),
+        ...(normalizedMentions.length ? { mentionedPubkeys: normalizedMentions } : {})
       };
       this._addInteraction({ ...interaction, pending: true });
       try {
@@ -245,17 +257,22 @@ export const useInteractionsStore = defineStore("interactions", {
       if (!key.isLoggedIn) throw new Error("未登录");
       const friendships = useFriendshipsStore();
       if (friendships.loadedFor !== key.pkHex) await friendships.load(key.pkHex);
-      if (recipientPubkey.toLowerCase() !== key.pkHex.toLowerCase() && !friendships.isAccepted(recipientPubkey)) {
-        throw new Error("只能与已互相确认的好友互动");
-      }
+      const recipientPubkeys = [...new Set([
+        recipientPubkey.toLowerCase(),
+        ...(interaction.type === "comment" ? (interaction.mentionedPubkeys || []) : []),
+      ])];
+      const unauthorized = recipientPubkeys.find(pubkey =>
+        pubkey !== key.pkHex.toLowerCase() && !friendships.isAccepted(pubkey));
+      if (unauthorized) throw new Error("只能与已互相确认的好友互动");
       await sendDirectMessage({
-        recipientPubkeys: [recipientPubkey],
+        recipientPubkeys,
         content: JSON.stringify(interaction),
         replyTo: interaction.messageId,
         tags: [
           ["l", INTERACTION_LABEL],
           ["t", interaction.type],
-          ...(interaction.type === "like" ? [["liked", String(isActiveLike(interaction))]] : [])
+          ...(interaction.type === "like" ? [["liked", String(isActiveLike(interaction))]] : []),
+          ...(interaction.type === "comment" ? mentionTags(interaction.mentionedPubkeys || []) : [])
         ],
         relays: getRelaysFromStorage(),
         context: {
@@ -279,11 +296,13 @@ export const useInteractionsStore = defineStore("interactions", {
         : undefined;
       const staleLike = !!currentLike && interaction.type === "like" && interaction.timestamp < currentLike.timestamp;
       if (!staleLike && interaction.author !== myPubkey && (interaction.type !== "like" || isActiveLike(interaction))) {
+        const isMention = interaction.type === "comment"
+          && !!interaction.mentionedPubkeys?.includes(myPubkey.toLowerCase());
         useNotificationsStore().addNotification({
           id: interaction.type === "like"
             ? likeNotificationId(interaction.messageId, interaction.author)
-            : `interaction:${message.id}`,
-          type: interaction.type,
+            : isMention ? `mention-comment:${interaction.id}` : `interaction:${message.id}`,
+          type: isMention ? "mention_comment" : interaction.type,
           from: interaction.author,
           messageId: interaction.messageId,
           commentId: interaction.type === "comment" ? interaction.id : undefined,

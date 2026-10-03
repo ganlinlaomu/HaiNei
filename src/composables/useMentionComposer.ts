@@ -17,6 +17,49 @@ export function useMentionComposer<T extends HTMLInputElement | HTMLTextAreaElem
   const range = ref<MentionQuery | null>(null);
   const open = ref(false);
   let blurTimer: ReturnType<typeof setTimeout> | null = null;
+  const selectedMentions = new Map<string, string>();
+
+  function containsMentionLabel(text: string, label: string) {
+    const token = `@${label.trim()}`;
+    if (token === "@") return false;
+    let offset = 0;
+    while (offset < text.length) {
+      const index = text.indexOf(token, offset);
+      if (index < 0) return false;
+      const previous = index > 0 ? text[index - 1] : "";
+      const next = text[index + token.length] || "";
+      const previousOk = !previous || !/[\p{L}\p{N}_]/u.test(previous);
+      const nextOk = !next || !/[\p{L}\p{N}_]/u.test(next);
+      if (previousOk && nextOk) return true;
+      offset = index + 1;
+    }
+    return false;
+  }
+
+  function mentionedPubkeys() {
+    const result = new Set<string>();
+    for (const [pubkey, label] of selectedMentions) {
+      if (containsMentionLabel(model.value, label)) result.add(pubkey);
+    }
+
+    // Drafts restored on a later session do not retain the selection map.
+    // Recover only unambiguous labels so a same-named friend is never guessed.
+    const labels = new Map<string, MentionCandidate[]>();
+    for (const candidate of candidates.value) {
+      const label = candidate.label.trim();
+      if (!label) continue;
+      const key = label.normalize("NFKC").toLocaleLowerCase();
+      const bucket = labels.get(key) || [];
+      bucket.push(candidate);
+      labels.set(key, bucket);
+    }
+    for (const bucket of labels.values()) {
+      if (bucket.length !== 1) continue;
+      const candidate = bucket[0];
+      if (containsMentionLabel(model.value, candidate.label)) result.add(candidate.pubkey.toLowerCase());
+    }
+    return [...result];
+  }
 
   const matches = computed(() =>
     open.value ? filterMentionCandidates(candidates.value, query.value) : []);
@@ -92,6 +135,7 @@ export function useMentionComposer<T extends HTMLInputElement | HTMLTextAreaElem
   async function select(candidate: MentionCandidate) {
     const current = range.value;
     if (!current) return;
+    selectedMentions.set(candidate.pubkey.toLowerCase(), candidate.label.trim());
     const next = insertMention(model.value, current, candidate);
     model.value = next.text;
     close();
@@ -111,6 +155,7 @@ export function useMentionComposer<T extends HTMLInputElement | HTMLTextAreaElem
     onMentionBlur: onBlur,
     onMentionKeydown: onKeydown,
     selectMention: select,
+    mentionedPubkeys,
     closeMention: close,
   };
 }

@@ -19,6 +19,7 @@ import { useProfilesStore } from "@/stores/profiles";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { onMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 import { pushEnabledForAccount, syncPushAuthorizationPolicy } from "@/services/pushNotifications";
+import { mentionedPubkeysFromTags } from "@/utils/mentions";
 import {
   cancelDmRelayDirectoryWork,
   ensureOwnDmRelayList,
@@ -204,7 +205,23 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         processInteraction: async message => {
           await interactions.processCanonicalInteraction(message, account);
         },
-        mirrorMessage: message => messages.addInbox({
+        mirrorMessage: message => {
+          if (
+            message.senderPubkey.toLowerCase() !== account
+            && !isDirectMessageTags(message.tags)
+            && mentionedPubkeysFromTags(message.tags).includes(account)
+          ) {
+            notifications.addNotification({
+              id: `mention-post:${message.id}`,
+              type: "mention_post",
+              from: message.senderPubkey,
+              messageId: message.id,
+              created_at: message.createdAt,
+              read: false,
+              postContent: message.plaintext || "",
+            });
+          }
+          messages.addInbox({
           id: message.id,
           pubkey: message.senderPubkey,
           created_at: message.createdAt,
@@ -218,7 +235,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
           replyTo: message.replyTo,
           rootId: message.rootId,
           tags: message.tags,
-        }),
+          });
+        },
       }),
       onPersistedMessage: async (message, metadata) => {
         await homeHandler(message, {...metadata,durable:true});
