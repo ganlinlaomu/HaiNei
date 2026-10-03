@@ -1,5 +1,9 @@
 # HaiNei 更新记录
 
+## 0.1.30 — 2026-10-02
+
+- 新增托管专用 Relay 短效会话：长期 App Token 仅保存在 HaiNei Worker，PWA 仅使用绑定当前 Nostr pubkey 的短效会话，并自动接入 System Relay。
+
 ## 0.1.29 — 2026-10-02
 
 - 新增无需登录即可访问的公开 `about`、`privacy`、`terms` 页面，说明 HaiNei、Google Drive `appDataFolder` 加密恢复的数据用途与限制，并在登录页加入公开政策入口，供 Google OAuth Branding / Production 使用。

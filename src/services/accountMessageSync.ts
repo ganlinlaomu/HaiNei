@@ -1,4 +1,5 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
+import { getActivePinia } from "pinia";
 import { getRelaysFromStorage } from "@/nostr/relays";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
@@ -109,8 +110,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   }
   if (!isCurrent()) return false;
   const profiles = useProfilesStore();
-  await useSettingsStore().refreshManagedRelay();
-  if (!isCurrent()) return false;
+  if (getActivePinia()) {
+    await useSettingsStore().refreshManagedRelay();
+    if (!isCurrent()) return false;
+  }
   const initialSyncState = await syncedMessageRepository.getSyncState(account);
   if (!isCurrent()) return false;
   let friendshipHistoryComplete = !!initialSyncState.historyBackfillCompletedAt;

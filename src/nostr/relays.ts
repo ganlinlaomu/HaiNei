@@ -16,7 +16,7 @@ import {
 } from "@/services/connectionSettings";
 import { performanceCounters } from "@/services/nostrCache";
 import { deviceStorage } from "@/services/deviceStorage";
-import { getManagedRelaySessionForUrl } from "@/services/relaySession";
+import { getManagedRelaySessionForUrl, managedRelayUrlFromCache } from "@/services/relaySession";
 
 type RelayConn = {
   url: string;
@@ -259,7 +259,9 @@ function ensureRelayConn(url: string): RelayConn {
     conn.connecting = true;
     debugLog("relay", "relay_connecting", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "info");
     try {
-      const managedSession = await getManagedRelaySessionForUrl(url);
+      const managedSession = managedRelayUrlFromCache() === url
+        ? await getManagedRelaySessionForUrl(url)
+        : null;
       if (!conn.shouldReconnect || conn.ws?.readyState === 0 || conn.ws?.readyState === 1) {
         conn.connecting = false;
         return;

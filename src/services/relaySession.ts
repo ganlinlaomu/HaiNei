@@ -3,9 +3,11 @@ import { normalizeRelayUrl } from "@/services/connectionSettings";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 import { signWorkerRequest } from "@/services/workerAuth";
 import { timedJsonFetch } from "@/utils/timedFetch";
+import { deviceStorage } from "@/services/deviceStorage";
 
 const CONFIG_CACHE_MS = 5 * 60_000;
 const EXPIRY_SKEW_SECONDS = 30;
+const MANAGED_RELAY_STORAGE_KEY = "hainei_managed_relay_url";
 
 export type ManagedRelayConfig = {
   enabled: boolean;
@@ -68,6 +70,16 @@ export function resetManagedRelaySessionForTests() {
   identity = null;
   sessionCache = null;
   sessionInflight = null;
+}
+
+export function managedRelayUrlFromCache() {
+  const cached = configCache?.value.enabled ? normalizeRelayUrl(configCache.value.relayUrl) : "";
+  if (cached) return cached;
+  try {
+    return normalizeRelayUrl(deviceStorage.getItem(MANAGED_RELAY_STORAGE_KEY) || "");
+  } catch {
+    return "";
+  }
 }
 
 export async function getManagedRelayConfig(force = false): Promise<ManagedRelayConfig> {
