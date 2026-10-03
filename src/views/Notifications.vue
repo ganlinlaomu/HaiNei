@@ -337,8 +337,8 @@ function getNotificationContent(n: any) {
     return rootSummary || "[媒体动态]";
   }
 
-  // 处理评论或回复
-  const targetId = n.replyId || n.commentId;
+  // 处理评论或回复；提及通知展示实际包含 @ 的那条评论。
+  const targetId = n.type === "mention_comment" ? n.commentId : (n.replyId || n.commentId);
   const actionNode = allInteractions.find(c => c.id === targetId);
   
   if (targetId && actionNode) {
