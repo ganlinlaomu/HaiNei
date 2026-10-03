@@ -1132,6 +1132,10 @@ export default defineComponent({
       onFilesSelected, insertImageUrl, removeUpload, checkBlossom,
       sheetDragging, sheetStyle, onSheetPointerDown, onSheetPointerMove, onSheetPointerEnd,
       onSheetPointerCancel, onSheetClickCapture,
+      // @ mention composer
+      mentionOpen, mentionMatches, mentionActiveIndex,
+      onMentionInput, onMentionFocus, onMentionClick, onMentionBlur, onMentionKeydown,
+      selectMention,
       // Video support
       videoPreview, removeVideo, onPaste
     };
