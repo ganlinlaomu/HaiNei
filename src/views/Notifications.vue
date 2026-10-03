@@ -212,15 +212,17 @@ const router = useRouter();
 const keys = useKeyStore();
 const profiles = useProfilesStore();
 
-type NotificationTab = "all" | "comments" | "likes" | "friends";
+type NotificationTab = "all" | "mentions" | "comments" | "likes" | "friends";
 const activeTab = ref<NotificationTab>("all");
 const tabs: Array<{ value: NotificationTab; label: string }> = [
   { value: "all", label: "全部" },
+  { value: "mentions", label: "@提及" },
   { value: "comments", label: "回复/评论" },
   { value: "likes", label: "点赞" },
   { value: "friends", label: "好友请求" },
 ];
 const filteredNotifications = computed(() => notifications.visibleList.filter(item => {
+  if (activeTab.value === "mentions") return item.type === "mention_post" || item.type === "mention_comment";
   if (activeTab.value === "comments") return item.type === "comment";
   if (activeTab.value === "likes") return item.type === "like";
   if (activeTab.value === "friends") return item.type === "friend_request";
@@ -288,14 +290,17 @@ function localName(pk: string) { return friendsByPubkey.value.get(pk)?.name; }
 function openSenderProfile(pubkey: string, event: Event) {
   return openProfile(router, keys.pkHex, pubkey, event);
 }
-function notificationIconType(n: any): "like" | "comment" | "reply" | "friend" {
+function notificationIconType(n: any): "like" | "comment" | "reply" | "friend" | "mention" {
   if (n.type === "like") return "like";
   if (n.type === "friend_request") return "friend";
+  if (n.type === "mention_post" || n.type === "mention_comment") return "mention";
   return n.replyId ? "reply" : "comment";
 }
 function notificationAction(n: any) {
   if (n.type === "like") return "点赞了你";
   if (n.type === "friend_request") return "请求添加你为好友";
+  if (n.type === "mention_post") return "在帖子中提到了你";
+  if (n.type === "mention_comment") return "在评论中提到了你";
   return n.replyId ? "回复了你的评论" : "评论了你";
 }
 function go(n: any) {
@@ -304,7 +309,7 @@ function go(n: any) {
     router.push({ path: "/friends", query: { section: "incoming" } });
     return;
   }
-  const targetCommentId = n.replyId || n.commentId;
+  const targetCommentId = n.type === "mention_comment" ? n.commentId : (n.replyId || n.commentId);
   router.push({
     path: "/",
     query: {
