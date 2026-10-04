@@ -201,32 +201,43 @@
         </div>
 
         <div v-else class="composer-normal" :class="{ 'voice-active': voiceCaptureOwnsAudioSession }">
-          <div
-            v-if="voiceCaptureOwnsAudioSession"
-            class="composer-recording"
-            :class="{ locked: voiceLocked, cancelling: voiceGestureHint === 'cancel' }"
-            role="status"
-            aria-live="polite"
-          >
-            <span class="recording-dot" aria-hidden="true"></span>
-            <strong>{{ formatVoiceDuration(recordingElapsed) }}</strong>
-            <span class="voice-waveform" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-            <template v-if="finishingRecording">
-              <span class="finishing-label">处理中…</span>
-            </template>
-            <template v-else-if="voiceLocked">
-              <span class="voice-lock-label">已锁定</span>
-              <button type="button" @click="cancelVoiceRecording">取消</button>
-              <button type="button" class="finish-recording" @click="finishVoiceRecording(undefined, true)">发送</button>
-            </template>
-            <span v-else class="voice-gesture-hint">{{ voiceGestureHint === "cancel" ? "松开取消" : voiceGestureHint === "lock" ? "松开锁定" : "松开发送 · ← 取消 · ↑ 锁定" }}</span>
-          </div>
-          <template v-else>
-            <button class="composer-icon-button attachment-button" type="button" aria-label="添加图片" :disabled="!accepted || !keys.pkHex" @click="chooseImage">
+          <template v-if="voiceCaptureOwnsAudioSession">
+            <div
+              class="composer-recording"
+              :class="{ locked: voiceLocked, cancelling: voiceGestureHint === 'cancel' }"
+              role="status"
+              aria-live="polite"
+            >
+              <span class="recording-dot" aria-hidden="true"></span>
+              <strong>{{ formatVoiceDuration(recordingElapsed) }}</strong>
+              <span class="voice-waveform" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+              <template v-if="finishingRecording">
+                <span class="finishing-label">处理中…</span>
+              </template>
+              <template v-else-if="voiceLocked">
+                <span class="voice-lock-label">已锁定</span>
+                <button type="button" @click="cancelVoiceRecording">取消</button>
+                <button type="button" class="finish-recording" @click="finishVoiceRecording(undefined, true)">发送</button>
+              </template>
+              <span v-else class="voice-gesture-hint">{{ voiceGestureHint === "cancel" ? "松开取消" : voiceGestureHint === "lock" ? "松开锁定" : "松开发送 · ← 取消 · ↑ 锁定" }}</span>
+            </div>
+            <button
+              class="composer-icon-button microphone-button"
+              :class="{ active: voiceCaptureOwnsAudioSession }"
+              type="button"
+              aria-label="按住录音"
+              :aria-pressed="voiceCaptureOwnsAudioSession"
+              :disabled="!accepted || !keys.pkHex || finishingRecording"
+              @touchstart.prevent="handleVoiceTouchStart"
+              @mousedown.prevent="handleVoiceMouseDown"
+              @click.prevent
+            >
               <span class="composer-icon-visual" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+                <svg viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
               </span>
             </button>
+          </template>
+          <template v-else>
             <textarea
               ref="textInput"
               v-model="draft"
@@ -241,34 +252,40 @@
               @click="onMentionClick"
               @keydown="onMentionKeydown"
             ></textarea>
-            <button
-              v-if="draft.trim() || selectedImage"
-              class="composer-icon-button send-button"
-              type="submit"
-              aria-label="发送"
-              :disabled="!canSend"
-            >
-              <span class="composer-icon-visual send-visual" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="m5 12 14-7-4 14-3-6-7-1Z"/><path d="m12 13 7-8"/></svg>
-              </span>
-            </button>
+            <div class="composer-actions">
+              <button class="composer-icon-button attachment-button" type="button" aria-label="添加图片" :disabled="!accepted || !keys.pkHex" @click="chooseImage">
+                <span class="composer-icon-visual" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+                </span>
+              </button>
+              <span class="composer-actions-spacer" aria-hidden="true"></span>
+              <button
+                v-if="draft.trim() || selectedImage"
+                class="composer-icon-button send-button"
+                type="submit"
+                aria-label="发送"
+                :disabled="!canSend"
+              >
+                <span class="composer-icon-visual send-visual" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="m5 12 14-7-4 14-3-6-7-1Z"/><path d="m12 13 7-8"/></svg>
+                </span>
+              </button>
+              <button
+                v-else
+                class="composer-icon-button microphone-button"
+                type="button"
+                aria-label="按住录音"
+                :disabled="!accepted || !keys.pkHex || finishingRecording"
+                @touchstart.prevent="handleVoiceTouchStart"
+                @mousedown.prevent="handleVoiceMouseDown"
+                @click.prevent
+              >
+                <span class="composer-icon-visual" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
+                </span>
+              </button>
+            </div>
           </template>
-          <button
-            v-if="voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImage)"
-            class="composer-icon-button microphone-button"
-            :class="{ active: voiceCaptureOwnsAudioSession }"
-            type="button"
-            aria-label="按住录音"
-            :aria-pressed="voiceCaptureOwnsAudioSession"
-            :disabled="!accepted || !keys.pkHex || finishingRecording"
-            @touchstart.prevent="handleVoiceTouchStart"
-            @mousedown.prevent="handleVoiceMouseDown"
-            @click.prevent
-          >
-            <span class="composer-icon-visual" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
-            </span>
-          </button>
         </div>
       </form>
     </div>
@@ -907,9 +924,9 @@ function scrollToBottom() {
 }
 function resizeMessageComposer() {
   resizeComposerTextarea(textInput.value, composerFocused, {
-    minHeight: 32,
-    focusedMinHeight: 54,
-    maxHeight: 160,
+    minHeight: 36,
+    focusedMinHeight: 36,
+    maxHeight: 108,
   });
 }
 watch(draft, () => {
@@ -1601,7 +1618,7 @@ onBeforeUnmount(() => {
 .composer-region{position:relative;z-index:3;width:min(100%,720px);margin:0 auto;padding:4px 0 calc(28px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(255,255,255,0),#fff 22%);transition:padding-bottom 180ms ease}.composer-region:has(.chat-composer:focus-within){padding-bottom:calc(8px + env(safe-area-inset-bottom))}
 .replying-preview{display:flex;min-width:0;align-items:center;gap:10px;margin:0 16px 6px;padding:7px 10px 7px 12px;border-left:3px solid #1687e8;border-radius:10px;background:#f7f9f9}.replying-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}.replying-copy strong,.replying-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.replying-copy strong{color:#0f1419;font-size:12px}.replying-copy span{color:#536471;font-size:12px}.replying-preview>button{width:30px;height:30px;flex:0 0 30px;padding:0;border:0;border-radius:50%;background:transparent;color:#536471;font-size:22px}.replying-preview>button:active{background:#e8ecef}
 .selected-image{position:relative;width:64px;height:64px;margin:0 0 8px 24px}.selected-image img{width:100%;height:100%;object-fit:cover;border:1px solid #e2e8f0;border-radius:12px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}.voice-error{margin:0 24px 6px;color:#dc2626;font-size:12px}
-.chat-composer{position:relative;width:calc(100% - 64px);min-width:0;margin:0 auto;border:1px solid #d8dee5;border-radius:28px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.11);transition:width 180ms ease,border-color 180ms ease,box-shadow 180ms ease}.chat-composer:focus-within{width:calc(100% - 32px);border-color:#c8d0d9;box-shadow:0 5px 20px rgba(15,23,42,.13)}.composer-normal,.composer-preview{display:flex;box-sizing:border-box;min-width:0;min-height:40px;gap:4px;padding:2px 9px}.composer-normal{height:auto;align-items:flex-end;transition:min-height 180ms ease}.composer-normal:focus-within{min-height:68px}.composer-preview{align-items:center}.composer-normal.voice-active{padding-left:4px}.composer-normal textarea{min-width:0;min-height:32px;max-height:160px;flex:1;box-sizing:border-box;padding:5px 4px 4px;border:0;outline:0;resize:none;overflow-y:hidden;background:transparent;color:#0f1419;font:inherit;font-size:16px;line-height:22px}.image-input{display:none}.composer-icon-button{display:grid;position:relative;width:44px;height:44px;flex:0 0 44px;margin:-5px;padding:5px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419;-webkit-tap-highlight-color:transparent}.composer-icon-visual{display:grid;width:34px;height:34px;place-items:center;border-radius:50%;background:transparent}.composer-icon-visual svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.attachment-button .composer-icon-visual svg{width:20px;height:20px;stroke-width:2}.microphone-button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}.microphone-button.active .composer-icon-visual{background:#f1f5f9}.send-button{color:#fff}.send-button .send-visual{background:#0f1419}.send-button .send-visual svg{width:18px;height:18px}.chat-composer button:disabled{opacity:.36}
+.chat-composer{position:relative;width:calc(100% - 48px);min-width:0;margin:0 auto;border:1px solid #d8dee5;border-radius:24px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.11);transition:width 180ms ease,border-color 180ms ease,box-shadow 180ms ease}.chat-composer:focus-within{width:calc(100% - 32px);border-color:#c8d0d9;box-shadow:0 5px 20px rgba(15,23,42,.13)}.composer-normal{display:grid;box-sizing:border-box;min-width:0;min-height:48px;grid-template-columns:44px minmax(0,1fr) 44px;align-items:center;padding:2px 8px;transition:min-height 180ms ease}.composer-normal textarea{grid-column:2;grid-row:1;min-width:0;min-height:36px;max-height:108px;box-sizing:border-box;padding:7px 6px 6px;border:0;outline:0;resize:none;overflow-y:hidden;background:transparent;color:#0f1419;font:inherit;font-size:16px;line-height:22px}.composer-actions{display:contents}.composer-actions-spacer{display:none}.composer-actions .attachment-button{grid-column:1;grid-row:1}.composer-actions .send-button,.composer-actions .microphone-button{grid-column:3;grid-row:1}.composer-normal:focus-within{min-height:76px;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 34px;align-items:stretch;padding:6px 8px 4px}.composer-normal:focus-within textarea{grid-column:1;grid-row:1;width:100%;padding:4px 6px 3px}.composer-normal:focus-within .composer-actions{display:flex;grid-column:1;grid-row:2;min-width:0;min-height:34px;align-items:center;justify-content:space-between}.composer-normal:focus-within .composer-actions-spacer{display:block;flex:1}.composer-normal.voice-active{display:flex;min-height:48px;align-items:center;gap:4px;padding:2px 8px}.composer-preview{display:flex;box-sizing:border-box;min-width:0;min-height:48px;align-items:center;gap:4px;padding:2px 8px}.image-input{display:none}.composer-icon-button{display:grid;position:relative;width:44px;height:44px;flex:0 0 44px;margin:-5px;padding:5px;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419;-webkit-tap-highlight-color:transparent}.composer-icon-visual{display:grid;width:34px;height:34px;place-items:center;border-radius:50%;background:transparent}.composer-icon-visual svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.attachment-button .composer-icon-visual svg{width:20px;height:20px;stroke-width:1.8}.microphone-button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}.microphone-button.active .composer-icon-visual{background:#f1f5f9}.send-button{color:#fff}.send-button .send-visual{background:#0f1419}.send-button .send-visual svg{width:18px;height:18px}.chat-composer button:disabled{opacity:.36}
 .composer-recording{display:flex;min-width:0;flex:1;height:46px;align-items:center;gap:8px;padding:0 8px;touch-action:none}.recording-dot{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#ef4444;animation:recording-pulse 1.2s ease-in-out infinite}.composer-recording.cancelling .recording-dot{animation:none}.composer-recording strong{font-size:14px;font-variant-numeric:tabular-nums}.voice-waveform{display:flex;height:22px;align-items:center;gap:2px}.voice-waveform i{display:block;width:2px;height:8px;border-radius:2px;background:#8b98a5;animation:voice-wave .72s ease-in-out infinite alternate}.voice-waveform i:nth-child(2){animation-delay:-.18s}.voice-waveform i:nth-child(3){animation-delay:-.36s}.voice-waveform i:nth-child(4){animation-delay:-.54s}.voice-waveform i:nth-child(5){animation-delay:-.27s}.voice-gesture-hint{margin-left:auto;color:#657786;font-size:12px;white-space:nowrap}.composer-recording.cancelling .voice-gesture-hint{color:#dc2626}.voice-lock-label{margin-left:auto;color:#657786;font-size:12px}.composer-recording button{min-width:50px;height:38px;border:0;background:transparent;color:#536471;font-weight:600}.composer-recording .finish-recording{color:#1687e8}.finishing-label{margin-left:auto;color:#536471;font-size:14px}.composer-preview{padding-left:10px}.composer-voice-preview{min-width:0;flex:1}.composer-preview :deep(.voice-message){min-width:0;grid-template-columns:34px minmax(70px,1fr) 36px}.remove-audio{font-size:25px;color:#64748b}
 @keyframes recording-pulse{50%{opacity:.35}}@keyframes voice-wave{from{height:5px}to{height:19px}}
 @media (min-width:768px){.composer-region{padding-bottom:16px}.message-list{width:min(100%,720px);margin:0 auto}}

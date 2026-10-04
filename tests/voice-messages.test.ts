@@ -511,7 +511,8 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain('aria-label="按住录音"');
     expect(messages).toContain('@touchstart.prevent="handleVoiceTouchStart"');
     expect(messages).toContain('@mousedown.prevent="handleVoiceMouseDown"');
-    expect(messages).toContain("v-if=\"voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImage)\"");
+    expect(messages).toContain('<template v-if="voiceCaptureOwnsAudioSession">');
+    expect(messages).toContain('class="composer-actions"');
     expect(messages).toContain(":aria-pressed=\"voiceCaptureOwnsAudioSession\"");
     expect(messages).not.toContain(':disabled="!accepted || !keys.pkHex || startingRecording"');
     expect(messages).toContain(':disabled="!accepted || !keys.pkHex || finishingRecording"');
@@ -526,10 +527,10 @@ describe("encrypted private audio messages", () => {
     expect(messages).not.toContain('capture="');
     expect(messages).not.toContain("attachmentMenuOpen");
     expect(messages).not.toContain("attachment-menu");
-    expect(messages).toContain("width:calc(100% - 64px)");
-    expect(messages).toContain("min-height:40px");
-    expect(messages).toContain("focusedMinHeight: 54");
-    expect(messages).toContain(".composer-normal:focus-within{min-height:68px}");
+    expect(messages).toContain("width:calc(100% - 48px)");
+    expect(messages).toContain("min-height:48px");
+    expect(messages).toContain("focusedMinHeight: 36");
+    expect(messages).toContain(".composer-normal:focus-within{min-height:76px");
     expect(messages).toContain("calc(28px + env(safe-area-inset-bottom))");
     expect(messages).toContain('v-if="hasAudio(message)"');
     expect(messages).toContain(':suspended="voiceCaptureOwnsAudioSession"');

@@ -612,15 +612,15 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('rows="1"');
     expect(chat).toContain('enterkeyhint="enter"');
     expect(chat).toContain("resizeComposerTextarea(textInput.value, composerFocused");
-    expect(chat).toContain("minHeight: 32");
-    expect(chat).toContain("focusedMinHeight: 54");
-    expect(chat).toContain("width:calc(100% - 64px)");
+    expect(chat).toContain("minHeight: 36");
+    expect(chat).toContain("focusedMinHeight: 36");
+    expect(chat).toContain("width:calc(100% - 48px)");
     expect(chat).toContain(".chat-composer:focus-within{width:calc(100% - 32px)");
     expect(chat).toContain(".composer-region:has(.chat-composer:focus-within){padding-bottom:calc(8px + env(safe-area-inset-bottom))}");
-    expect(chat).toContain("min-height:40px");
-    expect(chat).toContain(".composer-normal:focus-within{min-height:68px}");
-    expect(chat).toContain("max-height:160px");
-    expect(chat).toContain("border-radius:28px");
+    expect(chat).toContain("min-height:48px");
+    expect(chat).toContain(".composer-normal:focus-within{min-height:76px");
+    expect(chat).toContain("max-height:108px");
+    expect(chat).toContain("border-radius:24px");
     expect(chat).toContain("border-radius:50%");
     expect(chat).toContain("box-shadow:0 4px 18px");
     expect(chat).toContain("width:min(100%,720px)");
@@ -631,6 +631,10 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("margin:-5px");
     expect(chat).toContain(".send-button .send-visual{background:#0f1419}");
     expect(chat).toContain(".send-button .send-visual svg{width:18px;height:18px}");
+    expect(chat).toContain('class="composer-actions"');
+    expect(chat).toContain(".composer-actions{display:contents}");
+    expect(chat).toContain(".composer-normal:focus-within .composer-actions{display:flex");
+    expect(chat).toContain("grid-template-rows:auto 34px");
   });
 
   it("revalidates friendship before new DM navigation and keeps DM authorization in the account sync owner", () => {
