@@ -152,7 +152,7 @@ describe("comment bottom sheet", () => {
     expect(shouldCloseCommentSheetDrag(80, 1000, 500)).toBe(false);
     expect(shouldCloseCommentSheetDrag(8, 1000, 1)).toBe(false);
     const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
-    expect(sheet).toContain("height:calc(100dvh - 72px)");
+    expect(sheet).toContain("height:min(calc(100dvh - 72px),100%)");
     expect(sheet).toContain("320ms cubic-bezier(.22,1,.36,1)");
     expect(sheet).toContain("260ms cubic-bezier(.22,1,.36,1)");
   });
@@ -327,6 +327,14 @@ describe("comment bottom sheet", () => {
       parentCommentId: ROOT.id
     });
     expect(buildCommentSubmission("post", self, "reply", REPLY, self).recipientPubkey).toBe(friend);
+  });
+
+  it("keeps the bottom navigation visible while the comment sheet is open", () => {
+    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    expect(sheet).toContain("inset:0 0 var(--bottom-nav-height) 0");
+    expect(sheet).toContain("z-index:calc(var(--z-bottom-nav) - 1)");
+    expect(sheet).toContain("height:min(calc(100dvh - 72px),100%)");
+    expect(sheet).not.toContain("comment-sheet-backdrop{position:fixed;inset:0;z-index:12000");
   });
 
   it("uses a focus-expanding multiline comment composer where Enter inserts a newline", () => {
