@@ -43,8 +43,8 @@
           class="conversation-main"
           type="button"
           :style="swipeStyle(conversation.peerPubkey)"
-          @pointerdown="preloadMessagesView"
-          @focus="preloadMessagesView"
+          @pointerdown="warmConversation(conversation.peerPubkey)"
+          @focus="warmConversation(conversation.peerPubkey)"
           @click="openConversation(conversation.peerPubkey)"
         >
           <ProfileAvatar :pubkey="conversation.peerPubkey" :local-name="localName(conversation.peerPubkey)" :size="48" />
@@ -81,7 +81,7 @@ import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { formatRelativeTime } from "@/utils/format";
-import { loadAccountStoresOnce } from "@/utils/bottomTabActivation";
+import { loadAccountStoresOnce, runAfterFirstPaint, runWhenIdle } from "@/utils/bottomTabActivation";
 import { loadMessagesView } from "@/router/lazyViews";
 import { useSwipeActions } from "@/composables/useSwipeActions";
 
@@ -169,8 +169,21 @@ async function load() {
   if (!account) return;
   await loadAccountStoresOnce(account, [messages, friendships, friends, profiles]);
 }
-function openConversation(pubkey: string) {
+function warmConversation(pubkey: string) {
   void loadMessagesView();
+  void directMessages.prefetchPeerHistory(pubkey).catch(() => undefined);
+}
+function scheduleConversationWarmup() {
+  runAfterFirstPaint(() => {
+    void loadMessagesView();
+    runWhenIdle(() => {
+      const firstPeer = conversations.value[0]?.peerPubkey;
+      if (firstPeer) void directMessages.prefetchPeerHistory(firstPeer).catch(() => undefined);
+    }, 600);
+  });
+}
+function openConversation(pubkey: string) {
+  warmConversation(pubkey);
   if (isSwipeOpen(pubkey)) {
     closeSwipe(pubkey);
     return;
@@ -199,8 +212,14 @@ async function deleteConversation(pubkey: string) {
   }
 }
 
-onMounted(load);
-onActivated(load);
+onMounted(() => {
+  void load();
+  scheduleConversationWarmup();
+});
+onActivated(() => {
+  void load();
+  scheduleConversationWarmup();
+});
 onDeactivated(() => {
   closeOtherSwipes();
   ui.closeNewConversation();
