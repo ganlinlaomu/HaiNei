@@ -1,5 +1,5 @@
 import type { EventTemplate, NostrEvent, VerifiedEvent } from "nostr-tools";
-import { getRelaysFromStorage } from "@/nostr/relays";
+import { getRelaysFromStorage, inspectRelays, type RelayRuntimeStatus } from "@/nostr/relays";
 import { verifySignedEvent } from "@/nostr/messaging/protocol/common";
 import { dmRelayDirectoryRepository } from "@/repositories/dmRelayDirectoryRepository";
 import { replaceableEventOutboxRepository } from "@/repositories/replaceableEventOutboxRepository";
@@ -86,8 +86,17 @@ function relayStoredEvent(result: { ok: boolean; reason?: unknown }) {
   return result.ok || /^duplicate:/i.test(String(result.reason || "").trim());
 }
 
-export function selectOwnDmRelays(readRelays = getRelaysFromStorage("read")) {
-  return uniqueRelays(readRelays, Math.min(2, MAX_DM_RELAYS));
+export function selectOwnDmRelays(
+  readRelays = getRelaysFromStorage("read"),
+  runtimeStatuses: Record<string, RelayRuntimeStatus> = inspectRelays(),
+) {
+  const connected = readRelays.filter(relay => {
+    const normalized = secureRelayUrl(relay);
+    if (!normalized) return false;
+    const runtime = runtimeStatuses[normalized];
+    return runtime?.state === "connected" || runtime?.ready === true;
+  });
+  return uniqueRelays(connected, Math.min(2, MAX_DM_RELAYS));
 }
 
 export function dmDiscoveryRelays() {
