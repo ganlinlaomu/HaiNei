@@ -696,8 +696,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.comment-sheet-backdrop{position:fixed;inset:0 0 var(--bottom-nav-height) 0;z-index:calc(var(--z-bottom-nav) - 1);display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.42);touch-action:pan-y}
-.comment-sheet-panel{width:min(100%,720px);height:min(calc(100dvh - 72px),100%);display:flex;flex-direction:column;border-radius:18px 18px 0 0;background:#fff;box-shadow:0 -12px 38px rgba(15,23,42,.2);transition:transform 260ms cubic-bezier(.22,1,.36,1);overflow:hidden;touch-action:pan-y}.comment-sheet-panel.dragging{transition:none}
+.comment-sheet-backdrop{position:fixed;inset:0;z-index:12000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.42);touch-action:pan-y}
+.comment-sheet-panel{width:min(100%,720px);height:calc(100dvh - 72px);display:flex;flex-direction:column;border-radius:18px 18px 0 0;background:#fff;box-shadow:0 -12px 38px rgba(15,23,42,.2);transition:transform 260ms cubic-bezier(.22,1,.36,1);overflow:hidden;touch-action:pan-y}.comment-sheet-panel.dragging{transition:none}
 .drag-handle-area{display:grid;place-items:center;height:24px;flex:0 0 24px;touch-action:none}.drag-handle-area span{width:38px;height:4px;border-radius:999px;background:#cbd5e1}
 .comment-sheet-header{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:44px;padding-left:44px;border-bottom:1px solid #e2e8f0;touch-action:none}.comment-sheet-header h2{margin:0;text-align:center;font-size:16px}.comment-sheet-header button{width:44px;height:44px;border:0;background:transparent;color:#64748b;font-size:24px}
 .comment-sheet-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scroll-padding-bottom:24px;padding:8px 14px 24px}.comment-sheet-body.empty{cursor:grab}.comment-sheet-body.empty:active{cursor:grabbing}.empty-comments{display:flex;flex-direction:column;align-items:center;gap:4px;padding:54px 0;color:#94a3b8;text-align:center}.empty-comments strong{color:#334155;font-size:14px;font-weight:600}.empty-comments span{font-size:12px}
