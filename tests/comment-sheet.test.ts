@@ -161,7 +161,7 @@ describe("comment bottom sheet", () => {
     expect(shouldCloseCommentSheetDrag(80, 1000, 500)).toBe(false);
     expect(shouldCloseCommentSheetDrag(8, 1000, 1)).toBe(false);
     const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
-    expect(sheet).toContain("height:min(calc(100dvh - 72px),100%)");
+    expect(sheet).toContain("height:calc(100dvh - 72px)");
     expect(sheet).toContain("320ms cubic-bezier(.22,1,.36,1)");
     expect(sheet).toContain("260ms cubic-bezier(.22,1,.36,1)");
   });
