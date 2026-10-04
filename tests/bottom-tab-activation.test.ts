@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { isAccountResourceStale, loadAccountStoresOnce, runWhenIdle } from "@/utils/bottomTabActivation";
+import { isAccountResourceStale, loadAccountStoresOnce, runWhenIdle, storesLoadedForAccount } from "@/utils/bottomTabActivation";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -26,6 +26,14 @@ describe("bottom-tab activation loading", () => {
     ]);
     await loadAccountStoresOnce(ACCOUNT, stores);
     expect(stores.map(store => store.load.mock.calls)).toEqual(stores.map(() => [[ACCOUNT]]));
+  });
+
+  it("reports whether local account stores are already hydrated", async () => {
+    const stores = [accountStore(), accountStore()];
+    expect(storesLoadedForAccount(ACCOUNT, stores)).toBe(false);
+    await loadAccountStoresOnce(ACCOUNT, stores);
+    expect(storesLoadedForAccount(ACCOUNT, stores)).toBe(true);
+    expect(storesLoadedForAccount(OTHER, stores)).toBe(false);
   });
 
   it("loads all account stores again after an account switch", async () => {
@@ -88,6 +96,8 @@ describe("bottom-tab activation loading", () => {
     expect(routes).toContain("component: loadNotificationsView");
     expect(routes).toContain("component: loadSettingsView");
     expect(routes).toContain("component: loadSystemSettingsView");
+    expect(lazyViews).toContain("loadMessagesView,");
+    expect(lazyViews).toContain("loadFriendsView,");
     expect(lazyViews).toContain("loadSystemSettingsView,");
     expect(lazyViews).toContain("await yieldToMainThread()");
     expect(lazyViews).toContain('import("@/views/SystemSettings.vue")');
