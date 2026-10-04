@@ -30,6 +30,15 @@ const NESTED: Comment = {
 };
 
 describe("comment bottom sheet", () => {
+  it("closes an open comment sheet when navigating away from its route", () => {
+    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    expect(card).toContain("sheetRoute = router.currentRoute.value.fullPath");
+    expect(card).toContain("watch(() => router.currentRoute.value.fullPath");
+    expect(card).toContain("commentsOpen.value && sheetRoute && currentRoute !== sheetRoute");
+    expect(card).toContain("closeComments()");
+    expect(card).toContain("router.currentRoute.value.fullPath === sheetRoute");
+  });
+
   it("opens from the comment action without route navigation", () => {
     const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     expect(card).toContain("<CommentSheet");
