@@ -26,6 +26,7 @@ describe("System Settings status UX", () => {
   it("shows automatic NIP-17 DM relay publication without per-contact connections", () => {
     expect(source).toContain("私信 Relay / kind 10050");
     expect(source).toContain("getOwnDmRelayStatus(account)");
+    expect(source).toContain("当前已连接的读取 Relay 中选择最多 2 个接收点");
     expect(source).toContain("未找到时兼容传统 Relay");
     expect(source).toContain("不会为每位联系人保持额外长连接");
   });
