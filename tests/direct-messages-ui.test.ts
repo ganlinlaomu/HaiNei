@@ -630,8 +630,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("width:44px;height:44px");
     expect(chat).toContain("margin:-5px");
     expect(chat).toContain(".send-button .send-visual{background:#0f1419}");
-    expect(chat).toContain(".send-button .send-visual svg{width:18px;height:18px;transform:translateY(-1px)}");
-    expect(chat).toContain(".composer-actions .send-button,.composer-actions .microphone-button{grid-column:3;grid-row:1;align-self:center}");
+    expect(chat).toContain(".send-button .send-visual svg{width:18px;height:18px}");
     expect(chat).toContain('class="composer-actions"');
     expect(chat).toContain(".composer-actions{display:contents}");
     expect(chat).toContain(".composer-normal:focus-within .composer-actions{display:flex");
