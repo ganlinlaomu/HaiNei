@@ -338,12 +338,14 @@ describe("comment bottom sheet", () => {
     expect(buildCommentSubmission("post", self, "reply", REPLY, self).recipientPubkey).toBe(friend);
   });
 
-  it("keeps the bottom navigation visible while the comment sheet is open", () => {
+  it("uses an Instagram-style modal that hides the bottom navigation", () => {
     const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
-    expect(sheet).toContain("inset:0 0 var(--bottom-nav-height) 0");
-    expect(sheet).toContain("z-index:calc(var(--z-bottom-nav) - 1)");
-    expect(sheet).toContain("height:min(calc(100dvh - 72px),100%)");
-    expect(sheet).not.toContain("comment-sheet-backdrop{position:fixed;inset:0;z-index:12000");
+    const header = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
+    expect(sheet).toContain("comment-sheet-backdrop{position:fixed;inset:0;z-index:12000");
+    expect(sheet).toContain("height:calc(100dvh - 72px)");
+    expect(header).toContain('[...ui.blockingOverlays].some(name => name.startsWith("comment-sheet-"))');
+    expect(header).toContain("return false");
+    expect(sheet).not.toContain("inset:0 0 var(--bottom-nav-height) 0");
   });
 
   it("uses a focus-expanding multiline comment composer where Enter inserts a newline", () => {
