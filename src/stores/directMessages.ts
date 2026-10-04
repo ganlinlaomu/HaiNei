@@ -74,6 +74,13 @@ function receiptStateKey(peerPubkey: string) { return `dm-receipt:${peerPubkey}`
 function sentReceiptStateKey(peerPubkey: string) { return `dm-receipt-sent:${peerPubkey}`; }
 function draftKey(peerPubkey: string) { return `dm-draft:${peerPubkey.toLowerCase()}`; }
 const DRAFT_PREFIX = "dm-draft:";
+type PeerHistoryPage = {
+  items: InboxItem[];
+  cursor?: { createdAt: number; id: string };
+  exhausted: boolean;
+};
+const PEER_HISTORY_WARM_TTL_MS = 30_000;
+const peerHistoryWarmups = new Map<string, { createdAt: number; promise: Promise<PeerHistoryPage> }>();
 const activeOutgoingTasks = new Map<string, Promise<void>>();
 const taskPreviewUrls = new Map<string, string>();
 const pendingReceiptCursors = new Map<string, DmReceiptCursor>();
@@ -81,6 +88,12 @@ const receiptTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let stopResumeListener: (() => void) | null = null;
 
 function taskKey(accountPubkey: string, localId: string) { return `${accountPubkey}:${localId}`; }
+function peerHistoryWarmKey(accountPubkey: string, peerPubkey: string) {
+  return `${accountPubkey.toLowerCase()}:${peerPubkey.toLowerCase()}`;
+}
+function invalidatePeerHistoryWarmup(accountPubkey: string, peerPubkey: string) {
+  peerHistoryWarmups.delete(peerHistoryWarmKey(accountPubkey, peerPubkey));
+}
 function receiptQueueKey(accountPubkey: string, peerPubkey: string, status: DmReceiptStatus) {
   return `${accountPubkey}:${peerPubkey}:${status}`;
 }
@@ -351,9 +364,21 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         preference: this.preferencesByPeer[peerPubkey.toLowerCase()],
         enforceAuthorization: true,
       });
-      const matches = matchOutgoingTasksToCanonical(canonical, this.outgoingTasks, account);
-      const outgoing = this.outgoingTasks
-        .filter(task => task.peerPubkey === peerPubkey.toLowerCase() && !matches.matchedLocalIds.has(task.localId))
+      return this.mergePeerHistory(peerPubkey, canonical);
+    },
+    mergePeerHistory(peerPubkey: string, canonicalItems: InboxItem[]) {
+      const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      const friendships = useFriendshipsStore();
+      const canonical = directMessagesForPeer(canonicalItems, account, peer, {
+        friendship: friendships.getRecord(peer),
+        preference: this.preferencesByPeer[peer],
+        enforceAuthorization: true,
+      });
+      const tasks = this.outgoingTasks.filter(task => task.accountPubkey === account && task.peerPubkey === peer);
+      const matches = matchOutgoingTasksToCanonical(canonical, tasks, account);
+      const outgoing = tasks
+        .filter(task => !matches.matchedLocalIds.has(task.localId))
         .map(taskInboxItem);
       return [...canonical.map(item => {
         const task = matches.taskByMessageId.get(item.id);
@@ -467,18 +492,53 @@ export const useDirectMessagesStore = defineStore("directMessages", {
 
       return [...results.values()].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
     },
-    async loadPeerHistoryPage(peerPubkey: string, before?: {createdAt:number;id:string}) {
-      const account = this.loadedFor || useKeyStore().pkHex;
+    async prefetchPeerHistory(peerPubkey: string): Promise<PeerHistoryPage> {
+      const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
       const peer = peerPubkey.toLowerCase();
-      const conversation = await deriveConversationId([account,peer]);
-      const records = await syncedMessageRepository.listConversationPage(account,conversation,before,50);
-      if (useKeyStore().pkHex !== account) return {items:[] as InboxItem[],cursor:before,exhausted:true};
+      if (!account || !peer) return { items: [], exhausted: true };
+      const key = peerHistoryWarmKey(account, peer);
+      const existing = peerHistoryWarmups.get(key);
+      if (existing && Date.now() - existing.createdAt < PEER_HISTORY_WARM_TTL_MS) return existing.promise;
+
+      const promise = (async (): Promise<PeerHistoryPage> => {
+        const friendships = useFriendshipsStore();
+        if (friendships.loadedFor !== account) await friendships.load(account);
+        if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], exhausted: true };
+        const conversation = await deriveConversationId([account, peer]);
+        const records = await syncedMessageRepository.listConversationPage(account, conversation, undefined, 50);
+        if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], exhausted: true };
+        const items = records.map(recordInboxItem).filter(item => isDirectMessageTags(item.tags)
+          && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
+          && afterDeletion(item, this.preferencesByPeer[peer]));
+        const last = records[0];
+        return {
+          items,
+          cursor: last ? { createdAt: last.createdAt, id: last.id } : undefined,
+          exhausted: records.length < 50,
+        };
+      })();
+
+      peerHistoryWarmups.set(key, { createdAt: Date.now(), promise });
+      try {
+        return await promise;
+      } catch (error) {
+        if (peerHistoryWarmups.get(key)?.promise === promise) peerHistoryWarmups.delete(key);
+        throw error;
+      }
+    },
+    async loadPeerHistoryPage(peerPubkey: string, before?: {createdAt:number;id:string}): Promise<PeerHistoryPage> {
+      if (!before) return this.prefetchPeerHistory(peerPubkey);
+      const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      const conversation = await deriveConversationId([account, peer]);
+      const records = await syncedMessageRepository.listConversationPage(account, conversation, before, 50);
+      if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], cursor: before, exhausted: true };
       const friendships = useFriendshipsStore();
       const items = records.map(recordInboxItem).filter(item => isDirectMessageTags(item.tags)
-        && isAuthorizedDirectMessage(item,account,friendships.getRecord(peer))
-        && afterDeletion(item,this.preferencesByPeer[peer]));
-      const last=records[0];
-      return {items,cursor:last ? {createdAt:last.createdAt,id:last.id} : before,exhausted:records.length<50};
+        && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
+        && afterDeletion(item, this.preferencesByPeer[peer]));
+      const last = records[0];
+      return { items, cursor: last ? { createdAt: last.createdAt, id: last.id } : before, exhausted: records.length < 50 };
     },
     async loadPeerMessageContext(peerPubkey: string, messageId: string, radius = 20) {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
@@ -761,6 +821,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account || !isDirectMessageTags(item.tags)) return;
       const peer = directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account);
       if (!peer) return;
+      invalidatePeerHistoryWarmup(account, peer);
       await this.ensurePeerState(account, peer, item.conversationId);
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       await this.unhideForNewCanonicalMessages(account, peer);
@@ -1066,6 +1127,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     },
     async hideConversation(peerPubkey: string) {
       const peer = peerPubkey.toLowerCase();
+      invalidatePeerHistoryWarmup(this.loadedFor, peer);
       const items = this.peerMessages(peer);
       const latest = items.at(-1);
       const preference: ConversationPreference = {
@@ -1082,6 +1144,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     },
     async deleteConversation(peerPubkey: string) {
       const peer = peerPubkey.toLowerCase();
+      invalidatePeerHistoryWarmup(this.loadedFor, peer);
       const items = this.peerMessages(peer);
       const latest = items.at(-1);
       const existing = this.preferencesByPeer[peer];
@@ -1413,6 +1476,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.sentReceiptStateByPeer = {};
       this.draftsByPeer = {};
       clearReceiptTimers();
+      peerHistoryWarmups.clear();
       this.outgoingTasks = [];
     },
   },
