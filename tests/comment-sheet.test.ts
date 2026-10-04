@@ -357,6 +357,7 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain(".comment-composer-normal{display:grid");
     expect(sheet).toContain(".comment-composer-actions{display:contents}");
     expect(sheet).toContain(".comment-composer-normal:focus-within .comment-composer-actions{display:flex");
+    expect(sheet).toContain("justify-content:space-between;transform:translateY(-3px)");
     expect(sheet).toContain('h("div", { class: "comment-actions" }, [');
     expect(sheet).toContain(":deep(.comment-actions){display:flex");
     expect(sheet).not.toContain(":deep(.comment-composer-actions)");
