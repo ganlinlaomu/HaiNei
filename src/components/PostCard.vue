@@ -169,6 +169,9 @@ function closeComments() {
   });
 }
 function toggleMeta() { if (commentsOpen.value) closeComments(); metaOpen.value = !metaOpen.value; }
+watch(() => router.currentRoute.value.fullPath, currentRoute => {
+  if (commentsOpen.value && sheetRoute && currentRoute !== sheetRoute) closeComments();
+});
 watch(() => props.openCommentId, value => { if (value) openComments(); }, { immediate: true });
 let observer: ResizeObserver | null = null;
 onMounted(() => { if (!root.value || typeof ResizeObserver === "undefined") return; observer = new ResizeObserver(entries => emit("height", props.message.id, entries[0]?.contentRect.height || 0)); observer.observe(root.value); });
