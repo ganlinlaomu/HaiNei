@@ -155,20 +155,19 @@ describe("comment bottom sheet", () => {
     expect(feedScrollAfterSheetClose(428)).toBe(428);
   });
 
-  it("uses the taller timed sheet and closes only for a sufficient drag or flick", () => {
+  it("uses the Instagram-height sheet and closes only for a sufficient drag or flick", () => {
     expect(shouldCloseCommentSheetDrag(260, 1000, 1000)).toBe(true);
     expect(shouldCloseCommentSheetDrag(80, 1000, 80)).toBe(true);
     expect(shouldCloseCommentSheetDrag(80, 1000, 500)).toBe(false);
     expect(shouldCloseCommentSheetDrag(8, 1000, 1)).toBe(false);
     const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
-    expect(sheet).toContain("height:calc(100dvh - 72px)");
-    expect(sheet).toContain("320ms cubic-bezier(.22,1,.36,1)");
-    expect(sheet).toContain("260ms cubic-bezier(.22,1,.36,1)");
-    expect(sheet).toContain("@keyframes instagram-comment-sheet-in");
-    expect(sheet).toContain("transform:translateY(-1.4%)");
-    expect(sheet).toContain("animation:instagram-comment-sheet-in 520ms cubic-bezier(.16,1,.3,1)");
-    expect(sheet).toContain("transform:translateY(22%)");
-    expect(sheet).toContain("transform:translateY(-.55%)");
+    expect(sheet).toContain("height:70dvh");
+    expect(sheet).toContain("background:rgba(0,0,0,.66)");
+    expect(sheet).toContain("border-radius:24px 24px 0 0");
+    expect(sheet).toContain("240ms cubic-bezier(.32,.72,0,1)");
+    expect(sheet).toContain("220ms cubic-bezier(.4,0,.6,1)");
+    expect(sheet).toContain("background-color:rgba(0,0,0,0)");
+    expect(sheet).not.toContain("@keyframes instagram-comment-sheet-in");
   });
 
   it("allows empty and populated short bodies to start a pull-down without depending on comment count", () => {
@@ -347,7 +346,7 @@ describe("comment bottom sheet", () => {
     const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     const header = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
     expect(sheet).toContain("comment-sheet-backdrop{position:fixed;inset:0;z-index:12000");
-    expect(sheet).toContain("height:calc(100dvh - 72px)");
+    expect(sheet).toContain("height:70dvh");
     expect(header).toContain('[...ui.blockingOverlays].some(name => name.startsWith("comment-sheet-"))');
     expect(header).toContain("return false");
     expect(sheet).not.toContain("inset:0 0 var(--bottom-nav-height) 0");
