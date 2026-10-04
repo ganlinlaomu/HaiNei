@@ -4,12 +4,14 @@ import { finalizeEvent, getPublicKey, utils, type EventTemplate, type NostrEvent
 
 const mocks = vi.hoisted(() => ({
   getRelaysFromStorage: vi.fn(),
+  inspectRelays: vi.fn(),
   subscribe: vi.fn(),
   publish: vi.fn(),
 }));
 
 vi.mock("@/nostr/relays", () => ({
   getRelaysFromStorage: mocks.getRelaysFromStorage,
+  inspectRelays: mocks.inspectRelays,
 }));
 vi.mock("@/services/nostrClient", () => ({
   nostrClient: {
@@ -75,6 +77,11 @@ beforeEach(async () => {
       ? ["wss://own-one.test", "wss://own-two.test", "wss://own-three.test"]
       : ["wss://write.test"]
   );
+  mocks.inspectRelays.mockReset().mockReturnValue({
+    "wss://own-one.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+    "wss://own-two.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+    "wss://own-three.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+  });
   mocks.subscribe.mockReset().mockImplementation((relays: string[]) => subscription(relays, []));
   mocks.publish.mockReset().mockImplementation(async (_event: NostrEvent, relays: string[]) => [
     { relay: relays[0], ok: true, ts: 1 },
@@ -228,6 +235,32 @@ describe("kind 10050 parsing and discovery", () => {
 });
 
 describe("own kind 10050 publication", () => {
+  it("selects only currently connected read relays and skips a failed one", () => {
+    mocks.inspectRelays.mockReturnValue({
+      "wss://own-one.test": { ready: false, state: "disconnected", queueLength: 0, subs: 0, okHandlers: 0, reconnectAttempts: 3, connectStartedAt: 1 },
+      "wss://own-two.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+      "wss://own-three.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+    });
+    expect(selectOwnDmRelays()).toEqual(["wss://own-two.test", "wss://own-three.test"]);
+  });
+
+  it("keeps the prior advertisement when no read relay is currently connected", async () => {
+    await dmRelayDirectoryRepository.put({
+      accountPubkey: account,
+      ownerPubkey: account,
+      relays: ["wss://previous-good.test"],
+      fetchedAt: Date.now(),
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      source: "own",
+    });
+    mocks.inspectRelays.mockReturnValue({});
+    const signer = vi.fn(async (template: EventTemplate) => signed(accountSecret, template));
+    await expect(ensureOwnDmRelayList(account, signer)).resolves.toBe(false);
+    expect(signer).not.toHaveBeenCalled();
+    expect(await dmRelayDirectoryRepository.get(account, account)).toMatchObject({
+      relays: ["wss://previous-good.test"],
+    });
+  });
   it("adopts an already-published matching list on a fresh device", async () => {
     const remote = dmRelayEvent(accountSecret, ["wss://own-one.test", "wss://own-two.test"]);
     mocks.subscribe.mockImplementation((relays: string[]) => subscription(relays, [remote]));
@@ -335,6 +368,9 @@ describe("own kind 10050 publication", () => {
     const signer = vi.fn(async (template: EventTemplate) => signed(accountSecret, template));
     await ensureOwnDmRelayList(account, signer);
     mocks.getRelaysFromStorage.mockReturnValue(["wss://changed.test"]);
+    mocks.inspectRelays.mockReturnValue({
+      "wss://changed.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+    });
     await ensureOwnDmRelayList(account, signer);
     expect(signer).toHaveBeenCalledTimes(2);
     expect(mocks.publish).toHaveBeenCalledTimes(2);
