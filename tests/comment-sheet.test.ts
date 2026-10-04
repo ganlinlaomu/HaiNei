@@ -164,6 +164,9 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain("height:calc(100dvh - 72px)");
     expect(sheet).toContain("320ms cubic-bezier(.22,1,.36,1)");
     expect(sheet).toContain("260ms cubic-bezier(.22,1,.36,1)");
+    expect(sheet).toContain("@keyframes instagram-comment-sheet-in");
+    expect(sheet).toContain("transform:translateY(-1.4%)");
+    expect(sheet).toContain("animation:instagram-comment-sheet-in 360ms cubic-bezier(.22,1,.36,1)");
   });
 
   it("allows empty and populated short bodies to start a pull-down without depending on comment count", () => {
