@@ -329,6 +329,18 @@ describe("comment bottom sheet", () => {
     expect(buildCommentSubmission("post", self, "reply", REPLY, self).recipientPubkey).toBe(friend);
   });
 
+  it("uses a focus-expanding multiline comment composer where Enter inserts a newline", () => {
+    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    expect(sheet).toContain("<textarea");
+    expect(sheet).toContain('rows="1"');
+    expect(sheet).toContain('enterkeyhint="enter"');
+    expect(sheet).toContain("resizeComposerTextarea(composer.value, commentComposerFocused");
+    expect(sheet).toContain("width:calc(100% - 20px)");
+    expect(sheet).toContain(".comment-composer:focus-within{min-height:96px");
+    expect(sheet).toContain("max-height:160px");
+    expect(sheet).toContain("border-radius:30px");
+  });
+
   it("allows image-only comments and exposes one-image selection/removal UI", () => {
     expect(canSubmitComment("", false)).toBe(false);
     expect(canSubmitComment("", true)).toBe(true);
