@@ -178,7 +178,13 @@ function openComments() {
 }
 function preloadComments() { void loadCommentSheet(); }
 function toggleComments() { openComments(); }
+function clearCommentSheetOverlays() {
+  for (const name of [...ui.blockingOverlays]) {
+    if (name.startsWith("comment-sheet-")) ui.setBlockingOverlay(name, false);
+  }
+}
 function closeComments() {
+  clearCommentSheetOverlays();
   commentsOpen.value = false;
   void nextTick(() => {
     const scroller = feedScroller();
