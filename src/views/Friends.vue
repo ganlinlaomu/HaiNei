@@ -213,6 +213,7 @@ import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import QrScannerSheet from "@/components/QrScannerSheet.vue";
 import { parseNostrProfileQrValue } from "@/utils/nostrQr";
 import { friendGroupTags, UNGROUPED_FRIEND_LABEL } from "@/utils/friendAudience";
+import { loadAccountStoresOnce, storesLoadedForAccount, waitForFirstPaint } from "@/utils/bottomTabActivation";
 
 export default defineComponent({
   name: "Friends",
@@ -235,7 +236,7 @@ export default defineComponent({
     const editingPending = ref(false);
     const activeSection = ref<"accepted" | "incoming" | "outgoing">("accepted");
     const { close: closeSwipe, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
-    const initialLoading = ref(true);
+    const initialLoading = ref(!storesLoadedForAccount(keys.pkHex, [friends, friendships, profiles]));
     const initialLoadError = ref("");
     const showSyncSuccess = ref(false);
     const isFadingOut = ref(false);
@@ -322,14 +323,15 @@ export default defineComponent({
     });
 
     async function loadFriendsPage() {
+      const account = keys.pkHex;
+      if (!account) return;
+      const stores = [friends, friendships, profiles];
+      const alreadyLocal = storesLoadedForAccount(account, stores);
       initialLoadError.value = "";
-      initialLoading.value = true;
+      initialLoading.value = !alreadyLocal;
       try {
-        await Promise.all([
-          friends.load(),
-          friendships.load(),
-          profiles.load()
-        ]);
+        if (!alreadyLocal) await waitForFirstPaint();
+        await loadAccountStoresOnce(account, stores);
       } catch (error) {
         initialLoadError.value = error instanceof Error ? error.message : "好友加载失败，请稍后重试";
       } finally {
