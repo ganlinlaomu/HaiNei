@@ -161,6 +161,7 @@ describe("comment bottom sheet", () => {
     expect(shouldCloseCommentSheetDrag(80, 1000, 500)).toBe(false);
     expect(shouldCloseCommentSheetDrag(8, 1000, 1)).toBe(false);
     const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    expect(sheet).toContain('<Transition name="comment-sheet" appear>');
     expect(sheet).toContain("height:70dvh");
     expect(sheet).toContain("background:rgba(0,0,0,.66)");
     expect(sheet).toContain("border-radius:24px 24px 0 0");
