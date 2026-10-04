@@ -45,6 +45,18 @@ describe("comment bottom sheet", () => {
     expect(card).toContain('@click="toggleComments"');
     expect(card).not.toContain("router.push({ path: '/post'");
   });
+  it("restores bottom navigation immediately when the comment sheet closes", () => {
+    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    expect(card).toContain("function clearCommentSheetOverlays()");
+    expect(card).toContain('name.startsWith("comment-sheet-")');
+    expect(card).toContain("ui.setBlockingOverlay(name, false)");
+    const closeIndex = card.indexOf("function closeComments()");
+    const clearIndex = card.indexOf("clearCommentSheetOverlays();", closeIndex);
+    const stateIndex = card.indexOf("commentsOpen.value = false;", closeIndex);
+    expect(clearIndex).toBeGreaterThan(closeIndex);
+    expect(clearIndex).toBeLessThan(stateIndex);
+  });
+
 
   it("renders roots and flattens nested replies to one visual level", () => {
     const threads = buildCommentThreads([ROOT, REPLY, NESTED]);
