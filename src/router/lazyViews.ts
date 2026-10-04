@@ -14,11 +14,14 @@ let bottomTabPreload: Promise<PromiseSettledResult<unknown>[]> | null = null;
 
 async function preloadBottomTabsInBatches() {
   const loaders = [
-    // "我的" is the smallest primary hub and a frequent cold-start target on
-    // mobile. Warm it first, then keep the remaining tab chunks staggered.
+    // Warm the common navigation path in small idle batches. Messages is
+    // included immediately after the conversation list so the first chat open
+    // does not pay a cold chunk parse cost.
     loadSettingsView,
     loadConversationsView,
+    loadMessagesView,
     loadNotificationsView,
+    loadFriendsView,
     loadSystemSettingsView,
   ];
   const results: PromiseSettledResult<unknown>[] = [];
