@@ -27,10 +27,10 @@
               </div>
             </div>
           </div>
-          <p class="dm-relay-copy">自动从现有读取 Relay 中选择接收点，并将 kind 10050 发布到公共目录。发信时优先使用对方列表；未找到时兼容传统 Relay。公共目录仅用于列表发现，不传送私信；不会为每位联系人保持额外长连接。</p>
+          <p class="dm-relay-copy">自动从当前已连接的读取 Relay 中选择最多 2 个接收点，并将 kind 10050 发布到公共目录。发信时优先使用对方列表；未找到时兼容传统 Relay。公共目录仅用于列表发现，不传送私信；不会为每位联系人保持额外长连接。</p>
           <div class="dm-relay-list">
             <span v-for="relay in dmRelayStatus.relays" :key="relay">{{ relay }}</span>
-            <span v-if="!dmRelayStatus.relays.length">等待可用的安全 Relay</span>
+            <span v-if="!dmRelayStatus.relays.length">等待已连接的安全 Relay</span>
           </div>
         </article>
 
