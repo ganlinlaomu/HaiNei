@@ -350,9 +350,12 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain("margin:-5px");
     expect(sheet).toContain(".send-button .send-visual{background:#0f1419}");
     expect(sheet).toContain(".send-button .send-visual svg{width:18px;height:18px}");
-    expect(sheet).toContain('class="comment-actions"');
-    expect(sheet).toContain(".comment-actions{display:contents}");
-    expect(sheet).toContain(".comment-composer:focus-within .comment-actions{display:flex");
+    expect(sheet).toContain('class="comment-composer-actions"');
+    expect(sheet).toContain(".comment-composer-actions{display:contents}");
+    expect(sheet).toContain(".comment-composer:focus-within .comment-composer-actions{display:flex");
+    expect(sheet).toContain('h("div", { class: "comment-actions" }, [');
+    expect(sheet).toContain(":deep(.comment-actions){display:flex");
+    expect(sheet).not.toContain(":deep(.comment-composer-actions)");
     expect(sheet).toContain("grid-template-rows:auto 34px");
   });
 
