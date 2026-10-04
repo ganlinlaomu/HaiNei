@@ -528,7 +528,8 @@ describe("encrypted private audio messages", () => {
     expect(messages).not.toContain("attachment-menu");
     expect(messages).toContain("width:calc(100% - 64px)");
     expect(messages).toContain("min-height:40px");
-    expect(messages).toContain(".composer-normal:focus-within{min-height:96px}");
+    expect(messages).toContain("focusedMinHeight: 54");
+    expect(messages).toContain(".composer-normal:focus-within{min-height:68px}");
     expect(messages).toContain("calc(28px + env(safe-area-inset-bottom))");
     expect(messages).toContain('v-if="hasAudio(message)"');
     expect(messages).toContain(':suspended="voiceCaptureOwnsAudioSession"');

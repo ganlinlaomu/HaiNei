@@ -336,9 +336,11 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain('enterkeyhint="enter"');
     expect(sheet).toContain("resizeComposerTextarea(composer.value, commentComposerFocused");
     expect(sheet).toContain("minHeight: 32");
+    expect(sheet).toContain("focusedMinHeight: 54");
     expect(sheet).toContain("width:calc(100% - 64px)");
+    expect(sheet).toContain("margin:8px 16px calc(env(safe-area-inset-bottom) + 2px)");
     expect(sheet).toContain("min-height:40px");
-    expect(sheet).toContain(".comment-composer:focus-within{min-height:96px");
+    expect(sheet).toContain(".comment-composer:focus-within{width:calc(100% - 32px);min-height:68px");
     expect(sheet).toContain("max-height:160px");
     expect(sheet).toContain("border-radius:28px");
   });
