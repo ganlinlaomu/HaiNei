@@ -93,19 +93,20 @@
           <div v-if="sendError" class="send-error" role="alert">{{ sendError }}</div>
           <form class="comment-composer" @submit.prevent="submitComment">
             <ProfileAvatar :pubkey="keys.pkHex" local-name="自己" :size="34" />
-            <input
+            <textarea
               ref="composer"
               v-model="draft"
-              type="text"
+              rows="1"
+              enterkeyhint="enter"
               autocomplete="off"
               :placeholder="replyTarget ? `回复 @${displayName(replyTarget.author)}` : '添加评论...'"
               aria-label="添加评论"
               @input="onMentionInput"
-              @focus="onMentionFocus"
-              @blur="onMentionBlur"
+              @focus="handleCommentComposerFocus"
+              @blur="handleCommentComposerBlur"
               @click="onMentionClick"
               @keydown="onMentionKeydown"
-            />
+            ></textarea>
             <MentionSuggestions
               v-if="mentionOpen"
               :items="mentionMatches"
@@ -154,6 +155,7 @@ import PostImagePreview from "@/components/PostImagePreview.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import MentionText from "@/components/MentionText.vue";
 import { useMentionComposer } from "@/composables/useMentionComposer";
+import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import type { MentionCandidate } from "@/utils/mentions";
 import { useUIStore } from "@/stores/ui";
 
@@ -170,7 +172,7 @@ const overlayId = `comment-sheet-${getCurrentInstance()?.uid}`;
 const dialog = ref<HTMLElement | null>(null);
 const panel = ref<HTMLElement | null>(null);
 const commentBody = ref<HTMLElement | null>(null);
-const composer = ref<HTMLInputElement | null>(null);
+const composer = ref<HTMLTextAreaElement | null>(null);
 const imageInput = ref<HTMLInputElement | null>(null);
 const draft = ref("");
 const replyTarget = ref<Comment | null>(null);
@@ -225,6 +227,28 @@ const {
   mentionedPubkeys,
   closeMention,
 } = useMentionComposer(draft, composer, mentionCandidates);
+
+let commentComposerFocused = false;
+function resizeCommentComposer() {
+  resizeComposerTextarea(composer.value, commentComposerFocused, {
+    minHeight: 40,
+    focusedMinHeight: 72,
+    maxHeight: 160,
+  });
+}
+watch(draft, () => {
+  void nextTick(resizeCommentComposer);
+}, { immediate: true });
+function handleCommentComposerFocus() {
+  commentComposerFocused = true;
+  onMentionFocus();
+  void nextTick(resizeCommentComposer);
+}
+function handleCommentComposerBlur() {
+  commentComposerFocused = false;
+  onMentionBlur();
+  void nextTick(resizeCommentComposer);
+}
 
 function localName(pubkey: string) {
   if (pubkey === keys.pkHex) return "自己";
@@ -669,7 +693,7 @@ onBeforeUnmount(() => {
 .comment-sheet-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scroll-padding-bottom:24px;padding:8px 14px 24px}.comment-sheet-body.empty{cursor:grab}.comment-sheet-body.empty:active{cursor:grabbing}.empty-comments{display:flex;flex-direction:column;align-items:center;gap:4px;padding:54px 0;color:#94a3b8;text-align:center}.empty-comments strong{color:#334155;font-size:14px;font-weight:600}.empty-comments span{font-size:12px}
 .comment-thread{padding:5px 0}.comment-replies{margin-top:1px}.comment-reply{margin-left:42px;padding-top:4px}.comment-row{display:flex;align-items:flex-start;gap:10px;padding:4px 2px;border-radius:10px}.comment-row.highlight{animation:comment-highlight 1.6s ease}:deep(.comment-avatar),:deep(.comment-name),:deep(.comment-actions button){appearance:none;-webkit-appearance:none;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;color:inherit;font-family:inherit;cursor:pointer}:deep(.comment-avatar){display:flex;align-items:flex-start;justify-content:center;width:36px;height:36px;min-width:36px;min-height:36px;flex:0 0 36px;align-self:flex-start;border-radius:50%;overflow:hidden}:deep(.reply-row .comment-avatar){width:32px;height:32px;min-width:32px;min-height:32px;flex-basis:32px}:deep(.comment-copy){flex:1;min-width:0;font-size:13px}:deep(.comment-author-line){display:flex;align-items:baseline;gap:6px;min-width:0;line-height:1.25}:deep(.comment-name){min-width:0;color:#1f2937;font-size:13px;font-weight:600;line-height:1.25;text-align:left}:deep(.comment-author-line time){flex-shrink:0;color:#8e8e8e;font-size:11px;font-weight:400;line-height:1.25}:deep(.comment-text){margin-top:3px;color:#1f2937;line-height:1.4;overflow-wrap:anywhere}:deep(.comment-mention){color:#2563eb}:deep(.comment-actions){display:flex;align-items:center;gap:6px;min-height:17px;margin-top:3px;color:#8e8e8e;font-size:11px;line-height:1.25}:deep(.comment-actions button){color:#8e8e8e;font-size:11px;font-weight:600;line-height:1.25}:deep(.pending){margin-left:2px}:deep(.failed){margin-left:2px;color:#dc2626}.thread-toggle{min-height:30px;padding:2px 0;border:0;background:transparent;color:#64748b;font-size:11px;font-weight:500;text-align:left}.toggle-line{display:block;height:1px;background:#cbd5e1}.toggle-label{white-space:nowrap}.root-toggle{display:grid;grid-template-columns:minmax(48px,1fr) auto minmax(48px,1fr);align-items:center;gap:10px;width:100%;margin:3px 0}.root-toggle .toggle-line{width:100%;background:#aeb8c5}.reply-toggle{display:flex;align-items:center;gap:8px;margin:1px 0 0 48px}.reply-toggle .toggle-line{width:24px;flex:0 0 24px}:deep(.comment-image){width:min(260px,100%);max-height:320px;margin-top:6px;overflow:hidden;border-radius:10px}:deep(.comment-image .post-image-preview),:deep(.comment-image .carousel-shell){width:100%;max-width:260px}:deep(.comment-image .carousel-shell){max-height:320px;margin:0;border-radius:10px}:deep(.comment-image .carousel-image){display:block;width:auto;height:auto;max-width:100%;max-height:320px;margin:auto;object-fit:cover;border-radius:10px}:deep(.comment-image .carousel-dots),:deep(.comment-image .carousel-counter),:deep(.comment-image .carousel-nav){display:none}
 .reply-target{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;padding:2px 12px;border-top:1px solid #eef2f6;color:#64748b;font-size:11px}.reply-target button{width:28px;height:28px;border:0;background:transparent;color:inherit}
-.selected-image{position:relative;width:72px;height:72px;margin:7px 12px 0}.selected-image img{display:block;width:100%;height:100%;object-fit:cover;border-radius:9px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:rgba(15,23,42,.82);color:#fff;font-size:16px;line-height:22px}.comment-composer{position:sticky;bottom:0;z-index:2;display:grid;grid-template-columns:36px minmax(0,1fr) 40px auto;align-items:center;gap:6px;flex-shrink:0;padding:8px 10px calc(env(safe-area-inset-bottom) + 10px);border-top:1px solid #e2e8f0;background:#fff}.comment-composer input[type=text]{min-width:0;height:40px;padding:0 12px;border:1px solid #dbe3ec;border-radius:999px;font-size:16px}.image-input{display:none}.comment-composer button{height:40px;border:0;background:transparent;color:#2563eb;font-weight:700}.comment-composer button:disabled{opacity:.45}.image-button{width:40px;padding:8px}.image-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.send-button{min-width:44px;padding:0 4px}.send-error{flex-shrink:0;padding:3px 14px;color:#dc2626;font-size:11px;text-align:center}
+.selected-image{position:relative;width:72px;height:72px;margin:7px 12px 0}.selected-image img{display:block;width:100%;height:100%;object-fit:cover;border-radius:9px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:rgba(15,23,42,.82);color:#fff;font-size:16px;line-height:22px}.comment-composer{position:sticky;bottom:0;z-index:2;display:grid;grid-template-columns:36px minmax(0,1fr) 40px 44px;align-items:end;gap:6px;box-sizing:border-box;width:calc(100% - 20px);min-height:58px;flex-shrink:0;margin:8px 10px calc(env(safe-area-inset-bottom) + 10px);padding:6px 7px;border:1px solid #d8dee5;border-radius:30px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.11);transition:min-height 180ms ease,border-color 180ms ease,box-shadow 180ms ease}.comment-composer:focus-within{min-height:96px;border-color:#c8d0d9;box-shadow:0 5px 20px rgba(15,23,42,.13)}.comment-composer textarea{min-width:0;min-height:40px;max-height:160px;box-sizing:border-box;padding:8px 6px 7px;border:0;outline:0;resize:none;overflow-y:hidden;background:transparent;color:#0f1419;font:inherit;font-size:16px;line-height:22px}.image-input{display:none}.comment-composer button{height:40px;border:0;background:transparent;color:#2563eb;font-weight:700}.comment-composer button:disabled{opacity:.45}.image-button{width:40px;padding:8px}.image-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.send-button{min-width:44px;padding:0 4px}.send-error{flex-shrink:0;padding:3px 14px;color:#dc2626;font-size:11px;text-align:center}
 .comment-sheet-enter-active{transition:opacity 320ms cubic-bezier(.22,1,.36,1)}.comment-sheet-leave-active{transition:opacity 260ms cubic-bezier(.22,1,.36,1)}.comment-sheet-enter-active .comment-sheet-panel{transition:transform 320ms cubic-bezier(.22,1,.36,1)}.comment-sheet-leave-active .comment-sheet-panel{transition:transform 260ms cubic-bezier(.22,1,.36,1)}.comment-sheet-enter-from,.comment-sheet-leave-to{opacity:0}.comment-sheet-enter-from .comment-sheet-panel,.comment-sheet-leave-to .comment-sheet-panel{transform:translateY(100%)}
 @keyframes comment-highlight{0%,55%{background:#fef3c7}100%{background:transparent}}
 @media(min-width:768px){.comment-sheet-backdrop{align-items:center;padding:24px}.comment-sheet-panel{height:min(82vh,760px);border-radius:18px}.drag-handle-area{display:none}}

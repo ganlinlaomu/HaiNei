@@ -221,10 +221,11 @@
           </div>
           <template v-else>
             <button class="composer-icon-button attachment-button" type="button" aria-label="添加图片" :disabled="!accepted || !keys.pkHex" @click="chooseImage">+</button>
-            <input
+            <textarea
               ref="textInput"
               v-model="draft"
-              type="text"
+              rows="1"
+              enterkeyhint="enter"
               autocomplete="off"
               :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'"
               :disabled="!accepted || !keys.pkHex"
@@ -233,7 +234,7 @@
               @blur="handleComposerBlur"
               @click="onMentionClick"
               @keydown="onMentionKeydown"
-            />
+            ></textarea>
             <button
               v-if="draft.trim() || selectedImage"
               class="composer-icon-button send-button"
@@ -296,6 +297,7 @@ import { classifyVoiceGesture } from "@/utils/voiceGesture";
 import { createVoiceRecordingSession, type VoiceRecordingResult, type VoiceRecordingSession } from "@/utils/voiceRecorder";
 import { openProfile } from "@/utils/profileNavigation";
 import { useMentionComposer } from "@/composables/useMentionComposer";
+import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import type { MentionCandidate } from "@/utils/mentions";
 
 const route = useRoute();
@@ -361,7 +363,7 @@ const voiceGestureHint = ref<"send" | "cancel" | "lock">("send");
 const recordedAudio = ref<(VoiceRecordingResult & { preview: string }) | null>(null);
 const voiceError = ref("");
 const imageInput = ref<HTMLInputElement | null>(null);
-const textInput = ref<HTMLInputElement | null>(null);
+const textInput = ref<HTMLTextAreaElement | null>(null);
 const mentionCandidates = computed<MentionCandidate[]>(() => {
   const peer = peerPubkey.value;
   return friends.getAcceptedList(friendships.isAccepted)
@@ -892,9 +894,20 @@ function setMessageListToBottom() {
 function scrollToBottom() {
   void nextTick(setMessageListToBottom);
 }
+function resizeMessageComposer() {
+  resizeComposerTextarea(textInput.value, composerFocused, {
+    minHeight: 40,
+    focusedMinHeight: 72,
+    maxHeight: 160,
+  });
+}
+watch(draft, () => {
+  void nextTick(resizeMessageComposer);
+}, { immediate: true });
 function handleComposerFocus() {
   onMentionFocus();
   composerFocused = true;
+  void nextTick(resizeMessageComposer);
   scrollToBottom();
 
   // iOS changes the visual viewport while the keyboard animates in. Re-apply
@@ -910,6 +923,7 @@ function handleComposerFocus() {
 function handleComposerBlur() {
   onMentionBlur();
   composerFocused = false;
+  void nextTick(resizeMessageComposer);
   if (composerFocusSettleTimer !== null) window.clearTimeout(composerFocusSettleTimer);
   composerFocusSettleTimer = null;
 }
@@ -1533,7 +1547,7 @@ onBeforeUnmount(() => {
 .composer-region{position:relative;z-index:3;width:min(100%,720px);margin:0 auto;padding:4px 0 calc(28px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(255,255,255,0),#fff 22%)}
 .replying-preview{display:flex;min-width:0;align-items:center;gap:10px;margin:0 16px 6px;padding:7px 10px 7px 12px;border-left:3px solid #1687e8;border-radius:10px;background:#f7f9f9}.replying-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}.replying-copy strong,.replying-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.replying-copy strong{color:#0f1419;font-size:12px}.replying-copy span{color:#536471;font-size:12px}.replying-preview>button{width:30px;height:30px;flex:0 0 30px;padding:0;border:0;border-radius:50%;background:transparent;color:#536471;font-size:22px}.replying-preview>button:active{background:#e8ecef}
 .selected-image{position:relative;width:64px;height:64px;margin:0 0 8px 24px}.selected-image img{width:100%;height:100%;object-fit:cover;border:1px solid #e2e8f0;border-radius:12px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}.voice-error{margin:0 24px 6px;color:#dc2626;font-size:12px}
-.chat-composer{position:relative;width:calc(100% - 32px);min-width:0;margin:0 auto;border:1px solid #d8dee5;border-radius:28px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.11)}.composer-normal,.composer-preview{display:flex;box-sizing:border-box;min-width:0;height:54px;min-height:54px;align-items:center;gap:8px;padding:4px 6px}.composer-normal.voice-active{padding-left:6px}.composer-normal input[type=text]{min-width:0;height:40px;flex:1;padding:0 5px;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}.image-input{display:none}.composer-icon-button{display:grid;width:40px;height:40px;flex:0 0 40px;padding:0;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.attachment-button{font-size:28px;font-weight:300;line-height:1}.microphone-button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}.microphone-button.active{background:#f1f5f9}.microphone-button svg,.send-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.send-button{background:#0f1419;color:#fff}.chat-composer button:disabled{opacity:.36}
+.chat-composer{position:relative;width:calc(100% - 20px);min-width:0;margin:0 auto;border:1px solid #d8dee5;border-radius:30px;background:#fff;box-shadow:0 4px 18px rgba(15,23,42,.11);transition:border-color 180ms ease,box-shadow 180ms ease}.chat-composer:focus-within{border-color:#c8d0d9;box-shadow:0 5px 20px rgba(15,23,42,.13)}.composer-normal,.composer-preview{display:flex;box-sizing:border-box;min-width:0;min-height:58px;gap:8px;padding:6px 7px}.composer-normal{height:auto;align-items:flex-end;transition:min-height 180ms ease}.composer-normal:focus-within{min-height:96px}.composer-preview{align-items:center}.composer-normal.voice-active{padding-left:7px}.composer-normal textarea{min-width:0;min-height:40px;max-height:160px;flex:1;box-sizing:border-box;padding:8px 5px 7px;border:0;outline:0;resize:none;overflow-y:hidden;background:transparent;color:#0f1419;font:inherit;font-size:16px;line-height:22px}.image-input{display:none}.composer-icon-button{display:grid;width:40px;height:40px;flex:0 0 40px;padding:0;place-items:center;border:0;border-radius:50%;background:transparent;color:#0f1419}.attachment-button{font-size:28px;font-weight:300;line-height:1}.microphone-button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}.microphone-button.active{background:#f1f5f9}.microphone-button svg,.send-button svg{display:block;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.send-button{background:#0f1419;color:#fff}.chat-composer button:disabled{opacity:.36}
 .composer-recording{display:flex;min-width:0;flex:1;height:46px;align-items:center;gap:8px;padding:0 8px;touch-action:none}.recording-dot{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#ef4444;animation:recording-pulse 1.2s ease-in-out infinite}.composer-recording.cancelling .recording-dot{animation:none}.composer-recording strong{font-size:14px;font-variant-numeric:tabular-nums}.voice-waveform{display:flex;height:22px;align-items:center;gap:2px}.voice-waveform i{display:block;width:2px;height:8px;border-radius:2px;background:#8b98a5;animation:voice-wave .72s ease-in-out infinite alternate}.voice-waveform i:nth-child(2){animation-delay:-.18s}.voice-waveform i:nth-child(3){animation-delay:-.36s}.voice-waveform i:nth-child(4){animation-delay:-.54s}.voice-waveform i:nth-child(5){animation-delay:-.27s}.voice-gesture-hint{margin-left:auto;color:#657786;font-size:12px;white-space:nowrap}.composer-recording.cancelling .voice-gesture-hint{color:#dc2626}.voice-lock-label{margin-left:auto;color:#657786;font-size:12px}.composer-recording button{min-width:50px;height:38px;border:0;background:transparent;color:#536471;font-weight:600}.composer-recording .finish-recording{color:#1687e8}.finishing-label{margin-left:auto;color:#536471;font-size:14px}.composer-preview{padding-left:10px}.composer-voice-preview{min-width:0;flex:1}.composer-preview :deep(.voice-message){min-width:0;grid-template-columns:34px minmax(70px,1fr) 36px}.remove-audio{font-size:25px;color:#64748b}
 @keyframes recording-pulse{50%{opacity:.35}}@keyframes voice-wave{from{height:5px}to{height:19px}}
 @media (min-width:768px){.composer-region{padding-bottom:16px}.message-list{width:min(100%,720px);margin:0 auto}}
