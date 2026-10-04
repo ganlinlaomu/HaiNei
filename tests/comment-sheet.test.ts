@@ -335,14 +335,14 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain('rows="1"');
     expect(sheet).toContain('enterkeyhint="enter"');
     expect(sheet).toContain("resizeComposerTextarea(composer.value, commentComposerFocused");
-    expect(sheet).toContain("minHeight: 32");
-    expect(sheet).toContain("focusedMinHeight: 54");
-    expect(sheet).toContain("width:calc(100% - 64px)");
+    expect(sheet).toContain("minHeight: 36");
+    expect(sheet).toContain("focusedMinHeight: 36");
+    expect(sheet).toContain("width:calc(100% - 48px)");
     expect(sheet).toContain("margin:8px 16px calc(env(safe-area-inset-bottom) + 2px)");
-    expect(sheet).toContain("min-height:40px");
-    expect(sheet).toContain(".comment-composer:focus-within{width:calc(100% - 32px);min-height:68px");
-    expect(sheet).toContain("max-height:160px");
-    expect(sheet).toContain("border-radius:28px");
+    expect(sheet).toContain("min-height:48px");
+    expect(sheet).toContain(".comment-composer:focus-within{width:calc(100% - 32px);min-height:76px");
+    expect(sheet).toContain("max-height:108px");
+    expect(sheet).toContain("border-radius:24px");
     expect(sheet).toContain('class="comment-icon-button image-button"');
     expect(sheet).toContain('class="comment-icon-button send-button"');
     expect(sheet).toContain('<path d="M12 5v14M5 12h14"/>');
@@ -350,6 +350,10 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain("margin:-5px");
     expect(sheet).toContain(".send-button .send-visual{background:#0f1419}");
     expect(sheet).toContain(".send-button .send-visual svg{width:18px;height:18px}");
+    expect(sheet).toContain('class="comment-actions"');
+    expect(sheet).toContain(".comment-actions{display:contents}");
+    expect(sheet).toContain(".comment-composer:focus-within .comment-actions{display:flex");
+    expect(sheet).toContain("grid-template-rows:auto 34px");
   });
 
   it("allows image-only comments and exposes one-image selection/removal UI", () => {
