@@ -1,6 +1,6 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { getActivePinia } from "pinia";
-import { getRelaysFromStorage } from "@/nostr/relays";
+import { getRelaysFromStorage, onRelayConnectionState } from "@/nostr/relays";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
@@ -48,6 +48,38 @@ let activeKeys: AccountSyncKeys | null = null;
 let accountSyncGeneration = 0;
 let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle" };
 const accountSyncStatusListeners = new Set<(snapshot: AccountMessageSyncSnapshot) => void>();
+let dmRelayHealthUnsubscribe: (() => void) | null = null;
+let dmRelayHealthTimer: ReturnType<typeof setTimeout> | null = null;
+
+function stopDmRelayHealthWatch() {
+  if (dmRelayHealthTimer) clearTimeout(dmRelayHealthTimer);
+  dmRelayHealthTimer = null;
+  dmRelayHealthUnsubscribe?.();
+  dmRelayHealthUnsubscribe = null;
+}
+
+function bindDmRelayHealthWatch(
+  account: string,
+  isCurrent: () => boolean,
+  signer: (event: EventTemplate) => Promise<VerifiedEvent>,
+) {
+  stopDmRelayHealthWatch();
+  dmRelayHealthUnsubscribe = onRelayConnectionState(event => {
+    if (!isCurrent()) {
+      stopDmRelayHealthWatch();
+      return;
+    }
+    if (!event.connected && !event.failed) return;
+    const readRelays = new Set(getRelaysFromStorage("read"));
+    if (!readRelays.has(event.url)) return;
+    if (dmRelayHealthTimer) clearTimeout(dmRelayHealthTimer);
+    dmRelayHealthTimer = setTimeout(() => {
+      dmRelayHealthTimer = null;
+      if (!isCurrent()) return;
+      void ensureOwnDmRelayList(account, signer).catch(logDmRelayDirectoryFailure);
+    }, 250);
+  });
+}
 
 onMessageAuthorizationChanged(accountPubkey => {
   if (activeKeys?.pkHex.toLowerCase() !== accountPubkey) return;
@@ -82,6 +114,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   if (!account || !keys.isLoggedIn || !keys.supportsNip44) return false;
 
   const generation = ++accountSyncGeneration;
+  stopDmRelayHealthWatch();
   activeKeys = keys;
   const isCurrent = () =>
     generation === accountSyncGeneration
@@ -148,12 +181,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
     const legacyReadRelays = getRelaysFromStorage("read");
     const dmRelays = selectOwnDmRelays(legacyReadRelays);
     const messageRelays = [...new Set([...dmRelays, ...legacyReadRelays])];
-    // Publication is durable and deliberately does not block login. The same
-    // selected relays are already included in the legacy subscription, so the
-    // first migration adds no extra long-lived sockets.
-    if (keys.supportsNip44) {
-      void ensureOwnDmRelayList(account, assertCurrentSigner).catch(logDmRelayDirectoryFailure);
-    }
+    // All configured read relays remain part of the normal message subscription.
+    // The kind 10050 advertisement itself is refreshed only after runtime
+    // connectivity is known, so failed read relays are never selected merely
+    // because they appear early in configuration order.
     await accountMessageSyncManager.start({
       accountPubkey: account,
       relays: messageRelays,
@@ -265,6 +296,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       },
     });
     if (!isCurrent()) return false;
+    if (keys.supportsNip44) {
+      bindDmRelayHealthWatch(account, isCurrent, assertCurrentSigner);
+      void ensureOwnDmRelayList(account, assertCurrentSigner).catch(logDmRelayDirectoryFailure);
+    }
     return true;
   } catch (error) {
     if (isCurrent()) {
@@ -295,6 +330,7 @@ export async function markAccountConversationRead(conversationId: string) {
 export function stopAccountMessageSync() {
   const account = activeKeys?.pkHex.toLowerCase() || accountSyncSnapshot.accountPubkey;
   accountSyncGeneration++;
+  stopDmRelayHealthWatch();
   activeKeys = null;
   if (account) cancelDmRelayDirectoryWork(account);
   accountMessageSyncManager.stop();
