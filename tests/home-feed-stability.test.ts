@@ -18,6 +18,9 @@ describe("Home feed stability contract", () => {
     expect(home).not.toContain("showingSendMeta");
 
     expect(card).toContain("async function toggleLike()");
+    expect(card).toContain("function playLikeBounce()");
+    expect(card).toContain("'like-bounce': likeAnimating");
+    expect(card).toContain("@keyframes instagram-heart-pop");
     expect(card).toContain("CommentSheet");
     expect(card).toContain("const expanded = ref(false)");
     expect(card).toContain("toggleBookmark");
