@@ -340,7 +340,8 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain("width:calc(100% - 48px)");
     expect(sheet).toContain("margin:8px 16px calc(env(safe-area-inset-bottom) + 2px)");
     expect(sheet).toContain("min-height:48px");
-    expect(sheet).toContain(".comment-composer:focus-within{width:calc(100% - 32px);min-height:76px");
+    expect(sheet).toContain(".comment-composer:focus-within{width:calc(100% - 32px)");
+    expect(sheet).toContain(".comment-composer-normal:focus-within{min-height:76px");
     expect(sheet).toContain("max-height:108px");
     expect(sheet).toContain("border-radius:24px");
     expect(sheet).toContain('class="comment-icon-button image-button"');
@@ -350,9 +351,11 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain("margin:-5px");
     expect(sheet).toContain(".send-button .send-visual{background:#0f1419}");
     expect(sheet).toContain(".send-button .send-visual svg{width:18px;height:18px}");
+    expect(sheet).toContain('class="comment-composer-normal"');
     expect(sheet).toContain('class="comment-composer-actions"');
+    expect(sheet).toContain(".comment-composer-normal{display:grid");
     expect(sheet).toContain(".comment-composer-actions{display:contents}");
-    expect(sheet).toContain(".comment-composer:focus-within .comment-composer-actions{display:flex");
+    expect(sheet).toContain(".comment-composer-normal:focus-within .comment-composer-actions{display:flex");
     expect(sheet).toContain('h("div", { class: "comment-actions" }, [');
     expect(sheet).toContain(":deep(.comment-actions){display:flex");
     expect(sheet).not.toContain(":deep(.comment-composer-actions)");
