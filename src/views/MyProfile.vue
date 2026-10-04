@@ -42,6 +42,7 @@ import { useKeyStore } from "@/stores/keys";
 import { acceptedProfileRecipients, useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { uploadPrivateProfileAvatar } from "@/utils/profileAvatar";
+import { loadAccountStoresOnce, storesLoadedForAccount, waitForFirstPaint } from "@/utils/bottomTabActivation";
 
 const keys = useKeyStore();
 const friendships = useFriendshipsStore();
@@ -64,14 +65,23 @@ function populateDraft() {
   draftLoadedFor.value = account;
 }
 
-onMounted(async () => {
-  await Promise.all([profiles.load(keys.pkHex), friendships.load(keys.pkHex)]);
+async function ensureLocalProfileStores(account: string) {
+  if (!account) return;
+  const stores = [profiles, friendships];
+  if (!storesLoadedForAccount(account, stores)) await waitForFirstPaint();
+  await loadAccountStoresOnce(account, stores);
   populateDraft();
+}
+
+populateDraft();
+onMounted(() => {
+  populateDraft();
+  void ensureLocalProfileStores(keys.pkHex);
 });
-watch(() => keys.pkHex, async account => {
+watch(() => keys.pkHex, account => {
   draftLoadedFor.value = "";
-  if (account) await Promise.all([profiles.load(account), friendships.load(account)]);
   populateDraft();
+  if (account) void ensureLocalProfileStores(account);
 });
 watch(() => profiles.loading, loading => { if (!loading) populateDraft(); });
 

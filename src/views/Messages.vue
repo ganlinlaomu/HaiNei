@@ -276,7 +276,7 @@ import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import MentionText from "@/components/MentionText.vue";
 import { directMessagePreview } from "@/nostr/messaging/directMessages";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
-import { useDirectMessagesStore, type DmSearchResult } from "@/stores/directMessages";
+import { directMessagesForPeer, useDirectMessagesStore, type DmSearchResult } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
@@ -299,6 +299,7 @@ import { openProfile } from "@/utils/profileNavigation";
 import { useMentionComposer } from "@/composables/useMentionComposer";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import type { MentionCandidate } from "@/utils/mentions";
+import { loadAccountStoresOnce, waitForFirstPaint } from "@/utils/bottomTabActivation";
 
 const route = useRoute();
 const router = useRouter();
@@ -316,7 +317,7 @@ const displayName = computed(() => privateProfileDisplayName(profiles.getProfile
 const historyMessages = ref<InboxItem[]>([]);
 const historyCursor = ref<{createdAt:number;id:string}>();
 const historyExhausted = ref(false);
-const messages = computed(() => [...new Map([...historyMessages.value,...directMessages.peerMessages(peerPubkey.value)].map(m=>[m.id,m])).values()].sort((a,b)=>a.created_at-b.created_at || a.id.localeCompare(b.id)));
+const messages = computed(() => directMessages.mergePeerHistory(peerPubkey.value, historyMessages.value));
 async function fetchOlderPage(reset = false) {
   if (!reset && historyExhausted.value) return;
   const account=keys.pkHex, peer=peerPubkey.value;
@@ -1105,21 +1106,35 @@ async function load() {
   pendingTailCount.value = 0;
   resetMessageWindow();
   const account = keys.pkHex;
-  if (!account || peerPubkey.value === account) {
+  const peer = peerPubkey.value;
+  if (!account || peer === account) {
     loadingConversation = false;
     return void router.replace("/conversations");
   }
+
   try {
-    await Promise.all([messageStore.load(account), friendships.load(account), friends.load(account), profiles.load(account)]);
-    if (generation !== loadGeneration || account !== keys.pkHex) return;
+    // Never make IndexedDB hydration or account-store checks compete with the
+    // route transition. Paint the chat shell first, then hydrate local data.
+    await waitForFirstPaint();
+    if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
+
+    await loadAccountStoresOnce(account, [messageStore, friendships, friends, profiles]);
+    if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
+
+    // This is an indexed conversation query (and is normally already warmed by
+    // the conversation list), so no full inbox scan is needed to render chat.
     await fetchOlderPage(true);
-    await restoreDraft(account, peerPubkey.value);
-    if (generation !== loadGeneration || account !== keys.pkHex) return;
+    if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
+
     resetMessageWindow();
     await nextTick();
     setMessageListToBottom();
-    await markVisibleMessagesRead();
-    if (generation !== loadGeneration || account !== keys.pkHex) return;
+
+    // The visible conversation is usable now. Draft restoration and read-state
+    // persistence are local follow-up work and must not block first interaction.
+    loadingConversation = false;
+    void restoreDraft(account, peer).catch(() => undefined);
+    void markVisibleMessagesRead().catch(() => undefined);
   } finally {
     if (generation === loadGeneration) loadingConversation = false;
   }
@@ -1412,9 +1427,38 @@ function submitMessage() {
   }
 }
 
+function applyLatestInboxMutation() {
+  const mutation = messageStore.lastInboxMutation;
+  const account = keys.pkHex.toLowerCase();
+  const peer = peerPubkey.value;
+  if (!account || !peer || messageStore.loadedFor.toLowerCase() !== account) return;
+
+  if (mutation?.type === "insert" || mutation?.type === "update") {
+    const item = mutation.itemId ? messageStore.inbox.find(message => message.id === mutation.itemId) : undefined;
+    if (!item) return;
+    const matched = directMessagesForPeer([item], account, peer, {
+      friendship: friendships.getRecord(peer),
+      preference: directMessages.preferencesByPeer[peer],
+      enforceAuthorization: true,
+    });
+    if (!matched.length) return;
+    const merged = new Map(historyMessages.value.map(message => [message.id, message]));
+    for (const message of matched) merged.set(message.id, message);
+    historyMessages.value = [...merged.values()].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+    return;
+  }
+
+  if (mutation?.type === "reset") {
+    historyMessages.value = [];
+    historyCursor.value = undefined;
+    historyExhausted.value = false;
+  }
+}
+
 function handlePageHide() {
   flushDraft();
 }
+watch(() => messageStore.inboxRevision, applyLatestInboxMutation);
 onMounted(() => {
   window.visualViewport?.addEventListener("resize", handleVisualViewportResize);
   window.addEventListener("pagehide", handlePageHide);

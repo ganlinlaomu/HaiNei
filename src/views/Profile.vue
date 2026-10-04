@@ -23,8 +23,8 @@
         </div>
         <div v-if="!isSelf" class="friend-state">已接受的好友</div>
         <div class="profile-actions">
-          <button v-if="isSelf" class="message-button" type="button" @click="router.push('/settings/profile')">编辑资料</button>
-          <button v-else-if="canMessage" class="message-button" type="button" @click="router.push(`/messages/${ownerPubkey}`)">私信</button>
+          <button v-if="isSelf" class="message-button" type="button" @pointerdown="loadMyProfileView" @focus="loadMyProfileView" @click="router.push('/settings/profile')">编辑资料</button>
+          <button v-else-if="canMessage" class="message-button" type="button" @pointerdown="loadMessagesView" @focus="loadMessagesView" @click="router.push(`/messages/${ownerPubkey}`)">私信</button>
           <button class="secondary-action" type="button" :aria-label="isSelf ? '复制我的公钥' : '复制用户公钥'" @click="copyPubkey">复制公钥</button>
           <button class="secondary-action" type="button" :aria-label="isSelf ? '打开我的二维码' : '打开用户二维码'" @click="showQr = true">二维码</button>
         </div>
@@ -69,6 +69,8 @@ import { isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmRece
 import { canViewPrivateProfile } from "@/utils/profileNavigation";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { pubkeyToNpub } from "@/utils/nostrQr";
+import { loadMessagesView, loadMyProfileView } from "@/router/lazyViews";
+import { loadAccountStoresOnce, storesLoadedForAccount, waitForFirstPaint } from "@/utils/bottomTabActivation";
 
 const route = useRoute();
 const router = useRouter();
@@ -79,7 +81,7 @@ const profiles = useProfilesStore();
 const messages = useMessagesStore();
 const feedPreferences = useFeedPreferencesStore();
 const ui = useUIStore();
-const ready = ref(false);
+const ready = ref(storesLoadedForAccount(keys.pkHex, [friends, friendships, profiles, messages, feedPreferences]));
 const showQr = ref(false);
 let loadGeneration = 0;
 const ownerPubkey = computed(() => String(route.params.pubkey || "").trim().toLowerCase());
@@ -123,10 +125,15 @@ const ownerPosts = computed(() => canView.value && messages.loadedFor === keys.p
 
 async function load() {
   const generation = ++loadGeneration;
-  ready.value = false;
   const account = keys.pkHex;
   if (!account) return;
-  await Promise.all([friends.load(account), friendships.load(account), profiles.load(account), messages.load(account), feedPreferences.load(account)]);
+  const stores = [friends, friendships, profiles, messages, feedPreferences];
+  const alreadyLocal = storesLoadedForAccount(account, stores);
+  if (!alreadyLocal) {
+    ready.value = false;
+    await waitForFirstPaint();
+  }
+  await loadAccountStoresOnce(account, stores);
   if (generation === loadGeneration && keys.pkHex === account) ready.value = true;
 }
 

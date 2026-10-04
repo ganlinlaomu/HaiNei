@@ -80,7 +80,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(profile).toContain("message.pubkey.toLowerCase() === ownerPubkey.value");
     expect(profile).toContain("!isDirectMessageTags(message.tags)");
     expect(profile).toContain("!feedPreferences.isHidden(message.id)");
-    expect(profile).toContain("messages.load(account)");
+    expect(profile).toContain("loadAccountStoresOnce(account, stores)");
+    expect(profile).toContain("storesLoadedForAccount(account, stores)");
     expect(profile).toContain("暂无动态");
   });
 
@@ -327,7 +328,8 @@ describe("direct-message navigation and UI contract", () => {
     const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     expect(friends).toContain('useSwipeActions } from "@/composables/useSwipeActions"');
     expect(friends).toContain('class="friend-swipe-actions"');
-    expect(friends).toContain("await Promise.all([");
+    expect(friends).toContain("loadAccountStoresOnce(account, stores)");
+    expect(friends).toContain("storesLoadedForAccount(account, stores)");
     expect(friends).toContain("正在加载好友…");
     expect(friends).toContain(">重新加载</button>");
     expect(friends).toContain("@touchcancel=");
@@ -489,7 +491,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).not.toContain("sending = ref(");
     expect(chat).not.toContain(':disabled="!accepted || sending"');
     expect(chat).toContain(':disabled="!accepted || !keys.pkHex ||');
-    expect(chat).toContain('directMessages.peerMessages(peerPubkey.value)');
+    expect(chat).toContain("directMessages.mergePeerHistory(peerPubkey.value, historyMessages.value)");
+    expect(chat).not.toContain("directMessages.peerMessages(peerPubkey.value)");
     expect(chat).toContain("'输入消息……'");
     expect(chat).toContain('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>');
     expect(chat).not.toContain('@click="router.back()">‹</button>');
@@ -498,6 +501,28 @@ describe("direct-message navigation and UI contract", () => {
     expect(store).toContain("new Map(options.friendshipRecords.map");
     expect(chat).toContain("PostImagePreview");
     expect(conversations).toContain("`/messages/${pubkey}`");
+  });
+
+  it("opens cached conversations from indexed history without waiting for Relay or rescanning the whole inbox", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const lazyViews = readFileSync(join(process.cwd(), "src/router/lazyViews.ts"), "utf8");
+
+    expect(conversations).toContain("warmConversation(conversation.peerPubkey)");
+    expect(conversations).toContain("directMessages.prefetchPeerHistory(pubkey)");
+    expect(conversations).toContain("scheduleConversationWarmup()");
+    expect(chat).toContain("await waitForFirstPaint()");
+    expect(chat).toContain("await fetchOlderPage(true)");
+    expect(chat).toContain("directMessages.mergePeerHistory(peerPubkey.value, historyMessages.value)");
+    expect(chat).toContain("watch(() => messageStore.inboxRevision, applyLatestInboxMutation)");
+    expect(chat).toContain("loadingConversation = false");
+    expect(chat).toContain("void restoreDraft(account, peer)");
+    expect(chat).toContain("void markVisibleMessagesRead()");
+    expect(store).toContain("prefetchPeerHistory(peerPubkey: string)");
+    expect(store).toContain("syncedMessageRepository.listConversationPage(account, conversation, undefined, 50)");
+    expect(store).toContain("PEER_HISTORY_WARM_TTL_MS");
+    expect(lazyViews).toContain("loadMessagesView,");
   });
 
   it("provides local in-chat search and per-peer durable drafts without Relay search", () => {

@@ -29,6 +29,15 @@ export function runAfterFirstPaint(task: () => void) {
   return () => clearTimeout(handle);
 }
 
+export function waitForFirstPaint() {
+  return new Promise<void>(resolve => {
+    runAfterFirstPaint(resolve);
+  });
+}
+
+export function storesLoadedForAccount(account: string, stores: readonly AccountLoadedStore[]) {
+  return !!account && stores.every(store => store.loadedFor === account);
+}
 
 export function runWhenIdle(task: () => void, timeoutMs = 1_000) {
   const requestIdle = (globalThis as typeof globalThis & {
