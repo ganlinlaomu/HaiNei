@@ -627,6 +627,9 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('class="composer-icon-visual"');
     expect(chat).toContain('class="composer-icon-visual send-visual"');
     expect(chat).toContain('<path d="M12 5v14M5 12h14"/>');
+    expect(chat).toContain('class="attachment-file-input"');
+    expect(chat).toContain(".attachment-file-input{position:absolute;inset:0;width:100%;height:100%");
+    expect(chat).not.toContain('@click="chooseImage"');
     expect(chat).toContain("width:44px;height:44px");
     expect(chat).toContain("margin:-5px");
     expect(chat).toContain(".send-button .send-visual{background:#0f1419}");

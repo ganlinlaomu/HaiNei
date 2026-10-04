@@ -524,9 +524,12 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain('ui.addToast("说话时间太短"');
     expect(messages).toContain("directMessages.sendAudio(peer, result");
     expect(messages).toContain("onAutoFinish: () => { autoSendVoiceOnFinish = true; }");
-    expect(messages).toContain('@click="chooseImage"');
-    expect(messages).toContain("imageInput.value?.click()");
+    expect(messages).toContain('class="attachment-file-input"');
+    expect(messages).toContain(':disabled="!accepted || !keys.pkHex"');
+    expect(messages).not.toContain('@click="chooseImage"');
+    expect(messages).not.toContain("imageInput.value?.click()");
     expect(messages).toContain('accept="image/*"');
+    expect(messages).toContain(".attachment-file-input{position:absolute;inset:0;width:100%;height:100%");
     expect(messages).not.toContain('capture="');
     expect(messages).not.toContain("attachmentMenuOpen");
     expect(messages).not.toContain("attachment-menu");
