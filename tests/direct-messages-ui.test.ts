@@ -576,16 +576,22 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("pendingTailCount.value = 0");
   });
 
-  it("keeps the compact DM composer above the safe-area bottom", () => {
+  it("uses a ChatGPT-like multiline DM composer that expands on focus and keeps Enter for newlines", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain("calc(28px + env(safe-area-inset-bottom))");
     expect(chat).toContain('class="composer-normal"');
     expect(chat).toContain('class="composer-recording"');
     expect(chat).toContain('class="composer-preview"');
     expect(chat).toContain('aria-label="发送"');
-    expect(chat).toContain("width:calc(100% - 32px)");
-    expect(chat).toContain("height:54px;min-height:54px");
-    expect(chat).toContain("border-radius:28px");
+    expect(chat).toContain("<textarea");
+    expect(chat).toContain('rows="1"');
+    expect(chat).toContain('enterkeyhint="enter"');
+    expect(chat).toContain("resizeComposerTextarea(textInput.value, composerFocused");
+    expect(chat).toContain("width:calc(100% - 20px)");
+    expect(chat).toContain("min-height:58px");
+    expect(chat).toContain(".composer-normal:focus-within{min-height:96px}");
+    expect(chat).toContain("max-height:160px");
+    expect(chat).toContain("border-radius:30px");
     expect(chat).toContain("border-radius:50%");
     expect(chat).toContain("box-shadow:0 4px 18px");
     expect(chat).toContain("width:min(100%,720px)");
