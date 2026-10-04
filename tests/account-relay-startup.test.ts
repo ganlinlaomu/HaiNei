@@ -45,6 +45,16 @@ describe("account relay startup ordering", () => {
     expect(source).toContain("if (event.connected)");
     expect(source).toContain('event.reconnected ? "reconnect" : "resume"');
   });
+
+  it("refreshes the local kind 10050 list when read-relay health changes", () => {
+    const source = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
+    expect(source).toContain("bindDmRelayHealthWatch");
+    expect(source).toContain("onRelayConnectionState(event =>");
+    expect(source).toContain("if (!event.connected && !event.failed) return");
+    expect(source).toContain('getRelaysFromStorage("read")');
+    expect(source).toContain("ensureOwnDmRelayList(account, signer)");
+    expect(source).toContain("stopDmRelayHealthWatch()");
+  });
 });
 
 
@@ -98,7 +108,10 @@ describe("account message sync generation", () => {
         markConversationRead = vi.fn(async () => undefined);
       },
     }));
-    vi.doMock("@/nostr/relays", () => ({ getRelaysFromStorage: () => ["wss://relay.test"] }));
+    vi.doMock("@/nostr/relays", () => ({
+      getRelaysFromStorage: () => ["wss://relay.test"],
+      onRelayConnectionState: vi.fn(() => () => undefined),
+    }));
     vi.doMock("@/services/dmRelayDirectory", () => ({
       selectOwnDmRelays: (relays: string[]) => relays.slice(0, 2),
       ensureOwnDmRelayList,
