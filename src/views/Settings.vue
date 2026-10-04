@@ -30,7 +30,7 @@ import { useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { pubkeyToNpub, shortNpub } from "@/utils/nostrQr";
 import { loadFriendsView, loadProfileView, loadSavedView, loadSystemSettingsView } from "@/router/lazyViews";
-import { runAfterFirstPaint } from "@/utils/bottomTabActivation";
+import { runAfterFirstPaint, runWhenIdle } from "@/utils/bottomTabActivation";
 
 const keyStore = useKeyStore();
 const profiles = useProfilesStore();
@@ -67,9 +67,16 @@ function openFriends() {
 }
 
 onMounted(() => {
-  // The Settings hub is already local. Warm the deeper settings chunk after
-  // the first paint so tapping "设置" never waits on a cold network request.
-  runAfterFirstPaint(preloadSystemSettings);
+  // The Settings hub is already local. Warm likely next screens after first
+  // paint and only while idle so navigation remains responsive.
+  runAfterFirstPaint(() => {
+    preloadSystemSettings();
+    runWhenIdle(() => {
+      void loadProfileView();
+      void loadSavedView();
+      void loadFriendsView();
+    }, 800);
+  });
 });
 
 async function copyPubkey() {
