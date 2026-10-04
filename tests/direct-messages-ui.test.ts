@@ -624,6 +624,13 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("border-radius:50%");
     expect(chat).toContain("box-shadow:0 4px 18px");
     expect(chat).toContain("width:min(100%,720px)");
+    expect(chat).toContain('class="composer-icon-visual"');
+    expect(chat).toContain('class="composer-icon-visual send-visual"');
+    expect(chat).toContain('<path d="M12 5v14M5 12h14"/>');
+    expect(chat).toContain("width:44px;height:44px");
+    expect(chat).toContain("margin:-5px");
+    expect(chat).toContain(".send-button .send-visual{background:#0f1419}");
+    expect(chat).toContain(".send-button .send-visual svg{width:18px;height:18px}");
   });
 
   it("revalidates friendship before new DM navigation and keeps DM authorization in the account sync owner", () => {
