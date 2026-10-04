@@ -75,6 +75,7 @@ export default defineComponent({
       if (!keys.pkHex) return false; // Not logged in at all
       if (keys.isEncrypted && !keys.isUnlocked) return false; // Needs to unlock
       if (route.meta.hideBottomNav === true) return false;
+      if ([...ui.blockingOverlays].some(name => name.startsWith("comment-sheet-"))) return false;
       return true; // Logged in and unlocked (or not encrypted)
     });
 
