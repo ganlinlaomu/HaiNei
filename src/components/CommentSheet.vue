@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <Transition name="comment-sheet">
+    <Transition name="comment-sheet" appear>
       <div
         v-if="visible"
         ref="dialog"
