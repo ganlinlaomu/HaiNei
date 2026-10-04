@@ -526,8 +526,8 @@ describe("encrypted private audio messages", () => {
     expect(messages).not.toContain('capture="');
     expect(messages).not.toContain("attachmentMenuOpen");
     expect(messages).not.toContain("attachment-menu");
-    expect(messages).toContain("width:calc(100% - 20px)");
-    expect(messages).toContain("min-height:58px");
+    expect(messages).toContain("width:calc(100% - 32px)");
+    expect(messages).toContain("min-height:54px");
     expect(messages).toContain(".composer-normal:focus-within{min-height:96px}");
     expect(messages).toContain("calc(28px + env(safe-area-inset-bottom))");
     expect(messages).toContain('v-if="hasAudio(message)"');

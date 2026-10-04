@@ -335,10 +335,11 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain('rows="1"');
     expect(sheet).toContain('enterkeyhint="enter"');
     expect(sheet).toContain("resizeComposerTextarea(composer.value, commentComposerFocused");
-    expect(sheet).toContain("width:calc(100% - 20px)");
+    expect(sheet).toContain("width:calc(100% - 32px)");
+    expect(sheet).toContain("min-height:54px");
     expect(sheet).toContain(".comment-composer:focus-within{min-height:96px");
     expect(sheet).toContain("max-height:160px");
-    expect(sheet).toContain("border-radius:30px");
+    expect(sheet).toContain("border-radius:28px");
   });
 
   it("allows image-only comments and exposes one-image selection/removal UI", () => {
