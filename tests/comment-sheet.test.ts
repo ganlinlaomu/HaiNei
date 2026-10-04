@@ -343,6 +343,13 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain(".comment-composer:focus-within{width:calc(100% - 32px);min-height:68px");
     expect(sheet).toContain("max-height:160px");
     expect(sheet).toContain("border-radius:28px");
+    expect(sheet).toContain('class="comment-icon-button image-button"');
+    expect(sheet).toContain('class="comment-icon-button send-button"');
+    expect(sheet).toContain('<path d="M12 5v14M5 12h14"/>');
+    expect(sheet).toContain("width:44px;height:44px");
+    expect(sheet).toContain("margin:-5px");
+    expect(sheet).toContain(".send-button .send-visual{background:#0f1419}");
+    expect(sheet).toContain(".send-button .send-visual svg{width:18px;height:18px}");
   });
 
   it("allows image-only comments and exposes one-image selection/removal UI", () => {
