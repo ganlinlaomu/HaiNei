@@ -68,7 +68,8 @@ describe("v0.1.10 runtime smoothness", () => {
     const settings = readFileSync("src/views/Settings.vue", "utf8");
     const card = readFileSync("src/components/PostCard.vue", "utf8");
     const routes = readFileSync("src/router/index.ts", "utf8");
-    expect(conversations).toContain('@pointerdown="preloadMessagesView"');
+    expect(conversations).toContain('@pointerdown="warmConversation(conversation.peerPubkey)"');
+    expect(conversations).toContain("directMessages.prefetchPeerHistory(pubkey)");
     expect(settings).toContain('@pointerdown="loadSavedView"');
     expect(settings).toContain('@pointerdown="loadFriendsView"');
     expect(card).toContain('@pointerdown="preloadProfile"');
