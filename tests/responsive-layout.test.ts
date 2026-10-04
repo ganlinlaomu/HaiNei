@@ -26,6 +26,7 @@ describe("responsive application layout", () => {
     expect(header).toContain("@media (hover: hover) and (pointer: fine)");
     expect(header).toContain("@media (min-width: 768px) and (hover: hover) and (pointer: fine)");
     expect((header.match(/<router-link/g) || [])).toHaveLength(4);
+    expect(header).toContain('[...ui.blockingOverlays].some(name => name.startsWith("comment-sheet-"))');
   });
 
   it("removes mobile navigation offsets from desktop FAB and dialogs", () => {
