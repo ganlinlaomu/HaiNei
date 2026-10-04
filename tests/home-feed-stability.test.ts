@@ -20,9 +20,11 @@ describe("Home feed stability contract", () => {
     expect(card).toContain("async function toggleLike()");
     expect(card).toContain("function playLikeBounce()");
     expect(card).toContain("'like-bounce': likeAnimating");
-    expect(card).toContain("@keyframes instagram-heart-pop");
-    expect(card).toContain("translateY(-8px) scale(1.34)");
-    expect(card).toContain("instagram-heart-pop 430ms");
+    expect(card).toContain('class="like-flight"');
+    expect(card).toContain("@keyframes instagram-heart-flight");
+    expect(card).toContain("translateY(-106px) scale(2.2)");
+    expect(card).toContain("instagram-heart-flight 410ms");
+    expect(card).toContain(".like-action.like-bounce .like-base{fill:none");
     expect(card).toContain("CommentSheet");
     expect(card).toContain("const expanded = ref(false)");
     expect(card).toContain("toggleBookmark");
