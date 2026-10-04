@@ -587,8 +587,9 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('rows="1"');
     expect(chat).toContain('enterkeyhint="enter"');
     expect(chat).toContain("resizeComposerTextarea(textInput.value, composerFocused");
-    expect(chat).toContain("width:calc(100% - 32px)");
-    expect(chat).toContain("min-height:54px");
+    expect(chat).toContain("minHeight: 32");
+    expect(chat).toContain("width:calc(100% - 64px)");
+    expect(chat).toContain("min-height:40px");
     expect(chat).toContain(".composer-normal:focus-within{min-height:96px}");
     expect(chat).toContain("max-height:160px");
     expect(chat).toContain("border-radius:28px");
