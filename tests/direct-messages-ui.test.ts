@@ -106,6 +106,16 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('openProfile(router, keys.pkHex, peerPubkey.value, event)');
   });
 
+  it("shows a compact timestamp for every direct-message type", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    expect(chat).toContain('v-if="!isMediaCaption(message)" class="message-meta"');
+    expect(chat).toContain('<time>{{ formatBubbleTime(message.created_at) }}</time>');
+    expect(chat).toContain(".message-meta{display:flex");
+    expect(chat).toContain("font-size:9px");
+    expect(chat).toContain("font-variant-numeric:tabular-nums");
+    expect(chat).not.toContain('class="message-status"');
+  });
+
   it("supports quoted replies in direct-message bubbles and composer", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
