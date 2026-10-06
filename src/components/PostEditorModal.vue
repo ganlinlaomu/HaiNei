@@ -1083,22 +1083,20 @@ export default defineComponent({
           fullContent += `${VIDEO_METADATA_PREFIX}${JSON.stringify(videoData)}${VIDEO_METADATA_SUFFIX}\n`;
         }
         
-        // Publish the message to relays. Mention metadata stays inside the
-        // encrypted NIP-17 rumor and is not exposed by the gift-wrap envelope.
+        // Queue the complete signed NIP-17 message first. This returns after the
+        // durable IndexedDB write; DM Relay discovery, publish and ACK continue
+        // in the background and no longer block the composer/Home transition.
         const recipientSet = new Set(recips.map(pubkey => pubkey.toLowerCase()));
         const mentionRecipients = mentionedPubkeys().filter(pubkey => recipientSet.has(pubkey.toLowerCase()));
-        const { message } = await posts.sendDirectMessage(
+        const { message } = await posts.queuePost(
           recips,
           fullContent,
           undefined,
           mentionTags(mentionRecipients),
         );
 
-        // Add message to inbox with _localMeta immediately after publishing
-        // This executes as soon as the await resolves, minimizing the race condition
-        // window where relay echoes could arrive. The addInbox() method in the store
-        // handles duplicate detection and intelligently preserves _localMeta regardless
-        // of arrival order.
+        // Render the queued post immediately. Relay state events update this
+        // optimistic item to sent/failed without changing its logical message id.
         msgs.addInbox({
           id: message.id,
           pubkey: accountAtSend,
@@ -1110,17 +1108,23 @@ export default defineComponent({
           rumorId: message.rumorId,
           recipientPubkeys: message.recipientPubkeys,
           conversationId: message.conversationId,
+          outgoing: {
+            localId: message.id,
+            state: "sending",
+            hasImage: uploadedImages.length > 0,
+          },
           _localMeta: {
             groupCount: groupsMeta.length,
             groups: groupsMeta
           }
         });
 
-        ui.addToast("已发布", 1_400, "success");
         clearPersistentDraft(accountAtSend);
+        posts.startQueuedPostDelivery(message.id);
+        ui.addToast("正在发送", 1_200, "info");
         onClose();
-        // Navigate to home page after modal close animation completes (220ms matches the slide-up-leave-active transition)
-        setTimeout(()=>{ router.push('/'); }, 220);
+        // Do not wait for the sheet animation or Relay ACK before showing Home.
+        void router.push('/');
       } catch (e:any) {
         console.error("publish error", e);
         if (e?.outgoingId) {
