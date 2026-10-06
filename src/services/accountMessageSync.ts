@@ -100,7 +100,7 @@ function bindDmRelayHealthWatch(
         return;
       }
 
-      void ensureOwnDmRelayList(account, signer, { replaceUnhealthyRelays: [relayUrl] })
+      void ensureOwnDmRelayList(account, signer, { replaceUnhealthyRelays: [relayUrl], refreshRemote: false })
         .then(async () => {
           if (!isCurrent()) return;
           const own = await getOwnDmRelayStatus(account);
@@ -256,7 +256,9 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   try {
     let homeHandler: ReturnType<typeof createHomeMessageHandler>;
     const legacyReadRelays = getRelaysFromStorage("read");
-    const dmRelays = selectOwnDmRelays(legacyReadRelays);
+    const storedOwnDm = await getOwnDmRelayStatus(account);
+    if (!isCurrent()) return false;
+    const dmRelays = storedOwnDm.relays.length ? storedOwnDm.relays : selectOwnDmRelays(legacyReadRelays);
     const messageRelays = [...new Set([...dmRelays, ...legacyReadRelays])];
     // All configured read relays remain part of the normal message subscription.
     // The kind 10050 advertisement itself is refreshed only after runtime
