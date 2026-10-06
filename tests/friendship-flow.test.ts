@@ -31,7 +31,9 @@ vi.mock("@/nostr/relays", () => ({
 }));
 vi.mock("@/nostr/messaging/service", () => ({
   sendDirectMessage: mocks.send,
-  publishQueuedOutgoing: vi.fn()
+  queueDirectMessage: vi.fn(),
+  publishQueuedOutgoing: vi.fn(),
+  onOutgoingQueueState: vi.fn(() => () => undefined),
 }));
 vi.mock("@/repositories/friendshipRepository", () => ({
   friendshipRepository: { list: mocks.list, put: mocks.put, delete: mocks.delete }
