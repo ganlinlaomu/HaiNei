@@ -37,6 +37,9 @@ export type EnsureOwnDmRelayListOptions = {
   // Runtime failures are intentionally opt-in. Normal startup/connection-order
   // changes must not rotate the account's advertised DM inbox relays.
   replaceUnhealthyRelays?: readonly string[];
+  // Startup checks may refresh the account-level list from discovery. Health
+  // retries skip this extra lookup because they already operate on known state.
+  refreshRemote?: boolean;
 };
 
 const resolutions = new Map<string, Promise<DmRelayResolution>>();
@@ -508,30 +511,40 @@ async function ensureOwnDmRelayListOnce(
   if (!HEX_64.test(account)) return false;
   let existing = await dmRelayDirectoryRepository.get(account, account);
   assertCurrent(account, generation);
+  const pendingBeforeRefresh = await replaceableEventOutboxRepository.get(account, OUTBOX_KEY);
+  assertCurrent(account, generation);
 
-  if (!existing) {
+  if (!existing || (options.refreshRemote !== false && !pendingBeforeRefresh)) {
     const remote = await queryDiscovery(account, generation, account);
     assertCurrent(account, generation);
     if (remote.found) {
-      const observedAt = Date.now();
-      existing = {
-        accountPubkey: account,
-        ownerPubkey: account,
-        relays: remote.found.relays,
-        eventId: remote.found.event.id,
-        eventCreatedAt: remote.found.event.created_at,
-        fetchedAt: observedAt,
-        expiresAt: Number.MAX_SAFE_INTEGER,
-        publishedAt: observedAt,
-        source: "own",
-        sourceRelays: remote.found.sourceRelays,
-      };
-      // kind 10050 is account state, not device state. A fresh device adopts
-      // the already-published inbox list even when its sockets happened to
-      // connect in a different order during startup.
-      await dmRelayDirectoryRepository.put(existing);
-      assertCurrent(account, generation);
-      return true;
+      const remoteIsNewer = !existing?.eventId
+        || remote.found.event.created_at > (existing.eventCreatedAt || 0)
+        || (
+          remote.found.event.created_at === (existing.eventCreatedAt || 0)
+          && remote.found.event.id.localeCompare(existing.eventId) < 0
+        );
+      if (!existing || remoteIsNewer) {
+        const observedAt = Date.now();
+        existing = {
+          accountPubkey: account,
+          ownerPubkey: account,
+          relays: remote.found.relays,
+          eventId: remote.found.event.id,
+          eventCreatedAt: remote.found.event.created_at,
+          fetchedAt: observedAt,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          publishedAt: observedAt,
+          source: "own",
+          sourceRelays: remote.found.sourceRelays,
+        };
+        // kind 10050 is account state, not device state. A fresh or returning
+        // device adopts the newest already-published inbox list instead of
+        // overwriting it from transient local connection order.
+        await dmRelayDirectoryRepository.put(existing);
+        assertCurrent(account, generation);
+        return true;
+      }
     }
   }
 
