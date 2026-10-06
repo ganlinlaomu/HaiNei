@@ -318,6 +318,33 @@ describe("own kind 10050 publication", () => {
     });
   });
 
+  it("adopts a newer account-level DM list published by another device", async () => {
+    const local = dmRelayEvent(accountSecret, ["wss://own-one.test", "wss://own-two.test"], 100);
+    await dmRelayDirectoryRepository.put({
+      accountPubkey: account,
+      ownerPubkey: account,
+      relays: ["wss://own-one.test", "wss://own-two.test"],
+      eventId: local.id,
+      eventCreatedAt: local.created_at,
+      fetchedAt: Date.now(),
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      publishedAt: Date.now(),
+      source: "own",
+    });
+    const remote = dmRelayEvent(accountSecret, ["wss://own-two.test", "wss://own-three.test"], 200);
+    mocks.subscribe.mockImplementation((relays: string[]) => subscription(relays, [remote]));
+    const signer = vi.fn(async (template: EventTemplate) => signed(accountSecret, template));
+
+    await expect(ensureOwnDmRelayList(account, signer)).resolves.toBe(true);
+    expect(signer).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(await dmRelayDirectoryRepository.get(account, account)).toMatchObject({
+      eventId: remote.id,
+      eventCreatedAt: 200,
+      relays: ["wss://own-two.test", "wss://own-three.test"],
+    });
+  });
+
   it("keeps the published DM inbox when startup connection order changes", async () => {
     await dmRelayDirectoryRepository.put({
       accountPubkey: account,
