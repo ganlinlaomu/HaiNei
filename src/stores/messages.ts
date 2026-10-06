@@ -173,7 +173,13 @@ export const useMessagesStore = defineStore("messages", {
       const outgoing = await outgoingQueueRepository.list(targetPk);
       if (this.loadedFor !== targetPk) return;
       const inboxById = new Map(durableInbox.map(item => [item.id, item]));
-      for (const item of outgoing) {
+      const optimisticOutgoing = [
+        ...outgoing.filter(item => item.state !== "sent"),
+        ...outgoing.filter(item => item.state === "sent")
+          .sort((left, right) => right.updatedAt - left.updatedAt)
+          .slice(0, 50),
+      ];
+      for (const item of optimisticOutgoing) {
         const message = item.message as CanonicalMessage;
         const tags = message.tags || [];
         if (message.senderPubkey.toLowerCase() !== targetPk.toLowerCase()) continue;
