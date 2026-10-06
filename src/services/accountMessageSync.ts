@@ -1,6 +1,6 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { getActivePinia } from "pinia";
-import { getRelaysFromStorage, onRelayConnectionState } from "@/nostr/relays";
+import { getRelaysFromStorage, inspectRelays, onRelayConnectionState } from "@/nostr/relays";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
@@ -23,6 +23,7 @@ import { mentionedPubkeysFromTags } from "@/utils/mentions";
 import {
   cancelDmRelayDirectoryWork,
   ensureOwnDmRelayList,
+  getOwnDmRelayStatus,
   logDmRelayDirectoryFailure,
   selectOwnDmRelays,
 } from "@/services/dmRelayDirectory";
@@ -49,11 +50,24 @@ let accountSyncGeneration = 0;
 let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle" };
 const accountSyncStatusListeners = new Set<(snapshot: AccountMessageSyncSnapshot) => void>();
 let dmRelayHealthUnsubscribe: (() => void) | null = null;
-let dmRelayHealthTimer: ReturnType<typeof setTimeout> | null = null;
+const DM_RELAY_FAILURE_THRESHOLD = 3;
+const DM_RELAY_FAILURE_GRACE_MS = 5 * 60_000;
+const DM_RELAY_RECHECK_MS = 5 * 60_000;
+type DmRelayFailureState = {
+  failures: number;
+  firstFailedAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+};
+const dmRelayHealthFailures = new Map<string, DmRelayFailureState>();
+
+function clearDmRelayFailure(relayUrl: string) {
+  const state = dmRelayHealthFailures.get(relayUrl);
+  if (state?.timer) clearTimeout(state.timer);
+  dmRelayHealthFailures.delete(relayUrl);
+}
 
 function stopDmRelayHealthWatch() {
-  if (dmRelayHealthTimer) clearTimeout(dmRelayHealthTimer);
-  dmRelayHealthTimer = null;
+  for (const relayUrl of [...dmRelayHealthFailures.keys()]) clearDmRelayFailure(relayUrl);
   dmRelayHealthUnsubscribe?.();
   dmRelayHealthUnsubscribe = null;
 }
@@ -64,20 +78,83 @@ function bindDmRelayHealthWatch(
   signer: (event: EventTemplate) => Promise<VerifiedEvent>,
 ) {
   stopDmRelayHealthWatch();
+
+  const scheduleReconcile = (relayUrl: string, delay: number) => {
+    const state = dmRelayHealthFailures.get(relayUrl);
+    if (!state) return;
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = setTimeout(() => {
+      const latest = dmRelayHealthFailures.get(relayUrl);
+      if (!latest || !isCurrent()) return;
+      latest.timer = null;
+
+      const runtime = inspectRelays()[relayUrl];
+      if (runtime?.state === "connected" || runtime?.ready === true) {
+        clearDmRelayFailure(relayUrl);
+        return;
+      }
+
+      const failureAge = Date.now() - latest.firstFailedAt;
+      if (latest.failures < DM_RELAY_FAILURE_THRESHOLD || failureAge < DM_RELAY_FAILURE_GRACE_MS) {
+        scheduleReconcile(relayUrl, Math.max(1_000, DM_RELAY_FAILURE_GRACE_MS - failureAge));
+        return;
+      }
+
+      void ensureOwnDmRelayList(account, signer, { replaceUnhealthyRelays: [relayUrl] })
+        .then(async () => {
+          if (!isCurrent()) return;
+          const own = await getOwnDmRelayStatus(account);
+          if (!own.relays.includes(relayUrl)) {
+            clearDmRelayFailure(relayUrl);
+            return;
+          }
+          // No healthy replacement was available. Keep the sticky route and
+          // retry conservatively instead of shrinking/churning the inbox list.
+          scheduleReconcile(relayUrl, DM_RELAY_RECHECK_MS);
+        })
+        .catch(logDmRelayDirectoryFailure);
+    }, Math.max(0, delay));
+    (state.timer as any).unref?.();
+  };
+
+  const scheduleAnyOverdueFailures = () => {
+    const now = Date.now();
+    for (const [relayUrl, state] of dmRelayHealthFailures) {
+      if (state.failures < DM_RELAY_FAILURE_THRESHOLD) continue;
+      const remaining = DM_RELAY_FAILURE_GRACE_MS - (now - state.firstFailedAt);
+      scheduleReconcile(relayUrl, Math.max(0, remaining));
+    }
+  };
+
   dmRelayHealthUnsubscribe = onRelayConnectionState(event => {
     if (!isCurrent()) {
       stopDmRelayHealthWatch();
       return;
     }
-    if (!event.connected && !event.failed) return;
     const readRelays = new Set(getRelaysFromStorage("read"));
     if (!readRelays.has(event.url)) return;
-    if (dmRelayHealthTimer) clearTimeout(dmRelayHealthTimer);
-    dmRelayHealthTimer = setTimeout(() => {
-      dmRelayHealthTimer = null;
-      if (!isCurrent()) return;
-      void ensureOwnDmRelayList(account, signer).catch(logDmRelayDirectoryFailure);
-    }, 250);
+
+    if (event.connected) {
+      clearDmRelayFailure(event.url);
+      // A newly healthy alternative may now be able to replace another Relay
+      // that has already crossed the sustained-failure threshold.
+      scheduleAnyOverdueFailures();
+      return;
+    }
+    if (!event.failed) return;
+
+    const previous = dmRelayHealthFailures.get(event.url);
+    const next: DmRelayFailureState = previous || {
+      failures: 0,
+      firstFailedAt: event.at || Date.now(),
+      timer: null,
+    };
+    next.failures += 1;
+    dmRelayHealthFailures.set(event.url, next);
+    if (next.failures < DM_RELAY_FAILURE_THRESHOLD) return;
+
+    const elapsed = Math.max(0, (event.at || Date.now()) - next.firstFailedAt);
+    scheduleReconcile(event.url, Math.max(0, DM_RELAY_FAILURE_GRACE_MS - elapsed));
   });
 }
 
