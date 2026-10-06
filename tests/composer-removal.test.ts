@@ -14,6 +14,9 @@ describe("composer cleanup", () => {
     const modal = readFileSync(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
     expect(app).toContain("PostEditorModal");
     expect(app).toContain("postEditorReady");
-    expect(modal).toContain("posts.sendDirectMessage");
+    expect(modal).toContain("posts.queuePost");
+    expect(modal).toContain("posts.startQueuedPostDelivery");
+    expect(modal).toContain("outgoing: {");
+    expect(modal).toContain("void router.push('/');");
   });
 });
