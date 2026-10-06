@@ -33,6 +33,11 @@ export type DmRelayResolution = {
 };
 
 export type DmRelaySigner = (event: EventTemplate) => Promise<VerifiedEvent>;
+export type EnsureOwnDmRelayListOptions = {
+  // Runtime failures are intentionally opt-in. Normal startup/connection-order
+  // changes must not rotate the account's advertised DM inbox relays.
+  replaceUnhealthyRelays?: readonly string[];
+};
 
 const resolutions = new Map<string, Promise<DmRelayResolution>>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -97,6 +102,34 @@ export function selectOwnDmRelays(
     return runtime?.state === "connected" || runtime?.ready === true;
   });
   return uniqueRelays(connected, Math.min(2, MAX_DM_RELAYS));
+}
+
+function sameRelayList(left: readonly string[], right: readonly string[]) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function reconcileOwnDmRelays(existingRelays: readonly string[], replaceUnhealthyRelays: readonly string[]) {
+  const current = uniqueRelays(existingRelays, MAX_DM_RELAYS);
+  const configured = uniqueRelays(getRelaysFromStorage("read"));
+  const configuredSet = new Set(configured);
+  const unhealthy = new Set(uniqueRelays(replaceUnhealthyRelays));
+  const removed = current.filter(relay => !configuredSet.has(relay));
+  const failed = current.filter(relay => unhealthy.has(relay));
+
+  // Sticky by default: connection ordering, app restarts, and short outages must
+  // never rewrite kind 10050. Existing account-level routes remain authoritative.
+  if (current.length && !removed.length && !failed.length) return current;
+
+  const retained = current.filter(relay => configuredSet.has(relay) && !unhealthy.has(relay));
+  const targetCount = Math.min(Math.max(current.length, 2), MAX_DM_RELAYS);
+  const replacements = selectOwnDmRelays(configured)
+    .filter(relay => !unhealthy.has(relay) && !retained.includes(relay));
+
+  // A sustained runtime failure alone is not a reason to reduce redundancy.
+  // Keep the old advertisement until a healthy replacement actually exists.
+  if (failed.length && !removed.length && replacements.length < failed.length) return current;
+
+  return uniqueRelays([...retained, ...replacements], targetCount);
 }
 
 export function dmDiscoveryRelays() {
@@ -271,8 +304,10 @@ export async function resolveDmRelays(
     return { relays: fallback, source: "legacy-fallback", cached: false };
   }
   if (owner === account) {
-    const own = selectOwnDmRelays();
-    return { relays: own.length ? own : fallback, source: "own-10050", cached: true };
+    const stored = await dmRelayDirectoryRepository.get(account, account);
+    assertCurrent(account, generation);
+    const own = stored?.source === "own" ? stored.relays : selectOwnDmRelays();
+    return { relays: own.length ? own : fallback, source: "own-10050", eventId: stored?.eventId, cached: true };
   }
 
   const cache = await dmRelayDirectoryRepository.get(account, owner);
@@ -449,25 +484,34 @@ async function flushOwnDmRelayOutboxOnce(account: string, generation: number) {
   }
 }
 
-export function ensureOwnDmRelayList(accountPubkey: string, signEvent: DmRelaySigner): Promise<boolean> {
+export function ensureOwnDmRelayList(
+  accountPubkey: string,
+  signEvent: DmRelaySigner,
+  options: EnsureOwnDmRelayListOptions = {},
+): Promise<boolean> {
   const account = accountPubkey.toLowerCase();
   const existing = ownListUpdates.get(account);
   if (existing) return existing;
-  const task = ensureOwnDmRelayListOnce(account, signEvent, generationFor(account)).finally(() => {
+  const task = ensureOwnDmRelayListOnce(account, signEvent, generationFor(account), options).finally(() => {
     if (ownListUpdates.get(account) === task) ownListUpdates.delete(account);
   });
   ownListUpdates.set(account, task);
   return task;
 }
 
-async function ensureOwnDmRelayListOnce(account: string, signEvent: DmRelaySigner, generation: number) {
+async function ensureOwnDmRelayListOnce(
+  account: string,
+  signEvent: DmRelaySigner,
+  generation: number,
+  options: EnsureOwnDmRelayListOptions,
+) {
   if (!HEX_64.test(account)) return false;
-  const relays = selectOwnDmRelays();
-  if (!relays.length) return false;
   let existing = await dmRelayDirectoryRepository.get(account, account);
   assertCurrent(account, generation);
+
   if (!existing) {
     const remote = await queryDiscovery(account, generation, account);
+    assertCurrent(account, generation);
     if (remote.found) {
       const observedAt = Date.now();
       existing = {
@@ -482,17 +526,19 @@ async function ensureOwnDmRelayListOnce(account: string, signEvent: DmRelaySigne
         source: "own",
         sourceRelays: remote.found.sourceRelays,
       };
-      // A fresh device can adopt the already-published event when it advertises
-      // the same routes. This avoids an unnecessary signature/publication and
-      // keeps replaceable-event timestamps monotonic across devices.
-      if (JSON.stringify(existing.relays) === JSON.stringify(relays)) {
-        await dmRelayDirectoryRepository.put(existing);
-        return true;
-      }
+      // kind 10050 is account state, not device state. A fresh device adopts
+      // the already-published inbox list even when its sockets happened to
+      // connect in a different order during startup.
+      await dmRelayDirectoryRepository.put(existing);
+      assertCurrent(account, generation);
+      return true;
     }
   }
-  const unchanged = existing?.source === "own"
-    && JSON.stringify(existing.relays) === JSON.stringify(relays);
+
+  const relays = reconcileOwnDmRelays(existing?.source === "own" ? existing.relays : [], options.replaceUnhealthyRelays || []);
+  if (!relays.length) return false;
+
+  const unchanged = existing?.source === "own" && sameRelayList(existing.relays, relays);
   const pending = await replaceableEventOutboxRepository.get(account, OUTBOX_KEY);
   assertCurrent(account, generation);
   if (unchanged && pending?.event.id === existing?.eventId) return flushOwnDmRelayOutbox(account);
@@ -508,10 +554,8 @@ async function ensureOwnDmRelayListOnce(account: string, signEvent: DmRelaySigne
   });
   assertCurrent(account, generation);
   const parsed = parseDmRelayListEvent(event, account);
-  if (
-    !parsed
-    || JSON.stringify(parsed.relays) !== JSON.stringify(relays)
-  ) throw new Error("dm_relay_list_invalid_signature");
+  if (!parsed || !sameRelayList(parsed.relays, relays)) throw new Error("dm_relay_list_invalid_signature");
+
   const queuedAt = Date.now();
   const publishRelays = uniqueRelays(
     [...dmDiscoveryRelays(), ...relays],
