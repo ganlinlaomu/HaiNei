@@ -6,6 +6,7 @@ import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository"
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { notifyCanonicalMessageAdded } from "@/services/directMessageStateEvents";
 import { DM_RECEIPT_TYPE, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
+import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 
 export type InboxItem = {
   id: string;
@@ -72,6 +73,13 @@ export function isHomeControl(tags: string[][] | undefined, content?: string) {
     || values.has("t:hainei-tombstone")
     || values.has(`t:${DM_RECEIPT_TYPE}`)
     || isDmReceiptPayload(content);
+}
+
+function optimisticOutgoingState(state: "pending" | "sending" | "waiting_network" | "failed" | "sent"):
+  NonNullable<InboxItem["outgoing"]>["state"] {
+  if (state === "failed") return "send_failed";
+  if (state === "sent") return "sent";
+  return "sending";
 }
 
 function legacyTags(item: InboxItem) {
@@ -147,7 +155,7 @@ export const useMessagesStore = defineStore("messages", {
       }
       const records = await syncedMessageRepository.listRecent(targetPk);
       if (this.loadedFor !== targetPk) return;
-      this.inbox = records.filter(record => !isHomeControl(record.tags, record.plaintext)).map(record => ({
+      const durableInbox: InboxItem[] = records.filter(record => !isHomeControl(record.tags, record.plaintext)).map(record => ({
         id: record.id,
         pubkey: record.senderPubkey,
         created_at: record.createdAt,
@@ -161,10 +169,45 @@ export const useMessagesStore = defineStore("messages", {
         replyTo: record.replyTo,
         rootId: record.rootId,
         tags: record.tags || []
-      })).sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
-      this.recordInboxMutation("replace");
+      }));
       const outgoing = await outgoingQueueRepository.list(targetPk);
       if (this.loadedFor !== targetPk) return;
+      const inboxById = new Map(durableInbox.map(item => [item.id, item]));
+      for (const item of outgoing) {
+        const message = item.message as CanonicalMessage;
+        const tags = message.tags || [];
+        if (message.senderPubkey.toLowerCase() !== targetPk.toLowerCase()) continue;
+        if (isHomeControl(tags, message.plaintext) || isDirectMessageTags(tags)) continue;
+        const outgoingState: NonNullable<InboxItem["outgoing"]> = {
+          localId: item.outgoingId,
+          state: optimisticOutgoingState(item.state),
+          hasImage: /!\[[^\]]*\]\(/.test(message.plaintext || ""),
+          lastError: item.lastError,
+        };
+        const existing = inboxById.get(item.outgoingId);
+        if (existing) {
+          inboxById.set(item.outgoingId, { ...existing, outgoing: outgoingState });
+          continue;
+        }
+        inboxById.set(item.outgoingId, {
+          id: message.id,
+          pubkey: message.senderPubkey,
+          created_at: message.createdAt,
+          content: message.plaintext || "",
+          protocol: message.protocol,
+          transportKind: message.transportKind,
+          transportEventId: message.transportEventId,
+          rumorId: message.rumorId,
+          recipientPubkeys: message.recipientPubkeys,
+          conversationId: message.conversationId,
+          replyTo: message.replyTo,
+          rootId: message.rootId,
+          tags,
+          outgoing: outgoingState,
+        });
+      }
+      this.inbox = [...inboxById.values()].sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
+      this.recordInboxMutation("replace");
       this.outbox = outgoing.filter(item => item.state === "sent").map(item => {
         const message = item.message as CanonicalMessage;
         return {
@@ -221,6 +264,27 @@ export const useMessagesStore = defineStore("messages", {
       this.recordInboxMutation("insert", item.id, evictedId);
       this.scheduleInboxSave();
       notifyCanonicalMessageAdded(this.loadedFor, item);
+    },
+
+    setPostOutgoingState(
+      messageId: string,
+      state: NonNullable<InboxItem["outgoing"]>["state"],
+      lastError?: string,
+    ) {
+      const index = this.inbox.findIndex(item => item.id === messageId);
+      if (index < 0) return;
+      const current = this.inbox[index];
+      if (!current.outgoing || isDirectMessageTags(current.tags)) return;
+      this.inbox[index] = {
+        ...current,
+        outgoing: {
+          ...current.outgoing,
+          state,
+          lastError: state === "sent" ? undefined : lastError,
+        },
+      };
+      this.recordInboxMutation("update", messageId);
+      this.scheduleInboxSave();
     },
 
     addOutbox(item: OutboxItem) {
