@@ -3,7 +3,7 @@ import { nostrClient } from "@/services/nostrClient";
 import { debugLog } from "@/utils/debugLog";
 import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./protocol";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
-import type { OutgoingEventRoute, OutgoingQueueRecord, OutgoingRelayResult } from "@/db/dexie";
+import type { OutgoingEventRoute, OutgoingQueueRecord, OutgoingQueueState, OutgoingRelayResult } from "@/db/dexie";
 import { triggerGenericPush } from "@/services/pushNotifications";
 import type { PushCategory } from "@/services/pushNotifications";
 import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/directMessages";
@@ -32,6 +32,33 @@ export interface PublishedMessage {
   message: CanonicalMessage;
   events: NostrEvent[];
   relayResults: OutgoingRelayResult[];
+}
+
+export type OutgoingQueueStateEvent = {
+  accountPubkey: string;
+  outgoingId: string;
+  state: OutgoingQueueState;
+  lastError?: string;
+};
+
+const outgoingQueueStateListeners = new Set<(event: OutgoingQueueStateEvent) => void>();
+
+export function onOutgoingQueueState(listener: (event: OutgoingQueueStateEvent) => void) {
+  outgoingQueueStateListeners.add(listener);
+  return () => outgoingQueueStateListeners.delete(listener);
+}
+
+function emitOutgoingQueueState(record: OutgoingQueueRecord | undefined) {
+  if (!record) return;
+  const event: OutgoingQueueStateEvent = {
+    accountPubkey: record.accountPubkey,
+    outgoingId: record.outgoingId,
+    state: record.state,
+    lastError: record.lastError,
+  };
+  for (const listener of outgoingQueueStateListeners) {
+    try { listener(event); } catch {}
+  }
 }
 
 function eventTarget(event: NostrEvent) {
@@ -167,16 +194,16 @@ function mergeRelayResults(previous: OutgoingRelayResult[], current: OutgoingRel
   return [...merged.values()];
 }
 
-export async function sendDirectMessage(options: SendDirectMessageOptions): Promise<PublishedMessage> {
+export async function queueDirectMessage(options: SendDirectMessageOptions): Promise<PublishedMessage> {
   const accountPubkey = options.context.senderPubkey.toLowerCase();
   const accountGeneration = accountGenerations.get(accountPubkey) || 0;
   const encoded = await buildMessageEvents(options);
   if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");
   registerOutgoingPushSigner(accountPubkey, options.context.signEvent);
   const now = Date.now();
-  // Persist signed copies before discovery. The pending flag survives PWA
-  // suspension so a retry cannot publish the provisional legacy route first.
-  await outgoingQueueRepository.putIfAbsent({
+  // This is the optimistic-send durability boundary. All signed NIP-17 copies
+  // are on disk before the composer is allowed to close or the UI navigates.
+  const durable = await outgoingQueueRepository.putIfAbsent({
     accountPubkey,
     outgoingId: encoded.message.id,
     state: "pending",
@@ -189,9 +216,18 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
     createdAt: now,
     updatedAt: now
   });
+  emitOutgoingQueueState(durable);
   await options.onQueued?.(encoded.message.id);
   if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");
-  const published = await publishQueuedOutgoing(accountPubkey, encoded.message.id, options.pushCategory);
+  return queuedResult(durable);
+}
+
+export async function sendDirectMessage(options: SendDirectMessageOptions): Promise<PublishedMessage> {
+  const accountPubkey = options.context.senderPubkey.toLowerCase();
+  const accountGeneration = accountGenerations.get(accountPubkey) || 0;
+  const queued = await queueDirectMessage(options);
+  if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");
+  const published = await publishQueuedOutgoing(accountPubkey, queued.message.id, options.pushCategory);
   if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");
   return published;
 }
@@ -306,9 +342,10 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     }
     const offline = typeof navigator !== "undefined" && navigator.onLine === false;
     if (offline) {
-      await outgoingQueueRepository.update(accountPubkey, outgoingId, {
+      const waiting = await outgoingQueueRepository.update(accountPubkey, outgoingId, {
         state: "waiting_network", updatedAt: Date.now(), lastError: "offline"
       });
+      emitOutgoingQueueState(waiting);
       throw new Error("网络不可用，消息将在联网后重试");
     }
     if (record.dmRelayRoutesPending) {
@@ -322,7 +359,8 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     }
     assertCurrent();
     const attempts = record.attempts + 1;
-    await outgoingQueueRepository.update(accountPubkey, outgoingId, { state: "sending", attempts, updatedAt: Date.now() });
+    const sending = await outgoingQueueRepository.update(accountPubkey, outgoingId, { state: "sending", attempts, updatedAt: Date.now() });
+    emitOutgoingQueueState(sending);
     assertCurrent();
     const events = record.events as NostrEvent[];
     let relayResults: PublishedMessage["relayResults"];
@@ -335,10 +373,11 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
       assertCurrent();
       const state = attempts >= 3 ? "failed" : "waiting_network";
       const delay = Math.min(60_000, 2 ** attempts * 1_000);
-      await outgoingQueueRepository.update(accountPubkey, outgoingId, {
+      const failed = await outgoingQueueRepository.update(accountPubkey, outgoingId, {
         state, nextAttemptAt: Date.now() + delay,
         lastError: error instanceof Error ? error.message : "publish_failed", updatedAt: Date.now()
       });
+      emitOutgoingQueueState(failed);
       if (state === "waiting_network") scheduleRetry(accountPubkey, delay);
       throw error;
     }
@@ -352,7 +391,7 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
         ? await refreshFailedEventRoutes(record, failedRequiredEvents, assertCurrent)
         : record.eventRoutes;
       assertCurrent();
-      await outgoingQueueRepository.update(accountPubkey, outgoingId, {
+      const failed = await outgoingQueueRepository.update(accountPubkey, outgoingId, {
         state,
         relayResults,
         eventRoutes: refreshedRoutes,
@@ -360,6 +399,7 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
         lastError: `${failedRequiredEvents.length}/${requiredEvents.length} recipient copies failed`,
         updatedAt: Date.now()
       });
+      emitOutgoingQueueState(failed);
       if (state === "waiting_network") scheduleRetry(accountPubkey, delay);
       throw new Error(`消息发布失败：${failedRequiredEvents.length}/${requiredEvents.length} 个收件人副本未被任何 relay 接收`);
     }
@@ -368,6 +408,7 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
       state: "sent", relayResults, nextAttemptAt: undefined, lastError: undefined, updatedAt: Date.now(),
       ...(needsPush ? { pushState: "pending", pushAttempts: 0, pushExpiresAt: Date.now() + 24 * 60 * 60 * 1000 } : {}),
     });
+    emitOutgoingQueueState(sent);
     if (sent) await deliverQueuedPush(sent);
     return queuedResult(sent!);
   })().finally(() => {
