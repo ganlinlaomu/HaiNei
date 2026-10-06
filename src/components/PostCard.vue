@@ -12,6 +12,17 @@
             <span class="meta-separator" aria-hidden="true">·</span>
             <button class="audience-link" type="button" :aria-expanded="metaOpen" @click="toggleMeta">{{ visibilityLabel }}</button>
           </template>
+          <template v-if="isOwn && deliveryState && deliveryState !== 'sent'">
+            <span class="meta-separator" aria-hidden="true">·</span>
+            <button
+              v-if="deliveryState === 'send_failed'"
+              class="delivery-status delivery-failed"
+              type="button"
+              :disabled="retryingDelivery"
+              @click="retryPostDelivery"
+            >{{ retryingDelivery ? "重试中…" : "发送失败 · 重试" }}</button>
+            <span v-else class="delivery-status">发送中…</span>
+          </template>
         </div>
       </div>
       <div class="overflow-wrap">
@@ -74,6 +85,7 @@ import { extractVideoData, getVideoUrlRemovalPatterns } from "@/utils/videoUtils
 import { openProfile } from "@/utils/profileNavigation";
 import { useRouter } from "vue-router";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
+import { usePostsStore } from "@/stores/posts";
 import { useBookmarksStore } from "@/stores/bookmarks";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import MentionText from "./MentionText.vue";
@@ -90,6 +102,7 @@ const CommentSheet = defineAsyncComponent(loadCommentSheet);
 const props = withDefaults(defineProps<{ message: InboxItem; openCommentId?: string; flat?: boolean }>(), { flat: false });
 const emit = defineEmits<{ height: [id: string, height: number] }>();
 const keys = useKeyStore(); const friends = useFriendsStore(); const interactions = useInteractionsStore(); const ui = useUIStore();
+const posts = usePostsStore();
 const profiles = useProfilesStore();
 const router = useRouter();
 const feedPreferences = useFeedPreferencesStore();
@@ -110,6 +123,8 @@ const video = computed(() => extractVideoData(props.message.content));
 const liked = computed(() => !!keys.pkHex && interactions.isLikedByUser(props.message.id, keys.pkHex));
 const likeCount = computed(() => interactions.getLikeCount(props.message.id)); const commentCount = computed(() => interactions.getCommentCount(props.message.id));
 const isOwn = computed(() => props.message.pubkey === keys.pkHex);
+const deliveryState = computed(() => props.message.outgoing?.state);
+const retryingDelivery = ref(false);
 const bookmarked = computed(() => bookmarks.isBookmarked(props.message.id));
 const visibilityLabel = computed(() => {
   const groups = props.message._localMeta?.groups || [];
@@ -131,6 +146,20 @@ async function deleteOwnPost() {
   try { await feedPreferences.tombstoneOwn(props.message); ui.addToast("已发送删除标记", 1800, "success"); }
   catch { ui.addToast("动态已在本机隐藏，删除标记将稍后重试", 2200, "error"); }
 }
+async function retryPostDelivery() {
+  const outgoingId = props.message.outgoing?.localId;
+  if (!outgoingId || retryingDelivery.value) return;
+  retryingDelivery.value = true;
+  try {
+    await posts.retryDirectMessage(outgoingId);
+    ui.addToast("发送成功", 1400, "success");
+  } catch {
+    ui.addToast("重新发送失败", 1800, "error");
+  } finally {
+    retryingDelivery.value = false;
+  }
+}
+
 async function copyText() {
   menuOpen.value = false;
   try { await navigator.clipboard.writeText(cleanText.value); ui.addToast("已复制", 1200, "success"); }
@@ -205,7 +234,7 @@ onBeforeUnmount(() => observer?.disconnect());
 
 <style scoped>
 .post-card{background:#fff;padding:14px 16px 12px;border:0;border-bottom:1px solid #edf1f5;border-radius:0;box-shadow:none}
-.post-author{display:flex;align-items:center;gap:10px;position:relative}.author-copy{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:1px}.author-meta{display:flex;min-width:0;align-items:center;gap:4px;color:#8b98a5;font-size:12px;line-height:1.25}.author-copy time,.muted{color:#8b98a5;font-size:12px}.meta-separator{color:#b0bac4}.audience-link{max-width:160px;padding:0;border:0;background:transparent;color:#8b98a5;font:inherit;font-size:12px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}.audience-link:active{color:#475569}
+.post-author{display:flex;align-items:center;gap:10px;position:relative}.author-copy{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:1px}.author-meta{display:flex;min-width:0;align-items:center;gap:4px;color:#8b98a5;font-size:12px;line-height:1.25}.author-copy time,.muted{color:#8b98a5;font-size:12px}.meta-separator{color:#b0bac4}.delivery-status{padding:0;border:0;background:transparent;color:#8b98a5;font:inherit;font-size:12px;line-height:1.25}.delivery-failed{color:#dc2626;cursor:pointer}.delivery-failed:disabled{opacity:.65;cursor:default}.audience-link{max-width:160px;padding:0;border:0;background:transparent;color:#8b98a5;font:inherit;font-size:12px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}.audience-link:active{color:#475569}
 .profile-link,.comment-author{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.avatar-link{display:grid;place-items:center;min-width:44px;min-height:44px;margin:-3px}.name-link{min-height:23px;font-size:14px;font-weight:700;text-align:left}.comment-author{min-height:28px;font-weight:700}.profile-link:focus-visible,.comment-author:focus-visible,.audience-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:4px}.overflow-wrap{position:relative;align-self:flex-start}.overflow-button{min-width:40px;min-height:40px;border:0;border-radius:8px;background:transparent;color:#64748b;font-weight:700;letter-spacing:1px}.overflow-menu{position:absolute;z-index:20;top:38px;right:0;min-width:160px;padding:5px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-shadow:0 10px 28px rgba(15,23,42,.16)}.overflow-menu button{display:block;width:100%;min-height:42px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:#334155;text-align:left}.overflow-menu button:active{background:#f1f5f9}
 .message-text{margin-top:9px;color:#202938;font-size:15px;line-height:1.58;white-space:pre-wrap;overflow-wrap:anywhere}.text-button{display:inline-flex;min-height:28px;align-items:center;margin-left:3px;padding:0 3px;border:0;background:transparent;color:#2563eb;font:inherit;font-size:13px;vertical-align:baseline;cursor:pointer}
 .actions{display:flex;align-items:center;gap:10px;margin-top:6px;padding-top:3px;border-top:0}.action{min-width:42px;min-height:42px;padding:7px 8px;border:0;border-radius:9px;background:transparent;color:#334155;font-size:12px}.icon-action{display:inline-flex;align-items:center;justify-content:center;gap:4px}.icon-action svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.action-count{font-size:11px;color:#64748b}.action.liked{color:#ff0069}.action.liked .like-base{fill:currentColor}.like-action{overflow:visible}.like-icon-wrap{position:relative;display:grid;width:21px;height:21px;flex:0 0 21px;place-items:center;overflow:visible}.like-icon-wrap>.like-base{display:block;width:21px;height:21px}.like-action.like-bounce .like-base{fill:none;stroke:#9ca3af;color:#9ca3af}.like-flight{position:absolute;left:50%;top:50%;z-index:4;display:block;width:21px;height:21px;pointer-events:none;color:#ff0069;transform:translate(-50%,-50%);filter:drop-shadow(0 2px 2px rgba(255,0,105,.12))}.like-flight svg{display:block;width:21px;height:21px;fill:currentColor!important;stroke:currentColor;animation:instagram-heart-flight 410ms linear both}.action.bookmark.saved{color:#60A5FA}.action.bookmark.saved svg{fill:currentColor}.bookmark{margin-left:auto}
