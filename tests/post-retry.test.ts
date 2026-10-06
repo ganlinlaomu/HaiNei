@@ -21,8 +21,10 @@ const mocks = vi.hoisted(() => ({
     loadedFor: "a".repeat(64),
     load: vi.fn(),
     addOutbox: vi.fn(),
+    setPostOutgoingState: vi.fn(),
   },
   send: vi.fn(),
+  queue: vi.fn(),
   publishQueued: vi.fn(),
   queueUpdate: vi.fn(),
 }));
@@ -33,7 +35,9 @@ vi.mock("@/stores/messages", () => ({ useMessagesStore: () => mocks.messages }))
 vi.mock("@/nostr/relays", () => ({ getRelaysFromStorage: () => ["wss://relay.test"] }));
 vi.mock("@/nostr/messaging/service", () => ({
   sendDirectMessage: mocks.send,
+  queueDirectMessage: mocks.queue,
   publishQueuedOutgoing: mocks.publishQueued,
+  onOutgoingQueueState: vi.fn(() => () => undefined),
 }));
 vi.mock("@/repositories/outgoingQueueRepository", () => ({
   outgoingQueueRepository: { update: mocks.queueUpdate },
@@ -68,10 +72,25 @@ beforeEach(() => {
   mocks.friendships.load.mockResolvedValue(undefined);
   mocks.messages.load.mockResolvedValue(undefined);
   mocks.messages.addOutbox.mockResolvedValue(undefined);
+  mocks.messages.setPostOutgoingState.mockReturnValue(undefined);
+  mocks.queue.mockResolvedValue(published("post-1"));
   mocks.queueUpdate.mockResolvedValue(undefined);
 });
 
 describe("post publish retry identity", () => {
+  it("queues a post without waiting for relay publication, then starts delivery separately", async () => {
+    const store = usePostsStore();
+    const queued = await store.queuePost([PEER], "hello");
+
+    expect(mocks.queue).toHaveBeenCalledOnce();
+    expect(mocks.publishQueued).not.toHaveBeenCalled();
+    expect(queued.message.id).toBe("post-1");
+
+    mocks.publishQueued.mockResolvedValueOnce(published("post-1"));
+    store.startQueuedPostDelivery("post-1");
+    await vi.waitFor(() => expect(mocks.publishQueued).toHaveBeenCalledWith(ACCOUNT, "post-1"));
+  });
+
   it("freezes a queued post after a visible publish failure and exposes the same outgoing id", async () => {
     mocks.send.mockImplementationOnce(async (options: any) => {
       await options.onQueued("post-1");

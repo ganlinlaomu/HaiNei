@@ -1,6 +1,12 @@
 import { defineStore } from "pinia";
 import { getRelaysFromStorage } from "@/nostr/relays";
-import { publishQueuedOutgoing, sendDirectMessage, type PublishedMessage } from "@/nostr/messaging/service";
+import {
+  onOutgoingQueueState,
+  publishQueuedOutgoing,
+  queueDirectMessage as queueMessage,
+  sendDirectMessage,
+  type PublishedMessage,
+} from "@/nostr/messaging/service";
 import { useKeyStore } from "@/stores/keys";
 import { logger } from "@/utils/logger";
 import { useMessagesStore } from "@/stores/messages";
@@ -8,6 +14,23 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 
 type PostPublishError = Error & { outgoingId?: string };
+
+let postDeliveryObserverInstalled = false;
+
+function ensurePostDeliveryObserver() {
+  if (postDeliveryObserverInstalled) return;
+  postDeliveryObserverInstalled = true;
+  onOutgoingQueueState(event => {
+    const msgs = useMessagesStore();
+    if (msgs.loadedFor.toLowerCase() !== event.accountPubkey.toLowerCase()) return;
+    const state = event.state === "sent"
+      ? "sent"
+      : event.state === "failed"
+        ? "send_failed"
+        : "sending";
+    msgs.setPostOutgoingState(event.outgoingId, state, event.lastError);
+  });
+}
 
 function withOutgoingId(error: unknown, outgoingId: string): PostPublishError {
   const wrapped = new Error(error instanceof Error ? error.message : "发送失败") as PostPublishError;
@@ -44,7 +67,57 @@ async function savePublishedOutbox(accountAtStart: string, result: PublishedMess
 export const usePostsStore = defineStore("posts", {
   state: () => ({}),
   actions: {
+    startPostDeliveryTracking() {
+      ensurePostDeliveryObserver();
+    },
+
+    async queuePost(recipients: string[], plaintext: string, replyTo?: string, tags?: string[][]) {
+      ensurePostDeliveryObserver();
+      const key = useKeyStore();
+      if (!key.isLoggedIn) throw new Error("未登录");
+      const accountAtStart = key.pkHex;
+      const requestedRecipients = [...new Set(recipients.filter(Boolean))];
+      if (requestedRecipients.length === 0) throw new Error("recipients 不能为空");
+      const otherRecipients = requestedRecipients.filter(pubkey => pubkey !== accountAtStart);
+      const recipientPubkeys = otherRecipients.length > 0 ? otherRecipients : [accountAtStart];
+      const friendships = useFriendshipsStore();
+      if (friendships.loadedFor !== accountAtStart) await friendships.load(accountAtStart);
+      const unauthorized = otherRecipients.find(pubkey => !friendships.isAccepted(pubkey));
+      if (unauthorized) throw new Error("只能向已互相确认的好友发送消息");
+
+      const queued = await queueMessage({
+        recipientPubkeys,
+        content: plaintext,
+        replyTo,
+        tags,
+        relays: getRelaysFromStorage(),
+        context: {
+          senderPubkey: accountAtStart,
+          nip44Encrypt: key.supportsNip44 ? key.nip44Encrypt.bind(key) : undefined,
+          signEvent: key.signEvent.bind(key)
+        },
+      });
+      if (key.pkHex !== accountAtStart) throw new Error("账号已切换，消息结果已丢弃");
+      return queued;
+    },
+
+    startQueuedPostDelivery(outgoingId: string) {
+      ensurePostDeliveryObserver();
+      const key = useKeyStore();
+      if (!key.isLoggedIn || !outgoingId) return;
+      const accountAtStart = key.pkHex;
+      void publishQueuedOutgoing(accountAtStart, outgoingId).then(async result => {
+        if (useKeyStore().pkHex === accountAtStart) await savePublishedOutbox(accountAtStart, result);
+      }).catch(error => {
+        logger.warn("[post] background delivery pending", {
+          outgoingId: outgoingId.slice(0, 12),
+          reason: error instanceof Error ? error.message : "publish_failed",
+        });
+      });
+    },
+
     async sendDirectMessage(recipients: string[], plaintext: string, replyTo?: string, tags?: string[][]) {
+      ensurePostDeliveryObserver();
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
       const accountAtStart = key.pkHex;
@@ -110,6 +183,7 @@ export const usePostsStore = defineStore("posts", {
       } catch (error) {
         try {
           await freezeFailedPost(accountAtStart, outgoingId, error);
+          useMessagesStore().setPostOutgoingState(outgoingId, "send_failed", error instanceof Error ? error.message : "publish_failed");
         } catch (freezeError) {
           logger.warn("[post] failed to freeze retry", freezeError);
         }
