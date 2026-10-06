@@ -69,6 +69,7 @@ import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { isHomeControl, useMessagesStore, type InboxItem } from "@/stores/messages";
+import { usePostsStore } from "@/stores/posts";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
 import { logger } from "@/utils/logger";
 import PostCard from "@/components/PostCard.vue";
@@ -109,6 +110,8 @@ export default defineComponent({
     const friendships = useFriendshipsStore();
     const keys = useKeyStore();
     const msgs = useMessagesStore();
+    const posts = usePostsStore();
+    posts.startPostDeliveryTracking();
     const interactions = useInteractionsStore();
     const ui = useUIStore();
     const feedPreferences = useFeedPreferencesStore();
