@@ -17,6 +17,7 @@ import {
   buildMessageEvents,
   cancelOutgoingWorkForAccount,
   publishQueuedOutgoing,
+  queueDirectMessage,
   resolveMessageEventRoutes,
   sendDirectMessage,
 } from "@/nostr/messaging/service";
@@ -168,6 +169,32 @@ describe("NIP-17 message publication", () => {
     expect((await db.outgoingQueue.toArray())[0].eventRoutes).toEqual(expect.arrayContaining([
       expect.objectContaining({ targetPubkey: recipientPubkey, relays: [], source: "nip17-10050" }),
     ]));
+  });
+
+  it("returns after durable queueing without waiting for DM relay discovery or Relay ACK", async () => {
+    let resolveStarted = false;
+    resolveDmRelaysMock.mockImplementation(async () => {
+      resolveStarted = true;
+      return { relays: ["wss://dm.test"], source: "nip17-10050", cached: false };
+    });
+    publishMock.mockResolvedValue([{ relay: "wss://dm.test", ok: true, ts: 1 }]);
+
+    const queued = await queueDirectMessage({
+      recipientPubkeys: [recipientPubkey],
+      content: "optimistic",
+      relays: ["wss://legacy.test"],
+      context,
+    });
+
+    expect(queued.message.plaintext).toBe("optimistic");
+    expect(resolveStarted).toBe(false);
+    expect(publishMock).not.toHaveBeenCalled();
+    const [durable] = await db.outgoingQueue.toArray();
+    expect(durable).toMatchObject({
+      outgoingId: queued.message.id,
+      state: "pending",
+      dmRelayRoutesPending: true,
+    });
   });
 
   it("persists signed fallback copies before waiting for DM relay discovery", async () => {
