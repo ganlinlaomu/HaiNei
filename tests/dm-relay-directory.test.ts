@@ -244,6 +244,31 @@ describe("own kind 10050 publication", () => {
     expect(selectOwnDmRelays()).toEqual(["wss://own-two.test", "wss://own-three.test"]);
   });
 
+  it("uses the stored account DM inbox for self-routing instead of transient socket order", async () => {
+    await dmRelayDirectoryRepository.put({
+      accountPubkey: account,
+      ownerPubkey: account,
+      relays: ["wss://own-one.test", "wss://own-two.test"],
+      eventId: "a".repeat(64),
+      fetchedAt: Date.now(),
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      publishedAt: Date.now(),
+      source: "own",
+    });
+    mocks.inspectRelays.mockReturnValue({
+      "wss://own-one.test": { ready: false, state: "disconnected", queueLength: 0, subs: 0, okHandlers: 0, reconnectAttempts: 3, connectStartedAt: 1 },
+      "wss://own-two.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+      "wss://own-three.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+    });
+
+    await expect(resolveDmRelays(account, account, ["wss://legacy.test"])).resolves.toMatchObject({
+      relays: ["wss://own-one.test", "wss://own-two.test"],
+      source: "own-10050",
+      eventId: "a".repeat(64),
+      cached: true,
+    });
+  });
+
   it("keeps the prior advertisement when no read relay is currently connected", async () => {
     await dmRelayDirectoryRepository.put({
       accountPubkey: account,
@@ -276,16 +301,104 @@ describe("own kind 10050 publication", () => {
     });
   });
 
-  it("publishes a newer replacement when another device advertised different relays", async () => {
+  it("adopts the account's published list on a fresh device even when local sockets differ", async () => {
     const futureCreatedAt = Math.floor(Date.now() / 1000) + 100;
     const remote = dmRelayEvent(accountSecret, ["wss://old-device.test"], futureCreatedAt);
     mocks.subscribe.mockImplementation((relays: string[]) => subscription(relays, [remote]));
     const signer = vi.fn(async (template: EventTemplate) => signed(accountSecret, template));
 
     await expect(ensureOwnDmRelayList(account, signer)).resolves.toBe(true);
-    expect(signer.mock.calls[0][0].created_at).toBe(futureCreatedAt + 1);
+    expect(signer).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(await dmRelayDirectoryRepository.get(account, account)).toMatchObject({
+      eventId: remote.id,
+      eventCreatedAt: futureCreatedAt,
+      relays: ["wss://old-device.test"],
+      source: "own",
+    });
+  });
+
+  it("adopts a newer account-level DM list published by another device", async () => {
+    const local = dmRelayEvent(accountSecret, ["wss://own-one.test", "wss://own-two.test"], 100);
+    await dmRelayDirectoryRepository.put({
+      accountPubkey: account,
+      ownerPubkey: account,
+      relays: ["wss://own-one.test", "wss://own-two.test"],
+      eventId: local.id,
+      eventCreatedAt: local.created_at,
+      fetchedAt: Date.now(),
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      publishedAt: Date.now(),
+      source: "own",
+    });
+    const remote = dmRelayEvent(accountSecret, ["wss://own-two.test", "wss://own-three.test"], 200);
+    mocks.subscribe.mockImplementation((relays: string[]) => subscription(relays, [remote]));
+    const signer = vi.fn(async (template: EventTemplate) => signed(accountSecret, template));
+
+    await expect(ensureOwnDmRelayList(account, signer)).resolves.toBe(true);
+    expect(signer).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(await dmRelayDirectoryRepository.get(account, account)).toMatchObject({
+      eventId: remote.id,
+      eventCreatedAt: 200,
+      relays: ["wss://own-two.test", "wss://own-three.test"],
+    });
+  });
+
+  it("keeps the published DM inbox when startup connection order changes", async () => {
+    await dmRelayDirectoryRepository.put({
+      accountPubkey: account,
+      ownerPubkey: account,
+      relays: ["wss://own-one.test", "wss://own-two.test"],
+      eventId: "b".repeat(64),
+      eventCreatedAt: 100,
+      fetchedAt: Date.now(),
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      publishedAt: Date.now(),
+      source: "own",
+    });
+    mocks.inspectRelays.mockReturnValue({
+      "wss://own-one.test": { ready: false, state: "disconnected", queueLength: 0, subs: 0, okHandlers: 0, reconnectAttempts: 3, connectStartedAt: 1 },
+      "wss://own-two.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+      "wss://own-three.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+    });
+    const signer = vi.fn(async (template: EventTemplate) => signed(accountSecret, template));
+
+    await expect(ensureOwnDmRelayList(account, signer)).resolves.toBe(true);
+    expect(signer).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
     expect(await dmRelayDirectoryRepository.get(account, account)).toMatchObject({
       relays: ["wss://own-one.test", "wss://own-two.test"],
+    });
+  });
+
+  it("replaces only a sustained unhealthy advertised Relay when a healthy alternative exists", async () => {
+    await dmRelayDirectoryRepository.put({
+      accountPubkey: account,
+      ownerPubkey: account,
+      relays: ["wss://own-one.test", "wss://own-two.test"],
+      eventId: "c".repeat(64),
+      eventCreatedAt: 100,
+      fetchedAt: Date.now(),
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      publishedAt: Date.now(),
+      source: "own",
+    });
+    mocks.inspectRelays.mockReturnValue({
+      "wss://own-one.test": { ready: false, state: "disconnected", queueLength: 0, subs: 0, okHandlers: 0, reconnectAttempts: 3, connectStartedAt: 1 },
+      "wss://own-two.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+      "wss://own-three.test": { ready: true, state: "connected", queueLength: 0, subs: 1, okHandlers: 0, reconnectAttempts: 0, connectStartedAt: 1 },
+    });
+    const signer = vi.fn(async (template: EventTemplate) => signed(accountSecret, template));
+
+    await expect(ensureOwnDmRelayList(account, signer, { replaceUnhealthyRelays: ["wss://own-one.test"] })).resolves.toBe(true);
+    expect(signer).toHaveBeenCalledOnce();
+    expect(signer.mock.calls[0][0].tags).toEqual([
+      ["relay", "wss://own-two.test"],
+      ["relay", "wss://own-three.test"],
+    ]);
+    expect(await dmRelayDirectoryRepository.get(account, account)).toMatchObject({
+      relays: ["wss://own-two.test", "wss://own-three.test"],
       source: "own",
     });
   });

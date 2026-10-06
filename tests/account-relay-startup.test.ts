@@ -46,13 +46,17 @@ describe("account relay startup ordering", () => {
     expect(source).toContain('event.reconnected ? "reconnect" : "resume"');
   });
 
-  it("refreshes the local kind 10050 list when read-relay health changes", () => {
+  it("keeps DM relays sticky and only reconciles after sustained connection failures", () => {
     const source = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
     expect(source).toContain("bindDmRelayHealthWatch");
+    expect(source).toContain("DM_RELAY_FAILURE_THRESHOLD = 3");
+    expect(source).toContain("DM_RELAY_FAILURE_GRACE_MS = 5 * 60_000");
     expect(source).toContain("onRelayConnectionState(event =>");
-    expect(source).toContain("if (!event.connected && !event.failed) return");
+    expect(source).toContain("if (event.connected)");
+    expect(source).toContain("clearDmRelayFailure(event.url)");
     expect(source).toContain('getRelaysFromStorage("read")');
-    expect(source).toContain("ensureOwnDmRelayList(account, signer)");
+    expect(source).toContain("replaceUnhealthyRelays: [relayUrl]");
+    expect(source).toContain("getOwnDmRelayStatus(account)");
     expect(source).toContain("stopDmRelayHealthWatch()");
   });
 });
@@ -110,11 +114,15 @@ describe("account message sync generation", () => {
     }));
     vi.doMock("@/nostr/relays", () => ({
       getRelaysFromStorage: () => ["wss://relay.test"],
+      inspectRelays: vi.fn(() => ({
+        "wss://relay.test": { ready: true, state: "connected" },
+      })),
       onRelayConnectionState: vi.fn(() => () => undefined),
     }));
     vi.doMock("@/services/dmRelayDirectory", () => ({
       selectOwnDmRelays: (relays: string[]) => relays.slice(0, 2),
       ensureOwnDmRelayList,
+      getOwnDmRelayStatus: vi.fn(async () => ({ relays: ["wss://relay.test"], pending: false, attempts: 0 })),
       cancelDmRelayDirectoryWork,
       logDmRelayDirectoryFailure: vi.fn(),
     }));
