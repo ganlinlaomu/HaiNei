@@ -324,7 +324,6 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     authoritativeUnreadPendingFor: "",
     unreadHydratingFor: "",
     readCursors: {} as Record<string, MessageCursor | undefined>,
-    persistedReadCursors: {} as Record<string, MessageCursor | undefined>,
     preferencesByPeer: {} as Record<string, ConversationPreference | undefined>,
     receiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
     sentReceiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
@@ -1041,12 +1040,6 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // the newest message merely present on this device, otherwise later
       // backfill is incorrectly counted as unread again.
       const read = advanced || !previous ? candidate : previous;
-      const persisted = this.persistedReadCursors[conversationId];
-      // Scroll events at the bottom can fire repeatedly. Once both writes have
-      // succeeded, the same position needs no more writes or account sync.
-      if (persisted && !isMessageAfter({ id: read.lastReadMessageId, createdAt: read.lastReadCreatedAt }, persisted)
-        && !this.unreadByConversation[conversationId]) return;
-
       // Foreground read state owns the icon badge. Update memory immediately so
       // a previously delivered Push badge cannot linger while IndexedDB/D1 work
       // is still pending.
@@ -1067,22 +1060,19 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // a device whose first persistence attempt failed after memory was already
       // updated, and keeps the durable cursor monotonic.
       let durableReady = typeof indexedDB === "undefined";
+      let durableAdvanced = durableReady;
       if (typeof indexedDB !== "undefined") {
         try {
-          await syncedMessageRepository.advanceReadState(account, conversationId, read);
+          durableAdvanced = await syncedMessageRepository.advanceReadState(account, conversationId, read);
           durableReady = true;
         } catch (error) {
           console.warn("[dm] durable read-state persistence failed", error instanceof Error ? error.message : "unknown error");
         }
       }
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
-      if (durableReady) {
-        const saved = this.persistedReadCursors[conversationId];
-        if (!saved || isMessageAfter({ id: read.lastReadMessageId, createdAt: read.lastReadCreatedAt }, saved)) {
-          this.persistedReadCursors = { ...this.persistedReadCursors, [conversationId]: read };
-        }
-      }
-      if (durableReady) scheduleAccountStateSync(useKeyStore(), "read_state");
+      // Repository monotonic compare/write is the persistence de-duplicator.
+      // Only an actual durable cursor advance needs cross-device propagation.
+      if (durableReady && durableAdvanced) scheduleAccountStateSync(useKeyStore(), "read_state");
 
       // Receipts acknowledge only peer messages, even if the local read position
       // advanced through our own later message.
@@ -1444,7 +1434,6 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.authoritativeUnreadPendingFor = "";
       this.unreadHydratingFor = "";
       this.readCursors = {};
-      this.persistedReadCursors = {};
       this.preferencesByPeer = {};
       this.receiptStateByPeer = {};
       this.sentReceiptStateByPeer = {};
