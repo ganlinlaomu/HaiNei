@@ -1066,10 +1066,13 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         try {
           const result = await syncedMessageRepository.advanceReadStateResult(account, conversationId, read);
           durableAdvanced = result.advanced;
-          durableWinner = {
-            lastReadCreatedAt: result.state.lastReadCreatedAt,
-            lastReadMessageId: result.state.lastReadMessageId || "",
-          };
+          const durableCreatedAt = Number(result.state.lastReadCreatedAt || 0);
+          if (Number.isFinite(durableCreatedAt) && durableCreatedAt > 0) {
+            durableWinner = {
+              lastReadCreatedAt: durableCreatedAt,
+              lastReadMessageId: result.state.lastReadMessageId || "",
+            };
+          }
         } catch (error) {
           console.warn("[dm] durable read-state persistence failed", error instanceof Error ? error.message : "unknown error");
         }
