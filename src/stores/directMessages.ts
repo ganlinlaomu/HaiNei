@@ -1056,22 +1056,36 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         ), undefined, account).catch(() => undefined);
       }
 
-      // Persist even when the in-memory cursor did not advance. This self-heals
-      // a device whose first persistence attempt failed after memory was already
-      // updated, and keeps the durable cursor monotonic.
+      // Persist even when the in-memory cursor did not advance. The repository
+      // owns monotonic compare/write and returns the durable winner, so a
+      // concurrent remote restore can repair an older UI projection without a
+      // second persisted-cursor authority.
       let durableReady = typeof indexedDB === "undefined";
       let durableAdvanced = durableReady;
+      let durableWinner: MessageCursor | undefined;
       if (typeof indexedDB !== "undefined") {
         try {
-          durableAdvanced = await syncedMessageRepository.advanceReadState(account, conversationId, read);
+          const result = await syncedMessageRepository.advanceReadStateResult(account, conversationId, read);
+          durableAdvanced = result.advanced;
           durableReady = true;
+          const durableCreatedAt = Number(result.state.lastReadCreatedAt || 0);
+          if (Number.isFinite(durableCreatedAt) && durableCreatedAt > 0) {
+            durableWinner = {
+              lastReadCreatedAt: durableCreatedAt,
+              lastReadMessageId: result.state.lastReadMessageId || "",
+            };
+          }
         } catch (error) {
           console.warn("[dm] durable read-state persistence failed", error instanceof Error ? error.message : "unknown error");
         }
       }
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
-      // Repository monotonic compare/write is the persistence de-duplicator.
-      // Only an actual durable cursor advance needs cross-device propagation.
+      if (durableWinner && isMessageAfter(
+        { id: durableWinner.lastReadMessageId, createdAt: durableWinner.lastReadCreatedAt },
+        this.readCursors[conversationId],
+      )) {
+        this.readCursors = { ...this.readCursors, [conversationId]: durableWinner };
+      }
       if (durableReady && durableAdvanced) scheduleAccountStateSync(useKeyStore(), "read_state");
 
       // Receipts acknowledge only peer messages, even if the local read position
