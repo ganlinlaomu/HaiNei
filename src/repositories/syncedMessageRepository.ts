@@ -17,6 +17,17 @@ import { performanceCounters } from "@/services/nostrCache";
 
 export type InsertMessageResult = { inserted: boolean; record: SyncedMessageRecord };
 
+export const UNSUPPORTED_MESSAGE_CLEANUP_VERSION = 1;
+export const unsupportedMessageCleanupMetaKey = (version = UNSUPPORTED_MESSAGE_CLEANUP_VERSION) =>
+  `message-maintenance:unsupported-nip17-v${version}`;
+
+export type MessageCleanupMigrationResult = {
+  ran: boolean;
+  purged: number;
+  version: number;
+};
+
+
 function toRecord(accountPubkey: string, message: CanonicalMessage, nowMs: number): SyncedMessageRecord {
   return {
     accountPubkey,
@@ -51,6 +62,7 @@ export class SyncedMessageRepository {
   }[]>();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushScheduled = false;
+  private cleanupMigrations = new Map<string, Promise<MessageCleanupMigrationResult>>();
 
   constructor(private readonly database: HaiNeiDatabase = db) {}
 
@@ -284,6 +296,41 @@ export class SyncedMessageRepository {
     await this.database.syncedMessages.bulkDelete(keys);
     await this.rebuildConversationState(account);
     return keys.length;
+  }
+
+  async runUnsupportedMessageCleanupMigration(
+    accountPubkey: string,
+    version = UNSUPPORTED_MESSAGE_CLEANUP_VERSION,
+    nowMs = Date.now(),
+  ): Promise<MessageCleanupMigrationResult> {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const migrationId = `${account}:${version}`;
+    const active = this.cleanupMigrations.get(migrationId);
+    if (active) return active;
+
+    const run = (async () => {
+      const key = unsupportedMessageCleanupMetaKey(version);
+      const completed = await this.database.accountMeta.get([account, key]);
+      if (completed) return { ran: false, purged: 0, version };
+
+      // Deliberately write the marker only after cleanup succeeds. If the app is
+      // terminated during migration, the next launch retries instead of treating
+      // a partial cleanup as complete.
+      const purged = await this.purgeUnsupportedMessages(account);
+      await this.database.accountMeta.put({
+        accountPubkey: account,
+        key,
+        value: { version, completedAt: nowMs, purged },
+      });
+      return { ran: true, purged, version };
+    })();
+
+    this.cleanupMigrations.set(migrationId, run);
+    try {
+      return await run;
+    } finally {
+      if (this.cleanupMigrations.get(migrationId) === run) this.cleanupMigrations.delete(migrationId);
+    }
   }
 
   async listConversationPage(accountPubkey: string, conversationId: string, before?: {createdAt:number;id:string}, limit = 50) {

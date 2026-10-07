@@ -6,7 +6,11 @@ import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { MessageIngestionPipeline } from "@/nostr/messaging/sync/ingestion";
 import { calculateCatchupSince, compareMessages } from "@/nostr/messaging/sync/sorting";
 import { fetchCatchupPage, runPagedCatchup } from "@/nostr/messaging/sync/catchup";
-import { SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import {
+  SyncedMessageRepository,
+  UNSUPPORTED_MESSAGE_CLEANUP_VERSION,
+  unsupportedMessageCleanupMetaKey,
+} from "@/repositories/syncedMessageRepository";
 import { MessageSyncManager } from "@/nostr/messaging/sync/MessageSyncManager";
 import { decryptedEventCache, eventCache, scopedKey } from "@/services/nostrCache";
 
@@ -65,6 +69,67 @@ describe("reliable message persistence", () => {
     });
     expect(await repo.purgeUnsupportedMessages(ACCOUNT_A)).toBe(1);
     expect(await repo.list(ACCOUNT_A)).toEqual([]);
+  });
+
+  it("runs unsupported-message cleanup once per account and only reruns for a new migration version", async () => {
+    const db = database();
+    const repo = new SyncedMessageRepository(db);
+    await db.syncedMessages.add({
+      accountPubkey: ACCOUNT_A,
+      id: "legacy-a",
+      senderPubkey: PEER,
+      recipientPubkeys: [ACCOUNT_A],
+      conversationId: "legacy-a",
+      plaintext: "old",
+      createdAt: 1,
+      protocol: "removed-custom",
+      transportKind: 8964,
+      transportEventIds: ["legacy-a"],
+      firstSeenAt: 1,
+      lastSeenAt: 1,
+    });
+
+    const purge = vi.spyOn(repo, "purgeUnsupportedMessages");
+    const first = await repo.runUnsupportedMessageCleanupMigration(ACCOUNT_A, UNSUPPORTED_MESSAGE_CLEANUP_VERSION, 1234);
+    expect(first).toEqual({ ran: true, purged: 1, version: UNSUPPORTED_MESSAGE_CLEANUP_VERSION });
+    expect(purge).toHaveBeenCalledTimes(1);
+    expect(await db.accountMeta.get([ACCOUNT_A, unsupportedMessageCleanupMetaKey()])).toMatchObject({
+      value: { version: UNSUPPORTED_MESSAGE_CLEANUP_VERSION, completedAt: 1234, purged: 1 },
+    });
+
+    const second = await repo.runUnsupportedMessageCleanupMigration(ACCOUNT_A, UNSUPPORTED_MESSAGE_CLEANUP_VERSION, 5678);
+    expect(second).toEqual({ ran: false, purged: 0, version: UNSUPPORTED_MESSAGE_CLEANUP_VERSION });
+    expect(purge).toHaveBeenCalledTimes(1);
+
+    const nextVersion = UNSUPPORTED_MESSAGE_CLEANUP_VERSION + 1;
+    const upgraded = await repo.runUnsupportedMessageCleanupMigration(ACCOUNT_A, nextVersion, 9999);
+    expect(upgraded).toEqual({ ran: true, purged: 0, version: nextVersion });
+    expect(purge).toHaveBeenCalledTimes(2);
+    expect(await db.accountMeta.get([ACCOUNT_A, unsupportedMessageCleanupMetaKey(nextVersion)])).toBeTruthy();
+  });
+
+  it("deduplicates concurrent cleanup attempts for the same account and version", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const purge = vi.spyOn(repo, "purgeUnsupportedMessages");
+
+    const [first, second] = await Promise.all([
+      repo.runUnsupportedMessageCleanupMigration(ACCOUNT_A),
+      repo.runUnsupportedMessageCleanupMigration(ACCOUNT_A),
+    ]);
+
+    expect(first).toEqual(second);
+    expect(first.ran).toBe(true);
+    expect(purge).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps cleanup completion isolated per account", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const purge = vi.spyOn(repo, "purgeUnsupportedMessages");
+
+    expect((await repo.runUnsupportedMessageCleanupMigration(ACCOUNT_A)).ran).toBe(true);
+    expect((await repo.runUnsupportedMessageCleanupMigration(ACCOUNT_A)).ran).toBe(false);
+    expect((await repo.runUnsupportedMessageCleanupMigration(ACCOUNT_B)).ran).toBe(true);
+    expect(purge).toHaveBeenCalledTimes(2);
   });
 
   it("deduplicates concurrent multi-relay and duplicate realtime delivery atomically", async () => {
