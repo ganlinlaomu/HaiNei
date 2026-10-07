@@ -242,6 +242,14 @@ export class SyncedMessageRepository {
       .between([account,0,""],[account,before?.createdAt ?? Number.MAX_SAFE_INTEGER,before?.id ?? "\uffff"],true,!before)
       .reverse().limit(100).toArray();
   }
+  async listBySender(accountPubkey: string, senderPubkey: string) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const sender = senderPubkey.toLowerCase();
+    return this.database.syncedMessages
+      .where("[accountPubkey+senderPubkey]")
+      .equals([account, sender])
+      .toArray();
+  }
   async listDirectConversationHeads(accountPubkey: string, conversationId?: string) {
     const account = normalizeAccountPubkey(accountPubkey);
     const conversationIds = conversationId

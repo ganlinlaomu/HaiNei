@@ -62,7 +62,7 @@ import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useProfilesStore } from "@/stores/profiles";
-import { useMessagesStore } from "@/stores/messages";
+import { isHomeControl, useMessagesStore, type InboxItem } from "@/stores/messages";
 import { useUIStore } from "@/stores/ui";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
@@ -71,6 +71,8 @@ import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { pubkeyToNpub } from "@/utils/nostrQr";
 import { loadMessagesView, loadMyProfileView } from "@/router/lazyViews";
 import { loadAccountStoresOnce, storesLoadedForAccount, waitForFirstPaint } from "@/utils/bottomTabActivation";
+import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import type { SyncedMessageRecord } from "@/db/dexie";
 
 const route = useRoute();
 const router = useRouter();
@@ -114,19 +116,58 @@ async function copyPubkey() {
   }
 }
 
-const ownerPosts = computed(() => canView.value && messages.loadedFor === keys.pkHex
-  ? messages.inbox.filter(message =>
-      message.pubkey.toLowerCase() === ownerPubkey.value
-      && !isDirectMessageTags(message.tags)
-      && !isDmReceiptMessage({ tags: message.tags })
-      && !isDmReceiptPayload(message.content)
-      && !feedPreferences.isHidden(message.id))
-  : []);
+const historicalOwnerPosts = ref<InboxItem[]>([]);
+
+function historyRecordToInboxItem(record: SyncedMessageRecord): InboxItem {
+  return {
+    id: record.id,
+    pubkey: record.senderPubkey,
+    created_at: record.createdAt,
+    content: record.plaintext || "",
+    protocol: "nip17",
+    transportKind: record.transportKind,
+    transportEventId: record.transportEventIds[0],
+    rumorId: record.rumorId,
+    recipientPubkeys: record.recipientPubkeys,
+    conversationId: record.conversationId,
+    replyTo: record.replyTo,
+    rootId: record.rootId,
+    tags: record.tags || []
+  };
+}
+
+function isProfilePost(message: InboxItem) {
+  return message.pubkey.toLowerCase() === ownerPubkey.value
+    && !isHomeControl(message.tags, message.content)
+    && !isDirectMessageTags(message.tags)
+    && !isDmReceiptMessage({ tags: message.tags })
+    && !isDmReceiptPayload(message.content)
+    && !feedPreferences.isHidden(message.id);
+}
+
+function compareProfilePosts(left: InboxItem, right: InboxItem) {
+  return (right.created_at || 0) - (left.created_at || 0) || left.id.localeCompare(right.id);
+}
+
+const ownerPosts = computed(() => {
+  if (!canView.value || messages.loadedFor !== keys.pkHex) return [];
+  const merged = new Map<string, InboxItem>();
+  for (const message of historicalOwnerPosts.value) merged.set(message.id, message);
+  // Current inbox wins so optimistic delivery state and realtime replacements
+  // stay identical to the Home card for the same message.
+  for (const message of messages.inbox) merged.set(message.id, message);
+  return [...merged.values()].filter(isProfilePost).sort(compareProfilePosts);
+});
 
 async function load() {
   const generation = ++loadGeneration;
   const account = keys.pkHex;
-  if (!account) return;
+  const owner = ownerPubkey.value;
+  historicalOwnerPosts.value = [];
+  if (!account) {
+    ready.value = false;
+    return;
+  }
   const stores = [friends, friendships, profiles, messages, feedPreferences];
   const alreadyLocal = storesLoadedForAccount(account, stores);
   if (!alreadyLocal) {
@@ -134,6 +175,14 @@ async function load() {
     await waitForFirstPaint();
   }
   await loadAccountStoresOnce(account, stores);
+  if (generation !== loadGeneration || keys.pkHex !== account) return;
+
+  if (owner && canView.value) {
+    const records = await syncedMessageRepository.listBySender(account, owner);
+    if (generation !== loadGeneration || keys.pkHex !== account || ownerPubkey.value !== owner) return;
+    historicalOwnerPosts.value = records.map(historyRecordToInboxItem);
+  }
+
   if (generation === loadGeneration && keys.pkHex === account) ready.value = true;
 }
 
