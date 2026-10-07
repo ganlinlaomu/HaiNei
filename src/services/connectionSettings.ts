@@ -12,13 +12,7 @@ export interface SyncMetadata {
   syncEventId?: string;
 }
 
-export interface RelayConfig extends SyncMetadata {
-  url: string;
-  read: boolean;
-  write: boolean;
-  enabled: boolean;
-  source: RelaySource;
-  addedAt: number;
+export interface RelayHealth {
   lastConnectedAt?: number;
   lastFailureAt?: number;
   successCount?: number;
@@ -26,7 +20,22 @@ export interface RelayConfig extends SyncMetadata {
   latency?: number;
 }
 
-export interface MediaServer extends SyncMetadata {
+export interface RelayConfig extends SyncMetadata, RelayHealth {
+  url: string;
+  read: boolean;
+  write: boolean;
+  enabled: boolean;
+  source: RelaySource;
+  addedAt: number;
+}
+
+export interface MediaServerHealth {
+  lastSuccessAt?: number;
+  lastFailureAt?: number;
+  failureCount?: number;
+}
+
+export interface MediaServer extends SyncMetadata, MediaServerHealth {
   id: string;
   type: MediaServerType;
   url: string;
@@ -37,9 +46,6 @@ export interface MediaServer extends SyncMetadata {
   priority: number;
   source: MediaServerSource;
   addedAt: number;
-  lastSuccessAt?: number;
-  lastFailureAt?: number;
-  failureCount?: number;
 }
 
 export interface PrivacySettings extends SyncMetadata {
@@ -55,6 +61,36 @@ export interface ConnectionSettings {
 export interface SyncEventMetadata {
   createdAt: number;
   eventId: string;
+}
+
+export function stripRelayHealth<T extends RelayConfig>(item: T): RelayConfig {
+  const {
+    lastConnectedAt: _lastConnectedAt,
+    lastFailureAt: _lastFailureAt,
+    successCount: _successCount,
+    failureCount: _failureCount,
+    latency: _latency,
+    ...config
+  } = item;
+  return config;
+}
+
+export function stripMediaServerHealth<T extends MediaServer>(item: T): MediaServer {
+  const {
+    lastSuccessAt: _lastSuccessAt,
+    lastFailureAt: _lastFailureAt,
+    failureCount: _failureCount,
+    ...config
+  } = item;
+  return config;
+}
+
+export function stripConnectionHealth(settings: ConnectionSettings): ConnectionSettings {
+  return {
+    relays: settings.relays.map(stripRelayHealth),
+    mediaServers: settings.mediaServers.map(stripMediaServerHealth),
+    privacy: { ...settings.privacy },
+  };
 }
 
 export const SETTINGS_VERSION = 4;
@@ -257,7 +293,8 @@ function relayFromUnknown(value: unknown, now: number, deviceId: string): RelayC
     } : null;
   }
   if (!value || typeof value !== "object") return null;
-  const item = value as Partial<RelayConfig>;
+  const raw = value as Partial<RelayConfig>;
+  const item = stripRelayHealth(raw as RelayConfig);
   const url = normalizeRelayUrl(String(item.url || ""));
   if (!url) return null;
   const source: RelaySource = item.source === "nip65" || item.source === "default" ? item.source : "user";
@@ -277,7 +314,8 @@ function relayFromUnknown(value: unknown, now: number, deviceId: string): RelayC
 
 function mediaFromUnknown(value: unknown, index: number, now: number, deviceId: string): MediaServer | null {
   if (!value || typeof value !== "object") return null;
-  const item = value as Partial<MediaServer> & { token?: string };
+  const raw = value as Partial<MediaServer> & { token?: string };
+  const item = stripMediaServerHealth(raw as MediaServer) as Partial<MediaServer> & { token?: string };
   const url = normalizeMediaUrl(String(item.url || ""));
   if (!url) return null;
   const type: MediaServerType = item.type === "imgbed" || item.type === "custom" ? item.type : "blossom";
@@ -485,14 +523,20 @@ function mergeItems<T extends SyncMetadata>(
 
 export function mergeRelayConfigs(local: RelayConfig[], remote: RelayConfig[], metadata?: SyncEventMetadata): RelayConfig[] {
   return ensureDefaultRelayCandidates(
-    mergeItems(local, remote, item => item.url, metadata)
-      .filter(item => item.source !== "default" || !RETIRED_DEFAULT_RELAY_URLS.has(item.url))
+    mergeItems(
+      local.map(stripRelayHealth),
+      remote.map(stripRelayHealth),
+      item => item.url,
+      metadata
+    ).filter(item => item.source !== "default" || !RETIRED_DEFAULT_RELAY_URLS.has(item.url))
   );
 }
 
 export function mergeMediaServers(local: MediaServer[], remote: MediaServer[], metadata?: SyncEventMetadata): MediaServer[] {
-  return dedupeMedia([...local, ...remote.map(item => withEventMetadata(item, metadata))])
-    .filter(item => item.source !== "default"
+  return dedupeMedia([
+    ...local.map(stripMediaServerHealth),
+    ...remote.map(item => withEventMetadata(stripMediaServerHealth(item), metadata))
+  ]).filter(item => item.source !== "default"
       || (!RETIRED_DEFAULT_MEDIA.has(item.id) && !RETIRED_DEFAULT_MEDIA.has(item.url)));
 }
 
