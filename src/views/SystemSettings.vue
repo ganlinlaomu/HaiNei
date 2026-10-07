@@ -109,13 +109,6 @@
             autocomplete="off"
             placeholder="https://media.example.com"
           />
-          <input
-            v-model="newMediaToken"
-            class="input"
-            type="password"
-            autocomplete="off"
-            placeholder="Token（可选）"
-          />
           <button class="btn btn-primary" type="submit">添加</button>
         </form>
 
@@ -406,7 +399,6 @@ const primaryMediaId = computed(() =>
 const newRelay = ref("");
 const newMediaType = ref<MediaServerType>("blossom");
 const newMediaUrl = ref("");
-const newMediaToken = ref("");
 const statuses = reactive<Record<string, RelayRuntimeStatus | undefined>>({});
 const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0, persistentCount: 0, persistentSize: 0, persistentOldestTimestamp: 0 });
 const loadingCache = ref(false);
@@ -622,12 +614,11 @@ function reconnect(url: string) {
 }
 
 function addMediaServer() {
-  if (!settings.addMediaServer(newMediaType.value, newMediaUrl.value, newMediaToken.value.trim())) {
+  if (!settings.addMediaServer(newMediaType.value, newMediaUrl.value)) {
     showValidationError("请输入有效的媒体服务器地址");
     return;
   }
   newMediaUrl.value = "";
-  newMediaToken.value = "";
 }
 
 function removeMediaServer(server: MediaServer) {
@@ -1157,7 +1148,7 @@ h3 {
 }
 
 .media-add-form {
-  grid-template-columns: 120px minmax(0, 1fr) minmax(120px, 0.7fr) auto;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
 }
 
 .input {
@@ -1335,8 +1326,7 @@ h3 {
     grid-template-columns: 110px minmax(0, 1fr);
   }
 
-  .media-add-form .btn,
-  .media-add-form input[type="password"] {
+  .media-add-form .btn {
     grid-column: 1 / -1;
   }
 

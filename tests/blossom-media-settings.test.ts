@@ -8,14 +8,16 @@ it("keeps the configured identity for health reporting while deriving the upload
   const url = "https://media.example";
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => key === "blossom_servers" ? JSON.stringify([
-      { id: "legacy-a", url, updatedAt: 10, token: "saved-token" },
+      { id: "legacy-a", url, updatedAt: 10, token: "legacy-token-must-be-ignored" },
       { id: "legacy-b", url: `${url}/`, updatedAt: 20 }
     ]) : null
   });
   const config = await getBlossomConfig();
   expect(config.url).toBe(`${url}/upload`);
   expect(config.servers).toHaveLength(1);
-  expect(config.servers[0]).toMatchObject({ id: mediaServerId("blossom", url), url, token: "saved-token" });
+  expect(config.servers[0]).toMatchObject({ id: mediaServerId("blossom", url), url });
+  expect(config.servers[0].token).toBeUndefined();
+  expect(config.token).toBeNull();
 });
 
 it("merges tombstones before filtering the actual upload candidates", async () => {

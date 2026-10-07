@@ -228,10 +228,7 @@ export const useSettingsStore = defineStore("settings", {
       const legacyRelays = canUseGlobalLegacy ? readLegacyRelays() : [];
       const legacyMedia = canUseGlobalLegacy ? readJsonArray("blossom_servers") : [];
       const legacySingleMedia = canUseGlobalLegacy && !legacyMedia.length
-        ? [{
-            url: deviceStorage.getItem("blossom_upload_url") || "",
-            token: deviceStorage.getItem("blossom_token") || ""
-          }]
+        ? [{ url: deviceStorage.getItem("blossom_upload_url") || "" }]
         : [];
 
       if (this.loadedFor !== targetPk) this.reset();
@@ -265,6 +262,13 @@ export const useSettingsStore = defineStore("settings", {
         deviceId: this.deviceId,
         legacyRelays,
         legacyMediaServers: legacyMedia.length ? legacyMedia : legacySingleMedia
+      });
+      this.settings.mediaServers = this.settings.mediaServers.map(server => {
+        const sanitized = { ...server };
+        delete sanitized.token;
+        delete sanitized.tokenUpdatedAt;
+        delete sanitized.tokenUpdatedBy;
+        return sanitized;
       });
       this._clearValidationError();
       this.save();
@@ -404,15 +408,20 @@ export const useSettingsStore = defineStore("settings", {
       }
 
       try {
-        const activeMedia = effectiveMediaServers(this.settings.mediaServers);
+        const activeMedia = effectiveMediaServers(this.settings.mediaServers).map(server => {
+          const sanitized = { ...server };
+          delete sanitized.token;
+          delete sanitized.tokenUpdatedAt;
+          delete sanitized.tokenUpdatedBy;
+          return sanitized;
+        });
         deviceStorage.setItem("blossom_servers", JSON.stringify(activeMedia));
+        deviceStorage.removeItem("blossom_token");
         const first = activeMedia[0];
         if (first) {
           deviceStorage.setItem("blossom_upload_url", first.url);
-          deviceStorage.setItem("blossom_token", first.token || "");
         } else {
           deviceStorage.removeItem("blossom_upload_url");
-          deviceStorage.removeItem("blossom_token");
         }
         window.dispatchEvent(new CustomEvent("blossom-config-updated", { detail: { servers: activeMedia } }));
       } catch (error) {
@@ -426,7 +435,13 @@ export const useSettingsStore = defineStore("settings", {
     save() {
       const key = storageKeyFor(this.loadedFor);
       if (!key) return;
-      this.settings.mediaServers = dedupeMedia(this.settings.mediaServers);
+      this.settings.mediaServers = dedupeMedia(this.settings.mediaServers).map(server => {
+        const sanitized = { ...server };
+        delete sanitized.token;
+        delete sanitized.tokenUpdatedAt;
+        delete sanitized.tokenUpdatedBy;
+        return sanitized;
+      });
       const data: StoredSettingsData = {
         version: SETTINGS_VERSION,
         settings: this.settings,
@@ -540,7 +555,7 @@ export const useSettingsStore = defineStore("settings", {
       return true;
     },
 
-    addMediaServer(type: MediaServerType, input: string, token?: string) {
+    addMediaServer(type: MediaServerType, input: string) {
       const url = normalizeMediaUrl(input);
       if (!url) {
         this._setValidationError("请输入有效的媒体服务器地址（仅支持 HTTPS，localhost 可使用 HTTP）。");
@@ -550,8 +565,6 @@ export const useSettingsStore = defineStore("settings", {
       const now = Math.max(Date.now(), (existing?.updatedAt || 0) + 1);
       if (existing) {
         Object.assign(existing, {
-          token: token || existing.token,
-          ...(token ? { tokenUpdatedAt: now, tokenUpdatedBy: this.deviceId } : {}),
           enabled: true,
           source: "user",
           deleted: false,
@@ -565,8 +578,6 @@ export const useSettingsStore = defineStore("settings", {
           id: mediaServerId(type, url),
           type,
           url,
-          token,
-          ...(token !== undefined ? { tokenUpdatedAt: now, tokenUpdatedBy: this.deviceId } : {}),
           enabled: true,
           priority: 0,
           source: "user",
@@ -580,7 +591,7 @@ export const useSettingsStore = defineStore("settings", {
       return true;
     },
 
-    updateMediaServer(id: string, patch: Partial<Pick<MediaServer, "enabled" | "priority" | "token">>) {
+    updateMediaServer(id: string, patch: Partial<Pick<MediaServer, "enabled" | "priority">>) {
       const server = this.settings.mediaServers.find(item => item.id === id && !item.deleted);
       if (!server) return false;
       const next = this.settings.mediaServers.map(item =>
@@ -592,7 +603,6 @@ export const useSettingsStore = defineStore("settings", {
       }
       const now = Math.max(Date.now(), server.updatedAt + 1);
       Object.assign(server, patch, {
-        ...(patch.token !== undefined ? { tokenUpdatedAt: now, tokenUpdatedBy: this.deviceId } : {}),
         updatedAt: now,
         updatedBy: this.deviceId,
         syncCreatedAt: undefined,
