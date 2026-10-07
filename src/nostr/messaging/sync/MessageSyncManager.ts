@@ -103,8 +103,10 @@ export class MessageSyncManager {
     // Reset exhausted retry state and start connecting the exact Relay set selected
     // for this account before subscriptions/catch-up are created.
     this.resumeRelays(options.relays);
-    const purged = await this.repository.purgeUnsupportedMessages(accountPubkey);
-    if (purged > 0) logger.info(`[message-sync] removed ${purged} unsupported cached messages`);
+    const cleanup = await this.repository.runUnsupportedMessageCleanupMigration(accountPubkey);
+    if (cleanup.ran) {
+      logger.info(`[message-sync] message cleanup migration v${cleanup.version} completed purged=${cleanup.purged}`);
+    }
     const localMessages = (await this.repository.listRecent(accountPubkey))
       .filter(record => record.protocol === "nip17" && record.transportKind === 1059);
     for (const record of localMessages) {
