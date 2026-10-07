@@ -68,7 +68,7 @@ describe("local connection health", () => {
       mediaServers: { [mediaId]: { lastSuccessAt: 20, failureCount: 0 } },
     });
 
-    expect(connectionHealthKeyFor(ACCOUNT)).toBe(`hainei_connection_health_${ACCOUNT}`);
+    expect(connectionHealthKeyFor(ACCOUNT)).toBe(`nostr_connection_health_${ACCOUNT}`);
     expect(loadLocalConnectionHealth(ACCOUNT)).toEqual({
       version: 1,
       relays: { "wss://relay.example": {
