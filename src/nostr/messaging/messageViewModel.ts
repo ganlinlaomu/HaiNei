@@ -66,6 +66,6 @@ export function isHomeControl(tags: string[][] | undefined, content?: string) {
 export function isFeedRenderableMessage(message: Pick<InboxItem, "tags" | "content">) {
   return !isHomeControl(message.tags, message.content)
     && !isDirectMessageTags(message.tags)
-    && !isDmReceiptMessage({ tags: message.tags })
+    && !isDmReceiptMessage({ tags: message.tags || [] })
     && !isDmReceiptPayload(message.content);
 }
