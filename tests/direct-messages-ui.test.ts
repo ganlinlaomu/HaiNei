@@ -74,8 +74,14 @@ describe("direct-message navigation and UI contract", () => {
 
   it("shows a friend's non-DM posts on their profile", () => {
     const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const repository = readFileSync(join(process.cwd(), "src/repositories/syncedMessageRepository.ts"), "utf8");
     expect(profile).toContain('class="profile-posts"');
     expect(profile).toContain('<PostCard v-for="post in ownerPosts"');
+    expect(profile).toContain("syncedMessageRepository.listBySender(account, owner)");
+    expect(profile).toContain("for (const message of historicalOwnerPosts.value)");
+    expect(profile).toContain("for (const message of messages.inbox)");
+    expect(profile).toContain("!isHomeControl(message.tags, message.content)");
+    expect(repository).toContain('where("[accountPubkey+senderPubkey]")');
     expect(profile).toContain("messages.inbox.filter(message =>");
     expect(profile).toContain("message.pubkey.toLowerCase() === ownerPubkey.value");
     expect(profile).toContain("!isDirectMessageTags(message.tags)");
