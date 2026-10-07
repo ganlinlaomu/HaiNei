@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import type { BookmarkRecord } from "@/db/dexie";
 import { bookmarkRepository } from "@/repositories/bookmarkRepository";
 import { useKeyStore } from "@/stores/keys";
-import { ensureBookmarkCloudSyncState, markBookmarkCloudDirty, scheduleBookmarkCloudSync } from "@/services/bookmarkCloudSync";
+import { ensureBookmarkCloudSyncState, noteBookmarkLocalMutation } from "@/services/bookmarkCloudSync";
 import { recoverNip51SnapshotDeletionBatch, schedulePrivateBookmarkMirror } from "@/services/privateBookmarkMirror";
 
 export const useBookmarksStore = defineStore("bookmarks", {
@@ -24,8 +24,7 @@ export const useBookmarksStore = defineStore("bookmarks", {
         await Promise.all(recovered.map(record => bookmarkRepository.put(record)));
         records = await bookmarkRepository.list(account);
         const keys = useKeyStore();
-        await markBookmarkCloudDirty(account);
-        scheduleBookmarkCloudSync(keys, { delayMs: 0 });
+        noteBookmarkLocalMutation(keys, account, { delayMs: 0 });
         schedulePrivateBookmarkMirror(keys, 0);
       }
       if (this.loadedFor === account) this.records = records.filter(record => !record.deleted);
@@ -43,8 +42,7 @@ export const useBookmarksStore = defineStore("bookmarks", {
         try {
           await bookmarkRepository.put({ ...existing, deleted: true, updatedAt: Date.now() });
           const keys = useKeyStore();
-          await markBookmarkCloudDirty(account);
-          scheduleBookmarkCloudSync(keys);
+          noteBookmarkLocalMutation(keys, account);
           schedulePrivateBookmarkMirror(keys);
           return false;
         } catch (error) {
@@ -58,8 +56,7 @@ export const useBookmarksStore = defineStore("bookmarks", {
       try {
         await bookmarkRepository.put(record);
         const keys = useKeyStore();
-        await markBookmarkCloudDirty(account);
-        scheduleBookmarkCloudSync(keys);
+        noteBookmarkLocalMutation(keys, account);
         schedulePrivateBookmarkMirror(keys);
         return true;
       } catch (error) {
