@@ -149,13 +149,13 @@ describe("direct-message authorization and conversation lifecycle", () => {
     await context.direct.refresh(ACCOUNT);
     context.direct.unreadByConversation = { [CONVERSATION]: 151 };
 
-    context.direct.beginAuthoritativeUnreadRestore(ACCOUNT);
-    expect(context.direct.authoritativeUnreadPendingFor).toBe(ACCOUNT);
+    context.direct.beginReadStateRestore(ACCOUNT);
+    expect(context.direct.readStateRestorePhase).toBe("restoring");
     expect(context.direct.unreadCount).toBe(0);
     expect(context.direct.visibleUnreadByConversation).toEqual({});
 
-    context.direct.finishAuthoritativeUnreadRestore(ACCOUNT);
-    expect(context.direct.authoritativeUnreadPendingFor).toBe("");
+    context.direct.finishReadStateRestore(ACCOUNT);
+    expect(context.direct.readStateRestorePhase).toBe("ready");
     expect(context.direct.unreadCount).toBe(151);
     expect(context.direct.visibleUnreadByConversation).toEqual({ [CONVERSATION]: 151 });
   });
@@ -165,7 +165,7 @@ describe("direct-message authorization and conversation lifecycle", () => {
     await context.direct.refresh(ACCOUNT);
     expect(context.direct.unreadCount).toBe(1);
 
-    context.direct.beginUnreadHydration(ACCOUNT);
+    context.direct.beginHistoryHydration(ACCOUNT);
     context.messageStore.addInbox(dm("history", 6));
     await Promise.resolve();
     await Promise.resolve();
@@ -173,9 +173,9 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(context.direct.unreadCount).toBe(1);
     const reconcile = vi.spyOn(context.direct, "reconcileDurableUnread").mockResolvedValue(undefined);
     reconcile.mockClear();
-    await context.direct.finishUnreadHydration(ACCOUNT);
+    await context.direct.finishHistoryHydration(ACCOUNT);
     expect(reconcile).toHaveBeenCalled();
-    expect(context.direct.unreadHydratingFor).toBe("");
+    expect(context.direct.historyHydrationPhase).toBe("live");
   });
 
   it("keeps a foreground read made while background refresh is still loading peer state", async () => {
