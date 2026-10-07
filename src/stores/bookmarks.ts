@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import type { BookmarkRecord } from "@/db/dexie";
 import { bookmarkRepository } from "@/repositories/bookmarkRepository";
 import { useKeyStore } from "@/stores/keys";
-import { scheduleAccountStateSync } from "@/services/accountStateSync";
+import { ensureBookmarkCloudSyncState, markBookmarkCloudDirty, scheduleBookmarkCloudSync } from "@/services/bookmarkCloudSync";
 import { recoverNip51SnapshotDeletionBatch, schedulePrivateBookmarkMirror } from "@/services/privateBookmarkMirror";
 
 export const useBookmarksStore = defineStore("bookmarks", {
@@ -18,12 +18,14 @@ export const useBookmarksStore = defineStore("bookmarks", {
       this.reset();
       this.loadedFor = account;
       let records = await bookmarkRepository.list(account);
+      await ensureBookmarkCloudSyncState(account);
       const recovered = recoverNip51SnapshotDeletionBatch(records);
       if (recovered.length) {
         await Promise.all(recovered.map(record => bookmarkRepository.put(record)));
         records = await bookmarkRepository.list(account);
         const keys = useKeyStore();
-        scheduleAccountStateSync(keys, "bookmarks", undefined, { delayMs: 0 });
+        await markBookmarkCloudDirty(account);
+        scheduleBookmarkCloudSync(keys, { delayMs: 0 });
         schedulePrivateBookmarkMirror(keys, 0);
       }
       if (this.loadedFor === account) this.records = records.filter(record => !record.deleted);
@@ -41,7 +43,8 @@ export const useBookmarksStore = defineStore("bookmarks", {
         try {
           await bookmarkRepository.put({ ...existing, deleted: true, updatedAt: Date.now() });
           const keys = useKeyStore();
-          scheduleAccountStateSync(keys, "bookmarks");
+          await markBookmarkCloudDirty(account);
+          scheduleBookmarkCloudSync(keys);
           schedulePrivateBookmarkMirror(keys);
           return false;
         } catch (error) {
@@ -55,7 +58,8 @@ export const useBookmarksStore = defineStore("bookmarks", {
       try {
         await bookmarkRepository.put(record);
         const keys = useKeyStore();
-        scheduleAccountStateSync(keys, "bookmarks");
+        await markBookmarkCloudDirty(account);
+        scheduleBookmarkCloudSync(keys);
         schedulePrivateBookmarkMirror(keys);
         return true;
       } catch (error) {
