@@ -86,10 +86,10 @@ describe("media identity migration", () => {
 
   it("converges after independent device additions and repeated round trips", () => {
     const desktop = activate(A);
-    desktop.addMediaServer("blossom", URL, "saved-token");
+    desktop.addMediaServer("blossom", URL);
     const left = JSON.parse(JSON.stringify(desktop.settings.mediaServers));
     const phone = activate(A);
-    phone.addMediaServer("blossom", `${URL}/`, "saved-token");
+    phone.addMediaServer("blossom", `${URL}/`);
     let a = left, b = JSON.parse(JSON.stringify(phone.settings.mediaServers));
     for (let round = 0; round < 3; round++) {
       a = mergeMediaServers(a, b);
@@ -103,6 +103,28 @@ describe("media identity migration", () => {
     phone.save();
     expect(phone.mediaList.filter(item => item.url === URL)).toHaveLength(1);
     expect(JSON.parse(localStorage.getItem(storageKeyFor(A)!)!).settings.mediaServers.filter((item: MediaServer) => item.url === URL)).toHaveLength(1);
+  });
+
+  it("scrubs retired media credentials from account settings and runtime mirrors", () => {
+    const store = activate(A);
+    localStorage.setItem("blossom_token", "legacy-plaintext-token");
+    store.settings.mediaServers = [
+      media(mediaServerId("blossom", URL), 10, {
+        token: "legacy-account-token",
+        tokenUpdatedAt: 10,
+        tokenUpdatedBy: "old-device"
+      })
+    ];
+
+    store.save();
+    store.applySettings();
+
+    const saved = JSON.parse(localStorage.getItem(storageKeyFor(A)!)!);
+    expect(saved.settings.mediaServers[0].token).toBeUndefined();
+    expect(saved.settings.mediaServers[0].tokenUpdatedAt).toBeUndefined();
+    const runtime = JSON.parse(localStorage.getItem("blossom_servers")!);
+    expect(runtime[0].token).toBeUndefined();
+    expect(localStorage.getItem("blossom_token")).toBeNull();
   });
 
   it("keeps deletion across old UUIDs, repeated sync, and default injection", () => {
@@ -147,12 +169,12 @@ describe("media identity migration", () => {
     vi.setSystemTime(100);
     const store = activate(A);
     const url = DEFAULT_MEDIA_SERVERS[0].url;
-    store.addMediaServer("blossom", url, "saved-token");
+    store.addMediaServer("blossom", url);
     store.addMediaServer("blossom", `${url}/`);
     const id = mediaServerId("blossom", url);
     store.setPrimaryMediaServer(id);
     expect(store.mediaList.filter(item => item.url === url)).toEqual([
-      expect.objectContaining({ id, source: "user", priority: 0, token: "saved-token" })
+      expect.objectContaining({ id, source: "user", priority: 0 })
     ]);
     expect(store.deleteMediaServer(id)).toBe(false);
     expect(store.validationError).toContain("最后一个可用媒体服务器");
@@ -176,7 +198,7 @@ describe("media identity migration", () => {
     const store = activate(A);
     store.addMediaServer("blossom", URL);
     const id = mediaServerId("blossom", URL);
-    store.updateMediaServer(id, { token: "changed" });
+    store.updateMediaServer(id, { priority: 2 });
     const old = JSON.parse(JSON.stringify(store.settings.mediaServers));
     store.deleteMediaServer(id);
     store.settings.mediaServers = mergeMediaServers(store.settings.mediaServers, old);
