@@ -186,6 +186,27 @@ describe("reading paged DM history with an encrypted database", () => {
     expect(direct.unreadCount).toBe(0);
   });
 
+  it("adopts a newer durable cursor when the UI projection is stale", async () => {
+    for (let i = 1; i <= 360; i++) await save(item(i));
+    const direct = await restore();
+    direct.readCursors = {
+      [CONVERSATION]: { lastReadCreatedAt: 300, lastReadMessageId: item(300).id },
+    };
+    await syncedMessageRepository.advanceReadState(ACCOUNT, CONVERSATION, {
+      lastReadCreatedAt: 350,
+      lastReadMessageId: item(350).id,
+    });
+    vi.mocked(scheduleAccountStateSync).mockClear();
+
+    await direct.markPeerRead(PEER, item(320));
+
+    expect(direct.readCursors[CONVERSATION]).toEqual({
+      lastReadCreatedAt: 350,
+      lastReadMessageId: item(350).id,
+    });
+    expect(vi.mocked(scheduleAccountStateSync)).not.toHaveBeenCalled();
+  });
+
   it("persists the actual chat read position when incoming messages are absent from the home cache", async () => {
     for (let i = 1; i <= 151; i++) await save(item(i));
     // The last incoming messages are outside the global recent-message window.
@@ -196,7 +217,7 @@ describe("reading paged DM history with an encrypted database", () => {
     await direct.markPeerRead(PEER, item(360, ACCOUNT));
     await direct.reconcileDurableUnread();
     expect(direct.unreadCount).toBe(0);
-    const advance = vi.spyOn(syncedMessageRepository, "advanceReadState");
+    const advance = vi.spyOn(syncedMessageRepository, "advanceReadStateResult");
     const mirror = vi.spyOn(metaRepository, "put");
     const syncReadState = vi.mocked(scheduleAccountStateSync);
     syncReadState.mockClear();
