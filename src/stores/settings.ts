@@ -28,11 +28,21 @@ import {
   normalizeRelayUrl,
   rankMediaServers,
   selectRelayConfigs,
+  stripConnectionHealth,
   type ConnectionSettings,
   type MediaServer,
+  type MediaServerHealth,
   type MediaServerType,
-  type RelayConfig
+  type RelayConfig,
+  type RelayHealth
 } from "@/services/connectionSettings";
+import {
+  extractLegacyConnectionHealth,
+  loadLocalConnectionHealth,
+  mediaServersWithHealth,
+  relayConfigsWithHealth,
+  saveLocalConnectionHealth,
+} from "@/services/localConnectionHealth";
 
 export type { MediaServer, MediaServerType, RelayConfig };
 
@@ -102,6 +112,8 @@ function readLegacyRelays(): unknown[] {
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
     settings: createDefaultConnectionSettings() as ConnectionSettings,
+    relayHealth: {} as Record<string, RelayHealth>,
+    mediaHealth: {} as Record<string, MediaServerHealth>,
     loadedFor: "",
     deviceId: "",
     syncing: false,
@@ -121,7 +133,7 @@ export const useSettingsStore = defineStore("settings", {
   }),
 
   getters: {
-    relayList: (state) => state.settings.relays
+    relayList: (state) => relayConfigsWithHealth(state.settings.relays, state.relayHealth)
       .filter(item => !item.deleted)
       .slice()
       .sort((a, b) => {
@@ -129,12 +141,18 @@ export const useSettingsStore = defineStore("settings", {
         return source[a.source] - source[b.source] || a.url.localeCompare(b.url);
       }),
     mediaList: (state) => {
-      const visible = dedupeMedia(state.settings.mediaServers).filter(item => !item.deleted);
+      const visible = dedupeMedia(
+        mediaServersWithHealth(state.settings.mediaServers, state.mediaHealth)
+      ).filter(item => !item.deleted);
       const enabled = rankMediaServers(visible);
       return enabled.concat(visible.filter(item => !item.enabled));
     },
-    activeRelays: (state) => selectRuntimeRelayConfigs(state.settings.relays),
-    activeMediaServers: (state) => effectiveMediaServers(state.settings.mediaServers)
+    activeRelays: (state) => selectRuntimeRelayConfigs(
+      relayConfigsWithHealth(state.settings.relays, state.relayHealth)
+    ),
+    activeMediaServers: (state) => effectiveMediaServers(
+      mediaServersWithHealth(state.settings.mediaServers, state.mediaHealth)
+    )
   },
 
   actions: {
@@ -186,6 +204,8 @@ export const useSettingsStore = defineStore("settings", {
       relayHealthUnsubscribe = null;
       setMediaHealthReporter();
       this.settings = createDefaultConnectionSettings();
+      this.relayHealth = {};
+      this.mediaHealth = {};
       this.loadedFor = "";
       this.deviceId = "";
       this.syncing = false;
