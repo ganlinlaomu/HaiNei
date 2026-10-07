@@ -174,14 +174,45 @@ export function mergeNip51BookmarkRecords(
       continue;
     }
 
-    merged.set(id, {
-      ...current,
-      deleted: !remote.has(id),
-      updatedAt: remoteUpdatedAt,
-    });
+    // NIP-51 is an interoperability mirror, not HaiNei's deletion
+    // authority. A replaceable snapshot can be partial, stale on some relays,
+    // or produced by another client with different visibility semantics.
+    // Remote presence may restore/import a bookmark, but remote absence must
+    // never tombstone an existing HaiNei bookmark.
+    if (remote.has(id)) {
+      merged.set(id, {
+        ...current,
+        deleted: false,
+        updatedAt: remoteUpdatedAt,
+      });
+    }
   }
 
   return [...merged.values()];
+}
+
+export function recoverNip51SnapshotDeletionBatch(records: BookmarkRecord[], now = Date.now()): BookmarkRecord[] {
+  const active = records.filter(record => !record.deleted);
+  if (active.length || !records.length) return [];
+
+  // Historic NIP-51 imports stamped every removal with the replaceable
+  // event's second-resolution created_at. Local HaiNei removals use Date.now().
+  // If the visible collection is completely empty, recover only the newest
+  // second-aligned deletion batch; older user tombstones remain untouched.
+  const deleted = records.filter(record => record.deleted);
+  const latest = Math.max(...deleted.map(record => Number(record.updatedAt || 0)));
+  if (!latest || latest % 1000 !== 0) return [];
+  const candidates = deleted.filter(record =>
+    Number(record.updatedAt || 0) === latest
+    && Number(record.createdAt || 0) < latest
+  );
+  if (!candidates.length) return [];
+
+  return candidates.map((record, index) => ({
+    ...record,
+    deleted: false,
+    updatedAt: now + index,
+  }));
 }
 
 export function buildNip51BookmarkPayload(
