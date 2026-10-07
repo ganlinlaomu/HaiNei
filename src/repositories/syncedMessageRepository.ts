@@ -17,6 +17,12 @@ import { performanceCounters } from "@/services/nostrCache";
 
 export type InsertMessageResult = { inserted: boolean; record: SyncedMessageRecord };
 
+export const LEGACY_DM_READ_STATE_MIGRATION_VERSION = 1;
+export const LEGACY_DM_READ_PREFIX = "dm-read:";
+export const legacyDmReadStateMigrationMetaKey = (
+  version = LEGACY_DM_READ_STATE_MIGRATION_VERSION,
+) => `migration:legacy-dm-read-state-v${version}`;
+
 export const UNSUPPORTED_MESSAGE_CLEANUP_VERSION = 1;
 export const unsupportedMessageCleanupMetaKey = (version = UNSUPPORTED_MESSAGE_CLEANUP_VERSION) =>
   `message-maintenance:unsupported-nip17-v${version}`;
@@ -425,6 +431,75 @@ export class SyncedMessageRepository {
   async getReadState(accountPubkey: string, conversationId: string) {
     const account = normalizeAccountPubkey(accountPubkey);
     return this.database.conversationReadStates.get([account, conversationId]);
+  }
+
+  async migrateLegacyDmReadState(
+    accountPubkey: string,
+    version = LEGACY_DM_READ_STATE_MIGRATION_VERSION,
+    nowMs = Date.now(),
+  ) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const markerKey = legacyDmReadStateMigrationMetaKey(version);
+    const completed = await this.database.accountMeta.get([account, markerKey]);
+    if (completed) return { ran: false, migrated: 0, removed: 0, version };
+
+    return this.database.transaction(
+      "rw",
+      this.database.accountMeta,
+      this.database.conversationReadStates,
+      async () => {
+        const marker = await this.database.accountMeta.get([account, markerKey]);
+        if (marker) return { ran: false, migrated: 0, removed: 0, version };
+
+        const legacy = await this.database.accountMeta
+          .where("accountPubkey")
+          .equals(account)
+          .filter(record => record.key.startsWith(LEGACY_DM_READ_PREFIX))
+          .toArray();
+
+        let migrated = 0;
+        for (const record of legacy) {
+          const conversationId = record.key.slice(LEGACY_DM_READ_PREFIX.length);
+          if (!conversationId) continue;
+          const value = record.value as {
+            lastReadCreatedAt?: unknown;
+            lastReadMessageId?: unknown;
+          } | undefined;
+          const lastReadCreatedAt = Number(value?.lastReadCreatedAt || 0);
+          const lastReadMessageId = typeof value?.lastReadMessageId === "string"
+            ? value.lastReadMessageId
+            : "";
+          if (!Number.isFinite(lastReadCreatedAt) || lastReadCreatedAt <= 0) continue;
+
+          const current = await this.database.conversationReadStates.get([account, conversationId]);
+          if (!current || isMessageAfter(
+            { id: lastReadMessageId, createdAt: lastReadCreatedAt },
+            current,
+          )) {
+            await this.database.conversationReadStates.put({
+              accountPubkey: account,
+              conversationId,
+              lastReadCreatedAt,
+              lastReadMessageId,
+              updatedAt: nowMs,
+            });
+            migrated += 1;
+          }
+        }
+
+        if (legacy.length) {
+          await this.database.accountMeta.bulkDelete(
+            legacy.map(record => [account, record.key] as [string, string]),
+          );
+        }
+        await this.database.accountMeta.put({
+          accountPubkey: account,
+          key: markerKey,
+          value: { version, completedAt: nowMs, migrated, removed: legacy.length },
+        });
+        return { ran: true, migrated, removed: legacy.length, version };
+      },
+    );
   }
 
   async advanceReadState(
