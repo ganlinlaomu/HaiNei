@@ -11,6 +11,7 @@ import {
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useDirectMessagesStore } from "@/stores/directMessages";
+import { scheduleAccountStateSync } from "@/services/accountStateSync";
 
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
@@ -192,8 +193,13 @@ describe("reading paged DM history with an encrypted database", () => {
     expect(direct.unreadCount).toBe(0);
     const advance = vi.spyOn(syncedMessageRepository, "advanceReadState");
     const mirror = vi.spyOn(metaRepository, "put");
+    const syncReadState = vi.mocked(scheduleAccountStateSync);
+    syncReadState.mockClear();
     for (let i = 0; i < 20; i++) await direct.markPeerRead(PEER, item(360, ACCOUNT));
-    expect(advance).not.toHaveBeenCalled();
+    // Repeated bottom-of-chat reads may ask the repository to persist again,
+    // but its monotonic compare/write returns false and suppresses remote sync.
+    expect(advance).toHaveBeenCalledTimes(20);
+    expect(syncReadState).not.toHaveBeenCalled();
     expect(mirror).not.toHaveBeenCalledWith(
       ACCOUNT,
       expect.stringMatching(/^dm-read:/),
