@@ -64,12 +64,12 @@ describe("direct-message navigation and UI contract", () => {
   it("keeps DM receipt controls out of Home and profile feeds", () => {
     const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
     const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
-    const messages = readFileSync(join(process.cwd(), "src/stores/messages.ts"), "utf8");
-    expect(home).toContain("isHomeRenderable");
-    expect(home).toContain("!isDmReceiptPayload(message.content)");
-    expect(profile).toContain("!isDmReceiptPayload(message.content)");
-    expect(messages).toContain('values.has(`t:${DM_RECEIPT_TYPE}`)');
-    expect(messages).toContain("isDmReceiptPayload(content)");
+    const viewModel = readFileSync(join(process.cwd(), "src/nostr/messaging/messageViewModel.ts"), "utf8");
+    expect(home).toContain("const isHomeRenderable = isFeedRenderableMessage");
+    expect(profile).toContain("isFeedRenderableMessage(message)");
+    expect(viewModel).toContain('values.has(`t:${DM_RECEIPT_TYPE}`)');
+    expect(viewModel).toContain("isDmReceiptPayload(content)");
+    expect(viewModel).toContain("isDmReceiptMessage({ tags: message.tags })");
   });
 
   it("shows a friend's non-DM posts on their profile", () => {
@@ -80,10 +80,10 @@ describe("direct-message navigation and UI contract", () => {
     expect(profile).toContain("syncedMessageRepository.listBySender(account, owner)");
     expect(profile).toContain("for (const message of historicalOwnerPosts.value)");
     expect(profile).toContain("for (const message of messages.inbox)");
-    expect(profile).toContain("!isHomeControl(message.tags, message.content)");
+    expect(profile).toContain("isFeedRenderableMessage(message)");
     expect(repository).toContain('where("[accountPubkey+senderPubkey]")');
     expect(profile).toContain("message.pubkey.toLowerCase() === ownerPubkey.value");
-    expect(profile).toContain("!isDirectMessageTags(message.tags)");
+    expect(profile).toContain("records.map(syncedMessageRecordToInboxItem)");
     expect(profile).toContain("!feedPreferences.isHidden(message.id)");
     expect(profile).toContain("loadAccountStoresOnce(account, stores)");
     expect(profile).toContain("storesLoadedForAccount(account, stores)");
