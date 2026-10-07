@@ -368,6 +368,45 @@ describe("encrypted account-state materialization", () => {
     });
   });
 
+  it("never lets a stale bookmark snapshot overwrite a newer local mutation", async () => {
+    await db.accountBookmarks.put({
+      accountPubkey: ACCOUNT,
+      messageId: "post-local-newer",
+      createdAt: 100,
+      updatedAt: 300,
+      deleted: false,
+    });
+
+    await materializeAccountState(ACCOUNT, "bookmarks", [{
+      accountPubkey: ACCOUNT,
+      messageId: "post-local-newer",
+      createdAt: 100,
+      updatedAt: 200,
+      deleted: true,
+    }, {
+      accountPubkey: ACCOUNT,
+      messageId: "post-remote",
+      createdAt: 250,
+      updatedAt: 250,
+      deleted: false,
+    }], 4);
+
+    expect(await db.accountBookmarks.get([ACCOUNT, "post-local-newer"])).toMatchObject({
+      updatedAt: 300,
+      deleted: false,
+    });
+    expect(await db.accountBookmarks.get([ACCOUNT, "post-remote"])).toMatchObject({
+      updatedAt: 250,
+      deleted: false,
+    });
+    expect((await db.accountStateMirrors.get([ACCOUNT, "bookmarks"]))?.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ messageId: "post-local-newer", updatedAt: 300, deleted: false }),
+        expect.objectContaining({ messageId: "post-remote", updatedAt: 250, deleted: false }),
+      ]),
+    );
+  });
+
   it("merges a 409 conflict instead of overwriting another device bookmark", async () => {
     await db.accountBookmarks.put({ accountPubkey: ACCOUNT, messageId: "local", createdAt: 2, updatedAt: 2 });
     await db.accountStateMirrors.put({ accountPubkey: ACCOUNT, namespace: "bookmarks", version: 1, data: [], updatedAt: 1 });

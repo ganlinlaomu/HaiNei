@@ -32,6 +32,7 @@ import { clearMemoryImageCache } from "@/utils/imageCache";
 import { cancelOutgoingWorkForAccount } from "@/nostr/messaging/service";
 import { ACCOUNT_STATE_NAMESPACES, fetchAndMaterializeAccountState, syncAccountStateNamespace } from "@/services/accountStateSync";
 import { syncPrivateBookmarkMirror } from "@/services/privateBookmarkMirror";
+import { reconcileBookmarkCloudState } from "@/services/bookmarkCloudSync";
 import { hydratePrivateDeviceValues, clearPrivateDeviceValues, deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/deviceStorage";
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { startAccountMessageSync, stopAccountMessageSync } from "@/services/accountMessageSync";
@@ -186,6 +187,32 @@ export const useKeyStore = defineStore("keys", {
       }));
       if (!isCurrent()) return;
 
+      // Bookmarks are local-first and have their own durable cloud retry path.
+      // Start this independently of DM/Relay history bootstrap.
+      if (this.supportsNip44) {
+        void (async () => {
+          try {
+            await reconcileBookmarkCloudState(this, { force: true, isCurrent });
+            if (!isCurrent()) return;
+            await useBookmarksStore().load(pk, true);
+          } catch (error) {
+            debugLog("account", "bookmark_cloud_restore_unavailable", {
+              reason: error instanceof Error ? error.name : "unknown",
+            }, "warn");
+          }
+          if (!isCurrent()) return;
+          try {
+            await syncPrivateBookmarkMirror(this);
+            if (!isCurrent()) return;
+            await useBookmarksStore().load(pk, true);
+          } catch (error) {
+            debugLog("account", "nip51_bookmark_restore_unavailable", {
+              reason: error instanceof Error ? error.name : "unknown",
+            }, "warn");
+          }
+        })();
+      }
+
       const directMessages = useDirectMessagesStore();
       await directMessages.refresh(pk);
       if (!isCurrent()) return;
@@ -215,44 +242,30 @@ export const useKeyStore = defineStore("keys", {
 
         if (this.supportsNip44) {
           const backgroundNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
-            namespace => !criticalStateNamespaces.includes(namespace)
+            namespace => namespace !== "bookmarks" && !criticalStateNamespaces.includes(namespace)
           );
-          const reconcileBookmarkMirror = async () => {
-            if (!isCurrent()) return;
-            try {
-              await syncPrivateBookmarkMirror(this);
-              if (!isCurrent()) return;
-              await useBookmarksStore().load(pk, true);
-            } catch (error) {
-              debugLog("account", "nip51_bookmark_restore_unavailable", {
-                reason: error instanceof Error ? error.name : "unknown",
-              }, "warn");
-            }
-          };
 
           void fetchAndMaterializeAccountState(this, backgroundNamespaces, { onlyNewer: true, isCurrent })
             .then(async () => {
               if (!isCurrent()) return;
               await useSettingsStore().load(pk, true);
               if (!isCurrent()) return;
-              await Promise.all([useFriendsStore().reloadFromStorage(pk), useProfilesStore().load(pk, true), useBookmarksStore().load(pk, true)]);
-              if (!isCurrent()) return;
-              await reconcileBookmarkMirror();
+              await Promise.all([useFriendsStore().reloadFromStorage(pk), useProfilesStore().load(pk, true)]);
               if (!isCurrent()) return;
               const { pushEnabledForAccount, syncPushAuthorizationPolicy } = await import("@/services/pushNotifications");
               if (pushEnabledForAccount(pk)) await syncPushAuthorizationPolicy(pk, useFriendshipsStore().records.filter(r => r.state === "accepted").map(r => r.peerPubkey), this.signEvent.bind(this));
-            }).catch(async () => {
+            }).catch(() => {
               debugLog("account", "background_restore_unavailable", {}, "warn");
-              await reconcileBookmarkMirror();
             });
         }
 
         await startAccountMessageSync(this);
         if (!isCurrent() || !this.supportsNip44) return;
         const syncState = await syncedMessageRepository.getSyncState(pk);
-        const namespaces = syncState.historyBackfillCompletedAt
-          ? ACCOUNT_STATE_NAMESPACES
-          : ACCOUNT_STATE_NAMESPACES.filter(namespace => namespace !== "friendships");
+        const namespaces = ACCOUNT_STATE_NAMESPACES.filter(namespace =>
+          namespace !== "bookmarks"
+          && (syncState.historyBackfillCompletedAt || namespace !== "friendships")
+        );
         await Promise.allSettled(namespaces.map(namespace => syncAccountStateNamespace(this, namespace)));
       })().catch(error => {
         if (isCurrent()) directMessages.finishReadStateRestore(pk);

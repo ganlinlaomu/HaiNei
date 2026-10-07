@@ -198,7 +198,14 @@ export async function materializeAccountState(account: string, namespace: Accoun
   } else if (namespace === "settings") {
     deviceStorage.setItem(`nostr_settings_${account}`, JSON.stringify({ version: SETTINGS_VERSION, settings: materializedData, lastSyncTimestamp: Date.now() }));
   } else if (namespace === "bookmarks") {
-    await db.accountBookmarks.bulkPut((materializedData || []).map((record: BookmarkRecord) => ({ ...record, accountPubkey: account })));
+    const existing = await db.accountBookmarks.where("accountPubkey").equals(account).toArray();
+    if (!isCurrent()) return;
+    materializedData = mergeByKey(
+      existing,
+      materializedData || [],
+      (record: BookmarkRecord) => record.messageId,
+    ).map((record: BookmarkRecord) => ({ ...record, accountPubkey: account }));
+    if (materializedData.length) await db.accountBookmarks.bulkPut(materializedData);
   } else if (namespace === "feed_preferences") {
     await db.accountMeta.put({ accountPubkey: account, key: "feed_preferences_v2", value: materializedData });
   } else if (namespace === "read_state") {
