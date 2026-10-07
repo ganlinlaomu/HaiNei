@@ -69,7 +69,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(profile).toContain("isFeedRenderableMessage(message)");
     expect(viewModel).toContain('values.has(`t:${DM_RECEIPT_TYPE}`)');
     expect(viewModel).toContain("isDmReceiptPayload(content)");
-    expect(viewModel).toContain("isDmReceiptMessage({ tags: message.tags })");
+    expect(viewModel).toContain("isDmReceiptMessage({ tags: message.tags || [] })");
   });
 
   it("uses one durable-record mapper across Home, Profile, inbox restore and DM history", () => {
