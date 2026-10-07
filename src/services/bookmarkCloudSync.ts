@@ -97,6 +97,21 @@ export async function markBookmarkCloudDirty(account: string) {
   });
 }
 
+export function noteBookmarkLocalMutation(
+  keys: AccountStateKeys,
+  account: string,
+  options: { delayMs?: number } = {},
+) {
+  void markBookmarkCloudDirty(account).then(() => {
+    scheduleBookmarkCloudSync(keys, options);
+  }).catch(error => {
+    // Local bookmark persistence is authoritative for the user action.
+    // If this metadata write fails, startup/foreground reconciliation compares
+    // local mutation timestamps against the last synced baseline and repairs it.
+    console.warn("[bookmarks] cloud dirty marker unavailable", error instanceof Error ? error.message : "unknown");
+  });
+}
+
 function sessionMatches(keys: AccountStateKeys, account: string, generation: number | undefined) {
   return keys.pkHex.toLowerCase() === account
     && keys.sessionGeneration === generation
