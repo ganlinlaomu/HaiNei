@@ -103,6 +103,7 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(keys).toContain("await directMessages.refresh(pk)");
     expect(direct).not.toContain("dm-read:");
     expect(direct).not.toContain("read-state mirror persistence failed");
+    expect(direct).not.toContain("persistedReadCursors");
   });
 
   it("keeps text/reply drafts isolated by account and peer and protects newer drafts", async () => {
