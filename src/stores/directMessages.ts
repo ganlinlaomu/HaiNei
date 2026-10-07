@@ -1061,15 +1061,32 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // updated, and keeps the durable cursor monotonic.
       let durableReady = typeof indexedDB === "undefined";
       let durableAdvanced = durableReady;
+      let durableWinner: MessageCursor | undefined;
       if (typeof indexedDB !== "undefined") {
         try {
-          durableAdvanced = await syncedMessageRepository.advanceReadState(account, conversationId, read);
+          const result = await syncedMessageRepository.advanceReadStateResult(account, conversationId, read);
+          durableAdvanced = result.advanced;
           durableReady = true;
+          const durableCreatedAt = Number(result.state.lastReadCreatedAt || 0);
+          if (Number.isFinite(durableCreatedAt) && durableCreatedAt > 0) {
+            durableWinner = {
+              lastReadCreatedAt: durableCreatedAt,
+              lastReadMessageId: result.state.lastReadMessageId || "",
+            };
+          }
         } catch (error) {
           console.warn("[dm] durable read-state persistence failed", error instanceof Error ? error.message : "unknown error");
         }
       }
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      // Remote read_state can advance the durable cursor while this view still
+      // holds an older projection. Adopt the durable winner without rewinding it.
+      if (durableWinner && isMessageAfter(
+        { id: durableWinner.lastReadMessageId, createdAt: durableWinner.lastReadCreatedAt },
+        this.readCursors[conversationId],
+      )) {
+        this.readCursors = { ...this.readCursors, [conversationId]: durableWinner };
+      }
       // Repository monotonic compare/write is the persistence de-duplicator.
       // Only an actual durable cursor advance needs cross-device propagation.
       if (durableReady && durableAdvanced) scheduleAccountStateSync(useKeyStore(), "read_state");
