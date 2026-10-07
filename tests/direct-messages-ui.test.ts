@@ -72,6 +72,23 @@ describe("direct-message navigation and UI contract", () => {
     expect(viewModel).toContain("isDmReceiptMessage({ tags: message.tags })");
   });
 
+  it("uses one durable-record mapper across Home, Profile, inbox restore and DM history", () => {
+    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const messages = readFileSync(join(process.cwd(), "src/stores/messages.ts"), "utf8");
+    const directMessages = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const viewModel = readFileSync(join(process.cwd(), "src/nostr/messaging/messageViewModel.ts"), "utf8");
+
+    expect(viewModel).toContain("export function syncedMessageRecordToInboxItem");
+    expect(messages).toContain(".map(syncedMessageRecordToInboxItem)");
+    expect(home).toContain("records.map(syncedMessageRecordToInboxItem)");
+    expect(profile).toContain("records.map(syncedMessageRecordToInboxItem)");
+    expect(directMessages).toContain("records.map(syncedMessageRecordToInboxItem)");
+    expect(home).not.toContain("function syncedRecordToInbox");
+    expect(profile).not.toContain("historyRecordToInboxItem");
+    expect(directMessages).not.toContain("function recordInboxItem");
+  });
+
   it("shows a friend's non-DM posts on their profile", () => {
     const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
     const repository = readFileSync(join(process.cwd(), "src/repositories/syncedMessageRepository.ts"), "utf8");
