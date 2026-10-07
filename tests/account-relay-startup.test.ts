@@ -16,11 +16,11 @@ describe("account relay startup ordering", () => {
     const criticalRequest = source.indexOf("fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false");
     const criticalNamespaces = source.indexOf('["read_state", "notification_state", "friendships"]');
     const localRefresh = source.indexOf("await directMessages.refresh(pk)");
-    const pendingUnread = source.indexOf("directMessages.beginAuthoritativeUnreadRestore(pk)");
+    const pendingUnread = source.indexOf("directMessages.beginReadStateRestore(pk)");
     const remoteWait = source.indexOf("const criticalState = await criticalStateRestore");
     const authoritativeRefresh = source.indexOf("await directMessages.refresh(pk)", localRefresh + 1);
     const notificationRefresh = source.indexOf("await useNotificationsStore().refreshSyncedState(pk)");
-    const finishUnread = source.indexOf("directMessages.finishAuthoritativeUnreadRestore(pk)");
+    const finishUnread = source.indexOf("directMessages.finishReadStateRestore(pk)");
     const relayStart = source.indexOf("await startAccountMessageSync(this)");
 
     expect(criticalRequest).toBeGreaterThan(-1);
@@ -89,8 +89,8 @@ describe("account message sync generation", () => {
       }),
     };
     const directMessages = {
-      beginUnreadHydration: vi.fn(),
-      finishUnreadHydration: vi.fn(async () => undefined),
+      beginHistoryHydration: vi.fn(),
+      finishHistoryHydration: vi.fn(async () => undefined),
       processReceipt: vi.fn(),
       acknowledgePersistedIncoming: vi.fn(async () => undefined),
     };

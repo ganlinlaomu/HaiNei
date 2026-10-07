@@ -321,8 +321,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
   state: () => ({
     loadedFor: "",
     unreadByConversation: {} as Record<string, number>,
-    authoritativeUnreadPendingFor: "",
-    unreadHydratingFor: "",
+    readStateRestorePhase: "ready" as "ready" | "restoring",
+    historyHydrationPhase: "idle" as "idle" | "hydrating" | "live" | "error",
     readCursors: {} as Record<string, MessageCursor | undefined>,
     preferencesByPeer: {} as Record<string, ConversationPreference | undefined>,
     receiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
@@ -331,10 +331,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     outgoingTasks: [] as OutgoingDmTaskRecord[],
   }),
   getters: {
-    unreadCount: state => state.authoritativeUnreadPendingFor === state.loadedFor
+    unreadCount: state => state.readStateRestorePhase === "restoring"
       ? 0
       : Object.values(state.unreadByConversation).reduce((sum, value) => sum + value, 0),
-    visibleUnreadByConversation: state => state.authoritativeUnreadPendingFor === state.loadedFor
+    visibleUnreadByConversation: state => state.readStateRestorePhase === "restoring"
       ? {}
       : state.unreadByConversation,
   },
@@ -806,7 +806,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // During initial Relay history hydration, keep the login badge frozen.
       // The final count is reconciled once from durable history against the
       // restored read cursor when startup catch-up reaches live state.
-      if (item.conversationId && this.unreadHydratingFor !== account) {
+      if (item.conversationId && this.historyHydrationPhase !== "hydrating") {
         await this.reconcileDurableUnread(item.conversationId);
       }
       await this.relinkOutgoingTask(account, item);
@@ -820,30 +820,30 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
       await this.reconcileDurableUnread();
     },
-    beginAuthoritativeUnreadRestore(accountPubkey: string) {
+    beginReadStateRestore(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
       if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
-      this.authoritativeUnreadPendingFor = account;
+      this.readStateRestorePhase = "restoring";
     },
-    finishAuthoritativeUnreadRestore(accountPubkey: string) {
+    finishReadStateRestore(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
-      if (this.authoritativeUnreadPendingFor === account) this.authoritativeUnreadPendingFor = "";
+      if (account && this.loadedFor === account && useKeyStore().pkHex.toLowerCase() === account) this.readStateRestorePhase = "ready";
     },
-    beginUnreadHydration(accountPubkey: string) {
+    beginHistoryHydration(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
       if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
-      this.unreadHydratingFor = account;
+      this.historyHydrationPhase = "hydrating";
     },
-    async finishUnreadHydration(accountPubkey: string) {
+    async finishHistoryHydration(accountPubkey: string, outcome: "live" | "error" = "live") {
       const account = accountPubkey.toLowerCase();
-      if (!account || this.unreadHydratingFor !== account) return;
+      if (!account || this.historyHydrationPhase !== "hydrating") return;
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) {
-        this.unreadHydratingFor = "";
+        this.historyHydrationPhase = "idle";
         return;
       }
       await this.reconcileDurableUnread();
       if (this.loadedFor === account && useKeyStore().pkHex.toLowerCase() === account) {
-        this.unreadHydratingFor = "";
+        this.historyHydrationPhase = outcome;
       }
     },
     claimDerivedStateOwnership() {
@@ -1431,8 +1431,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
       this.loadedFor = "";
       this.unreadByConversation = {};
-      this.authoritativeUnreadPendingFor = "";
-      this.unreadHydratingFor = "";
+      this.readStateRestorePhase = "ready";
+      this.historyHydrationPhase = "idle";
       this.readCursors = {};
       this.preferencesByPeer = {};
       this.receiptStateByPeer = {};

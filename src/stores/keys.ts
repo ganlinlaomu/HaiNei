@@ -192,7 +192,7 @@ export const useKeyStore = defineStore("keys", {
       // A new device may have an old/empty local read cursor. Hide that
       // provisional unread count until cross-device read_state + friendships
       // have converged, rather than flashing a large false unread badge.
-      directMessages.beginAuthoritativeUnreadRestore(pk);
+      directMessages.beginReadStateRestore(pk);
 
       // Network phase: runs after local login has completed. Relay history must
       // still wait for this phase so historical events cannot race an older
@@ -211,7 +211,7 @@ export const useKeyStore = defineStore("keys", {
         }
         await directMessages.refresh(pk);
         if (!isCurrent()) return;
-        directMessages.finishAuthoritativeUnreadRestore(pk);
+        directMessages.finishReadStateRestore(pk);
 
         if (this.supportsNip44) {
           const backgroundNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
@@ -255,7 +255,7 @@ export const useKeyStore = defineStore("keys", {
           : ACCOUNT_STATE_NAMESPACES.filter(namespace => namespace !== "friendships");
         await Promise.allSettled(namespaces.map(namespace => syncAccountStateNamespace(this, namespace)));
       })().catch(error => {
-        if (isCurrent()) directMessages.finishAuthoritativeUnreadRestore(pk);
+        if (isCurrent()) directMessages.finishReadStateRestore(pk);
         console.warn(`[account] background account bootstrap unavailable account=${account}`, error instanceof Error ? error.message : "unknown");
       });
     },
