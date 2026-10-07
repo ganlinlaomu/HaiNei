@@ -825,7 +825,7 @@ describe("privacy-preserving push and badge", () => {
     const method = source.slice(methodStart, methodEnd);
     const memoryClear = method.indexOf("this.unreadByConversation = { ...this.unreadByConversation");
     const badgeSync = method.indexOf("void syncAppBadge(accountBadgeCount(");
-    const persistence = method.indexOf("await metaRepository.put(");
+    const persistence = method.indexOf("await syncedMessageRepository.advanceReadState(");
     expect(methodStart).toBeGreaterThan(-1);
     expect(memoryClear).toBeGreaterThan(-1);
     expect(badgeSync).toBeGreaterThan(memoryClear);
