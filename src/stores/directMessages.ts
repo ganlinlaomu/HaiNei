@@ -22,6 +22,7 @@ import { syncedMessageRepository } from "@/repositories/syncedMessageRepository"
 import { isFriendshipAcceptedAt, useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
+import { syncedMessageRecordToInboxItem } from "@/nostr/messaging/messageViewModel";
 import { useSettingsStore } from "@/stores/settings";
 import { deviceStorage } from "@/services/deviceStorage";
 import { uploadEncryptedCommentImage } from "@/utils/commentImage";
@@ -127,22 +128,6 @@ export function receiptStatusForMessage(
 }
 function normalizeSearchText(value: string) {
   return value.normalize("NFKC").toLocaleLowerCase();
-}
-function recordInboxItem(record: Awaited<ReturnType<typeof syncedMessageRepository.listConversationPage>>[number]): InboxItem {
-  return {
-    id: record.id,
-    pubkey: record.senderPubkey,
-    recipientPubkeys: record.recipientPubkeys,
-    created_at: record.createdAt,
-    content: record.plaintext || "",
-    conversationId: record.conversationId,
-    replyTo: record.replyTo,
-    rootId: record.rootId,
-    protocol: "nip17",
-    transportKind: record.transportKind,
-    rumorId: record.rumorId,
-    tags: record.tags || [],
-  };
 }
 function persistenceError(error: unknown) {
   const wrapped = new Error(error instanceof Error ? error.message : "indexeddb write failed") as Error & { phase: string };
@@ -485,7 +470,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         loadPage: (before, limit) => syncedMessageRepository.listConversationPage(account, conversationId, before, limit),
         onPage: (records, progress) => {
           if (!isActive()) return;
-          const batch = collectMatches(records.map(recordInboxItem));
+          const batch = collectMatches(records.map(syncedMessageRecordToInboxItem));
           options.onBatch?.(batch, progress);
         },
       });
@@ -507,7 +492,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         const conversation = await deriveConversationId([account, peer]);
         const records = await syncedMessageRepository.listConversationPage(account, conversation, undefined, 50);
         if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], exhausted: true };
-        const items = records.map(recordInboxItem).filter(item => isDirectMessageTags(item.tags)
+        const items = records.map(syncedMessageRecordToInboxItem).filter(item => isDirectMessageTags(item.tags)
           && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
           && afterDeletion(item, this.preferencesByPeer[peer]));
         const last = records[0];
@@ -534,7 +519,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const records = await syncedMessageRepository.listConversationPage(account, conversation, before, 50);
       if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], cursor: before, exhausted: true };
       const friendships = useFriendshipsStore();
-      const items = records.map(recordInboxItem).filter(item => isDirectMessageTags(item.tags)
+      const items = records.map(syncedMessageRecordToInboxItem).filter(item => isDirectMessageTags(item.tags)
         && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
         && afterDeletion(item, this.preferencesByPeer[peer]));
       const last = records[0];
@@ -549,7 +534,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const conversationId = await deriveConversationId([account, peer]);
       const records = await syncedMessageRepository.listConversationAround(account, conversationId, messageId, radius);
       return records
-        .map(recordInboxItem)
+        .map(syncedMessageRecordToInboxItem)
         .filter(item => isDirectMessageTags(item.tags)
           && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) === peer
           && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
@@ -736,7 +721,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         const read = cursors[id];
         const policy = JSON.stringify([friendship, preference, read]);
         const count = await syncedMessageRepository.getVisibleUnreadCount(account, id, policy, read, message => {
-          const candidate = recordInboxItem(message);
+          const candidate = syncedMessageRecordToInboxItem(message);
           return afterDeletion(candidate, preference)
             && isAuthorizedDirectMessage(candidate, account, friendship);
         });
