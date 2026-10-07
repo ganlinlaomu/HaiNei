@@ -11,19 +11,32 @@ const mocks = vi.hoisted(() => ({
     pkHex: "a".repeat(64), isLoggedIn: true, supportsNip44: true,
     nip44Decrypt: vi.fn(), nip44Encrypt: vi.fn(), signEvent: vi.fn()
   },
-  publish: vi.fn(), subscribe: vi.fn(), healthReporter: undefined as undefined | ((id: string, ok: boolean, at: number) => void)
+  publish: vi.fn(),
+  subscribe: vi.fn(),
+  healthReporter: undefined as undefined | ((id: string, ok: boolean, at: number) => void),
+  relayHealthReporter: undefined as undefined | ((event: { url: string; connected: boolean; failed?: boolean; at: number; latency?: number }) => void),
+  scheduleAccountStateSync: vi.fn(),
 }));
 vi.mock("@/stores/keys", () => ({ useKeyStore: () => mocks.key }));
 vi.mock("@/nostr/relays", () => ({
   DEFAULT_RELAYS: ["wss://relay.damus.io", "wss://relay.floonet.dev"],
   disconnectRelay: vi.fn(), reconnectRelay: vi.fn(),
-  getRelaysFromStorage: () => [], onRelayConnectionState: () => vi.fn(),
+  getRelaysFromStorage: () => [],
+  onRelayConnectionState: (reporter: typeof mocks.relayHealthReporter) => {
+    mocks.relayHealthReporter = reporter;
+    return vi.fn();
+  },
   publish: mocks.publish, subscribe: mocks.subscribe
 }));
 vi.mock("@/utils/blossom", () => ({
   setMediaHealthReporter: (reporter?: typeof mocks.healthReporter) => { mocks.healthReporter = reporter; }
 }));
+vi.mock("@/services/accountStateSync", () => ({
+  scheduleAccountStateSync: mocks.scheduleAccountStateSync,
+  syncAccountStateNamespace: vi.fn(async () => true),
+}));
 import { storageKeyFor, useSettingsStore } from "@/stores/settings";
+import { connectionHealthKeyFor } from "@/services/localConnectionHealth";
 
 const A = "a".repeat(64), B = "b".repeat(64);
 const URL = "https://media.example/upload";
@@ -49,6 +62,8 @@ function activate(account: string) {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  mocks.healthReporter = undefined;
+  mocks.relayHealthReporter = undefined;
   const values = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => values.get(key) ?? null,
@@ -223,6 +238,43 @@ describe("settings session isolation", () => {
     expect(mocks.publish).not.toHaveBeenCalled();
   });
 
+  it("keeps Relay and Media health local without scheduling settings sync", () => {
+    const store = activate(A);
+    const relayUrl = DEFAULT_RELAY_URLS[0];
+    const mediaId = mediaServerId("blossom", URL);
+    store.settings.mediaServers = [media(mediaId, 10)];
+    store.bindHealthTracking();
+    mocks.scheduleAccountStateSync.mockClear();
+
+    mocks.relayHealthReporter?.({
+      url: relayUrl,
+      connected: true,
+      at: 1_000,
+      latency: 42,
+    });
+    mocks.healthReporter?.(mediaId, false, 2_000);
+
+    expect(store.settings.relays.find(item => item.url === relayUrl)?.lastConnectedAt).toBeUndefined();
+    expect(store.settings.mediaServers[0].lastFailureAt).toBeUndefined();
+    expect(store.relayHealth[relayUrl]).toMatchObject({
+      lastConnectedAt: 1_000,
+      successCount: 1,
+      failureCount: 0,
+      latency: 42,
+    });
+    expect(store.mediaHealth[mediaId]).toMatchObject({
+      lastFailureAt: 2_000,
+      failureCount: 1,
+    });
+    expect(store.relayList.find(item => item.url === relayUrl)?.latency).toBe(42);
+    expect(store.mediaList.find(item => item.id === mediaId)?.failureCount).toBe(1);
+    expect(mocks.scheduleAccountStateSync).not.toHaveBeenCalled();
+
+    const persistedHealth = JSON.parse(localStorage.getItem(connectionHealthKeyFor(A)!)!);
+    expect(persistedHealth.relays[relayUrl].latency).toBe(42);
+    expect(persistedHealth.mediaServers[mediaId].failureCount).toBe(1);
+  });
+
   it("ignores an old account's delayed upload health result", () => {
     const store = activate(A);
     store.bindHealthTracking();
@@ -232,6 +284,7 @@ describe("settings session isolation", () => {
     store.bindHealthTracking();
     oldReporter(mediaServerId("blossom", URL), false, Date.now());
     expect(store.settings.mediaServers[0].failureCount).toBeUndefined();
+    expect(store.mediaHealth[mediaServerId("blossom", URL)]).toBeUndefined();
   });
 
   it("keeps every system Relay permanently enabled for read and write", () => {
