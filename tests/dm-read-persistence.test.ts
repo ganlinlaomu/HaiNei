@@ -115,6 +115,11 @@ describe("legacy DM read-state migration", () => {
 });
 
 describe("reading paged DM history with an encrypted database", () => {
+  it("does not maintain a second persisted read-cursor authority in Pinia", async () => {
+    const direct = await restore();
+    expect(Object.prototype.hasOwnProperty.call(direct.$state, "persistedReadCursors")).toBe(false);
+  });
+
   it("uses a paged incoming message newer than the cached incoming message", async () => {
     for (let i = 1; i <= 151; i++) await save(item(i));
     const direct = await restore();
