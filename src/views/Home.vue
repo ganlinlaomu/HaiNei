@@ -68,7 +68,7 @@ import { defineComponent, ref, onMounted, onBeforeUnmount, onActivated, onDeacti
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
-import { isHomeControl, useMessagesStore, type InboxItem } from "@/stores/messages";
+import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { usePostsStore } from "@/stores/posts";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
 import { logger } from "@/utils/logger";
@@ -82,8 +82,10 @@ import { useUIStore } from "@/stores/ui";
 import type { SyncStatus } from "@/nostr/messaging/sync/types";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
-import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
-import { isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
+import {
+  isFeedRenderableMessage,
+  syncedMessageRecordToInboxItem,
+} from "@/nostr/messaging/messageViewModel";
 import { buildHeightPrefix, resolveVirtualRange, updateHeightPrefix } from "@/utils/virtualFeed";
 import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
 
@@ -122,9 +124,7 @@ export default defineComponent({
     const lastSeenCreatedAt = ref(0); // Track the watermark for filtering pending messages
     const inboxRevision = computed(() => msgs.inboxRevision);
     const feedPreferenceRevision = computed(() => feedPreferences.revision);
-    const isHomeRenderable = (message: InboxItem) => !isHomeControl(message.tags, message.content) && !isDirectMessageTags(message.tags)
-      && !isDmReceiptMessage({ tags: message.tags })
-      && !isDmReceiptPayload(message.content);
+    const isHomeRenderable = isFeedRenderableMessage;
     const storedHistory = ref<InboxItem[]>([]);
     let historyCursor: {createdAt:number;id:string} | undefined;
     const historyExhausted = ref(false);
@@ -604,7 +604,7 @@ async function safeUpdateLocalRefs() {
           historyExhausted.value=records.length<100;
           const last=records.at(-1);
           if(last)historyCursor={createdAt:last.createdAt,id:last.id};
-          const restored=records.map(syncedRecordToInbox).filter((item):item is InboxItem=>!!item);
+          const restored=records.map(syncedMessageRecordToInboxItem);
           storedHistory.value=[...storedHistory.value,...restored];
           rebuildVisibleInbox();
         }
@@ -657,25 +657,6 @@ async function safeUpdateLocalRefs() {
     }
 
 
-  function syncedRecordToInbox(record: Awaited<ReturnType<typeof syncedMessageRepository.get>>): InboxItem | null {
-    if (!record) return null;
-    return {
-      id: record.id,
-      pubkey: record.senderPubkey,
-      created_at: record.createdAt,
-      content: record.plaintext || "",
-      protocol: "nip17",
-      transportKind: record.transportKind,
-      transportEventId: record.transportEventIds[0],
-      rumorId: record.rumorId,
-      recipientPubkeys: record.recipientPubkeys,
-      conversationId: record.conversationId,
-      replyTo: record.replyTo,
-      rootId: record.rootId,
-      tags: record.tags || [],
-    };
-  }
-
   async function resolveNotificationPost(mid: string) {
     const existing = messagesRef.value.find(message => message.id === mid)
       || displayedMessages.value.find(message => message.id === mid)
@@ -684,7 +665,7 @@ async function safeUpdateLocalRefs() {
 
     if (!keys.pkHex) return null;
     const record = await syncedMessageRepository.get(keys.pkHex, mid);
-    const restored = syncedRecordToInbox(record);
+    const restored = record ? syncedMessageRecordToInboxItem(record) : null;
     if (!restored || !isHomeRenderable(restored)) return null;
     return restored;
   }
