@@ -16,6 +16,7 @@ import { MAX_FUTURE_SKEW_SECONDS, type SyncStatus } from "@/nostr/messaging/sync
 import { performanceCounters } from "@/services/nostrCache";
 
 export type InsertMessageResult = { inserted: boolean; record: SyncedMessageRecord };
+export type AdvanceReadStateResult = { advanced: boolean; state: ConversationReadStateRecord };
 
 export const LEGACY_DM_READ_STATE_MIGRATION_VERSION = 1;
 export const LEGACY_DM_READ_PREFIX = "dm-read:";
@@ -502,25 +503,41 @@ export class SyncedMessageRepository {
     );
   }
 
+  async advanceReadStateResult(
+    accountPubkey: string,
+    conversationId: string,
+    cursor: { lastReadCreatedAt: number; lastReadMessageId: string },
+  ): Promise<AdvanceReadStateResult> {
+    const account = normalizeAccountPubkey(accountPubkey);
+    // Serialize compare/write with concurrent foreground reads and remote
+    // account-state materialization. Return the durable winner so callers can
+    // refresh a stale in-memory projection without introducing another source.
+    return this.database.transaction("rw", this.database.conversationReadStates, async () => {
+      const current = await this.database.conversationReadStates.get([account, conversationId]);
+      if (current && !isMessageAfter(
+        { id: cursor.lastReadMessageId, createdAt: cursor.lastReadCreatedAt },
+        current,
+      )) {
+        return { advanced: false, state: current };
+      }
+      const state: ConversationReadStateRecord = {
+        accountPubkey: account,
+        conversationId,
+        lastReadMessageId: cursor.lastReadMessageId,
+        lastReadCreatedAt: cursor.lastReadCreatedAt,
+        updatedAt: Date.now(),
+      };
+      await this.database.conversationReadStates.put(state);
+      return { advanced: true, state };
+    });
+  }
+
   async advanceReadState(
     accountPubkey: string,
     conversationId: string,
     cursor: { lastReadCreatedAt: number; lastReadMessageId: string },
   ) {
-    const account = normalizeAccountPubkey(accountPubkey);
-    // Serialize read/compare/write with concurrent foreground reads and restore.
-    return this.database.transaction("rw", this.database.conversationReadStates, async () => {
-      const current = await this.getReadState(account, conversationId);
-      if (!isMessageAfter({ id: cursor.lastReadMessageId, createdAt: cursor.lastReadCreatedAt }, current)) return false;
-      await this.database.conversationReadStates.put({
-        accountPubkey: account,
-        conversationId,
-        lastReadMessageId: cursor.lastReadMessageId,
-        lastReadCreatedAt: cursor.lastReadCreatedAt,
-        updatedAt: Date.now()
-      });
-      return true;
-    });
+    return (await this.advanceReadStateResult(accountPubkey, conversationId, cursor)).advanced;
   }
 
   async markRead(accountPubkey: string, conversationId: string, message?: SyncedMessageRecord) {
