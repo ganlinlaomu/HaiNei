@@ -67,6 +67,8 @@ import { useDirectMessagesStore } from "@/stores/directMessages";
 import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appBadge";
 import { installBackgroundLock } from "@/services/autoLock";
 import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
+import { reconcileBookmarkCloudState } from "@/services/bookmarkCloudSync";
+import { useBookmarksStore } from "@/stores/bookmarks";
 import { onAppResume } from "@/services/appResumeCoordinator";
 import { cancelBackgroundTask, installForegroundActivityMonitor, scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
 
@@ -84,6 +86,7 @@ export default defineComponent({
     const keys = useKeyStore();
     const notifications = useNotificationsStore();
     const directMessages = useDirectMessagesStore();
+    const bookmarks = useBookmarksStore();
     const postEditorReady = ref(false);
     const postEditorLoadError = ref(false);
     const hideAppChrome = computed(() => route.meta.hideHeader === true);
@@ -135,6 +138,15 @@ export default defineComponent({
       if (document.visibilityState === "hidden" || !keys.isLoggedIn || !keys.isUnlocked) return;
       void reconcileForegroundFriendState(keys).catch(error => {
         console.warn("[account-state] foreground friend reconciliation failed", error instanceof Error ? error.message : "unknown");
+      });
+    }
+
+    function reconcileBookmarksOnForeground(force = false) {
+      if (document.visibilityState === "hidden" || !keys.isLoggedIn || !keys.isUnlocked) return;
+      void reconcileBookmarkCloudState(keys, { force }).then(async result => {
+        if (result.restored && keys.pkHex) await bookmarks.load(keys.pkHex, true);
+      }).catch(error => {
+        console.warn("[bookmarks] foreground cloud reconciliation failed", error instanceof Error ? error.message : "unknown");
       });
     }
 
@@ -204,8 +216,9 @@ export default defineComponent({
       stopActivityMonitor = installForegroundActivityMonitor();
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked && keys.credentialMode !== "device",lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
-      stopForegroundResume = onAppResume(() => {
+      stopForegroundResume = onAppResume(reason => {
         reconcileFriendStateOnForeground();
+        reconcileBookmarksOnForeground(reason === "online");
         prewarmRemoteSignerOnForeground();
       });
     });
