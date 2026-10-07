@@ -4,7 +4,7 @@ import { bookmarkRepository } from "@/repositories/bookmarkRepository";
 import { replaceableEventOutboxRepository } from "@/repositories/replaceableEventOutboxRepository";
 import { getRelaysFromStorage, publish, subscribe } from "@/nostr/relays";
 import { verifySignedEvent } from "@/nostr/messaging/protocol/common";
-import { scheduleAccountStateSync } from "@/services/accountStateSync";
+import { markBookmarkCloudDirty, scheduleBookmarkCloudSync } from "@/services/bookmarkCloudSync";
 import { logger } from "@/utils/logger";
 
 export const NIP51_BOOKMARK_KIND = 10003;
@@ -352,7 +352,8 @@ export async function syncPrivateBookmarkMirror(keys: PrivateBookmarkMirrorKeys)
     if (changed.length) {
       await Promise.all(changed.map(record => bookmarkRepository.put(record)));
       if (!isCurrent(keys, account, generation)) return false;
-      scheduleAccountStateSync(keys, "bookmarks");
+      await markBookmarkCloudDirty(account);
+      scheduleBookmarkCloudSync(keys);
     }
   }
 
