@@ -213,6 +213,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(friends).toContain('<SecondaryPageHeader title="好友 / 好友分组" back-label="返回我的" />');
     expect(friends).toContain('components: { ProfileAvatar, SecondaryPageHeader, QrScannerSheet }');
     expect(saved).toContain('<SecondaryPageHeader title="已收藏" back-label="返回我的" />');
+    expect(saved).toContain("收藏会先保存在本机，并通过加密同步到其他设备");
+    expect(saved).not.toContain("收藏仅保存在当前设备和账号中");
     expect(profile).toContain('<SecondaryPageHeader title="编辑资料" back-label="返回个人资料" back-mode="history" />');
     expect(friends).toMatch(/return \{[\s\S]*router,[\s\S]*acceptedFriends/);
     expect(secondaryHeader).toContain('backTo: "/settings"');
