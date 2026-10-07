@@ -26,7 +26,7 @@ import { clearMediaSession, getMediaSession } from "@/services/mediaSession";
 import { deviceStorage } from "@/services/deviceStorage";
 
 export const DEFAULT_BLOSSOM_SERVERS = [
-  { url: DEFAULT_MEDIA_SERVERS[0].url, token: "" }
+  { url: DEFAULT_MEDIA_SERVERS[0].url }
 ];
 
 type MediaHealthReporter = (serverId: string, ok: boolean, at: number) => void;
@@ -76,7 +76,7 @@ export async function getBlossomConfig(): Promise<{
             id: String(s.id || `legacy-media-${index}-${s.url || ""}`),
             type: (["blossom", "imgbed", "custom"].includes(s.type) ? s.type : "blossom") as MediaServerType,
             url: normalizeMediaUrl(s.url || ""),
-            token: typeof s.token === "string" ? s.token.trim() : undefined,
+            token: undefined,
             enabled: s.enabled !== false,
             priority: Number.isFinite(s.priority) ? Number(s.priority) : index,
             source: s.source === "default" ? "default" : "user",
@@ -93,13 +93,11 @@ export async function getBlossomConfig(): Promise<{
     // Fallback to single server config (old format)
     if (servers.length === 0 && !hasExplicitServerList) {
       const rawUrl = (deviceStorage.getItem("blossom_upload_url") || "").trim();
-      const token = (deviceStorage.getItem("blossom_token") || "").trim();
       if (rawUrl) {
         servers.push({
           id: `legacy-media-${rawUrl}`,
           type: "blossom",
           url: normalizeMediaUrl(rawUrl),
-          token,
           enabled: true,
           priority: 0,
           source: "user",
@@ -115,7 +113,6 @@ export async function getBlossomConfig(): Promise<{
         id: DEFAULT_MEDIA_SERVERS[index]?.id || `default-media-${index}`,
         type: "blossom" as const,
         url: normalizeMediaUrl(s.url),
-        token: s.token,
         enabled: true,
         priority: 1_000 + index,
         source: "default" as const,
@@ -131,9 +128,7 @@ export async function getBlossomConfig(): Promise<{
     
     // Return first server as default for backward compatibility
     const url = servers.length > 0 ? normalizeBlossomUploadUrl(servers[0].url) : null;
-    const token = servers.length > 0 ? servers[0].token || "" : null;
-    
-    return { url, token, timeoutMs, authHeaderName, servers };
+    return { url, token: null, timeoutMs, authHeaderName, servers };
   } catch {
     return { 
       url: null, 
