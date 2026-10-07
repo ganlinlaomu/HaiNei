@@ -3,7 +3,7 @@ import type { BookmarkRecord } from "@/db/dexie";
 import { bookmarkRepository } from "@/repositories/bookmarkRepository";
 import { useKeyStore } from "@/stores/keys";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
-import { schedulePrivateBookmarkMirror } from "@/services/privateBookmarkMirror";
+import { recoverNip51SnapshotDeletionBatch, schedulePrivateBookmarkMirror } from "@/services/privateBookmarkMirror";
 
 export const useBookmarksStore = defineStore("bookmarks", {
   state: () => ({ records: [] as BookmarkRecord[], loadedFor: "" }),
@@ -17,7 +17,15 @@ export const useBookmarksStore = defineStore("bookmarks", {
       if (this.loadedFor === account && !force) return;
       this.reset();
       this.loadedFor = account;
-      const records = await bookmarkRepository.list(account);
+      let records = await bookmarkRepository.list(account);
+      const recovered = recoverNip51SnapshotDeletionBatch(records);
+      if (recovered.length) {
+        await Promise.all(recovered.map(record => bookmarkRepository.put(record)));
+        records = await bookmarkRepository.list(account);
+        const keys = useKeyStore();
+        scheduleAccountStateSync(keys, "bookmarks", undefined, { delayMs: 0 });
+        schedulePrivateBookmarkMirror(keys, 0);
+      }
       if (this.loadedFor === account) this.records = records.filter(record => !record.deleted);
     },
     reset() {
