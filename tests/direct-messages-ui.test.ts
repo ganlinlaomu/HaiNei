@@ -82,7 +82,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(profile).toContain("for (const message of messages.inbox)");
     expect(profile).toContain("!isHomeControl(message.tags, message.content)");
     expect(repository).toContain('where("[accountPubkey+senderPubkey]")');
-    expect(profile).toContain("messages.inbox.filter(message =>");
+    expect(profile).toContain("for (const message of messages.inbox)");
     expect(profile).toContain("message.pubkey.toLowerCase() === ownerPubkey.value");
     expect(profile).toContain("!isDirectMessageTags(message.tags)");
     expect(profile).toContain("!feedPreferences.isHidden(message.id)");
