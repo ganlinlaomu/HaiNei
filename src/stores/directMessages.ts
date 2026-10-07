@@ -69,7 +69,6 @@ export type ConversationPreference = {
   deletedThroughMessageId?: string;
 };
 
-function readKey(conversationId: string) { return `dm-read:${conversationId}`; }
 function preferenceKey(peerPubkey: string) { return `dm-conversation:${peerPubkey}`; }
 function receiptStateKey(peerPubkey: string) { return `dm-receipt:${peerPubkey}`; }
 function sentReceiptStateKey(peerPubkey: string) { return `dm-receipt-sent:${peerPubkey}`; }
@@ -740,27 +739,21 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const needsPreference = !Object.prototype.hasOwnProperty.call(this.preferencesByPeer, peer);
       const needsCursor = !!conversationId && !Object.prototype.hasOwnProperty.call(this.readCursors, conversationId);
       if (!needsPreference && !needsCursor) return;
-      const [preferenceRecord, cursorValues] = await Promise.all([
+      const [preferenceRecord, synced] = await Promise.all([
         needsPreference ? metaRepository.get(account, preferenceKey(peer)).catch(() => undefined) : Promise.resolve(undefined),
-        needsCursor && conversationId ? Promise.all([
-          metaRepository.get(account, readKey(conversationId)).catch(() => undefined),
-          typeof syncedMessageRepository.getReadState === "function" && typeof indexedDB !== "undefined"
-            ? syncedMessageRepository.getReadState(account, conversationId).catch(() => undefined)
-            : Promise.resolve(undefined),
-        ]) : Promise.resolve(undefined),
+        needsCursor && conversationId && typeof indexedDB !== "undefined"
+          ? syncedMessageRepository.getReadState(account, conversationId).catch(() => undefined)
+          : Promise.resolve(undefined),
       ]);
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       if (needsPreference) {
         this.preferencesByPeer = { ...this.preferencesByPeer, [peer]: preferenceRecord?.value as ConversationPreference | undefined };
       }
-      if (needsCursor && conversationId && cursorValues) {
-        const [localRecord, synced] = cursorValues;
-        const local = localRecord?.value as MessageCursor | undefined;
-        const remote = synced?.lastReadCreatedAt === undefined ? undefined : {
+      if (needsCursor && conversationId) {
+        const read = synced?.lastReadCreatedAt === undefined ? undefined : {
           lastReadCreatedAt: synced.lastReadCreatedAt,
           lastReadMessageId: synced.lastReadMessageId || "",
         };
-        const read = !local || (remote && isMessageAfter({ id: remote.lastReadMessageId, createdAt: remote.lastReadCreatedAt }, local)) ? remote : local;
         this.readCursors = { ...this.readCursors, [conversationId]: read };
       }
     },
@@ -867,6 +860,13 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     async refresh(accountPubkey?: string) {
       const account = (accountPubkey || useKeyStore().pkHex).toLowerCase();
       if (!account) return this.reset();
+      if (typeof indexedDB !== "undefined") {
+        try {
+          await syncedMessageRepository.migrateLegacyDmReadState(account);
+        } catch (error) {
+          console.warn("[dm] legacy read-state migration failed", error instanceof Error ? error.message : "unknown error");
+        }
+      }
       const messages = useMessagesStore();
       const friendships = useFriendshipsStore();
       await Promise.all([
@@ -967,18 +967,14 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       });
       const conversationIds = [...new Set(visible.map(item => item.conversationId).filter((value): value is string => !!value))];
       const cursors = await Promise.all(conversationIds.map(async conversationId => {
-        const [record, synced] = await Promise.all([
-          metaRepository.get(account, readKey(conversationId)),
-          typeof syncedMessageRepository.getReadState === "function" && typeof indexedDB !== "undefined"
-            ? syncedMessageRepository.getReadState(account, conversationId)
-            : Promise.resolve(undefined),
-        ]);
-        const local = record?.value as MessageCursor | undefined;
-        const remote = synced?.lastReadCreatedAt === undefined ? undefined : {
+        const synced = typeof syncedMessageRepository.getReadState === "function" && typeof indexedDB !== "undefined"
+          ? await syncedMessageRepository.getReadState(account, conversationId)
+          : undefined;
+        const read = synced?.lastReadCreatedAt === undefined ? undefined : {
           lastReadCreatedAt: synced.lastReadCreatedAt,
           lastReadMessageId: synced.lastReadMessageId || "",
         };
-        return [conversationId, !local || (remote && isMessageAfter({ id: remote.lastReadMessageId, createdAt: remote.lastReadCreatedAt }, local)) ? remote : local] as const;
+        return [conversationId, read] as const;
       }));
       if (useKeyStore().pkHex !== account) return;
       this.preferencesByPeer = preferences;
@@ -1079,15 +1075,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           console.warn("[dm] durable read-state persistence failed", error instanceof Error ? error.message : "unknown error");
         }
       }
-      let mirrorReady = false;
-      try {
-        await metaRepository.put(account, readKey(conversationId), read);
-        mirrorReady = true;
-      } catch (error) {
-        console.warn("[dm] read-state mirror persistence failed", error instanceof Error ? error.message : "unknown error");
-      }
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
-      if (durableReady && mirrorReady) {
+      if (durableReady) {
         const saved = this.persistedReadCursors[conversationId];
         if (!saved || isMessageAfter({ id: read.lastReadMessageId, createdAt: read.lastReadCreatedAt }, saved)) {
           this.persistedReadCursors = { ...this.persistedReadCursors, [conversationId]: read };

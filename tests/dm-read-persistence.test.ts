@@ -4,7 +4,10 @@ import { createPinia, setActivePinia } from "pinia";
 import { db } from "@/db/dexie";
 import { unlockLocalVault, lockLocalVault } from "@/services/localVault";
 import { metaRepository } from "@/repositories/metaRepository";
-import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import {
+  syncedMessageRepository,
+  legacyDmReadStateMigrationMetaKey,
+} from "@/repositories/syncedMessageRepository";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useDirectMessagesStore } from "@/stores/directMessages";
@@ -46,6 +49,69 @@ beforeEach(async () => {
     db.accountMeta.clear(), db.outgoingQueue.clear(), db.outgoingDmTasks.clear(), db.messageSyncStates.clear()]);
 });
 afterEach(() => { lockLocalVault(ACCOUNT); vi.restoreAllMocks(); });
+
+describe("legacy DM read-state migration", () => {
+  it("moves the newer legacy dm-read cursor into conversationReadStates and deletes the mirror", async () => {
+    await metaRepository.put(ACCOUNT, `dm-read:${CONVERSATION}`, {
+      lastReadCreatedAt: 120,
+      lastReadMessageId: item(120).id,
+    });
+    await syncedMessageRepository.advanceReadState(ACCOUNT, CONVERSATION, {
+      lastReadCreatedAt: 100,
+      lastReadMessageId: item(100).id,
+    });
+
+    const result = await syncedMessageRepository.migrateLegacyDmReadState(ACCOUNT, 1, 1_234);
+
+    expect(result).toEqual({ ran: true, migrated: 1, removed: 1, version: 1 });
+    expect(await syncedMessageRepository.getReadState(ACCOUNT, CONVERSATION)).toMatchObject({
+      lastReadCreatedAt: 120,
+      lastReadMessageId: item(120).id,
+    });
+    expect(await metaRepository.get(ACCOUNT, `dm-read:${CONVERSATION}`)).toBeUndefined();
+    expect(await metaRepository.get(ACCOUNT, legacyDmReadStateMigrationMetaKey())).toMatchObject({
+      value: { version: 1, completedAt: 1_234, migrated: 1, removed: 1 },
+    });
+  });
+
+  it("never rewinds a newer durable cursor while removing the legacy mirror", async () => {
+    await syncedMessageRepository.advanceReadState(ACCOUNT, CONVERSATION, {
+      lastReadCreatedAt: 150,
+      lastReadMessageId: item(150).id,
+    });
+    await metaRepository.put(ACCOUNT, `dm-read:${CONVERSATION}`, {
+      lastReadCreatedAt: 120,
+      lastReadMessageId: item(120).id,
+    });
+
+    const result = await syncedMessageRepository.migrateLegacyDmReadState(ACCOUNT, 1, 2_345);
+
+    expect(result).toEqual({ ran: true, migrated: 0, removed: 1, version: 1 });
+    expect(await syncedMessageRepository.getReadState(ACCOUNT, CONVERSATION)).toMatchObject({
+      lastReadCreatedAt: 150,
+      lastReadMessageId: item(150).id,
+    });
+    expect(await metaRepository.get(ACCOUNT, `dm-read:${CONVERSATION}`)).toBeUndefined();
+  });
+
+  it("uses the migration marker to avoid rescanning legacy dm-read rows", async () => {
+    await metaRepository.put(ACCOUNT, `dm-read:${CONVERSATION}`, {
+      lastReadCreatedAt: 90,
+      lastReadMessageId: item(90).id,
+    });
+    const first = await syncedMessageRepository.migrateLegacyDmReadState(ACCOUNT);
+    expect(first.ran).toBe(true);
+
+    await metaRepository.put(ACCOUNT, `dm-read:${CONVERSATION}`, {
+      lastReadCreatedAt: 200,
+      lastReadMessageId: item(200).id,
+    });
+    const second = await syncedMessageRepository.migrateLegacyDmReadState(ACCOUNT);
+
+    expect(second).toEqual({ ran: false, migrated: 0, removed: 0, version: 1 });
+    expect((await syncedMessageRepository.getReadState(ACCOUNT, CONVERSATION))?.lastReadCreatedAt).toBe(90);
+  });
+});
 
 describe("reading paged DM history with an encrypted database", () => {
   it("uses a paged incoming message newer than the cached incoming message", async () => {
@@ -128,7 +194,11 @@ describe("reading paged DM history with an encrypted database", () => {
     const mirror = vi.spyOn(metaRepository, "put");
     for (let i = 0; i < 20; i++) await direct.markPeerRead(PEER, item(360, ACCOUNT));
     expect(advance).not.toHaveBeenCalled();
-    expect(mirror).not.toHaveBeenCalled();
+    expect(mirror).not.toHaveBeenCalledWith(
+      ACCOUNT,
+      expect.stringMatching(/^dm-read:/),
+      expect.anything(),
+    );
     expect((await syncedMessageRepository.getReadState(ACCOUNT, CONVERSATION))?.lastReadCreatedAt).toBe(360);
     db.close();
     lockLocalVault(ACCOUNT);

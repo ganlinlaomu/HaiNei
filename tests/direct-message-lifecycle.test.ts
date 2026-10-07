@@ -98,8 +98,11 @@ describe("direct-message authorization and conversation lifecycle", () => {
       expect(readFileSync(join(process.cwd(), file), "utf8")).not.toContain("directMessages.refresh(");
     }
     const keys = readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8");
+    const direct = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
     expect(keys).toContain("const directMessages = useDirectMessagesStore()");
     expect(keys).toContain("await directMessages.refresh(pk)");
+    expect(direct).not.toContain("dm-read:");
+    expect(direct).not.toContain("read-state mirror persistence failed");
   });
 
   it("keeps text/reply drafts isolated by account and peer and protects newer drafts", async () => {
@@ -175,7 +178,7 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(context.direct.unreadHydratingFor).toBe("");
   });
 
-  it("keeps a read made while background refresh is restoring an older cursor", async () => {
+  it("keeps a foreground read made while background refresh is still loading peer state", async () => {
     const context = seed([dm("latest", 20)], relationship("accepted"));
     await context.direct.refresh(ACCOUNT);
     const get = vi.mocked(metaRepository.get);
@@ -186,7 +189,7 @@ describe("direct-message authorization and conversation lifecycle", () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     get.mockImplementation(async (account, key) => {
       const record = await original(account, key);
-      if (key === `dm-read:${CONVERSATION}`) {
+      if (key === `dm-conversation:${PEER}`) {
         captured();
         await gate;
       }
@@ -218,7 +221,7 @@ describe("direct-message authorization and conversation lifecycle", () => {
 
     expect(context.direct.readCursors[CONVERSATION]).toEqual(restored);
     expect(context.direct.unreadCount).toBe(0);
-    expect(mocks.meta.get(`${ACCOUNT}:dm-read:${CONVERSATION}`)).toEqual(restored);
+    expect(mocks.meta.has(`${ACCOUNT}:dm-read:${CONVERSATION}`)).toBe(false);
 
     // Historical backfill that is still before the restored cursor must stay read.
     context.messageStore.addInbox(dm("backfill-15", 15));
