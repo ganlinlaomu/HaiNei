@@ -108,6 +108,20 @@ describe("reliable message persistence", () => {
     expect(await db.accountMeta.get([ACCOUNT_A, unsupportedMessageCleanupMetaKey(nextVersion)])).toBeTruthy();
   });
 
+  it("deduplicates concurrent cleanup attempts for the same account and version", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const purge = vi.spyOn(repo, "purgeUnsupportedMessages");
+
+    const [first, second] = await Promise.all([
+      repo.runUnsupportedMessageCleanupMigration(ACCOUNT_A),
+      repo.runUnsupportedMessageCleanupMigration(ACCOUNT_A),
+    ]);
+
+    expect(first).toEqual(second);
+    expect(first.ran).toBe(true);
+    expect(purge).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps cleanup completion isolated per account", async () => {
     const repo = new SyncedMessageRepository(database());
     const purge = vi.spyOn(repo, "purgeUnsupportedMessages");
