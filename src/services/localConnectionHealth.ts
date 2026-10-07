@@ -20,7 +20,7 @@ export type LocalConnectionHealth = {
 
 export function connectionHealthKeyFor(pkHex?: string | null) {
   const account = typeof pkHex === "string" ? pkHex.trim().toLowerCase() : "";
-  return account ? `hainei_connection_health_${account}` : null;
+  return account ? `nostr_connection_health_${account}` : null;
 }
 
 function finiteNumber(value: unknown): number | undefined {
