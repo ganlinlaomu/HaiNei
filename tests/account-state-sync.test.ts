@@ -195,6 +195,50 @@ describe("encrypted account-state materialization", () => {
     expect((await db.accountStateMirrors.get([ACCOUNT, "settings"]))?.data).toEqual(stored.settings);
   });
 
+  it("does not propagate device-local Relay or Media health through account state", () => {
+    const restored = mergeNamespaceData("settings", null, {
+      relays: [{
+        url: "wss://user.example",
+        read: true,
+        write: true,
+        enabled: true,
+        source: "user",
+        addedAt: 1,
+        updatedAt: 1,
+        lastConnectedAt: 100,
+        lastFailureAt: 90,
+        successCount: 5,
+        failureCount: 2,
+        latency: 44,
+      }],
+      mediaServers: [{
+        id: "legacy-media",
+        type: "blossom",
+        url: "https://media.example",
+        enabled: true,
+        priority: 0,
+        source: "user",
+        addedAt: 1,
+        updatedAt: 1,
+        lastSuccessAt: 100,
+        lastFailureAt: 90,
+        failureCount: 2,
+      }],
+    });
+
+    const relay = restored.relays.find((item: any) => item.url === "wss://user.example");
+    expect(relay).not.toHaveProperty("lastConnectedAt");
+    expect(relay).not.toHaveProperty("lastFailureAt");
+    expect(relay).not.toHaveProperty("successCount");
+    expect(relay).not.toHaveProperty("failureCount");
+    expect(relay).not.toHaveProperty("latency");
+
+    const media = restored.mediaServers.find((item: any) => item.url === "https://media.example");
+    expect(media).not.toHaveProperty("lastSuccessAt");
+    expect(media).not.toHaveProperty("lastFailureAt");
+    expect(media).not.toHaveProperty("failureCount");
+  });
+
   it("keeps the newest read-receipt privacy choice across devices", () => {
     const merged = mergeNamespaceData("settings", {
       relays: [], mediaServers: [],

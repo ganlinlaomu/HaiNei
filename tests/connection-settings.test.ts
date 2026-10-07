@@ -71,6 +71,35 @@ describe("Relay configuration", () => {
     });
   });
 
+  it("strips legacy device health from synchronized connection settings", () => {
+    const migrated = migrateConnectionSettings({
+      relays: [relay("wss://health.example", "user", {
+        lastConnectedAt: NOW,
+        lastFailureAt: NOW - 1,
+        successCount: 4,
+        failureCount: 2,
+        latency: 88,
+      })],
+      mediaServers: [media("health-media", "user", {
+        lastSuccessAt: NOW,
+        lastFailureAt: NOW - 1,
+        failureCount: 3,
+      })],
+    }, { deviceId: "device-a", now: NOW });
+
+    const relayConfig = migrated.relays.find(item => item.url === "wss://health.example")!;
+    expect(relayConfig).not.toHaveProperty("lastConnectedAt");
+    expect(relayConfig).not.toHaveProperty("lastFailureAt");
+    expect(relayConfig).not.toHaveProperty("successCount");
+    expect(relayConfig).not.toHaveProperty("failureCount");
+    expect(relayConfig).not.toHaveProperty("latency");
+
+    const mediaConfig = migrated.mediaServers.find(item => item.url === "https://health-media.example")!;
+    expect(mediaConfig).not.toHaveProperty("lastSuccessAt");
+    expect(mediaConfig).not.toHaveProperty("lastFailureAt");
+    expect(mediaConfig).not.toHaveProperty("failureCount");
+  });
+
   it("retires old built-in services without deleting matching user entries", () => {
     const migrated = migrateConnectionSettings({
       relays: [

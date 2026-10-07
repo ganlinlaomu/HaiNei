@@ -28,11 +28,21 @@ import {
   normalizeRelayUrl,
   rankMediaServers,
   selectRelayConfigs,
+  stripConnectionHealth,
   type ConnectionSettings,
   type MediaServer,
+  type MediaServerHealth,
   type MediaServerType,
-  type RelayConfig
+  type RelayConfig,
+  type RelayHealth
 } from "@/services/connectionSettings";
+import {
+  extractLegacyConnectionHealth,
+  loadLocalConnectionHealth,
+  mediaServersWithHealth,
+  relayConfigsWithHealth,
+  saveLocalConnectionHealth,
+} from "@/services/localConnectionHealth";
 
 export type { MediaServer, MediaServerType, RelayConfig };
 
@@ -102,6 +112,8 @@ function readLegacyRelays(): unknown[] {
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
     settings: createDefaultConnectionSettings() as ConnectionSettings,
+    relayHealth: {} as Record<string, RelayHealth>,
+    mediaHealth: {} as Record<string, MediaServerHealth>,
     loadedFor: "",
     deviceId: "",
     syncing: false,
@@ -121,7 +133,7 @@ export const useSettingsStore = defineStore("settings", {
   }),
 
   getters: {
-    relayList: (state) => state.settings.relays
+    relayList: (state) => relayConfigsWithHealth(state.settings.relays, state.relayHealth)
       .filter(item => !item.deleted)
       .slice()
       .sort((a, b) => {
@@ -129,12 +141,18 @@ export const useSettingsStore = defineStore("settings", {
         return source[a.source] - source[b.source] || a.url.localeCompare(b.url);
       }),
     mediaList: (state) => {
-      const visible = dedupeMedia(state.settings.mediaServers).filter(item => !item.deleted);
+      const visible = dedupeMedia(
+        mediaServersWithHealth(state.settings.mediaServers, state.mediaHealth)
+      ).filter(item => !item.deleted);
       const enabled = rankMediaServers(visible);
       return enabled.concat(visible.filter(item => !item.enabled));
     },
-    activeRelays: (state) => selectRuntimeRelayConfigs(state.settings.relays),
-    activeMediaServers: (state) => effectiveMediaServers(state.settings.mediaServers)
+    activeRelays: (state) => selectRuntimeRelayConfigs(
+      relayConfigsWithHealth(state.settings.relays, state.relayHealth)
+    ),
+    activeMediaServers: (state) => effectiveMediaServers(
+      mediaServersWithHealth(state.settings.mediaServers, state.mediaHealth)
+    )
   },
 
   actions: {
@@ -186,6 +204,8 @@ export const useSettingsStore = defineStore("settings", {
       relayHealthUnsubscribe = null;
       setMediaHealthReporter();
       this.settings = createDefaultConnectionSettings();
+      this.relayHealth = {};
+      this.mediaHealth = {};
       this.loadedFor = "";
       this.deviceId = "";
       this.syncing = false;
@@ -258,6 +278,11 @@ export const useSettingsStore = defineStore("settings", {
         });
       }
 
+      const legacyHealth = extractLegacyConnectionHealth(storedValue);
+      const localHealth = loadLocalConnectionHealth(targetPk);
+      this.relayHealth = { ...legacyHealth.relays, ...(localHealth?.relays || {}) };
+      this.mediaHealth = { ...legacyHealth.mediaServers, ...(localHealth?.mediaServers || {}) };
+
       this.settings = migrateConnectionSettings(storedValue, {
         deviceId: this.deviceId,
         legacyRelays,
@@ -270,6 +295,7 @@ export const useSettingsStore = defineStore("settings", {
         delete sanitized.tokenUpdatedBy;
         return sanitized;
       });
+      this.persistConnectionHealth();
       this._clearValidationError();
       this.save();
       this.applySettings();
@@ -348,6 +374,29 @@ export const useSettingsStore = defineStore("settings", {
       }
     },
 
+    persistConnectionHealth() {
+      const account = this.loadedFor;
+      if (!account) return;
+      const configuredRelayUrls = new Set(this.settings.relays.filter(item => !item.deleted).map(item => item.url));
+      const configuredMediaIds = new Set(this.settings.mediaServers.filter(item => !item.deleted).map(item => item.id));
+      const relays = Object.fromEntries(
+        Object.entries(this.relayHealth).filter(([url]) => configuredRelayUrls.has(url))
+      );
+      const mediaServers = Object.fromEntries(
+        Object.entries(this.mediaHealth).filter(([id]) => configuredMediaIds.has(id))
+      );
+      this.relayHealth = relays;
+      this.mediaHealth = mediaServers;
+      try {
+        saveLocalConnectionHealth(account, { version: 1, relays, mediaServers });
+      } catch (error) {
+        logger.warn("[settings] local connection health save failed", {
+          account: account.slice(0, 8),
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
+      }
+    },
+
     bindHealthTracking() {
       const account = this.loadedFor;
       const generation = this._sessionGeneration;
@@ -355,18 +404,23 @@ export const useSettingsStore = defineStore("settings", {
       relayHealthUnsubscribe?.();
       relayHealthUnsubscribe = onRelayConnectionState(event => {
         if (!this.loadedFor || !isCurrent()) return;
-        const relay = this.settings.relays.find(item => item.url === event.url);
-        if (!relay || relay.deleted) return;
+        const url = normalizeRelayUrl(event.url);
+        const relay = this.settings.relays.find(item => item.url === url);
+        if (!relay || relay.deleted || (!event.connected && !event.failed)) return;
+
+        const current = this.relayHealth[url] || {};
+        const next: RelayHealth = { ...current };
         if (event.connected) {
-          relay.lastConnectedAt = event.at;
-          relay.successCount = (relay.successCount || 0) + 1;
-          relay.failureCount = 0;
-          if (typeof event.latency === "number") relay.latency = event.latency;
-        } else if (event.failed) {
-          relay.lastFailureAt = event.at;
-          relay.failureCount = (relay.failureCount || 0) + 1;
+          next.lastConnectedAt = event.at;
+          next.successCount = (current.successCount || 0) + 1;
+          next.failureCount = 0;
+          if (typeof event.latency === "number") next.latency = event.latency;
+        } else {
+          next.lastFailureAt = event.at;
+          next.failureCount = (current.failureCount || 0) + 1;
         }
-        this.save();
+        this.relayHealth = { ...this.relayHealth, [url]: next };
+        this.persistConnectionHealth();
         this.applySettings(false);
       });
 
@@ -374,21 +428,27 @@ export const useSettingsStore = defineStore("settings", {
         if (!isCurrent()) return;
         const server = this.settings.mediaServers.find(item => item.id === serverId);
         if (!server || server.deleted) return;
+
+        const current = this.mediaHealth[serverId] || {};
+        const next: MediaServerHealth = { ...current };
         if (ok) {
-          server.lastSuccessAt = at;
-          server.failureCount = 0;
+          next.lastSuccessAt = at;
+          next.failureCount = 0;
         } else {
-          server.lastFailureAt = at;
-          server.failureCount = (server.failureCount || 0) + 1;
+          next.lastFailureAt = at;
+          next.failureCount = (current.failureCount || 0) + 1;
         }
-        this.save();
+        this.mediaHealth = { ...this.mediaHealth, [serverId]: next };
+        this.persistConnectionHealth();
         this.applySettings(false);
       });
     },
 
     applySettings(_connectNewRelays = false) {
       const previousRelays = new Set(getRelaysFromStorage());
-      const activeRelays = selectRuntimeRelayConfigs(this.settings.relays);
+      const activeRelays = selectRuntimeRelayConfigs(
+        relayConfigsWithHealth(this.settings.relays, this.relayHealth)
+      );
       const activeUrls = activeRelays.map(item => item.url);
       const activeSet = new Set(activeUrls);
 
@@ -408,7 +468,9 @@ export const useSettingsStore = defineStore("settings", {
       }
 
       try {
-        const activeMedia = effectiveMediaServers(this.settings.mediaServers).map(server => {
+        const activeMedia = effectiveMediaServers(
+          mediaServersWithHealth(this.settings.mediaServers, this.mediaHealth)
+        ).map(server => {
           const sanitized = { ...server };
           delete sanitized.token;
           delete sanitized.tokenUpdatedAt;
@@ -435,13 +497,14 @@ export const useSettingsStore = defineStore("settings", {
     save() {
       const key = storageKeyFor(this.loadedFor);
       if (!key) return;
-      this.settings.mediaServers = dedupeMedia(this.settings.mediaServers).map(server => {
+      const mediaServers = dedupeMedia(this.settings.mediaServers).map(server => {
         const sanitized = { ...server };
         delete sanitized.token;
         delete sanitized.tokenUpdatedAt;
         delete sanitized.tokenUpdatedBy;
         return sanitized;
       });
+      this.settings = stripConnectionHealth({ ...this.settings, mediaServers });
       const data: StoredSettingsData = {
         version: SETTINGS_VERSION,
         settings: this.settings,
