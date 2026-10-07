@@ -11,6 +11,7 @@ import {
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useDirectMessagesStore } from "@/stores/directMessages";
+import { scheduleAccountStateSync } from "@/services/accountStateSync";
 
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
@@ -114,6 +115,11 @@ describe("legacy DM read-state migration", () => {
 });
 
 describe("reading paged DM history with an encrypted database", () => {
+  it("does not maintain a second persisted read-cursor authority in Pinia", async () => {
+    const direct = await restore();
+    expect(Object.prototype.hasOwnProperty.call(direct.$state, "persistedReadCursors")).toBe(false);
+  });
+
   it("uses a paged incoming message newer than the cached incoming message", async () => {
     for (let i = 1; i <= 151; i++) await save(item(i));
     const direct = await restore();
@@ -192,8 +198,13 @@ describe("reading paged DM history with an encrypted database", () => {
     expect(direct.unreadCount).toBe(0);
     const advance = vi.spyOn(syncedMessageRepository, "advanceReadState");
     const mirror = vi.spyOn(metaRepository, "put");
+    const syncReadState = vi.mocked(scheduleAccountStateSync);
+    syncReadState.mockClear();
     for (let i = 0; i < 20; i++) await direct.markPeerRead(PEER, item(360, ACCOUNT));
-    expect(advance).not.toHaveBeenCalled();
+    // Repeated bottom-of-chat reads may ask the repository to persist again,
+    // but its monotonic compare/write returns false and suppresses remote sync.
+    expect(advance).toHaveBeenCalledTimes(20);
+    expect(syncReadState).not.toHaveBeenCalled();
     expect(mirror).not.toHaveBeenCalledWith(
       ACCOUNT,
       expect.stringMatching(/^dm-read:/),
