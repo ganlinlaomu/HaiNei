@@ -64,24 +64,20 @@ export interface SyncEventMetadata {
 }
 
 export function stripRelayHealth<T extends RelayConfig>(item: T): RelayConfig {
-  const {
-    lastConnectedAt: _lastConnectedAt,
-    lastFailureAt: _lastFailureAt,
-    successCount: _successCount,
-    failureCount: _failureCount,
-    latency: _latency,
-    ...config
-  } = item;
+  const config = { ...item };
+  delete config.lastConnectedAt;
+  delete config.lastFailureAt;
+  delete config.successCount;
+  delete config.failureCount;
+  delete config.latency;
   return config;
 }
 
 export function stripMediaServerHealth<T extends MediaServer>(item: T): MediaServer {
-  const {
-    lastSuccessAt: _lastSuccessAt,
-    lastFailureAt: _lastFailureAt,
-    failureCount: _failureCount,
-    ...config
-  } = item;
+  const config = { ...item };
+  delete config.lastSuccessAt;
+  delete config.lastFailureAt;
+  delete config.failureCount;
   return config;
 }
 
