@@ -12,11 +12,13 @@ import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useDirectMessagesStore } from "@/stores/directMessages";
 
+const mocks = vi.hoisted(() => ({ scheduleSync: vi.fn() }));
+
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
 const CONVERSATION = "dm-persisted-history";
 vi.mock("@/stores/keys", () => ({ useKeyStore: () => ({ pkHex: "a".repeat(64), supportsNip44: true }) }));
-vi.mock("@/services/accountStateSync", () => ({ scheduleAccountStateSync: vi.fn() }));
+vi.mock("@/services/accountStateSync", () => ({ scheduleAccountStateSync: mocks.scheduleSync }));
 
 function item(index: number, sender = PEER): InboxItem {
   return { id: index.toString(16).padStart(64, "0"), pubkey: sender, recipientPubkeys: [ACCOUNT, PEER],
@@ -43,6 +45,7 @@ async function restore() {
   return direct;
 }
 beforeEach(async () => {
+  mocks.scheduleSync.mockClear();
   await unlockLocalVault(ACCOUNT, "1".repeat(64));
   await db.open();
   await Promise.all([db.syncedMessages.clear(), db.conversationStates.clear(), db.conversationReadStates.clear(),
@@ -180,6 +183,27 @@ describe("reading paged DM history with an encrypted database", () => {
     expect(direct.unreadCount).toBe(0);
   });
 
+  it("adopts a newer durable cursor instead of rewinding it from stale UI state", async () => {
+    for (let i = 1; i <= 360; i++) await save(item(i));
+    const direct = await restore();
+    direct.readCursors = {
+      [CONVERSATION]: { lastReadCreatedAt: 300, lastReadMessageId: item(300).id },
+    };
+    await syncedMessageRepository.advanceReadState(ACCOUNT, CONVERSATION, {
+      lastReadCreatedAt: 350,
+      lastReadMessageId: item(350).id,
+    });
+    mocks.scheduleSync.mockClear();
+
+    await direct.markPeerRead(PEER, item(320));
+
+    expect(direct.readCursors[CONVERSATION]).toEqual({
+      lastReadCreatedAt: 350,
+      lastReadMessageId: item(350).id,
+    });
+    expect(mocks.scheduleSync).not.toHaveBeenCalled();
+  });
+
   it("persists the actual chat read position when incoming messages are absent from the home cache", async () => {
     for (let i = 1; i <= 151; i++) await save(item(i));
     // The last incoming messages are outside the global recent-message window.
@@ -190,10 +214,12 @@ describe("reading paged DM history with an encrypted database", () => {
     await direct.markPeerRead(PEER, item(360, ACCOUNT));
     await direct.reconcileDurableUnread();
     expect(direct.unreadCount).toBe(0);
-    const advance = vi.spyOn(syncedMessageRepository, "advanceReadState");
+    const durablePut = vi.spyOn(db.conversationReadStates, "put");
     const mirror = vi.spyOn(metaRepository, "put");
+    mocks.scheduleSync.mockClear();
     for (let i = 0; i < 20; i++) await direct.markPeerRead(PEER, item(360, ACCOUNT));
-    expect(advance).not.toHaveBeenCalled();
+    expect(durablePut).not.toHaveBeenCalled();
+    expect(mocks.scheduleSync).not.toHaveBeenCalled();
     expect(mirror).not.toHaveBeenCalledWith(
       ACCOUNT,
       expect.stringMatching(/^dm-read:/),
