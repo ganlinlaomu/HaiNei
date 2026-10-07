@@ -93,7 +93,7 @@ export function stripConnectionHealth(settings: ConnectionSettings): ConnectionS
   };
 }
 
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
 export const RELAY_SYNC_IDENTIFIER = "hainei-relays";
 export const MEDIA_SYNC_IDENTIFIER = "hainei-media";
 export const DEVICE_ID_STORAGE_KEY = "hainei_device_id";
