@@ -62,17 +62,18 @@ import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useProfilesStore } from "@/stores/profiles";
-import { isHomeControl, useMessagesStore, type InboxItem } from "@/stores/messages";
+import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { useUIStore } from "@/stores/ui";
-import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
-import { isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
+import {
+  isFeedRenderableMessage,
+  syncedMessageRecordToInboxItem,
+} from "@/nostr/messaging/messageViewModel";
 import { canViewPrivateProfile } from "@/utils/profileNavigation";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
 import { pubkeyToNpub } from "@/utils/nostrQr";
 import { loadMessagesView, loadMyProfileView } from "@/router/lazyViews";
 import { loadAccountStoresOnce, storesLoadedForAccount, waitForFirstPaint } from "@/utils/bottomTabActivation";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
-import type { SyncedMessageRecord } from "@/db/dexie";
 
 const route = useRoute();
 const router = useRouter();
@@ -118,30 +119,9 @@ async function copyPubkey() {
 
 const historicalOwnerPosts = ref<InboxItem[]>([]);
 
-function historyRecordToInboxItem(record: SyncedMessageRecord): InboxItem {
-  return {
-    id: record.id,
-    pubkey: record.senderPubkey,
-    created_at: record.createdAt,
-    content: record.plaintext || "",
-    protocol: "nip17",
-    transportKind: record.transportKind,
-    transportEventId: record.transportEventIds[0],
-    rumorId: record.rumorId,
-    recipientPubkeys: record.recipientPubkeys,
-    conversationId: record.conversationId,
-    replyTo: record.replyTo,
-    rootId: record.rootId,
-    tags: record.tags || []
-  };
-}
-
 function isProfilePost(message: InboxItem) {
   return message.pubkey.toLowerCase() === ownerPubkey.value
-    && !isHomeControl(message.tags, message.content)
-    && !isDirectMessageTags(message.tags)
-    && !isDmReceiptMessage({ tags: message.tags })
-    && !isDmReceiptPayload(message.content)
+    && isFeedRenderableMessage(message)
     && !feedPreferences.isHidden(message.id);
 }
 
@@ -180,7 +160,7 @@ async function load() {
   if (owner && canView.value) {
     const records = await syncedMessageRepository.listBySender(account, owner);
     if (generation !== loadGeneration || keys.pkHex !== account || ownerPubkey.value !== owner) return;
-    historicalOwnerPosts.value = records.map(historyRecordToInboxItem);
+    historicalOwnerPosts.value = records.map(syncedMessageRecordToInboxItem);
   }
 
   if (generation === loadGeneration && keys.pkHex === account) ready.value = true;
