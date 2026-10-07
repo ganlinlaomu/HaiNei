@@ -1,7 +1,7 @@
 <template>
   <main class="saved-page app-page">
     <SecondaryPageHeader title="已收藏" back-label="返回我的" />
-    <p class="privacy-note">收藏仅保存在当前设备和账号中</p>
+    <p class="privacy-note">收藏会先保存在本机，并通过加密同步到其他设备</p>
     <section v-if="savedPosts.length" class="saved-list">
       <PostCard v-for="post in savedPosts" :key="post.id" :message="post" />
     </section>
