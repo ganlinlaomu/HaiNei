@@ -1148,7 +1148,7 @@ h3 {
 }
 
 .media-add-form {
-  grid-template-columns: 120px minmax(0, 1fr) minmax(120px, 0.7fr) auto;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
 }
 
 .input {
@@ -1326,8 +1326,7 @@ h3 {
     grid-template-columns: 110px minmax(0, 1fr);
   }
 
-  .media-add-form .btn,
-  .media-add-form input[type="password"] {
+  .media-add-form .btn {
     grid-column: 1 / -1;
   }
 
