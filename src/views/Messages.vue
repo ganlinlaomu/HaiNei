@@ -609,7 +609,7 @@ async function revealDisappearing(message: InboxItem) {
     openedDeadlines.value = { ...openedDeadlines.value, [message.id]: deadline };
     // Actual reveal, not opening the chat or advancing a read cursor, is the
     // only event that emits a per-message encrypted read confirmation.
-    void directMessages.acknowledgeOpenedDisappearing(peer, message);
+    void directMessages.acknowledgeOpenedDisappearing(peer, message, deadline);
     // Global one-shot timer survives closing or navigating away from this chat.
     directMessages.scheduleOpenedBurn(peer, message.id, deadline);
     if (deadline <= Date.now()) void checkBurnDeadlines();
