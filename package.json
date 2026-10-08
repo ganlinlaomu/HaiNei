@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.36",
-  "releaseSummary": "动态与私信改为正文摘录，来源和媒体独立加密存储，兼容旧笔记",
+  "version": "0.1.37",
+  "releaseSummary": "私人空间修复备份恢复重复冲突、长笔记阻断同步和历史私信误标已读",
   "private": true,
   "scripts": {
     "dev": "vite",
