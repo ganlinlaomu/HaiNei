@@ -209,9 +209,11 @@ export class SyncedMessageRepository {
     if (!/^[0-9a-f]{64}$/i.test(messageId) || !/^[0-9a-f]{64}$/i.test(peer) || peer === account) return false;
     const id = messageId.toLowerCase();
     let accepted = false;
-    await this.database.transaction("rw", this.database.syncedMessages, this.database.accountMeta,
-      this.database.decryptedEvents, this.database.deferredAuthorizationMessages, this.database.outgoingQueue,
-      this.database.outgoingDmTasks, this.database.conversationStates, async () => {
+    await this.database.transaction("rw", [
+      this.database.syncedMessages, this.database.accountMeta, this.database.decryptedEvents,
+      this.database.deferredAuthorizationMessages, this.database.outgoingQueue,
+      this.database.outgoingDmTasks, this.database.conversationStates,
+    ], async () => {
         const target = await this.database.syncedMessages.get([account, id]);
         if (target && (!isDirectMessageTags(target.tags) || !hasDisappearingMarker(target.tags)
           || directMessagePeer(target, account) !== peer)) return;
