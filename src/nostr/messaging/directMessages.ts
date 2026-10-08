@@ -1,5 +1,6 @@
 import type { CanonicalMessage } from "./protocol";
 import { parsePrivateAudioMessage } from "./privateMedia";
+import { parseFriendRecommendation } from "./friendRecommendation";
 
 export const DIRECT_MESSAGE_TYPE = "hainei-dm";
 
@@ -32,6 +33,7 @@ export function directMessagePeer(
 }
 
 export function directMessagePreview(content: string) {
+  if (parseFriendRecommendation(content)) return "[好友推荐]";
   if (parsePrivateAudioMessage(content)) return "[语音]";
   const hasImage = /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
   const text = content

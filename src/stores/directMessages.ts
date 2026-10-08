@@ -1402,7 +1402,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       for (const item of items) if (item.conversationId) this.unreadByConversation[item.conversationId] = 0;
       await this.markPeerReadInternal(peer, false);
     },
-    send(peerPubkey: string, content: string, image?: File, replyTo?: string, burnAfterSeconds?: BurnDuration) {
+    send(peerPubkey: string, content: string, image?: File, replyTo?: string, burnAfterSeconds?: BurnDuration, options?: { preserveDraft?: boolean }) {
       const keys = useKeyStore();
       const account = keys.pkHex.toLowerCase();
       const peer = peerPubkey.trim().toLowerCase();
@@ -1457,7 +1457,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           }
           return;
         }
-        void this.clearDraftThrough(peer, now, account)
+        if (!options?.preserveDraft) void this.clearDraftThrough(peer, now, account)
           .catch(error => console.warn("[dm] draft cleanup failed", error instanceof Error ? error.message : "unknown error"));
         void this.runTask(task.localId);
       })();
