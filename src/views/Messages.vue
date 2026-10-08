@@ -310,7 +310,7 @@
             type="button"
             aria-label="按住录音"
             :aria-pressed="voiceCaptureOwnsAudioSession"
-            :disabled="!accepted || !keys.pkHex || finishingRecording"
+            :disabled="!accepted || !keys.pkHex || finishingRecording || disappearingSeconds !== null"
             @touchstart.prevent="handleVoiceTouchStart"
             @mousedown.prevent="handleVoiceMouseDown"
             @click.prevent
@@ -570,6 +570,93 @@ const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreview
 const isMediaCaption = (message: InboxItem) => hasMessageImage(message) && !!messageText(message.content);
 const isOwn = (message: InboxItem) => message.pubkey === keys.pkHex;
 const isFailed = (message: InboxItem) => message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed";
+function isDisappearing(message: InboxItem) {
+  return hasDisappearingMarker(message.tags) || directMessages.burnedById[message.id]?.peerPubkey === peerPubkey.value;
+}
+function burnDuration(message: InboxItem) {
+  return disappearingMetadata(message.tags)?.burnAfterSeconds || 10;
+}
+function remainingBurnSeconds(message: InboxItem) {
+  const deadline = openedDeadlines.value[message.id] || 0;
+  return Math.max(0, Math.ceil((deadline - clockNow.value) / 1000));
+}
+function isBurned(message: InboxItem) {
+  return !!directMessages.burnedById[message.id]
+    || isExpiredDisappearing(message.tags, Math.floor(clockNow.value / 1000))
+    || (openedDeadlines.value[message.id] !== undefined && remainingBurnSeconds(message) === 0);
+}
+function canShowTemporaryText(message: InboxItem) {
+  return !isOwn(message) && !isBurned(message)
+    && openedDeadlines.value[message.id] !== undefined && remainingBurnSeconds(message) > 0;
+}
+async function revealDisappearing(message: InboxItem) {
+  if (openingMessageId.value || isOwn(message) || isBurned(message) || !accepted.value
+    || !/^[0-9a-f]{64}$/i.test(message.id)) return;
+  const account = keys.pkHex;
+  const peer = peerPubkey.value;
+  openingMessageId.value = message.id;
+  try {
+    const deadline = await syncedMessageRepository.openDisappearingMessage(account, message.id, peer);
+    if (disposed || account !== keys.pkHex || peer !== peerPubkey.value) return;
+    clockNow.value = Date.now();
+    if (deadline === null) {
+      ui.addToast("临时消息已不可查看", 1800, "info");
+      void checkBurnDeadlines();
+      return;
+    }
+    openedDeadlines.value = { ...openedDeadlines.value, [message.id]: deadline };
+    if (deadline <= Date.now()) void checkBurnDeadlines();
+    else startBurnClock();
+  } catch {
+    if (!disposed && account === keys.pkHex) ui.addToast("临时消息打开失败，请重试", 2100, "error");
+  } finally {
+    if (openingMessageId.value === message.id) openingMessageId.value = "";
+  }
+}
+function stopBurnClock() {
+  if (burnTimer !== null) window.clearInterval(burnTimer);
+  burnTimer = null;
+}
+function startBurnClock() {
+  if (burnTimer !== null || document.hidden) return;
+  clockNow.value = Date.now();
+  burnTimer = window.setInterval(() => {
+    clockNow.value = Date.now();
+    void checkBurnDeadlines();
+  }, 500);
+}
+async function checkBurnDeadlines() {
+  if (disposed || !keys.pkHex || !accepted.value) return;
+  const account = keys.pkHex;
+  const peer = peerPubkey.value;
+  const now = Date.now();
+  for (const message of messages.value) {
+    if (!isDisappearing(message) || directMessages.burnedById[message.id]
+      || !/^[0-9a-f]{64}$/i.test(message.id) || burningMessageIds.has(message.id)) continue;
+    const deadline = openedDeadlines.value[message.id];
+    if (deadline === undefined && !isExpiredDisappearing(message.tags, Math.floor(now / 1000))) continue;
+    if (deadline !== undefined && deadline > now && !isExpiredDisappearing(message.tags, Math.floor(now / 1000))) continue;
+    burningMessageIds.add(message.id);
+    try {
+      if (await directMessages.burnDisappearingMessage(peer, message.id)
+        && account === keys.pkHex && peer === peerPubkey.value) {
+        const next = { ...openedDeadlines.value };
+        delete next[message.id];
+        openedDeadlines.value = next;
+      }
+    } finally {
+      burningMessageIds.delete(message.id);
+    }
+  }
+}
+function handleBurnVisibility() {
+  clockNow.value = Date.now();
+  if (document.hidden) stopBurnClock();
+  else {
+    startBurnClock();
+    void checkBurnDeadlines();
+  }
+}
 function quotePreview(message?: InboxItem) {
   if (!message) return "引用的消息暂不可用";
   if (isDisappearing(message)) return "阅后即焚消息";
@@ -1581,6 +1668,9 @@ function handlePageHide() {
 }
 watch(() => messageStore.inboxRevision, applyLatestInboxMutation);
 onMounted(() => {
+  document.addEventListener("visibilitychange", handleBurnVisibility);
+  window.addEventListener("pageshow", handleBurnVisibility);
+  startBurnClock();
   window.visualViewport?.addEventListener("resize", handleVisualViewportResize);
   window.addEventListener("pagehide", handlePageHide);
   messageList.value?.addEventListener("load", handleMessageMediaLoad, true);
@@ -1588,6 +1678,10 @@ onMounted(() => {
 });
 watch([draft, replyingToId], scheduleDraftSave);
 watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
+  openedDeadlines.value = {};
+  disappearingSeconds.value = null;
+  attachmentMenuOpen.value = false;
+  openingMessageId.value = "";
   if (previous?.[0] && previous?.[1]) flushDraft(previous[0], previous[1]);
   draftReady = false;
   clearDraftSaveTimer();
@@ -1680,6 +1774,9 @@ onBeforeUnmount(() => {
   clearDraftSaveTimer();
   cancelSearchRequest();
   window.removeEventListener("pagehide", handlePageHide);
+  document.removeEventListener("visibilitychange", handleBurnVisibility);
+  window.removeEventListener("pageshow", handleBurnVisibility);
+  stopBurnClock();
   window.visualViewport?.removeEventListener("resize", handleVisualViewportResize);
   messageList.value?.removeEventListener("load", handleMessageMediaLoad, true);
   handleComposerBlur();
