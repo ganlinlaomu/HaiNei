@@ -1,4 +1,5 @@
-import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { directMessagePeer, isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { hasDisappearingMarker, isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
 import Dexie from "dexie";
 import {
   db,
@@ -17,6 +18,8 @@ import { performanceCounters } from "@/services/nostrCache";
 
 export type InsertMessageResult = { inserted: boolean; record: SyncedMessageRecord };
 export type AdvanceReadStateResult = { advanced: boolean; state: ConversationReadStateRecord };
+
+const burnKey = (messageId: string) => `dm-burn:${messageId.toLowerCase()}`;
 
 export const LEGACY_DM_READ_STATE_MIGRATION_VERSION = 1;
 export const LEGACY_DM_READ_PREFIX = "dm-read:";
@@ -133,8 +136,18 @@ export class SyncedMessageRepository {
       this.database.conversationStates,
         this.database.conversationReadStates,
       this.database.messageSyncStates,
+      this.database.accountMeta,
       async () => {
         const key: [string, string] = [account, message.id];
+        if (isExpiredDisappearing(message.tags, Math.floor(nowMs / 1000))) {
+          return { inserted: false, record: incoming };
+        }
+        const tombstone = await this.database.accountMeta.get([account, burnKey(message.id)]);
+        const peer = directMessagePeer(message, account);
+        if (hasDisappearingMarker(message.tags) && isDirectMessageTags(message.tags)
+          && (tombstone?.value as { peerPubkey?: string } | undefined)?.peerPubkey === peer) {
+          return { inserted: false, record: incoming };
+        }
         const existing = await this.database.syncedMessages.get(key);
         if (existing) {
           const transportEventIds = [...new Set([...existing.transportEventIds, ...incoming.transportEventIds])];
@@ -180,6 +193,66 @@ export class SyncedMessageRepository {
         return { inserted: true, record: incoming };
       }
     );
+  }
+
+  /** Persistent, account-scoped tombstones prevent old relay wraps from resurrecting a burned message. */
+  async isBurnedMessage(accountPubkey: string, message: CanonicalMessage) {
+    if (!hasDisappearingMarker(message.tags) || !isDirectMessageTags(message.tags)) return false;
+    const account = normalizeAccountPubkey(accountPubkey);
+    const marker = await this.database.accountMeta.get([account, burnKey(message.id)]);
+    return (marker?.value as { peerPubkey?: string } | undefined)?.peerPubkey === directMessagePeer(message, account);
+  }
+
+  async burnDisappearingMessage(accountPubkey: string, messageId: string, peerPubkey: string, nowMs = Date.now()) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const peer = peerPubkey.toLowerCase();
+    if (!/^[0-9a-f]{64}$/i.test(messageId) || !/^[0-9a-f]{64}$/i.test(peer) || peer === account) return false;
+    const id = messageId.toLowerCase();
+    let accepted = false;
+    await this.database.transaction("rw", this.database.syncedMessages, this.database.accountMeta,
+      this.database.decryptedEvents, this.database.deferredAuthorizationMessages, this.database.outgoingQueue,
+      this.database.conversationStates, async () => {
+        const target = await this.database.syncedMessages.get([account, id]);
+        if (target && (!isDirectMessageTags(target.tags) || !hasDisappearingMarker(target.tags)
+          || directMessagePeer(target, account) !== peer)) return;
+        const marker = await this.database.accountMeta.get([account, burnKey(id)]);
+        if (marker && (marker.value as { peerPubkey?: string })?.peerPubkey !== peer) return;
+        await this.database.accountMeta.put({ accountPubkey: account, key: burnKey(id), value: { peerPubkey: peer, burnedAt: nowMs } });
+        accepted = true;
+        if (!target) return; // burn event may arrive before the original wrap
+        await this.database.syncedMessages.delete([account, id]);
+        await this.database.deferredAuthorizationMessages.delete([account, id]);
+        for (const transportId of target.transportEventIds || []) {
+          await this.database.decryptedEvents.delete([account, transportId]);
+        }
+        await this.database.outgoingQueue.delete([account, id]);
+        const stateKey: [string, string] = [account, target.conversationId];
+        const current = await this.database.conversationStates.get(stateKey);
+        if (current?.lastMessageId === id) {
+          const latest = await this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
+            .between([account, target.conversationId, 0, ""], [account, target.conversationId, Number.MAX_SAFE_INTEGER, "\\uffff"])
+            .reverse().first();
+          if (latest) await this.database.conversationStates.put({ ...current, lastMessageId: latest.id,
+            lastMessageAt: latest.createdAt, lastMessageSenderPubkey: latest.senderPubkey,
+            unreadCache: undefined, visibleUnreadCache: undefined, updatedAt: nowMs });
+          else await this.database.conversationStates.delete(stateKey);
+        } else if (current) {
+          await this.database.conversationStates.update(stateKey, { unreadCache: undefined, visibleUnreadCache: undefined });
+        }
+      });
+    return accepted;
+  }
+
+  async purgeExpiredDisappearing(accountPubkey: string, nowMs = Date.now()) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const expired = await this.database.syncedMessages.where("accountPubkey").equals(account)
+      .filter(record => isExpiredDisappearing(record.tags, Math.floor(nowMs / 1000))).toArray();
+    let cleaned = 0;
+    for (const record of expired) {
+      const peer = directMessagePeer(record, account);
+      if (peer && await this.burnDisappearingMessage(account, record.id, peer, nowMs)) cleaned++;
+    }
+    return cleaned;
   }
 
   async get(accountPubkey: string, messageId: string) {
