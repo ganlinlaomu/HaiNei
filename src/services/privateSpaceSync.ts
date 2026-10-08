@@ -1,6 +1,7 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { privateSpaceRepository } from "@/repositories/privateSpaceRepository";
 import type { PrivateSpaceRecord } from "@/db/dexie";
+import { validatePrivateSpaceSource, validatePrivateSpaceAttachments } from "@/services/privateSpaceContent";
 import { signWorkerRequest } from "@/services/workerAuth";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 import { timedJsonFetch } from "@/utils/timedFetch";
@@ -90,9 +91,9 @@ async function responseJson(response: Response): Promise<any> {
 
 function envelope(note: PrivateSpaceRecord): string {
   // Local CAS metadata is never uploaded. No plaintext title or task tags are visible to D1.
-  const { accountPubkey, id, kind, title, body, tasks, pinned, archivedAt, deletedAt, createdAt, updatedAt, revision } = note;
+  const { accountPubkey, id, kind, title, body, tasks, pinned, source, attachments, archivedAt, deletedAt, createdAt, updatedAt, revision } = note;
   return JSON.stringify({ schemaVersion: 1, id, note: {
-    accountPubkey, id, kind, title, body, tasks, pinned, archivedAt, deletedAt,
+    accountPubkey, id, kind, title, body, tasks, pinned, source, attachments, archivedAt, deletedAt,
     createdAt, updatedAt, revision,
   } });
 }
@@ -116,6 +117,8 @@ function decode(account: string, id: string, plaintext: string): PrivateSpaceRec
     tasks: row.tasks.map(task => ({ id: task.id, text: task.text, done: task.done })),
     pinned: row.pinned, createdAt: row.createdAt, updatedAt: row.updatedAt,
     revision: row.revision, archivedAt: row.archivedAt, deletedAt: row.deletedAt,
+    ...(row.source ? { source: validatePrivateSpaceSource(row.source) } : {}),
+    ...(row.attachments !== undefined ? { attachments: validatePrivateSpaceAttachments(row.attachments) } : {}),
   };
 }
 

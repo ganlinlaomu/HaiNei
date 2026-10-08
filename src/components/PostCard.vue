@@ -33,7 +33,7 @@
           <button v-if="!isOwn" type="button" @click="muteAuthor">不看此人的动态</button>
           <button type="button" @click="copyText">复制文字</button>
           <button v-if="importablePost" type="button" :disabled="importingPost"
-            @click="savePostToPrivateSpace">{{ importingPost ? "保存中…" : "保存到私人空间" }}</button>
+            @click="savePostToPrivateSpace">{{ importingPost ? "摘录中…" : "摘录到私人空间" }}</button>
         </div>
       </div>
     </header>
@@ -179,10 +179,10 @@ async function savePostToPrivateSpace() {
       const { notePrivateSpaceMutation } = await import("@/services/privateSpaceSync");
       if (account === keys.pkHex && generation === keys.sessionGeneration) {
         notePrivateSpaceMutation(keys);
-        ui.addToast("已保存到私人空间", 1800, "success");
+        ui.addToast("已摘录到私人空间，可继续编辑", 1800, "success");
       }
     } else {
-      ui.addToast("私人空间中已存在这条动态", 1800, "info");
+      ui.addToast("这条动态已摘录过，可在私人空间编辑", 1800, "info");
     }
   } catch {
     if (account === keys.pkHex && generation === keys.sessionGeneration)

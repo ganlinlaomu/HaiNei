@@ -118,6 +118,26 @@ describe("private space NIP-44 cloud reconciliation", () => {
     expect((await privateSpaceRepository.list(ACCOUNT))).toHaveLength(2);
   });
 
+  it("roundtrips optional encrypted excerpt metadata across cloud and fresh device", async () => {
+    const id = "d".repeat(64), author = "e".repeat(64);
+    const created = await privateSpaceRepository.importNote(
+      ACCOUNT, id, "摘录内容", "正文", {
+        source: { kind: "post", messageId: id, author: "好友", authorPubkey: author, date: "2026-10-08" },
+        attachments: [{ kind: "image", url: "https://img.example/post.jpg" }],
+      },
+    );
+    expect(created.created).toBe(true);
+    await syncPrivateSpace(keys());
+    expect(cloud.get(id)?.ciphertext).not.toContain("img.example");
+    await db.accountNotes.delete([ACCOUNT, id]);
+    await syncPrivateSpace(keys());
+    const downloaded = await privateSpaceRepository.get(ACCOUNT, id);
+    expect(downloaded?.body).toBe("正文");
+    expect(downloaded?.source?.messageId).toBe(id);
+    expect(downloaded?.source?.author).toBe("好友");
+    expect(downloaded?.attachments).toEqual([{ kind: "image", url: "https://img.example/post.jpg" }]);
+  });
+
   it("never discards locally saved notes when offline", async () => {
     const note = await privateSpaceRepository.create(ACCOUNT, "todo");
     vi.stubGlobal("navigator", { onLine: false });

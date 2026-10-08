@@ -61,7 +61,7 @@
         <li v-for="note in filtered" :key="note.id">
           <button type="button" class="item" :disabled="backupBusy || !!note.archivedAt || !!note.deletedAt" @click="open(note)">
             <span class="item-top"><strong>{{ label(note) }}</strong><span v-if="note.pinned">📌</span></span>
-            <span class="preview">{{ note.kind === 'todo' ? progress(note) : note.body || '空白笔记' }}</span>
+            <span class="preview">{{ note.kind === 'todo' ? progress(note) : privateSpaceDisplay(note).text || (privateSpaceDisplay(note).attachments.length ? '媒体摘录' : '空白笔记') }}</span>
             <span class="date">{{ note.kind === 'todo' ? '待办' : '笔记' }} · {{ formatted(note.updatedAt) }}</span>
           </button>
           <button v-if="note.archivedAt || note.deletedAt" type="button" class="restore-button" @click="restoreNote(note)">恢复</button>
@@ -97,6 +97,10 @@
           <p class="task-counter">{{ progress(editor) }}</p>
         </div>
       </template>
+      <div v-if="editorImageContent" class="excerpt-media" aria-label="摘录的图片">
+        <PostImagePreview :content="editorImageContent" :show-all="true" />
+      </div>
+      <div v-if="editorVideoCount" class="excerpt-video-note">已保存 {{ editorVideoCount }} 个视频引用 · 请通过原动态查看视频</div>
       <div v-if="activeSource" class="source-card">
         <strong>来源：{{ activeSource.kind === 'post' ? '海内动态' : '普通私信' }}</strong>
         <span>作者：{{ activeSource.author || '未知' }}</span>
@@ -113,7 +117,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useKeyStore } from "@/stores/keys";
@@ -126,11 +130,13 @@ import {
   MAX_BACKUP_FILE_BYTES, type PrivateBackupPayload,
 } from "@/services/privateSpaceBackup";
 import { privateNoteSource } from "@/services/privateSpaceSource";
+import { privateSpaceDisplay } from "@/services/privateSpaceContent";
 import {
   syncPrivateSpace, notePrivateSpaceMutation, getPrivateSpaceSyncState,
   subscribePrivateSpaceSync, setPrivateSpaceEditing, type PrivateSpaceSyncState,
 } from "@/services/privateSpaceSync";
 
+const PostImagePreview = defineAsyncComponent(() => import("@/components/PostImagePreview.vue"));
 const keys = useKeyStore();
 const route = useRoute();
 const router = useRouter();
@@ -144,6 +150,11 @@ const restoreFileName = ref("");
 const restoreFileContent = ref("");
 const restorePreview = ref<PrivateBackupPayload | null>(null);
 const activeSource = computed(() => editor.value ? privateNoteSource(editor.value) : null);
+const editorAttachments = computed(() => editor.value ? privateSpaceDisplay(editor.value).attachments : []);
+const editorImageContent = computed(() => editorAttachments.value
+  .filter(attachment => attachment.kind === "image")
+  .map(attachment => `![](${attachment.url})`).join("\n"));
+const editorVideoCount = computed(() => editorAttachments.value.filter(attachment => attachment.kind === "video").length);
 function sourceDateDisplay(value: string) {
   const time = new Date(value);
   return Number.isNaN(time.getTime()) ? value : time.toLocaleString();
@@ -371,7 +382,7 @@ const filtered = computed(() => {
     .filter(note => filter.value === "trash" ? !!note.deletedAt
       : filter.value === "archived" ? !!note.archivedAt && !note.deletedAt
         : !note.deletedAt && !note.archivedAt && (filter.value === "all" || note.kind === filter.value))
-    .filter(note => !term || [note.title, note.body, ...note.tasks.map(task => task.text)]
+    .filter(note => !term || [note.title, privateSpaceDisplay(note).text, ...note.tasks.map(task => task.text)]
       .some(value => value.toLocaleLowerCase().includes(term)));
 });
 
@@ -445,6 +456,8 @@ function saveNow(): Promise<void> {
   const draft: PrivateSpaceDraft = {
     kind: current.kind, title: current.title, body: current.body,
     tasks: current.tasks.map(task => ({ ...task })), pinned: current.pinned,
+    ...(current.source ? { source: current.source } : {}),
+    ...(current.attachments !== undefined ? { attachments: current.attachments } : {}),
   };
   // A never-edited draft must not create an IndexedDB row or enter PR2 cloud sync.
   if (isUnsavedDraft.value && !hasPrivateSpaceDraftContent(draft)) {
@@ -529,7 +542,14 @@ async function open(note: PrivateSpaceRecord) {
     await flush();
     if (!keys.isUnlocked || keys.pkHex !== note.accountPubkey) return;
     isUnsavedDraft.value = false;
-    editor.value = { ...note, tasks: note.tasks.map(task => ({ ...task })) };
+    // Legacy PR3-A notes are projected into readable text in memory only.
+    // Do not auto-write or create a cloud conflict merely by viewing one.
+    const display = privateSpaceDisplay(note);
+    editor.value = {
+      ...note, body: display.text, tasks: note.tasks.map(task => ({ ...task })),
+      ...(display.source ? { source: display.source } : {}),
+      ...(display.attachments.length ? { attachments: display.attachments } : {}),
+    };
     newTaskText.value = "";
     saveStatus.value = "已保存在本机";
     error.value = "";
@@ -691,4 +711,6 @@ button{font:inherit;cursor:pointer}
 .source-card strong{color:#172033}
 .source-card button{justify-self:start;min-height:34px;padding:4px 8px;border:0;background:transparent;color:#2563eb;font:inherit;font-weight:600}
 .source-card small{color:#94a3b8}
+.excerpt-media{margin:14px 0;border-radius:12px;overflow:hidden}
+.excerpt-video-note{font-size:12px;color:#64748b;padding:10px 12px;border-radius:9px;background:#f8fafc}
 </style>

@@ -20,7 +20,7 @@ const fields: Record<string, string[]> = {
     "uploadedRef",
     "lastError",
   ],
-  accountNotes: ["kind", "title", "body", "tasks", "pinned", "archivedAt", "deletedAt", "revision", "cloudVersion", "syncedRevision"],
+  accountNotes: ["kind", "title", "body", "tasks", "pinned", "source", "attachments", "archivedAt", "deletedAt", "revision", "cloudVersion", "syncedRevision"],
   accountStateMirrors: ["data"],
   replaceableEventOutbox: ["event", "lastError"],
   dmRelayDirectory: ["relays", "eventId", "eventCreatedAt", "publishedAt", "source", "sourceRelays"],

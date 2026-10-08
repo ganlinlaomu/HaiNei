@@ -53,7 +53,8 @@ describe("private space PR3-A: explicit post and DM imports", () => {
     const [saved] = await repository.list(A);
     expect(saved).toMatchObject({ id: first.id, kind: "note", revision: 1 });
     expect(saved.body).toContain("重要内容：勿忘！");
-    expect(saved.body).toContain("消息 ID：" + POST_ID);
+    expect(saved.body).not.toContain("消息 ID：");
+    expect(saved.source).toMatchObject({ kind: "post", messageId: POST_ID, author: "好友名称", authorPubkey: PEER });
     const raw: any = await new Promise((resolve, reject) => {
       const transaction = database.backendDB().transaction("accountNotes", "readonly");
       const request = transaction.objectStore("accountNotes").get([A, first.id]);
@@ -83,8 +84,9 @@ describe("private space PR3-A: explicit post and DM imports", () => {
     expect(first.created).toBe(true);
     const saved = await repository.get(A, first.id);
     expect(saved?.body).toContain("只保存普通私信文字");
-    expect(saved?.body).toContain("来源：海内普通私信");
-    expect(saved?.body).toContain(PEER);
+    expect(saved?.body).not.toContain("来源：");
+    expect(saved?.body).not.toContain(PEER);
+    expect(saved?.source).toMatchObject({ kind: "dm", peerPubkey: PEER, authorPubkey: PEER, messageId: DM_ID });
     expect((await repository.list(B))).toHaveLength(0);
 
     const second = await importDirectMessageToPrivateSpace(account(B), dm(), PEER, "老友", false, repository);

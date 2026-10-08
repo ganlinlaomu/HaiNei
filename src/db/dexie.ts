@@ -3,7 +3,7 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.35";
+export const APP_VERSION = "0.1.36";
 export const DB_VERSION = 19;
 export const DATABASE_NAME = "closed_community_db";
 
@@ -267,6 +267,16 @@ export type OutgoingDmTaskRecord = {
 
 // Only account/id/timestamps are indexed; the private content is encrypted by localVault.
 export type PrivateSpaceTask = { id: string; text: string; done: boolean };
+/** Encrypted, optional metadata for explicitly excerpted content. */
+export type PrivateSpaceSource = {
+  kind: "post" | "dm";
+  messageId: string;
+  author: string;
+  date: string;
+  authorPubkey?: string;
+  peerPubkey?: string;
+};
+export type PrivateSpaceAttachment = { kind: "image" | "video"; url: string };
 export type PrivateSpaceRecord = {
   accountPubkey: string;
   id: string;
@@ -275,6 +285,8 @@ export type PrivateSpaceRecord = {
   body: string;
   tasks: PrivateSpaceTask[];
   pinned: boolean;
+  source?: PrivateSpaceSource;
+  attachments?: PrivateSpaceAttachment[];
   archivedAt?: number;
   deletedAt?: number;
   createdAt: number;
