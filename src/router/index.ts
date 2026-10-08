@@ -12,6 +12,7 @@ import {
   loadFriendsView,
   loadMyProfileView,
   loadSavedView,
+  loadPrivateSpaceView,
 } from "@/router/lazyViews";
 // Lazy load less frequently accessed views
 const Debug = () => import("@/views/Debug.vue");
@@ -90,6 +91,12 @@ const routes: Array<RouteRecordRaw> = [
     path: "/settings/saved",
     name: "Saved",
     component: loadSavedView,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/settings/private-space",
+    name: "PrivateSpace",
+    component: loadPrivateSpaceView,
     meta: { requiresAuth: true }
   },
   {
