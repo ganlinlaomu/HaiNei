@@ -20,6 +20,7 @@ export interface Env {
   BLOSSOM_SERVICE_TOKEN: string;
   RELAY_APP_URL?: string;
   RELAY_APP_TOKEN?: string;
+  METRICS_READ_TOKEN?: string;
   AUTH_CHALLENGE_TTL_SECONDS?: string;
   AUTH_CHALLENGE_PER_MINUTE_PER_SOURCE?: string;
   AUTH_CHALLENGE_PER_MINUTE_GLOBAL?: string;
