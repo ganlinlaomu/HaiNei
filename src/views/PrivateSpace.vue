@@ -78,7 +78,7 @@ import { privateSpaceRepository, type PrivateSpaceDraft } from "@/repositories/p
 import type { PrivateSpaceRecord } from "@/db/dexie";
 import {
   syncPrivateSpace, notePrivateSpaceMutation, getPrivateSpaceSyncState,
-  subscribePrivateSpaceSync, type PrivateSpaceSyncState,
+  subscribePrivateSpaceSync, setPrivateSpaceEditing, type PrivateSpaceSyncState,
 } from "@/services/privateSpaceSync";
 
 const keys = useKeyStore();
@@ -163,6 +163,11 @@ async function loadForAccount(account: string) {
     if (version === loadVersion) loading.value = false;
   }
 }
+
+watch(() => editor.value?.accountPubkey || "", (account, previousAccount) => {
+  if (previousAccount) setPrivateSpaceEditing(previousAccount, false);
+  if (account) setPrivateSpaceEditing(account, true);
+}, { flush: "sync" });
 
 watch(() => [keys.pkHex, keys.isUnlocked] as const, ([account, unlocked]) => {
   void loadForAccount(unlocked ? account : "");
@@ -316,6 +321,7 @@ onBeforeRouteLeave(async () => {
   }
 });
 onBeforeUnmount(() => {
+  if (editor.value) setPrivateSpaceEditing(editor.value.accountPubkey, false);
   unsubscribeLock?.();
   unsubscribeSync?.();
   window.removeEventListener("hainei-private-space-synced", onCloudUpdate);
