@@ -58,7 +58,7 @@
       </div>
     </header>
 
-    <section ref="messageList" class="message-list" aria-live="polite" @scroll.passive="handleMessageScroll">
+    <section ref="messageList" class="message-list" aria-live="polite" @scroll.passive="handleMessageScroll" @click="attachmentMenuOpen = false">
       <div v-if="!accepted" class="relationship-notice">已不是已接受的好友，无法发送新消息。</div>
       <div v-if="accepted && messages.length === 0" class="empty-chat">开始一段私密对话</div>
       <template v-for="(message, index) in windowMessages" :key="message.id">
@@ -90,7 +90,26 @@
             <svg viewBox="0 0 24 24"><path d="M9 8 4 12l5 4"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg>
           </span>
           <div class="message-stack">
-            <div class="message-bubble" :class="{ 'media-caption-bubble': isMediaCaption(message), 'audio-bubble': hasAudio(message) }">
+            <div class="message-bubble" :class="{ 'media-caption-bubble': !isDisappearing(message) && isMediaCaption(message), 'audio-bubble': !isDisappearing(message) && hasAudio(message), 'disappearing-bubble': isDisappearing(message) }">
+              <template v-if="isDisappearing(message)">
+                <div v-if="isBurned(message)" class="burned-placeholder" role="status">
+                  <span aria-hidden="true">✓</span> 临时消息已销毁
+                </div>
+                <div v-else-if="isOwn(message)" class="temporary-message">
+                  <span class="temporary-heading"><span aria-hidden="true">♨</span> 阅后即焚消息</span>
+                  <span class="temporary-caption">对方打开后 {{ burnDuration(message) }} 秒销毁</span>
+                </div>
+                <div v-else-if="canShowTemporaryText(message)" class="temporary-message">
+                  <MentionText class="bubble-text" :text="messageText(message.content)" />
+                  <span class="temporary-countdown" role="timer" aria-live="off">♨ {{ remainingBurnSeconds(message) }} 秒后销毁</span>
+                </div>
+                <button v-else class="temporary-reveal" type="button" :disabled="openingMessageId === message.id" @click.stop="revealDisappearing(message)">
+                  <strong>♨ 阅后即焚消息</strong>
+                  <span>{{ openingMessageId === message.id ? "正在开启…" : "点击查看" }}</span>
+                  <small>查看后 {{ burnDuration(message) }} 秒自动销毁</small>
+                </button>
+              </template>
+              <template v-else>
               <button
                 v-if="message.replyTo"
                 class="quoted-message"
@@ -130,8 +149,9 @@
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else-if="hasImage(message.content)" :content="message.content" :show-all="true" alt-text="私信图片" />
               </template>
+              </template>
             </div>
-            <span v-if="!isMediaCaption(message)" class="message-meta" :class="{ failed: isFailed(message), read: statusKind(message) === 'read' }">
+            <span v-if="!isMediaCaption(message) || isDisappearing(message)" class="message-meta" :class="{ failed: isFailed(message), read: statusKind(message) === 'read' }">
               <time>{{ formatBubbleTime(message.created_at) }}</time>
               <template v-if="isOwn(message)">
                 <span>{{ statusLabel(message) }}</span>
@@ -184,6 +204,24 @@
         <button type="button" aria-label="移除图片" @click="removeSelectedImage">×</button>
       </div>
       <p v-if="voiceError" class="voice-error" role="alert">{{ voiceError }}</p>
+      <div v-if="attachmentMenuOpen" class="dm-attachment-menu" role="menu" aria-label="添加消息内容">
+        <button type="button" role="menuitem" @click="chooseImageFromMenu">
+          <span aria-hidden="true">▧</span> 图片
+        </button>
+        <button type="button" role="menuitem" @click="enableDisappearing">
+          <span aria-hidden="true">♨</span> 阅后即焚
+        </button>
+      </div>
+      <div v-if="disappearingSeconds !== null && !voiceCaptureOwnsAudioSession" class="temporary-composer-mode" role="status">
+        <span>♨ 阅后即焚</span>
+        <label for="temporary-duration">阅后</label>
+        <select id="temporary-duration" v-model.number="disappearingSeconds" aria-label="阅后销毁时间">
+          <option :value="10">10 秒</option>
+          <option :value="30">30 秒</option>
+          <option :value="60">60 秒</option>
+        </select>
+        <button type="button" aria-label="关闭阅后即焚模式" @click="disableDisappearing">×</button>
+      </div>
       <form class="chat-composer" @submit.prevent="submitMessage">
         <MentionSuggestions
           v-if="mentionOpen"
@@ -230,7 +268,7 @@
               rows="1"
               enterkeyhint="enter"
               autocomplete="off"
-              :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'"
+              :placeholder="accepted ? (disappearingSeconds !== null ? '输入临时消息……' : '输入消息……') : '仅已接受好友可发送私信'"
               :disabled="!accepted || !keys.pkHex"
               @input="onMentionInput"
               @focus="handleComposerFocus"
@@ -239,23 +277,18 @@
               @keydown="onMentionKeydown"
             ></textarea>
             <div class="composer-actions">
-              <label
+              <button
+                type="button"
                 class="composer-icon-button attachment-button"
-                :class="{ disabled: !accepted || !keys.pkHex }"
-                aria-label="添加图片"
+                :disabled="!accepted || !keys.pkHex || disappearingSeconds !== null"
+                aria-label="添加内容"
+                :aria-expanded="attachmentMenuOpen"
+                @click="attachmentMenuOpen = !attachmentMenuOpen"
               >
                 <span class="composer-icon-visual" aria-hidden="true">
                   <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
                 </span>
-                <input
-                  ref="imageInput"
-                  class="attachment-file-input"
-                  type="file"
-                  accept="image/*"
-                  :disabled="!accepted || !keys.pkHex"
-                  @change="selectImage"
-                />
-              </label>
+              </button>
               <span class="composer-actions-spacer" aria-hidden="true"></span>
               <button
                 v-if="draft.trim() || selectedImage"
@@ -288,6 +321,7 @@
           </button>
         </div>
       </form>
+      <input ref="imageInput" class="attachment-file-input sr-file-input" type="file" accept="image/*" :disabled="!accepted || !keys.pkHex" @change="selectImage" />
     </div>
   </main>
 </template>
