@@ -200,7 +200,7 @@
         <button v-if="actionMenuImportable" type="button" role="menuitem"
           :disabled="importingDm" @click="saveDmFromActionMenu">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/></svg>
-          <span>{{ importingDm ? "保存中…" : "保存到私人空间" }}</span>
+          <span>{{ importingDm ? "摘录中…" : "摘录到私人空间" }}</span>
         </button>
       </div>
     </div>
@@ -930,9 +930,9 @@ async function saveDmFromActionMenu() {
       const { notePrivateSpaceMutation } = await import("@/services/privateSpaceSync");
       if (!disposed && account === keys.pkHex && generation === keys.sessionGeneration) {
         notePrivateSpaceMutation(keys);
-        ui.addToast("已保存到私人空间", 1800, "success");
+        ui.addToast("已摘录文字到私人空间", 1800, "success");
       }
-    } else ui.addToast("私人空间中已存在这条私信", 1800, "info");
+    } else ui.addToast("这条私信已摘录过", 1800, "info");
   } catch {
     if (!disposed && account === keys.pkHex && generation === keys.sessionGeneration)
       ui.addToast("保存失败，请确认私人空间已解锁或内容未超出限制", 2300, "error");
