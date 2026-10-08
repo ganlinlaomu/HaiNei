@@ -5,6 +5,8 @@ import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { parseFriendRecommendation } from "@/nostr/messaging/friendRecommendation";
 import { privateSpaceRepository, type PrivateSpaceRepository } from "@/repositories/privateSpaceRepository";
+import { extractPrivateSpaceContent, privateSpaceTitle } from "@/services/privateSpaceContent";
+import type { PrivateSpaceSource } from "@/db/dexie";
 
 /** No background imports, no remote fetch, and no content read from expired ephemeral messages. */
 export type PrivateSpaceImportSession = {
@@ -50,12 +52,9 @@ export function canImportDirectMessage(
     && !parsePrivateAudioMessage(message.content)
     && !parseFriendRecommendation(message.content)
     && (!message.outgoing || message.outgoing.state === "sent")
-    && !!directMessagePlainText(message.content);
+    && !!extractPrivateSpaceContent(message.content, false).text;
 }
 
-function directMessagePlainText(content: string) {
-  return content.replace(/!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/gi, "").trim();
-}
 function ensureSession(session: PrivateSpaceImportSession, account: string, generation: number) {
   if (!session.isUnlocked || session.pkHex.toLowerCase() !== account || session.sessionGeneration !== generation)
     throw new Error("private_space_account_changed");
@@ -88,20 +87,19 @@ export async function importPostToPrivateSpace(
   const generation = session.sessionGeneration;
   if (!PUBKEY.test(account)) throw new Error("private_space_account_unavailable");
   ensureSession(session, account, generation);
-  const title = "动态 · " + shortName(authorName, message.pubkey);
-  const body = [
-    "来源：海内动态",
-    "作者：" + (authorName.trim() || message.pubkey),
-    "作者公钥：" + message.pubkey,
-    "发布时间：" + sourceDate(message.created_at),
-    "消息 ID：" + message.id,
-    "",
-    message.content.trim() || "（仅保存了原动态的引用信息）",
-  ].join("\n");
-  validateSize(title, body);
+  const extracted = extractPrivateSpaceContent(message.content);
+  const title = privateSpaceTitle(extracted.text, "动态摘录 · " + shortName(authorName, message.pubkey));
+  const source: PrivateSpaceSource = {
+    kind: "post", messageId: message.id.toLowerCase(),
+    author: authorName.trim().slice(0, 200) || message.pubkey,
+    authorPubkey: message.pubkey.toLowerCase(), date: sourceDate(message.created_at),
+  };
+  validateSize(title, extracted.text);
   const id = await deterministicImportId("post:" + message.id.toLowerCase());
   ensureSession(session, account, generation);
-  const result = await repository.importNote(account, id, title, body);
+  const result = await repository.importNote(account, id, title, extracted.text, {
+    source, attachments: extracted.attachments,
+  });
   return { created: result.created, id };
 }
 
@@ -118,22 +116,18 @@ export async function importDirectMessageToPrivateSpace(
   if (!canImportDirectMessage(message, account, peer, burned))
     throw new Error("private_space_dm_not_importable");
   ensureSession(session, account, generation);
+  const extracted = extractPrivateSpaceContent(message.content, false);
   const author = message.pubkey.toLowerCase() === account
     ? "自己" : shortName(displayName, peer);
-  const title = "私信 · " + shortName(displayName, peer);
-  const body = [
-    "来源：海内普通私信（仅文字）",
-    "发送者：" + author,
-    "发送者公钥：" + message.pubkey,
-    "对话对象：" + peer,
-    "发送时间：" + sourceDate(message.created_at),
-    "消息 ID：" + message.id,
-    "",
-    directMessagePlainText(message.content),
-  ].join("\n");
-  validateSize(title, body);
+  const title = privateSpaceTitle(extracted.text, "私信摘录 · " + shortName(displayName, peer));
+  const source: PrivateSpaceSource = {
+    kind: "dm", messageId: message.id.toLowerCase(), author,
+    authorPubkey: message.pubkey.toLowerCase(), peerPubkey: peer.toLowerCase(),
+    date: sourceDate(message.created_at),
+  };
+  validateSize(title, extracted.text);
   const id = await deterministicImportId("dm:" + message.id.toLowerCase());
   ensureSession(session, account, generation);
-  const result = await repository.importNote(account, id, title, body);
+  const result = await repository.importNote(account, id, title, extracted.text, { source });
   return { created: result.created, id };
 }
