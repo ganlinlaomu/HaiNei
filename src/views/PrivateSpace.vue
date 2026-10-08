@@ -8,11 +8,48 @@
         type="button" @click="retrySync">重新同步</button>
     </div>
     <p v-if="error" role="alert" class="error-line">{{ error }}</p>
+    <section v-if="backupOpen && !editor" class="backup-panel" aria-label="私人空间备份">
+      <div class="backup-panel-header"><strong>备份与恢复</strong><button type="button" @click="closeBackupPanel">关闭</button></div>
+      <p>加密备份包含当前账号的笔记、待办、归档和最近删除。密码只用于当前操作，不会上传或保存。</p>
+      <label class="backup-label">备份密码（至少 12 个字符）
+        <input v-model="backupPassword" type="password" autocomplete="new-password" placeholder="设置独立备份密码" :disabled="backupBusy" />
+      </label>
+      <label class="backup-label">再次输入备份密码
+        <input v-model="backupConfirm" type="password" autocomplete="new-password" placeholder="确认备份密码" :disabled="backupBusy" />
+      </label>
+      <button class="backup-primary" type="button" :disabled="backupBusy" @click="downloadEncryptedBackup">
+        {{ backupBusy ? '处理中…' : '导出加密备份（推荐）' }}
+      </button>
+      <div class="backup-divider"></div>
+      <label class="backup-label">解密备份的密码
+        <input v-model="restorePassword" type="password" autocomplete="off" placeholder="输入备份密码" :disabled="backupBusy" />
+      </label>
+      <input ref="restoreFileInput" class="backup-file-input" type="file" accept=".json,application/json"
+        aria-label="选择海内私人空间加密备份" @change="selectEncryptedBackup" />
+      <button type="button" :disabled="backupBusy" @click="restoreFileInput?.click()">选择加密备份文件</button>
+      <p v-if="restoreFileName" class="backup-help">已选择：{{ restoreFileName }}</p>
+      <button type="button" :disabled="backupBusy || !restoreFileContent || !restorePassword" @click="previewEncryptedBackup">
+        {{ backupBusy ? '处理中…' : '解密并预览备份' }}
+      </button>
+      <section v-if="restorePreview" class="restore-preview" aria-live="polite">
+        <strong>预览：{{ restorePreview.items.length }} 条笔记 / 待办</strong>
+        <p>只恢复当前设备缺失的笔记；同 ID 的现有笔记会跳过，不覆盖正文、编辑或删除状态。不会导入其他账号。</p>
+        <button class="backup-primary" type="button" :disabled="backupBusy" @click="confirmRestoreBackup">确认合并恢复</button>
+        <button type="button" :disabled="backupBusy" @click="clearRestorePreview">取消恢复</button>
+      </section>
+      <div class="backup-divider"></div>
+      <p><strong>明文导出</strong>（JSON / Markdown）</p>
+      <p class="backup-help">明文文件不加密，任何获得文件的人都能读取。不会包含 Nostr 私钥。</p>
+      <button type="button" :disabled="backupBusy" @click="downloadPlainBackup('json')">导出 JSON 明文</button>
+      <button type="button" :disabled="backupBusy" @click="downloadPlainBackup('md')">导出 Markdown 明文</button>
+    </section>
     <template v-if="!editor">
       <div class="toolbar">
         <input v-model="query" type="search" aria-label="搜索私人笔记" placeholder="搜索笔记和待办" />
         <button type="button" class="primary" @click="create('note')">＋ 笔记</button>
         <button type="button" class="primary secondary" @click="create('todo')">＋ 待办</button>
+        <button type="button" class="more-action" :aria-expanded="backupOpen" aria-label="备份与恢复"
+          @click="backupOpen ? closeBackupPanel() : backupOpen = true">•••</button>
       </div>
       <div class="tabs" role="group" aria-label="笔记分类">
         <button v-for="tab in tabs" :key="tab.value" type="button" :class="{ selected: filter === tab.value }"
@@ -60,6 +97,13 @@
           <p class="task-counter">{{ progress(editor) }}</p>
         </div>
       </template>
+      <div v-if="activeSource" class="source-card">
+        <strong>来源：{{ activeSource.kind === 'post' ? '海内动态' : '普通私信' }}</strong>
+        <span>作者：{{ activeSource.author || '未知' }}</span>
+        <span v-if="activeSource.date">时间：{{ sourceDateDisplay(activeSource.date) }}</span>
+        <button type="button" @click="navigateToSource">查看原{{ activeSource.kind === 'post' ? '动态' : '私信' }} ↗</button>
+        <small>来源信息属于加密笔记，原消息不存在时无法跳转。</small>
+      </div>
       <footer class="editor-footer">
         <button type="button" @click="archiveNote">归档</button>
         <button type="button" class="delete-button" @click="deleteNote">移到最近删除</button>
@@ -70,18 +114,188 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { onBeforeRouteLeave } from "vue-router";
+import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useKeyStore } from "@/stores/keys";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { privateSpaceRepository, type PrivateSpaceDraft } from "@/repositories/privateSpaceRepository";
 import type { PrivateSpaceRecord } from "@/db/dexie";
 import {
+  encryptPrivateBackup, decryptPrivateBackup, exportPlainJson, exportPlainMarkdown,
+  MAX_BACKUP_FILE_BYTES, type PrivateBackupPayload,
+} from "@/services/privateSpaceBackup";
+import { privateNoteSource } from "@/services/privateSpaceSource";
+import {
   syncPrivateSpace, notePrivateSpaceMutation, getPrivateSpaceSyncState,
   subscribePrivateSpaceSync, setPrivateSpaceEditing, type PrivateSpaceSyncState,
 } from "@/services/privateSpaceSync";
 
 const keys = useKeyStore();
+const route = useRoute();
+const router = useRouter();
+const backupOpen = ref(false);
+const backupBusy = ref(false);
+const backupPassword = ref("");
+const backupConfirm = ref("");
+const restorePassword = ref("");
+const restoreFileInput = ref<HTMLInputElement | null>(null);
+const restoreFileName = ref("");
+const restoreFileContent = ref("");
+const restorePreview = ref<PrivateBackupPayload | null>(null);
+const activeSource = computed(() => editor.value ? privateNoteSource(editor.value) : null);
+function sourceDateDisplay(value: string) {
+  const time = new Date(value);
+  return Number.isNaN(time.getTime()) ? value : time.toLocaleString();
+}
+function navigateToSource() {
+  const source = activeSource.value;
+  if (!source || !editor.value || editor.value.accountPubkey !== keys.pkHex) return;
+  if (source.kind === "post") void router.push({ path: "/", query: { mid: source.messageId } });
+  else if (source.peerPubkey) void router.push({
+    path: "/messages/" + source.peerPubkey, query: { focus: source.messageId },
+  });
+}
+function clearRestorePreview() { restorePreview.value = null; }
+function closeBackupPanel() {
+  if (backupBusy.value) return;
+  backupOpen.value = false;
+  backupPassword.value = ""; backupConfirm.value = "";
+  restorePassword.value = "";
+  restoreFileName.value = ""; restoreFileContent.value = "";
+  clearRestorePreview();
+  if (restoreFileInput.value) restoreFileInput.value.value = "";
+}
+function sessionSnapshot() {
+  if (!keys.pkHex || !keys.isUnlocked) throw new Error("private_space_locked");
+  const account = keys.pkHex.toLowerCase();
+  const generation = keys.sessionGeneration;
+  return { account, generation, isCurrent: () => keys.isUnlocked
+    && keys.pkHex.toLowerCase() === account && keys.sessionGeneration === generation };
+}
+function throwIfStale(check: () => boolean) { if (!check()) throw new Error("account_changed"); }
+function promptDownload(name: string, content: string, mime: string) {
+  const file = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(file);
+  try {
+    const link = document.createElement("a");
+    link.href = url; link.download = name;
+    link.style.display = "none";
+    document.body.append(link);
+    link.click(); link.remove();
+  } finally {
+    // Delay revocation for iOS Safari / PWA to finish initiating the download.
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
+}
+function backupFileName(suffix: string) {
+  return "hainei-private-" + new Date().toISOString().slice(0, 10) + suffix;
+}
+function backupError(cause: unknown) {
+  const code = cause instanceof Error ? cause.message : "";
+  const descriptions: Record<string, string> = {
+    backup_password_length: "备份密码至少需要 12 个字符（最多 256 字节）",
+    backup_password_or_integrity_failure: "密码不正确或备份文件已损坏",
+    backup_account_or_version_mismatch: "该备份不属于当前账号，或文件版本不支持",
+    backup_file_too_large: "备份文件太大",
+    backup_too_large: "备份内容超出大小限制",
+    account_changed: "账号状态发生变化，已取消操作",
+    local_vault_locked: "私人空间未解锁",
+  };
+  error.value = descriptions[code] || ("备份操作失败：" + (code || "请重试"));
+}
+async function downloadEncryptedBackup() {
+  if (backupBusy.value) return;
+  error.value = "";
+  if (backupPassword.value !== backupConfirm.value) {
+    error.value = "两次输入的备份密码不一致"; return;
+  }
+  const password = backupPassword.value;
+  backupBusy.value = true;
+  try {
+    await flush();
+    const { account, isCurrent } = sessionSnapshot();
+    const records = await privateSpaceRepository.list(account);
+    throwIfStale(isCurrent);
+    const output = await encryptPrivateBackup(account, records, password);
+    throwIfStale(isCurrent);
+    promptDownload(backupFileName(".hainei-backup.json"), output, "application/json");
+    backupPassword.value = ""; backupConfirm.value = "";
+    saveStatus.value = "已生成加密备份";
+  } catch (cause) { backupError(cause); }
+  finally { backupBusy.value = false; }
+}
+async function selectEncryptedBackup(event: Event) {
+  clearRestorePreview();
+  restoreFileContent.value = ""; restoreFileName.value = "";
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  if (file.size > MAX_BACKUP_FILE_BYTES) { error.value = "备份文件太大"; return; }
+  const { isCurrent } = sessionSnapshot();
+  const content = await file.text().catch(() => "");
+  if (!isCurrent()) return;
+  if (!content) { error.value = "无法读取备份文件"; return; }
+  restoreFileName.value = file.name;
+  restoreFileContent.value = content;
+}
+async function previewEncryptedBackup() {
+  if (backupBusy.value || !restoreFileContent.value) return;
+  backupBusy.value = true;
+  error.value = ""; clearRestorePreview();
+  try {
+    await flush();
+    const { account, isCurrent } = sessionSnapshot();
+    const preview = await decryptPrivateBackup(restoreFileContent.value, account, restorePassword.value);
+    throwIfStale(isCurrent);
+    restorePreview.value = preview;
+    restorePassword.value = "";
+    restoreFileContent.value = "";
+    if (restoreFileInput.value) restoreFileInput.value.value = "";
+  } catch (cause) { backupError(cause); }
+  finally { backupBusy.value = false; }
+}
+async function confirmRestoreBackup() {
+  if (backupBusy.value || !restorePreview.value || editor.value) return;
+  backupBusy.value = true;
+  error.value = "";
+  try {
+    const { account, isCurrent } = sessionSnapshot();
+    const preview = restorePreview.value;
+    if (preview.accountPubkey !== account) throw new Error("backup_account_or_version_mismatch");
+    setPrivateSpaceEditing(account, true);
+    try {
+      const outcome = await privateSpaceRepository.restoreBackup(account, preview.items, isCurrent);
+      throwIfStale(isCurrent);
+      if (outcome.added) notePrivateSpaceMutation(keys);
+      notes.value = await privateSpaceRepository.list(account);
+      throwIfStale(isCurrent);
+      saveStatus.value = "已恢复 " + outcome.added + " 条 · 跳过 " + outcome.skipped + " 条";
+      clearRestorePreview();
+      restoreFileName.value = "";
+      backupOpen.value = false;
+    } finally {
+      setPrivateSpaceEditing(account, false);
+    }
+  } catch (cause) { backupError(cause); }
+  finally { backupBusy.value = false; }
+}
+async function downloadPlainBackup(format: "json" | "md") {
+  if (backupBusy.value) return;
+  if (!window.confirm("将生成未加密文件，其他人可直接读取全部笔记与待办。仍要导出吗？")) return;
+  if (!window.confirm("再次确认：请勿将明文文件存放在公开位置。确定继续？")) return;
+  backupBusy.value = true;
+  error.value = "";
+  try {
+    await flush();
+    const { account, isCurrent } = sessionSnapshot();
+    const records = await privateSpaceRepository.list(account);
+    throwIfStale(isCurrent);
+    const content = format === "json" ? exportPlainJson(account, records) : exportPlainMarkdown(account, records);
+    throwIfStale(isCurrent);
+    promptDownload(backupFileName(format === "json" ? ".json" : ".md"),
+      content, format === "json" ? "application/json" : "text/markdown");
+  } catch (cause) { backupError(cause); }
+  finally { backupBusy.value = false; }
+}
 const notes = ref<PrivateSpaceRecord[]>([]);
 const editor = ref<PrivateSpaceRecord | null>(null);
 const query = ref("");
@@ -148,6 +362,7 @@ async function loadForAccount(account: string) {
   if (timer) clearTimeout(timer);
   timer = undefined;
   error.value = "";
+  closeBackupPanel();
   loading.value = !!account && keys.isUnlocked;
   if (!loading.value) return;
   try {
@@ -156,6 +371,15 @@ async function loadForAccount(account: string) {
       notes.value = records;
       syncStatus.value = getPrivateSpaceSyncState(account);
       void syncPrivateSpace(keys);
+      const requested = route.query.new;
+      if (requested === "note" || requested === "todo") {
+        await create(requested);
+        if (version === loadVersion && keys.pkHex === account) {
+          void router.replace({ path: route.path, query: Object.fromEntries(
+            Object.entries(route.query).filter(([name]) => name !== "new"),
+          ) });
+        }
+      }
     }
   } catch (cause) {
     if (version === loadVersion) handleError(cause);
@@ -163,6 +387,14 @@ async function loadForAccount(account: string) {
     if (version === loadVersion) loading.value = false;
   }
 }
+
+watch(() => route.query.new, async requested => {
+  if ((requested !== "note" && requested !== "todo") || !keys.isUnlocked || loading.value) return;
+  await create(requested);
+  void router.replace({ path: route.path, query: Object.fromEntries(
+    Object.entries(route.query).filter(([name]) => name !== "new"),
+  ) });
+});
 
 watch(() => editor.value?.accountPubkey || "", (account, previousAccount) => {
   if (previousAccount) setPrivateSpaceEditing(previousAccount, false);
@@ -321,6 +553,10 @@ onBeforeRouteLeave(async () => {
   }
 });
 onBeforeUnmount(() => {
+  // Decrypted previews and plaintext exports are never persisted in app storage.
+  restorePreview.value = null;
+  restoreFileContent.value = ""; restorePassword.value = "";
+  backupPassword.value = ""; backupConfirm.value = "";
   if (editor.value) setPrivateSpaceEditing(editor.value.accountPubkey, false);
   unsubscribeLock?.();
   unsubscribeSync?.();
@@ -369,4 +605,20 @@ button{font:inherit;cursor:pointer}
 .task-counter{font-size:12px;color:#94a3b8}
 .editor-footer{display:flex;justify-content:space-between;border-top:1px solid #edf0f2;margin-top:25px;padding-top:12px}
 .editor-footer .delete-button{color:#be123c}
+.more-action{min-width:38px;min-height:40px;padding:5px;border:1px solid #e2e8f0;border-radius:9px;background:white;color:#475569}
+.backup-panel{margin:8px 14px;padding:14px;border:1px solid #e2e8f0;border-radius:13px;background:#f8fafc;display:flex;flex-direction:column;gap:10px;font-size:13px}
+.backup-panel-header{display:flex;align-items:center;justify-content:space-between}
+.backup-panel p{margin:0;color:#64748b;line-height:1.5}
+.backup-panel button{min-height:40px;padding:8px 12px;border:1px solid #dbe2e9;border-radius:9px;background:white;color:#334155;text-align:left}
+.backup-panel button:disabled{opacity:.5}
+.backup-panel .backup-primary{background:#172033;color:white}
+.backup-label{display:grid;gap:5px;color:#334155}
+.backup-label input{width:100%;box-sizing:border-box;min-height:42px;border:1px solid #cbd5e1;border-radius:9px;padding:8px 10px;font:inherit;font-size:16px}
+.backup-file-input{display:none}
+.backup-divider{height:1px;background:#e2e8f0;margin:6px 0}
+.restore-preview{display:grid;gap:9px;padding:10px;border:1px solid #cbd5e1;border-radius:9px;background:#fff}
+.source-card{display:grid;gap:5px;margin-top:16px;padding:12px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;font-size:12px;color:#475569}
+.source-card strong{color:#172033}
+.source-card button{justify-self:start;min-height:34px;padding:4px 8px;border:0;background:transparent;color:#2563eb;font:inherit;font-weight:600}
+.source-card small{color:#94a3b8}
 </style>
