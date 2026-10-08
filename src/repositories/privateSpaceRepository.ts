@@ -35,6 +35,52 @@ export class PrivateSpaceRepository {
       || b.updatedAt - a.updatedAt || b.id.localeCompare(a.id));
   }
 
+  async get(account: string, id: string) {
+    return this.database.accountNotes.get([requireUnlocked(account), id]);
+  }
+
+  /** Confirm an upload without losing edits made while the HTTP request was in flight. */
+  async markSynced(account: string, id: string, sentRevision: number, version: number) {
+    const owner = requireUnlocked(account);
+    await this.database.transaction("rw", this.database.accountNotes, async () => {
+      const current = await this.database.accountNotes.get([owner, id]);
+      if (!current || Number(current.cloudVersion || 0) >= version) return;
+      await this.database.accountNotes.put({
+        ...current, cloudVersion: version, syncedRevision: sentRevision,
+      });
+    });
+  }
+
+  /** Import a remote version atomically; retain locally edited content as a new conflict copy. */
+  async applyRemote(account: string, remote: PrivateSpaceRecord, version: number) {
+    const owner = requireUnlocked(account);
+    if (remote.accountPubkey !== owner || !remote.id || !Number.isSafeInteger(version) || version < 1)
+      throw new Error("invalid_private_space_remote_record");
+    let changed = false;
+    let conflicted = false;
+    await this.database.transaction("rw", this.database.accountNotes, async () => {
+      const existing = await this.database.accountNotes.get([owner, remote.id]);
+      if (existing && Number(existing.cloudVersion || 0) >= version) return;
+      if (existing && existing.revision !== Number(existing.syncedRevision || 0)) {
+        // A newer local edit, including a tombstone, must never be overwritten.
+        const copyId = crypto.randomUUID();
+        const now = Date.now();
+        await this.database.accountNotes.add({
+          ...existing, id: copyId, title: existing.title + "（冲突副本）",
+          createdAt: now, updatedAt: now, revision: 1,
+          cloudVersion: 0, syncedRevision: 0,
+        });
+        conflicted = true;
+      }
+      await this.database.accountNotes.put({
+        ...remote, accountPubkey: owner, cloudVersion: version,
+        syncedRevision: remote.revision,
+      });
+      changed = true;
+    });
+    return { changed, conflicted };
+  }
+
   async create(account: string, kind: "note" | "todo"): Promise<PrivateSpaceRecord> {
     const owner = requireUnlocked(account);
     if (kind !== "note" && kind !== "todo") throw new Error("invalid_private_space_kind");
