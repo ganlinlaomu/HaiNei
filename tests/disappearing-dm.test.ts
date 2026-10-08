@@ -107,6 +107,44 @@ describe("opt-in disappearing NIP-17", () => {
     expect((await repo.get(receiver, ordinary.id))?.plaintext).toBe("keep");
   });
 
+  it("starts countdown on explicit open, persists deadline and never resets it", async () => {
+    const repo = repository();
+    const temporary = (await nip17Adapter.encode!({
+      recipientPubkeys: [receiver], plaintext: "private view", tags: [["t", "hainei-dm"]],
+      burnAfterSeconds: 10,
+    }, context)).message;
+    const receivedAt = Date.now();
+    await repo.insertMessageIfAbsent(receiver, temporary);
+    expect(await repo.listOpenedDisappearing(receiver, sender)).toEqual([]);
+    const deadline = await repo.openDisappearingMessage(receiver, temporary.id, sender, receivedAt);
+    expect(deadline).toBe(receivedAt + 10_000);
+    expect(await repo.openDisappearingMessage(receiver, temporary.id, sender, receivedAt + 5_000)).toBe(deadline);
+    expect(await repo.listOpenedDisappearing(receiver, sender)).toContainEqual({
+      messageId: temporary.id, peerPubkey: sender, deadlineAt: deadline,
+    });
+    expect(await repo.listOpenedDisappearing(sender, receiver)).toEqual([]);
+    await repo.burnDisappearingMessage(receiver, temporary.id, sender, deadline!);
+    expect(await repo.openDisappearingMessage(receiver, temporary.id, sender, deadline!)).toBeNull();
+    expect(await repo.listOpenedDisappearing(receiver, sender)).toEqual([]);
+    expect((await repo.insertMessageIfAbsent(receiver, temporary)).inserted).toBe(false);
+  });
+
+  it("refuses opening normal, sender-owned or expired temporary messages", async () => {
+    const repo = repository();
+    const ordinary = (await nip17Adapter.encode!({
+      recipientPubkeys: [receiver], plaintext: "ordinary", tags: [["t", "hainei-dm"]],
+    }, context)).message;
+    await repo.insertMessageIfAbsent(receiver, ordinary);
+    expect(await repo.openDisappearingMessage(receiver, ordinary.id, sender)).toBeNull();
+    const disappearing = (await nip17Adapter.encode!({
+      recipientPubkeys: [receiver], plaintext: "private", tags: [["t", "hainei-dm"]],
+      burnAfterSeconds: 30,
+    }, context)).message;
+    await repo.insertMessageIfAbsent(receiver, disappearing);
+    expect(await repo.openDisappearingMessage(sender, disappearing.id, receiver)).toBeNull();
+    expect(await repo.openDisappearingMessage(receiver, disappearing.id, sender, Date.now() + 49 * 3600 * 1000)).toBeNull();
+  });
+
   it("handles a signed burn control arriving before the original message", async () => {
     const repo = repository();
     const temporary = (await nip17Adapter.encode!({
