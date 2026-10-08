@@ -173,7 +173,7 @@ export async function decryptPrivateBackup(
   let plaintext: ArrayBuffer;
   try {
     plaintext = await crypto.subtle.decrypt({
-      name: "AES-GCM", iv, additionalData: associatedData(account), tagLength: 128,
+      name: "AES-GCM", iv: Uint8Array.from(iv).buffer, additionalData: associatedData(account), tagLength: 128,
     }, key, Uint8Array.from(ciphertext).buffer);
   } catch { throw new Error("backup_password_or_integrity_failure"); }
   return parseBackupPayload(textDecoder.decode(plaintext), account);
