@@ -26,7 +26,7 @@ describe("PR-FIX-C: source-linked DM read boundaries", () => {
     expect(screen).toContain("canMarkConversationTailRead({");
     expect(screen).toContain("const latest = windowMessages.value.filter(");
     expect(screen).toContain("if (!sourceFocusReadSuppressed.value)");
-    expect(store).toContain("if (readThrough && !requestedReadThrough) return;");
-    expect(store).toContain("readThrough ? requestedReadThrough : items.filter(readable).at(-1)");
+    expect(store).toContain("if (readThrough && !requestedReadThrough && !optimisticSent) return;");
+    expect(store).toContain("const optimisticSent = readThrough?.outgoing?.state");
   });
 });
