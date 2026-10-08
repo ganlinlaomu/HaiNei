@@ -145,6 +145,51 @@ describe("opt-in disappearing NIP-17", () => {
     expect(await repo.openDisappearingMessage(receiver, disappearing.id, sender, Date.now() + 49 * 3600 * 1000)).toBeNull();
   });
 
+  it("sender independently destroys a read temporary message at the peer's durable deadline", async () => {
+    const repo = repository();
+    const temporary = (await nip17Adapter.encode!({
+      recipientPubkeys: [receiver], plaintext: "sender must erase", tags: [["t", "hainei-dm"]],
+      burnAfterSeconds: 10,
+    }, context)).message;
+    const now = Date.now();
+    const deadline = now + 10_000;
+    await repo.insertMessageIfAbsent(sender, temporary);
+    await repo.insertMessageIfAbsent(receiver, temporary);
+    expect(await repo.recordSenderBurnDeadline(sender, temporary.id, receiver, deadline)).toBe(deadline);
+    // Receiving a duplicate or later read must not extend the deletion time.
+    expect(await repo.recordSenderBurnDeadline(sender, temporary.id, receiver, deadline + 5_000)).toBe(deadline);
+    expect(await repo.listDueOpenedDisappearing(sender, now + 9_000)).toEqual([]);
+    expect(await repo.listDueOpenedDisappearing(sender, now + 11_000)).toContainEqual({
+      messageId: temporary.id, peerPubkey: receiver, deadlineAt: deadline,
+    });
+    expect(await repo.purgeExpiredDisappearing(sender, now + 11_000)).toBe(1);
+    expect(await repo.get(sender, temporary.id)).toBeUndefined();
+    // Sender's local deletion does not affect a separate recipient account.
+    expect((await repo.get(receiver, temporary.id))?.plaintext).toBe("sender must erase");
+    expect(await repo.isBurnedMessage(sender, temporary)).toBe(true);
+    expect((await repo.insertMessageIfAbsent(sender, temporary)).inserted).toBe(false);
+    expect(await repo.recordSenderBurnDeadline(sender, temporary.id, receiver, deadline + 1_000)).toBeNull();
+  });
+
+  it("sender refuses forged or non-temporary burn deadlines", async () => {
+    const repo = repository();
+    const regular = (await nip17Adapter.encode!({
+      recipientPubkeys: [receiver], plaintext: "ordinary", tags: [["t", "hainei-dm"]],
+    }, context)).message;
+    const temporary = (await nip17Adapter.encode!({
+      recipientPubkeys: [receiver], plaintext: "private", tags: [["t", "hainei-dm"]],
+      burnAfterSeconds: 30,
+    }, context)).message;
+    await repo.insertMessageIfAbsent(sender, regular);
+    await repo.insertMessageIfAbsent(sender, temporary);
+    const expiry = disappearingMetadata(temporary.tags)!.expiresAt * 1000;
+    expect(await repo.recordSenderBurnDeadline(sender, regular.id, receiver, Date.now() + 10_000)).toBeNull();
+    expect(await repo.recordSenderBurnDeadline(receiver, temporary.id, sender, Date.now() + 10_000)).toBeNull();
+    expect(await repo.recordSenderBurnDeadline(sender, temporary.id, "c".repeat(64), Date.now() + 10_000)).toBeNull();
+    expect(await repo.recordSenderBurnDeadline(sender, temporary.id, receiver, expiry + 1000)).toBeNull();
+    expect(await repo.listOpenedDisappearing(sender, receiver)).toEqual([]);
+  });
+
   it("purges an elapsed read timer on account restore without opening its chat", async () => {
     const repo = repository();
     const ephemeral = (await nip17Adapter.encode!({
