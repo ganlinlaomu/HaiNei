@@ -587,14 +587,14 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     scheduleOpenedBurn(peerPubkey: string, messageId: string, deadlineAt: number) {
       const account = useKeyStore().pkHex.toLowerCase();
       const peer = peerPubkey.toLowerCase();
-      if (!account || this.loadedFor !== account || !Number.isFinite(deadlineAt)
+      if (!account || (this.loadedFor && this.loadedFor !== account) || !Number.isFinite(deadlineAt)
         || !/^[0-9a-f]{64}$/i.test(messageId) || !/^[0-9a-f]{64}$/i.test(peer)) return;
       const key = `${account}:${messageId.toLowerCase()}`;
       const previous = scheduledBurnTimers.get(key);
       if (previous) clearTimeout(previous);
       const timer = setTimeout(() => {
         scheduledBurnTimers.delete(key);
-        if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return;
+        if (useKeyStore().pkHex.toLowerCase() !== account || (this.loadedFor && this.loadedFor !== account)) return;
         void this.burnDisappearingMessage(peer, messageId).catch(error => {
           console.warn("[dm] scheduled burn failed", error instanceof Error ? error.message : "unknown");
         });
@@ -642,7 +642,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // temporary message; unknown non-friends cannot plant future tombstones.
       if (!useFriendshipsStore().isAccepted(peer) && !target) return false;
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, targetId, peer);
-      if (accepted) this.burnedById = { ...this.burnedById, [targetId]: { peerPubkey: peer, createdAt: target?.createdAt, senderPubkey: target?.senderPubkey, conversationId: target?.conversationId } };
+      if (accepted && useKeyStore().pkHex.toLowerCase() === account) this.burnedById = { ...this.burnedById, [targetId]: { peerPubkey: peer, createdAt: target?.createdAt, senderPubkey: target?.senderPubkey, conversationId: target?.conversationId } };
       if (!accepted || useKeyStore().pkHex.toLowerCase() !== account) return false;
       for (const transportId of target?.transportEventIds || []) {
         decryptedEventCache.delete(scopedKey(account, transportId));
@@ -672,7 +672,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!target || !hasDisappearingMarker(target.tags) || !isDirectMessageTags(target.tags)
         || directMessagePeer(target, account) !== peer) return false;
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, messageId, peer);
-      if (accepted) this.burnedById = { ...this.burnedById, [messageId]: { peerPubkey: peer, createdAt: target.createdAt, senderPubkey: target.senderPubkey, conversationId: target.conversationId } };
+      if (accepted && useKeyStore().pkHex.toLowerCase() === account) this.burnedById = { ...this.burnedById, [messageId]: { peerPubkey: peer, createdAt: target.createdAt, senderPubkey: target.senderPubkey, conversationId: target.conversationId } };
       if (!accepted || keys.pkHex.toLowerCase() !== account) return false;
       for (const transportId of target.transportEventIds || []) {
         decryptedEventCache.delete(scopedKey(account, transportId));
