@@ -32,6 +32,8 @@
           <button v-else type="button" @click="hidePost">隐藏此动态</button>
           <button v-if="!isOwn" type="button" @click="muteAuthor">不看此人的动态</button>
           <button type="button" @click="copyText">复制文字</button>
+          <button v-if="importablePost" type="button" :disabled="importingPost"
+            @click="savePostToPrivateSpace">{{ importingPost ? "保存中…" : "保存到私人空间" }}</button>
         </div>
       </div>
     </header>
@@ -93,6 +95,7 @@ import { shouldSendDoubleTapLike } from "@/utils/feedCarousel";
 import { extractImageUrls } from "@/utils/extractImageUrls";
 import { loadProfileView } from "@/router/lazyViews";
 import { feedScrollAfterSheetClose } from "@/utils/commentThreads";
+import { canImportPost } from "@/services/privateSpaceImport";
 
 const loadCommentSheet = () => import("./CommentSheet.vue");
 const PostImagePreview = defineAsyncComponent(() => import("./PostImagePreview.vue"));
@@ -110,6 +113,8 @@ const bookmarks = useBookmarksStore();
 const root = ref<HTMLElement | null>(null); const expanded = ref(false); const commentsOpen = ref(false); const metaOpen = ref(false);
 const likeAnimating = ref(false);
 const menuOpen = ref(false);
+const importingPost = ref(false);
+const importablePost = computed(() => canImportPost(props.message));
 const patterns = getVideoUrlRemovalPatterns();
 const cleanText = computed(() => (props.message.content || "")
   .replace(/!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/gi, "")
@@ -160,6 +165,32 @@ async function retryPostDelivery() {
   }
 }
 
+async function savePostToPrivateSpace() {
+  if (importingPost.value || !importablePost.value) return;
+  importingPost.value = true;
+  const account = keys.pkHex;
+  const generation = keys.sessionGeneration;
+  try {
+    const { importPostToPrivateSpace } = await import("@/services/privateSpaceImport");
+    const result = await importPostToPrivateSpace(keys, props.message, displayName(props.message.pubkey));
+    if (account !== keys.pkHex || generation !== keys.sessionGeneration) return;
+    menuOpen.value = false;
+    if (result.created) {
+      const { notePrivateSpaceMutation } = await import("@/services/privateSpaceSync");
+      if (account === keys.pkHex && generation === keys.sessionGeneration) {
+        notePrivateSpaceMutation(keys);
+        ui.addToast("已保存到私人空间", 1800, "success");
+      }
+    } else {
+      ui.addToast("私人空间中已存在这条动态", 1800, "info");
+    }
+  } catch {
+    if (account === keys.pkHex && generation === keys.sessionGeneration)
+      ui.addToast("保存失败，请确认私人空间已解锁或内容未超出限制", 2300, "error");
+  } finally {
+    importingPost.value = false;
+  }
+}
 async function copyText() {
   menuOpen.value = false;
   try { await navigator.clipboard.writeText(cleanText.value); ui.addToast("已复制", 1200, "success"); }
