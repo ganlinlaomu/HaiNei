@@ -1,4 +1,5 @@
 import type { PrivateSpaceRecord } from "@/db/dexie";
+import { validatePrivateSpaceSource, validatePrivateSpaceAttachments } from "@/services/privateSpaceContent";
 
 export const PRIVATE_BACKUP_FORMAT = "hainei-private-space-backup";
 export const PRIVATE_BACKUP_VERSION = 1;
@@ -13,7 +14,8 @@ const textDecoder = new TextDecoder("utf-8", { fatal: true });
 
 export type PrivateBackupNote = Pick<PrivateSpaceRecord,
   "id" | "kind" | "title" | "body" | "tasks" | "pinned" |
-  "createdAt" | "updatedAt" | "revision" | "archivedAt" | "deletedAt">;
+  "createdAt" | "updatedAt" | "revision" | "archivedAt" | "deletedAt" |
+  "source" | "attachments">;
 export type PrivateBackupPayload = {
   schemaVersion: 1;
   accountPubkey: string;
@@ -81,6 +83,8 @@ function validateNote(item: any): PrivateBackupNote {
     createdAt: item.createdAt, updatedAt: item.updatedAt, revision: item.revision,
     ...(item.archivedAt === undefined ? {} : { archivedAt: item.archivedAt }),
     ...(item.deletedAt === undefined ? {} : { deletedAt: item.deletedAt }),
+    ...(item.source === undefined ? {} : { source: validatePrivateSpaceSource(item.source) }),
+    ...(item.attachments === undefined ? {} : { attachments: validatePrivateSpaceAttachments(item.attachments) }),
   };
 }
 
