@@ -176,8 +176,18 @@ function sessionSnapshot() {
     && keys.pkHex.toLowerCase() === account && keys.sessionGeneration === generation };
 }
 function throwIfStale(check: () => boolean) { if (!check()) throw new Error("account_changed"); }
-function promptDownload(name: string, content: string, mime: string) {
-  const file = new Blob([content], { type: mime });
+async function promptDownload(name: string, content: string, mime: string): Promise<boolean> {
+  const file = new File([content], name, { type: mime });
+  // Prefer the native iOS share sheet so PWA users can choose Files/iCloud Drive.
+  // Safari may deny share after asynchronous crypto work; in that case fall back.
+  if (navigator.share && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ title: "海内私人空间", files: [file] });
+      return true;
+    } catch (cause) {
+      if (cause instanceof Error && cause.name === "AbortError") return false;
+    }
+  }
   const url = URL.createObjectURL(file);
   try {
     const link = document.createElement("a");
@@ -189,6 +199,7 @@ function promptDownload(name: string, content: string, mime: string) {
     // Delay revocation for iOS Safari / PWA to finish initiating the download.
     window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
   }
+  return true;
 }
 function backupFileName(suffix: string) {
   return "hainei-private-" + new Date().toISOString().slice(0, 10) + suffix;
@@ -221,9 +232,12 @@ async function downloadEncryptedBackup() {
     throwIfStale(isCurrent);
     const output = await encryptPrivateBackup(account, records, password);
     throwIfStale(isCurrent);
-    promptDownload(backupFileName(".hainei-backup.json"), output, "application/json");
-    backupPassword.value = ""; backupConfirm.value = "";
-    saveStatus.value = "已生成加密备份";
+    const saved = await promptDownload(backupFileName(".hainei-backup.json"), output, "application/json");
+    throwIfStale(isCurrent);
+    if (saved) {
+      backupPassword.value = ""; backupConfirm.value = "";
+      saveStatus.value = "加密备份已交给系统保存";
+    }
   } catch (cause) { backupError(cause); }
   finally { backupBusy.value = false; }
 }
@@ -294,7 +308,7 @@ async function downloadPlainBackup(format: "json" | "md") {
     throwIfStale(isCurrent);
     const content = format === "json" ? exportPlainJson(account, records) : exportPlainMarkdown(account, records);
     throwIfStale(isCurrent);
-    promptDownload(backupFileName(format === "json" ? ".json" : ".md"),
+    await promptDownload(backupFileName(format === "json" ? ".json" : ".md"),
       content, format === "json" ? "application/json" : "text/markdown");
   } catch (cause) { backupError(cause); }
   finally { backupBusy.value = false; }
