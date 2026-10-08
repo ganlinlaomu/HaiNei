@@ -1282,10 +1282,11 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           enforceAuthorization: true,
         }).filter(readable).at(-1)
         : undefined;
-      // If the UI tail is an optimistic sent task, fall back to the newest
-      // canonical message instead of returning without persisting the real read
-      // position. This is what makes the cursor survive lock/login cycles.
-      const latest = requestedReadThrough || items.filter(readable).at(-1);
+      // An explicitly supplied read-through that fails authorization or is
+      // temporary/optimistic must NOT silently fall back to the newest message.
+      // No-argument calls may continue using the newest durable cursor.
+      if (readThrough && !requestedReadThrough) return;
+      const latest = readThrough ? requestedReadThrough : items.filter(readable).at(-1);
       if (!latest?.conversationId) return;
       const conversationId = latest.conversationId;
       const previous = this.readCursors[conversationId];
