@@ -105,7 +105,9 @@ describe("Private Space PR-FIX-A: no accidental empty records", () => {
     expect(view).toContain("if (isUnsavedDraft.value && !hasPrivateSpaceDraftContent(draft))");
     expect(view).toContain("if (backupBusy.value || editorTransitionBusy.value || editor.value");
     expect(view).toContain('aria-label="新的待办事项" @input="pendingTaskInput" @blur="addTask"');
-    expect(view).toContain("if (commitPendingTaskInput()) queueSave()");
+    expect(view).toContain("const committed = commitPendingTaskInput()");
+    expect(view).toContain("if (committed) queueSave()");
+    expect(view).toContain("待办已达到 1000 项，请先处理输入内容再离开");
     expect(view).toContain('onBeforeRouteLeave(async () => {');
     expect(view).toContain('onBeforeAccountLock(async account => {');
     expect(view).toContain('document.visibilityState === "hidden"');
