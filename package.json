@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.34",
-  "releaseSummary": "私人空间支持快捷添加、独立密码加密备份及合并恢复、明文导出确认与来源跳转",
+  "version": "0.1.35",
+  "releaseSummary": "私人空间空白新建不再生成记录，防止重复点击创建，并保护未添加的待办输入",
   "private": true,
   "scripts": {
     "dev": "vite",
