@@ -14,7 +14,7 @@ import {
 } from "@/nostr/messaging/dmReceipts";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { burnControlTags, parseBurnControl, serializeBurnControl } from "@/nostr/messaging/dmBurnControl";
-import { hasDisappearingMarker } from "@/nostr/messaging/disappearingMessages";
+import { BURN_DURATIONS, DISAPPEARING_DM_TYPE, hasDisappearingMarker, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
 import { decryptedEventCache, eventCache, scopedKey } from "@/services/nostrCache";
 import { publishQueuedOutgoing, registerOutgoingPushSigner, sendDirectMessage, type PublishedMessage } from "@/nostr/messaging/service";
 import { isMessageAfter } from "@/nostr/messaging/sync/sorting";
@@ -180,7 +180,7 @@ function taskInboxItem(task: OutgoingDmTaskRecord): InboxItem {
     replyTo: task.replyTo,
     protocol: "nip17",
     transportKind: 1059,
-    tags: [["t", DIRECT_MESSAGE_TYPE]],
+    tags: [["t", DIRECT_MESSAGE_TYPE], ...(task.burnAfterSeconds ? [["t", DISAPPEARING_DM_TYPE], ["burn-after", String(task.burnAfterSeconds)], ["expiration", String(task.createdAt + 48 * 3600)]] : [])],
     outgoing: {
       localId: task.localId,
       state: task.state,
@@ -1204,7 +1204,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       for (const item of items) if (item.conversationId) this.unreadByConversation[item.conversationId] = 0;
       await this.markPeerReadInternal(peer, false);
     },
-    send(peerPubkey: string, content: string, image?: File, replyTo?: string) {
+    send(peerPubkey: string, content: string, image?: File, replyTo?: string, burnAfterSeconds?: BurnDuration) {
       const keys = useKeyStore();
       const account = keys.pkHex.toLowerCase();
       const peer = peerPubkey.trim().toLowerCase();
@@ -1212,12 +1212,16 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!canStartDirectMessage(account, peer, friendships.isAccepted)) throw new Error(peer === account ? "无法向自己发送私信" : "只能向已接受的好友发送私信");
       const text = content.trim();
       if (!text && !image) throw new Error("消息不能为空");
+      if (burnAfterSeconds !== undefined && (!BURN_DURATIONS.includes(burnAfterSeconds) || image || replyTo || !text)) {
+        throw new Error("阅后即焚目前仅支持不带引用或图片的文字消息");
+      }
       const now = Date.now();
       const task: OutgoingDmTaskRecord = {
         accountPubkey: account,
         localId: createLocalId(),
         peerPubkey: peer,
         text,
+        ...(burnAfterSeconds ? { burnAfterSeconds } : {}),
         ...(replyTo ? { replyTo } : {}),
         ...(image ? { imageName: image.name, imageType: image.type } : {}),
         state: image ? "uploading" : "sending",
@@ -1451,6 +1455,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
             : await sendDirectMessage({
               recipientPubkeys: [task.peerPubkey], content, createdAt: task.createdAt,
               replyTo: task.replyTo,
+              burnAfterSeconds: task.burnAfterSeconds,
               tags: [["t", DIRECT_MESSAGE_TYPE]], relays: getRelaysFromStorage("write"), pushCategory: "message",
               context: { senderPubkey: account, nip44Encrypt: keys.supportsNip44 ? keys.nip44Encrypt.bind(keys) : undefined, signEvent: keys.signEvent.bind(keys) },
               onQueued: async outgoingId => { await this.patchTask(localId, { outgoingId }); },
