@@ -154,7 +154,9 @@ describe("direct-message navigation and UI contract", () => {
   it("marks a disappearing message read only after an explicit reveal and an exact receipt", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
-    expect(chat).toContain("void directMessages.acknowledgeOpenedDisappearing(peer, message)");
+    expect(chat).toContain("void directMessages.acknowledgeOpenedDisappearing(peer, message, deadline)");
+    expect(store).toContain("this.scheduleOpenedBurn(peer, id, deadline)");
+    expect(chat).toContain('v-if="isBurned(message)" class="burned-placeholder"');
     expect(chat).toContain('return directMessages.outgoingReceiptStatus(peerPubkey.value, message) || "sent"');
     expect(chat).not.toContain('isDisappearing(message) && receipt === "read" ? "delivered" : receipt');
     expect(store).toContain("if (hasDisappearingMarker(message.tags)) {");
