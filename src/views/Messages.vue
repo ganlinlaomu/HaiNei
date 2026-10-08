@@ -433,6 +433,7 @@ import { createVoiceRecordingSession, type VoiceRecordingResult, type VoiceRecor
 import { openProfile } from "@/utils/profileNavigation";
 import { useMentionComposer } from "@/composables/useMentionComposer";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
+import { canMarkConversationTailRead } from "@/utils/messageReadVisibility";
 import type { MentionCandidate } from "@/utils/mentions";
 import { loadAccountStoresOnce, waitForFirstPaint } from "@/utils/bottomTabActivation";
 
@@ -1433,9 +1434,13 @@ function markVisibleMessagesRead() {
   const list = messageList.value;
   // The latest canonical message may exist in the store without being on
   // screen (historical source/search context, paged messages or mid-scroll).
-  if (!list || sourceFocusReadSuppressed.value || searchContextActive.value
-      || windowEnd.value < messages.value.length
-      || !isNearMessageBottom(scrollMetrics(list), BOTTOM_FOLLOW_THRESHOLD)) return Promise.resolve();
+  if (!canMarkConversationTailRead({
+    hasList: !!list,
+    sourceFocused: sourceFocusReadSuppressed.value,
+    searchingHistory: searchContextActive.value,
+    tailRendered: windowEnd.value >= messages.value.length,
+    nearBottom: !!list && isNearMessageBottom(scrollMetrics(list), BOTTOM_FOLLOW_THRESHOLD),
+  })) return Promise.resolve();
   // Showing a sealed preview is never equivalent to reading its content.
   const latest = windowMessages.value.filter(message => !hasDisappearingMarker(message.tags)
     && (!message.outgoing || message.outgoing.state === "sent")).at(-1);
