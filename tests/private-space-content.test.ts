@@ -47,6 +47,19 @@ describe("PR-FIX-B excerpt semantics", () => {
     expect(extractPrivateSpaceContent(raw, false).text).toBe("今日咖啡非常好喝");
   });
 
+  it("unwraps only a complete serialized Nostr event, not arbitrary user JSON", () => {
+    const envelope = JSON.stringify({
+      id: ID, kind: 1, pubkey: PEER, created_at: 1_760_000_000,
+      tags: [], sig: "f".repeat(128),
+      content: "真正的文字\\n![pic](https://img.example/photo.png)",
+    });
+    const extracted = extractPrivateSpaceContent(envelope);
+    expect(extracted.text).toBe("真正的文字");
+    expect(extracted.attachments).toEqual([{ kind: "image", url: "https://img.example/photo.png" }]);
+    const ordinary = JSON.stringify({ content: "普通 JSON，不能误拆", another: true });
+    expect(extractPrivateSpaceContent(ordinary).text).toBe(ordinary);
+  });
+
   it("stores clean excerpt and source separately; duplicate import cannot overwrite edits or archived note", async () => {
     const { database, notes } = makeRepo();
     await unlockLocalVault(A, "1".repeat(64));
