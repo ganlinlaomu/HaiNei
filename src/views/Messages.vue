@@ -1814,4 +1814,22 @@ onBeforeUnmount(() => {
 @keyframes recording-pulse{50%{opacity:.35}}@keyframes voice-wave{from{height:5px}to{height:19px}}
 @media (min-width:768px){.composer-region{padding-bottom:16px}.message-list{width:min(100%,720px);margin:0 auto}}
 @media (prefers-reduced-motion:reduce){.message-line.message-highlight .message-bubble{animation:none;box-shadow:0 0 0 3px rgba(22,135,232,.16)}}
+
+/* PR2 disappearing-message UI: small opt-in control without changing composer geometry. */
+.dm-attachment-menu{position:absolute;z-index:12;left:24px;bottom:calc(100% + 5px);display:grid;min-width:188px;overflow:hidden;border:1px solid #e5eaf0;border-radius:17px;background:#fff;box-shadow:0 10px 32px rgba(15,23,42,.17)}
+.dm-attachment-menu button{display:flex;min-height:48px;align-items:center;gap:12px;padding:0 16px;border:0;border-bottom:1px solid #f0f2f4;background:transparent;color:#0f1419;text-align:left;font:inherit;font-size:14px}
+.dm-attachment-menu button:last-child{border-bottom:0}.dm-attachment-menu button:active{background:#f4f6f8}.dm-attachment-menu button span{display:inline-grid;width:23px;place-items:center;font-size:21px;color:#64748b}
+.temporary-composer-mode{display:flex;align-items:center;gap:8px;margin:0 24px 7px;padding:6px 9px 6px 12px;border:1px solid #f4ddd9;border-radius:13px;background:#fff8f7;color:#94423c;font-size:12px}
+.temporary-composer-mode>span{font-weight:650;flex:1;white-space:nowrap}.temporary-composer-mode label{color:#8d5752}.temporary-composer-mode select{max-width:100px;min-height:30px;padding:3px 6px;border:1px solid #e9c8c3;border-radius:9px;background:#fff;color:#5d342f;font:inherit;font-size:13px}
+.temporary-composer-mode button{width:28px;height:30px;flex-shrink:0;padding:0;border:0;background:transparent;color:#8d5752;font-size:23px}
+.sr-file-input{position:absolute!important;width:1px!important;height:1px!important;left:-9999px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}
+.message-line .disappearing-bubble{min-width:154px;max-width:min(76vw,290px);border:1px solid #eae2e0;background:#fcf9f8;color:#3b3030}
+.message-line.own .disappearing-bubble{border-color:#e9d0cd;background:#fbebea}
+.temporary-message{display:flex;min-width:0;flex-direction:column;gap:5px}
+.temporary-heading{font-size:13px;font-weight:650;color:#995950}.temporary-caption{font-size:11px;color:#996b65}
+.temporary-countdown{display:block;padding-top:5px;border-top:1px solid #e8dcd9;color:#a55249;font-size:11px;font-variant-numeric:tabular-nums}
+.temporary-reveal{display:flex;width:100%;min-width:150px;flex-direction:column;gap:4px;padding:2px 0;border:0;background:transparent;color:#6c403d;text-align:left;cursor:pointer}
+.temporary-reveal strong{font-size:13px;font-weight:650}.temporary-reveal>span{font-size:14px;color:#bd584f}.temporary-reveal small{font-size:11px;color:#927370}.temporary-reveal:disabled{opacity:.5}
+.burned-placeholder{display:flex;align-items:center;gap:6px;color:#8c8280;font-size:12px;white-space:nowrap}
+@media (max-width:360px){.temporary-composer-mode{margin-right:16px;margin-left:16px}.temporary-composer-mode select{max-width:85px}}
 </style>
