@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.32",
-  "releaseSummary": "私人空间支持 NIP-44 加密跨设备同步、离线重试与冲突副本保护",
+  "version": "0.1.33",
+  "releaseSummary": "私人空间支持手动保存动态、收藏动态和普通私信，严格排除阅后即焚",
   "private": true,
   "scripts": {
     "dev": "vite",
