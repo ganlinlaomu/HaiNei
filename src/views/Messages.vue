@@ -484,6 +484,9 @@ async function fetchOlderPage(reset = false) {
 }
 const searchContextMessages = ref<InboxItem[]>([]);
 const searchContextActive = ref(false);
+// A source jump is a historical inspection, not consent to mark the whole
+// conversation read. Only an explicit "jump to latest" unlocks tail reads.
+const sourceFocusReadSuppressed = ref(false);
 const initialWindowRange = initialBoundedMessageWindow(messages.value.length, 60);
 const windowStart = ref(initialWindowRange.start);
 const windowEnd = ref(initialWindowRange.end);
@@ -1427,9 +1430,14 @@ function handleMessageMediaLoad() {
 }
 
 function markVisibleMessagesRead() {
-  // Showing a sealed preview is not reading its content. Preserve its unread
-  // state until the user explicitly opens (and later burns) that message.
-  const latest = messages.value.filter(message => !hasDisappearingMarker(message.tags)
+  const list = messageList.value;
+  // The latest canonical message may exist in the store without being on
+  // screen (historical source/search context, paged messages or mid-scroll).
+  if (!list || sourceFocusReadSuppressed.value || searchContextActive.value
+      || windowEnd.value < messages.value.length
+      || !isNearMessageBottom(scrollMetrics(list), BOTTOM_FOLLOW_THRESHOLD)) return Promise.resolve();
+  // Showing a sealed preview is never equivalent to reading its content.
+  const latest = windowMessages.value.filter(message => !hasDisappearingMarker(message.tags)
     && (!message.outgoing || message.outgoing.state === "sent")).at(-1);
   if (!latest) return Promise.resolve();
   return directMessages.markPeerRead(peerPubkey.value, latest);
@@ -1451,7 +1459,7 @@ function handleMessageScroll() {
   if (nearBottom && windowEnd.value < messages.value.length) void appendNewerMessages();
 
   const atConversationTail = windowEnd.value >= messages.value.length;
-  if (atConversationTail && nearBottom) {
+  if (atConversationTail && nearBottom && !sourceFocusReadSuppressed.value) {
     followLatestTail = true;
     showJumpToLatest.value = false;
     pendingTailCount.value = 0;
@@ -1465,13 +1473,20 @@ function handleMessageScroll() {
 }
 
 function jumpToLatest() {
+  // Explicit action: user now chooses to inspect the newest conversation.
+  sourceFocusReadSuppressed.value = false;
   exitSearchContext();
   scrollToBottom();
-  void nextTick(() => markVisibleMessagesRead());
+  void nextTick(() => {
+    setMessageListToBottom();
+    void markVisibleMessagesRead();
+  });
 }
 
 async function load() {
   const generation = ++loadGeneration;
+  const sourceTarget = route.query.focus;
+  sourceFocusReadSuppressed.value = typeof sourceTarget === "string" && /^[0-9a-f]{64}$/i.test(sourceTarget);
   loadingConversation = true;
   showJumpToLatest.value = false;
   pendingTailCount.value = 0;
@@ -1513,12 +1528,13 @@ async function load() {
     // persistence are local follow-up work and must not block first interaction.
     loadingConversation = false;
     // PR3-B: explicit source jump from a private note; never reveal temporary DMs.
-    const target = route.query.focus;
-    if (typeof target === "string" && /^[0-9a-f]{64}$/i.test(target)) {
-      await focusMessage(target);
+    if (sourceFocusReadSuppressed.value && typeof sourceTarget === "string") {
+      await focusMessage(sourceTarget);
+      showJumpToLatest.value = true;
     }
     void restoreDraft(account, peer).catch(() => undefined);
-    void markVisibleMessagesRead().catch(() => undefined);
+    if (!sourceFocusReadSuppressed.value)
+      void markVisibleMessagesRead().catch(() => undefined);
   } finally {
     if (generation === loadGeneration) loadingConversation = false;
   }
@@ -1951,8 +1967,14 @@ watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
   void load();
 });
 watch(() => route.query.focus, target => {
-  if (loadingConversation || typeof target !== "string" || !/^[0-9a-f]{64}$/i.test(target)) return;
-  void focusMessage(target);
+  if (loadingConversation) return;
+  if (typeof target === "string" && /^[0-9a-f]{64}$/i.test(target)) {
+    sourceFocusReadSuppressed.value = true;
+    showJumpToLatest.value = true;
+    void focusMessage(target);
+  } else {
+    sourceFocusReadSuppressed.value = false;
+  }
 });
 watch(() => messages.value.map(message => message.id).join("\0"), async (nextSignature, previousSignature) => {
   if (windowMutationInProgress) return;
@@ -2003,7 +2025,7 @@ watch(() => messages.value.map(message => message.id).join("\0"), async (nextSig
     followLatestTail = true;
     showJumpToLatest.value = false;
     pendingTailCount.value = 0;
-    await markVisibleMessagesRead();
+    if (!sourceFocusReadSuppressed.value) await markVisibleMessagesRead();
     return;
   }
 
