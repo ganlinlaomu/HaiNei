@@ -4,7 +4,7 @@ import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess
 import type { NostrEvent } from "nostr-tools";
 
 export const APP_VERSION = "0.1.31";
-export const DB_VERSION = 18;
+export const DB_VERSION = 19;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -280,6 +280,10 @@ export type PrivateSpaceRecord = {
   createdAt: number;
   updatedAt: number;
   revision: number;
+  /** Last Worker CAS version we have applied or published. */
+  cloudVersion?: number;
+  /** Local revision whose contents were last confirmed remotely. */
+  syncedRevision?: number;
 };
 
 export type BookmarkRecord = {
@@ -687,6 +691,10 @@ export class HaiNeiDatabase extends Dexie {
 
     // PR1: additive account-scoped private notes. No existing data is rewritten.
     this.version(18).stores({
+      accountNotes: "[accountPubkey+id], accountPubkey, [accountPubkey+updatedAt]"
+    });
+    // Metadata is inside the vault envelope; old v18 rows remain readable.
+    this.version(19).stores({
       accountNotes: "[accountPubkey+id], accountPubkey, [accountPubkey+updatedAt]"
     });
 
