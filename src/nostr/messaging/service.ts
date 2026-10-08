@@ -25,6 +25,7 @@ export interface SendDirectMessageOptions {
   context: EncodeContext;
   pushCategory?: PushCategory;
   createdAt?: number;
+  burnAfterSeconds?: 10 | 30 | 60;
   onQueued?: (outgoingId: string) => void | Promise<void>;
 }
 
@@ -88,7 +89,8 @@ export async function buildMessageEvents(options: Omit<SendDirectMessageOptions,
     replyTo: options.replyTo,
     rootId: options.rootId,
     tags: options.tags,
-    createdAt: options.createdAt
+    createdAt: options.createdAt,
+    burnAfterSeconds: options.burnAfterSeconds
   };
   if (!options.context.nip44Encrypt) throw new Error("当前登录方式不支持 NIP-44，无法发送 NIP-17 消息");
   return nip17Adapter.encode!(outgoing, options.context);
