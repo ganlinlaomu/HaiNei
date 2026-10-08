@@ -1125,7 +1125,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // Relay echo is matched, so it must never become a durable read cursor.
       const readable = (item: InboxItem) => (!item.outgoing || item.outgoing.state === "sent")
         && !item.id.startsWith("local:")
-        && !item.conversationId?.startsWith("local:");
+        && !item.conversationId?.startsWith("local:")
+        && !hasDisappearingMarker(item.tags);
       const requestedReadThrough = readThrough
         ? directMessagesForPeer([readThrough], account, peer, {
           friendship: useFriendshipsStore().getRecord(peer),
@@ -1152,7 +1153,11 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // a previously delivered Push badge cannot linger while IndexedDB/D1 work
       // is still pending.
       this.readCursors = { ...this.readCursors, [conversationId]: read };
-      this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: 0 };
+      const sealedUnread = items.filter(item => item.pubkey !== account
+        && hasDisappearingMarker(item.tags)
+        && item.conversationId === conversationId
+        && isMessageAfter({ id: item.id, createdAt: item.created_at }, read)).length;
+      this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: sealedUnread };
       if (typeof navigator !== "undefined") {
         const notifications = useNotificationsStore();
         void syncAppBadge(accountBadgeCount(
