@@ -286,14 +286,42 @@ export class SyncedMessageRepository {
     return accepted;
   }
 
+  /** Due read deadlines are durable even when the chat view is unmounted.
+   * Return only minimal identifiers; never materialize plaintext for scheduling. */
+  async listDueOpenedDisappearing(accountPubkey: string, nowMs = Date.now()): Promise<OpenedDmState[]> {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const records = await this.database.accountMeta.where("accountPubkey").equals(account)
+      .filter(record => record.key.startsWith("dm-open:")).toArray();
+    return records
+      .map(record => record.value as OpenedDmState | undefined)
+      .filter((record): record is OpenedDmState => !!record
+        && /^[0-9a-f]{64}$/i.test(record.messageId)
+        && /^[0-9a-f]{64}$/i.test(record.peerPubkey)
+        && Number.isFinite(record.deadlineAt)
+        && record.deadlineAt <= nowMs);
+  }
+
+  /** Never defer secure local deletion to the next time that particular chat
+   * is opened. All expired/watched plaintext is purged on account restoration. */
   async purgeExpiredDisappearing(accountPubkey: string, nowMs = Date.now()) {
     const account = normalizeAccountPubkey(accountPubkey);
-    const expired = await this.database.syncedMessages.where("accountPubkey").equals(account)
-      .filter(record => isExpiredDisappearing(record.tags, Math.floor(nowMs / 1000))).toArray();
-    let cleaned = 0;
+    const [expired, openedDue] = await Promise.all([
+      this.database.syncedMessages.where("accountPubkey").equals(account)
+        .filter(record => isExpiredDisappearing(record.tags, Math.floor(nowMs / 1000))).toArray(),
+      this.listDueOpenedDisappearing(account, nowMs),
+    ]);
+    const toBurn = new Map<string, string>();
     for (const record of expired) {
       const peer = directMessagePeer(record, account);
-      if (peer && await this.burnDisappearingMessage(account, record.id, peer, nowMs)) cleaned++;
+      if (peer) toBurn.set(record.id, peer);
+    }
+    for (const record of openedDue) {
+      const existing = toBurn.get(record.messageId);
+      if (!existing) toBurn.set(record.messageId, record.peerPubkey);
+    }
+    let cleaned = 0;
+    for (const [id, peer] of toBurn) {
+      if (await this.burnDisappearingMessage(account, id, peer, nowMs)) cleaned++;
     }
     return cleaned;
   }

@@ -85,6 +85,8 @@ type PeerHistoryPage = {
 const PEER_HISTORY_WARM_TTL_MS = 30_000;
 const peerHistoryWarmups = new Map<string, { createdAt: number; promise: Promise<PeerHistoryPage> }>();
 const activeOutgoingTasks = new Map<string, Promise<void>>();
+const activeBurnRequests = new Set<string>();
+const scheduledBurnTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const taskPreviewUrls = new Map<string, string>();
 const pendingReceiptCursors = new Map<string, DmReceiptCursor>();
 const receiptTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -241,6 +243,11 @@ function ensureResumeListeners() {
   if (stopResumeListener) return;
   stopResumeListener = onAppResume(() => {
     void useDirectMessagesStore().resumePending(true);
+    // A 10-second read deadline may have elapsed while the PWA was suspended
+    // or while the user was browsing another route.
+    void useDirectMessagesStore().restoreOpenedBurnSchedules().catch(error => {
+      console.warn("[dm] expired read-message cleanup failed", error instanceof Error ? error.message : "unknown");
+    });
   });
 }
 function cursor(createdAt?: number, messageId?: string) {
@@ -575,16 +582,67 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!account || useKeyStore().pkHex.toLowerCase() !== account) return;
       await metaRepository.put(account, sent ? sentReceiptStateKey(peerPubkey) : receiptStateKey(peerPubkey), state);
     },
+    /** Keep short, account-scoped one-shot timers alive across route navigation.
+     * iOS suspension is handled by restoreOpenedBurnSchedules on resume. */
+    scheduleOpenedBurn(peerPubkey: string, messageId: string, deadlineAt: number) {
+      const account = useKeyStore().pkHex.toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      if (!account || (this.loadedFor && this.loadedFor !== account) || !Number.isFinite(deadlineAt)
+        || !/^[0-9a-f]{64}$/i.test(messageId) || !/^[0-9a-f]{64}$/i.test(peer)) return;
+      const key = `${account}:${messageId.toLowerCase()}`;
+      const previous = scheduledBurnTimers.get(key);
+      if (previous) clearTimeout(previous);
+      const timer = setTimeout(() => {
+        scheduledBurnTimers.delete(key);
+        if (useKeyStore().pkHex.toLowerCase() !== account || (this.loadedFor && this.loadedFor !== account)) return;
+        void this.burnDisappearingMessage(peer, messageId).catch(error => {
+          console.warn("[dm] scheduled burn failed", error instanceof Error ? error.message : "unknown");
+        });
+      }, Math.max(0, deadlineAt - Date.now()));
+      scheduledBurnTimers.set(key, timer);
+    },
+    async restoreOpenedBurnSchedules(nowMs = Date.now()) {
+      const account = useKeyStore().pkHex.toLowerCase();
+      if (!account || this.loadedFor !== account) return;
+      const records = await metaRepository.listPrefix(account, "dm-open:");
+      if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return;
+      for (const record of records) {
+        const state = record.value as { messageId?: string; peerPubkey?: string; deadlineAt?: number } | undefined;
+        if (!state || typeof state.messageId !== "string" || typeof state.peerPubkey !== "string"
+          || typeof state.deadlineAt !== "number" || !Number.isFinite(state.deadlineAt)) continue;
+        if (state.deadlineAt <= nowMs) {
+          await this.burnDisappearingMessage(state.peerPubkey, state.messageId);
+        } else {
+          this.scheduleOpenedBurn(state.peerPubkey, state.messageId, state.deadlineAt);
+        }
+      }
+    },
+    /** Delete due temporary messages across all chats, not just mounted views. */
+    async burnDueOpenedMessages(nowMs = Date.now()) {
+      const account = useKeyStore().pkHex.toLowerCase();
+      if (!account || this.loadedFor !== account) return 0;
+      const due = await syncedMessageRepository.listDueOpenedDisappearing(account, nowMs);
+      if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return 0;
+      let burned = 0;
+      for (const item of due) {
+        if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) break;
+        if (await this.burnDisappearingMessage(item.peerPubkey, item.messageId)) burned++;
+      }
+      return burned;
+    },
     /** An encrypted burn notice is authenticated by NIP-17's signed seal and friendship gate. */
     async processBurnControl(message: CanonicalMessage) {
       const targetId = parseBurnControl(message);
       const account = useKeyStore().pkHex.toLowerCase();
       if (!targetId || !account || (this.loadedFor && this.loadedFor !== account)) return false;
       const peer = directMessagePeer(message, account);
-      if (!peer || !useFriendshipsStore().isAccepted(peer)) return false;
+      if (!peer) return false;
       const target = await syncedMessageRepository.get(account, targetId);
+      // Former friends can still request destruction of an existing matching
+      // temporary message; unknown non-friends cannot plant future tombstones.
+      if (!useFriendshipsStore().isAccepted(peer) && !target) return false;
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, targetId, peer);
-      if (accepted) this.burnedById = { ...this.burnedById, [targetId]: { peerPubkey: peer, createdAt: target?.createdAt, senderPubkey: target?.senderPubkey, conversationId: target?.conversationId } };
+      if (accepted && useKeyStore().pkHex.toLowerCase() === account) this.burnedById = { ...this.burnedById, [targetId]: { peerPubkey: peer, createdAt: target?.createdAt, senderPubkey: target?.senderPubkey, conversationId: target?.conversationId } };
       if (!accepted || useKeyStore().pkHex.toLowerCase() !== account) return false;
       for (const transportId of target?.transportEventIds || []) {
         decryptedEventCache.delete(scopedKey(account, transportId));
@@ -602,12 +660,19 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const keys = useKeyStore();
       const account = keys.pkHex.toLowerCase();
       const peer = peerPubkey.toLowerCase();
-      if (!keys.supportsNip44 || !canStartDirectMessage(account, peer, useFriendshipsStore().isAccepted)) return false;
+      const burnKey = `${account}:${messageId.toLowerCase()}`;
+      if (activeBurnRequests.has(burnKey)) return false;
+      activeBurnRequests.add(burnKey);
+      try {
+      // Local destruction must not depend on friendship status, relay health,
+      // or a currently available signer. Network notification is best effort.
+      if (!account || !peer || peer === account) return false;
+      const canNotify = keys.supportsNip44 && canStartDirectMessage(account, peer, useFriendshipsStore().isAccepted);
       const target = await syncedMessageRepository.get(account, messageId);
       if (!target || !hasDisappearingMarker(target.tags) || !isDirectMessageTags(target.tags)
         || directMessagePeer(target, account) !== peer) return false;
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, messageId, peer);
-      if (accepted) this.burnedById = { ...this.burnedById, [messageId]: { peerPubkey: peer, createdAt: target.createdAt, senderPubkey: target.senderPubkey, conversationId: target.conversationId } };
+      if (accepted && useKeyStore().pkHex.toLowerCase() === account) this.burnedById = { ...this.burnedById, [messageId]: { peerPubkey: peer, createdAt: target.createdAt, senderPubkey: target.senderPubkey, conversationId: target.conversationId } };
       if (!accepted || keys.pkHex.toLowerCase() !== account) return false;
       for (const transportId of target.transportEventIds || []) {
         decryptedEventCache.delete(scopedKey(account, transportId));
@@ -617,7 +682,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.outgoingTasks = this.outgoingTasks.filter(task => task.accountPubkey !== account ||
         (task.outgoingId !== messageId && task.canonicalMessageId !== messageId));
       if (this.loadedFor === account) await this.reconcileDurableUnread();
-      try {
+      if (canNotify) try {
         await sendDirectMessage({
           recipientPubkeys: [peer],
           content: serializeBurnControl(messageId),
@@ -635,7 +700,13 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         // to the user as a confirmed remote deletion.
         console.warn("[dm] encrypted burn notification unavailable", error instanceof Error ? error.message : "unknown");
       }
+      const scheduled = scheduledBurnTimers.get(burnKey);
+      if (scheduled) clearTimeout(scheduled);
+      scheduledBurnTimers.delete(burnKey);
       return true;
+      } finally {
+        activeBurnRequests.delete(burnKey);
+      }
     },
     async processReceipt(message: CanonicalMessage) {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
@@ -1084,6 +1155,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.claimDerivedStateOwnership();
       ensureResumeListeners();
       void this.resumePending(false);
+      void this.restoreOpenedBurnSchedules().catch(() => undefined);
     },
     async markPeerRead(peerPubkey: string, readThrough?: InboxItem) {
       return this.markPeerReadInternal(peerPubkey, true, readThrough);
@@ -1101,7 +1173,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // Relay echo is matched, so it must never become a durable read cursor.
       const readable = (item: InboxItem) => (!item.outgoing || item.outgoing.state === "sent")
         && !item.id.startsWith("local:")
-        && !item.conversationId?.startsWith("local:");
+        && !item.conversationId?.startsWith("local:")
+        && !hasDisappearingMarker(item.tags);
       const requestedReadThrough = readThrough
         ? directMessagesForPeer([readThrough], account, peer, {
           friendship: useFriendshipsStore().getRecord(peer),
@@ -1128,7 +1201,11 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // a previously delivered Push badge cannot linger while IndexedDB/D1 work
       // is still pending.
       this.readCursors = { ...this.readCursors, [conversationId]: read };
-      this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: 0 };
+      const sealedUnread = items.filter(item => item.pubkey !== account
+        && hasDisappearingMarker(item.tags)
+        && item.conversationId === conversationId
+        && isMessageAfter({ id: item.id, createdAt: item.created_at }, read)).length;
+      this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: sealedUnread };
       if (typeof navigator !== "undefined") {
         const notifications = useNotificationsStore();
         void syncAppBadge(accountBadgeCount(
@@ -1526,6 +1603,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
     },
     reset() {
+      for (const timer of scheduledBurnTimers.values()) clearTimeout(timer);
+      scheduledBurnTimers.clear();
       for (const task of this.outgoingTasks) {
         const key = taskKey(task.accountPubkey, task.localId);
         const url = taskPreviewUrls.get(key);
