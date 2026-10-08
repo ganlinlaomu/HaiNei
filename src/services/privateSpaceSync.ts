@@ -225,7 +225,7 @@ export async function syncPrivateSpace(keys: Keys): Promise<void> {
   const controller = new AbortController();
   controllers.set(account, controller);
   const isCurrent = () => !controller.signal.aborted
-    && epochs.get(account) === epoch && active(keys, account, generation);
+    && (epochs.get(account) || 0) === epoch && active(keys, account, generation);
   publish(account, "syncing");
   const work = (async () => {
     try {
