@@ -495,7 +495,11 @@ function addTask() {
   if (commitPendingTaskInput()) queueSave();
 }
 async function flush() {
-  if (commitPendingTaskInput()) queueSave();
+  const committed = commitPendingTaskInput();
+  // A full todo list must block navigation rather than silently discard typed input.
+  if (!committed && editor.value?.kind === "todo" && newTaskText.value.trim())
+    throw new Error("待办已达到 1000 项，请先处理输入内容再离开");
+  if (committed) queueSave();
   if (timer) return saveNow();
   return writes;
 }
