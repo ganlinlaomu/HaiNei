@@ -211,7 +211,7 @@ export class SyncedMessageRepository {
     let accepted = false;
     await this.database.transaction("rw", this.database.syncedMessages, this.database.accountMeta,
       this.database.decryptedEvents, this.database.deferredAuthorizationMessages, this.database.outgoingQueue,
-      this.database.conversationStates, async () => {
+      this.database.outgoingDmTasks, this.database.conversationStates, async () => {
         const target = await this.database.syncedMessages.get([account, id]);
         if (target && (!isDirectMessageTags(target.tags) || !hasDisappearingMarker(target.tags)
           || directMessagePeer(target, account) !== peer)) return;
@@ -219,6 +219,10 @@ export class SyncedMessageRepository {
         if (marker && (marker.value as { peerPubkey?: string })?.peerPubkey !== peer) return;
         await this.database.accountMeta.put({ accountPubkey: account, key: burnKey(id), value: { peerPubkey: peer, burnedAt: nowMs } });
         accepted = true;
+        // The optimistic-send task can contain plaintext even after the synced row is removed.
+        const tasks = await this.database.outgoingDmTasks.where("accountPubkey").equals(account)
+          .filter(task => task.canonicalMessageId === id || task.outgoingId === id).primaryKeys();
+        if (tasks.length) await this.database.outgoingDmTasks.bulkDelete(tasks);
         if (!target) return; // burn event may arrive before the original wrap
         await this.database.syncedMessages.delete([account, id]);
         await this.database.deferredAuthorizationMessages.delete([account, id]);
