@@ -1,7 +1,12 @@
 <template>
   <main class="private-space-page app-page">
     <SecondaryPageHeader title="私人空间" back-label="返回我的" />
-    <div class="privacy-line">🔒 仅当前账号可见 · 本机加密保存 · 云同步将在后续版本开放</div>
+    <div class="privacy-line">🔒 本地与云端均加密 · 仅当前账号可访问</div>
+    <div class="cloud-status" aria-live="polite">
+      <span>{{ cloudStatusLabel }}</span>
+      <button v-if="syncStatus.status === 'error' || syncStatus.status === 'offline'"
+        type="button" @click="retrySync">重新同步</button>
+    </div>
     <p v-if="error" role="alert" class="error-line">{{ error }}</p>
     <template v-if="!editor">
       <div class="toolbar">
@@ -71,6 +76,10 @@ import { useKeyStore } from "@/stores/keys";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { privateSpaceRepository, type PrivateSpaceDraft } from "@/repositories/privateSpaceRepository";
 import type { PrivateSpaceRecord } from "@/db/dexie";
+import {
+  syncPrivateSpace, notePrivateSpaceMutation, getPrivateSpaceSyncState,
+  subscribePrivateSpaceSync, type PrivateSpaceSyncState,
+} from "@/services/privateSpaceSync";
 
 const keys = useKeyStore();
 const notes = ref<PrivateSpaceRecord[]>([]);
@@ -81,6 +90,18 @@ const loading = ref(false);
 const error = ref("");
 const saveStatus = ref("已保存在本机");
 const newTaskText = ref("");
+const syncStatus = ref<PrivateSpaceSyncState>(getPrivateSpaceSyncState(keys.pkHex.toLowerCase()));
+const cloudStatusLabel = computed(() => {
+  if (syncStatus.value.status === "synced") return syncStatus.value.conflicts
+    ? "云端已同步 · 已保留 " + syncStatus.value.conflicts + " 条冲突副本"
+    : "已加密同步至云端";
+  if (syncStatus.value.status === "syncing") return "正在加密同步…";
+  if (syncStatus.value.status === "error") return "云同步失败 · 内容已保存在本机：" + (syncStatus.value.error || "请重试");
+  if (syncStatus.value.status === "offline") return "当前离线 · 内容仅保存在本机";
+  if (syncStatus.value.status === "unavailable") return "当前登录方式不支持加密同步";
+  return "已保存在本机 · 等待云同步";
+});
+function retrySync() { void syncPrivateSpace(keys); }
 const tabs = [
   { value: "all", label: "全部" }, { value: "note", label: "笔记" }, { value: "todo", label: "待办" },
   { value: "archived", label: "归档" }, { value: "trash", label: "最近删除" },
@@ -89,6 +110,7 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let writes: Promise<void> = Promise.resolve();
 let loadVersion = 0;
 let unsubscribeLock: (() => void) | undefined;
+let unsubscribeSync: (() => void) | undefined;
 
 const filtered = computed(() => {
   const term = query.value.trim().toLocaleLowerCase();
@@ -130,7 +152,11 @@ async function loadForAccount(account: string) {
   if (!loading.value) return;
   try {
     const records = await privateSpaceRepository.list(account);
-    if (version === loadVersion && keys.pkHex === account) notes.value = records;
+    if (version === loadVersion && keys.pkHex === account) {
+      notes.value = records;
+      syncStatus.value = getPrivateSpaceSyncState(account);
+      void syncPrivateSpace(keys);
+    }
   } catch (cause) {
     if (version === loadVersion) handleError(cause);
   } finally {
@@ -162,6 +188,7 @@ function saveNow(): Promise<void> {
     const record = await privateSpaceRepository.save(account, id, draft);
     if (loadVersion === version && keys.pkHex === account) {
       updateInList(record);
+      notePrivateSpaceMutation(keys);
       if (editor.value?.id === id && !timer) saveStatus.value = "已保存在本机";
     }
   });
@@ -185,6 +212,7 @@ async function create(kind: "note" | "todo") {
     if (!account || !keys.isUnlocked) return;
     const created = await privateSpaceRepository.create(account, kind);
     updateInList(created);
+    notePrivateSpaceMutation(keys);
     editor.value = { ...created, tasks: [] };
     newTaskText.value = "";
     saveStatus.value = "已保存在本机";
@@ -201,7 +229,12 @@ async function open(note: PrivateSpaceRecord) {
   } catch (cause) { handleError(cause); }
 }
 async function closeEditor() {
-  try { await flush(); editor.value = null; }
+  try {
+    await flush();
+    editor.value = null;
+    await refreshAfterSync();
+    void syncPrivateSpace(keys);
+  }
   catch (cause) { handleError(cause); }
 }
 function addTask() {
@@ -226,6 +259,7 @@ async function archiveNote() {
     await flush();
     const note = editor.value;
     updateInList(await privateSpaceRepository.update(note.accountPubkey, note.id, { archivedAt: Date.now() }));
+    notePrivateSpaceMutation(keys);
     editor.value = null;
   } catch (cause) { handleError(cause); }
 }
@@ -234,6 +268,7 @@ async function restoreNote(note: PrivateSpaceRecord) {
     updateInList(await privateSpaceRepository.update(note.accountPubkey, note.id, {
       deletedAt: 0, archivedAt: 0,
     }));
+    notePrivateSpaceMutation(keys);
     error.value = "";
   } catch (cause) { handleError(cause); }
 }
@@ -244,13 +279,31 @@ async function deleteNote() {
     await flush();
     const note = editor.value;
     updateInList(await privateSpaceRepository.moveToTrash(note.accountPubkey, note.id));
+    notePrivateSpaceMutation(keys);
     editor.value = null;
   } catch (cause) { handleError(cause); }
+}
+async function refreshAfterSync() {
+  const account = keys.pkHex;
+  const version = loadVersion;
+  if (!account || !keys.isUnlocked || editor.value || timer) return;
+  try {
+    const records = await privateSpaceRepository.list(account);
+    if (account === keys.pkHex && version === loadVersion && !editor.value && !timer) notes.value = records;
+  } catch { /* A locked session will reload after the next successful unlock. */ }
+}
+function onCloudUpdate(event: Event) {
+  const detail = (event as CustomEvent<{ account: string }>).detail;
+  if (detail?.account === keys.pkHex.toLowerCase()) void refreshAfterSync();
 }
 function onVisibilityChange() {
   if (document.visibilityState === "hidden" && timer) void saveNow().catch(handleError);
 }
 onMounted(() => {
+  unsubscribeSync = subscribePrivateSpaceSync(state => {
+    if (state.account === keys.pkHex.toLowerCase()) syncStatus.value = state;
+  });
+  window.addEventListener("hainei-private-space-synced", onCloudUpdate);
   unsubscribeLock = onBeforeAccountLock(async account => {
     if (editor.value?.accountPubkey === account) await flush();
   });
@@ -264,6 +317,8 @@ onBeforeRouteLeave(async () => {
 });
 onBeforeUnmount(() => {
   unsubscribeLock?.();
+  unsubscribeSync?.();
+  window.removeEventListener("hainei-private-space-synced", onCloudUpdate);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   if (timer) clearTimeout(timer);
 });
@@ -272,6 +327,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .private-space-page{min-height:100%;background:#fff;color:#172033;padding-bottom:calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
 .privacy-line{padding:12px 16px 6px;font-size:12px;color:#64748b}
+.cloud-status{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 16px 8px;font-size:12px;color:#64748b}
+.cloud-status button{border:0;border-radius:7px;background:#eff6ff;color:#1d4ed8;padding:7px 9px;white-space:nowrap}
 .error-line{margin:8px 16px;padding:10px;border-radius:8px;background:#fef2f2;color:#b91c1c;font-size:13px}
 .toolbar{display:flex;gap:8px;align-items:center;padding:14px 14px 10px}
 .toolbar input{min-width:0;flex:1;border:1px solid #e2e8f0;border-radius:11px;padding:10px;font:inherit;font-size:14px}
