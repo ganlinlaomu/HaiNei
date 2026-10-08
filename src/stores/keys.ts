@@ -186,6 +186,10 @@ export const useKeyStore = defineStore("keys", {
         }
       }));
       if (!isCurrent()) return;
+      // Start note sync independently; never delay DM read-state recovery or first paint.
+      void import("@/services/privateSpaceSync").then(({ schedulePrivateSpaceSync }) => {
+        if (isCurrent()) schedulePrivateSpaceSync(this, 3_000);
+      }).catch(() => { /* Local encrypted notes stay available offline. */ });
 
       // Bookmarks are local-first and have their own durable cloud retry path.
       // Start this independently of DM/Relay history bootstrap.
@@ -276,6 +280,9 @@ export const useKeyStore = defineStore("keys", {
     resetAccountStores(currentPk: string) {
       this.sessionGeneration++;
       clearRelaySessionSigner(currentPk);
+      void import("@/services/privateSpaceSync").then(({ cancelPrivateSpaceSync }) => {
+        cancelPrivateSpaceSync(currentPk.toLowerCase());
+      });
       stopAccountMessageSync();
       lockLocalVault(currentPk);
       clearPrivateDeviceValues(currentPk);
