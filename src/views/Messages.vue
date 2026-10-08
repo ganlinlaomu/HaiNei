@@ -606,6 +606,8 @@ async function revealDisappearing(message: InboxItem) {
       return;
     }
     openedDeadlines.value = { ...openedDeadlines.value, [message.id]: deadline };
+    // Global one-shot timer survives closing or navigating away from this chat.
+    directMessages.scheduleOpenedBurn(peer, message.id, deadline);
     if (deadline <= Date.now()) void checkBurnDeadlines();
     else startBurnClock();
   } catch {
@@ -1326,6 +1328,7 @@ async function load() {
     const openRows = await syncedMessageRepository.listOpenedDisappearing(account, peer);
     if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
     openedDeadlines.value = Object.fromEntries(openRows.map(row => [row.messageId, row.deadlineAt]));
+    for (const row of openRows) directMessages.scheduleOpenedBurn(peer, row.messageId, row.deadlineAt);
     startBurnClock();
     clockNow.value = Date.now();
     void checkBurnDeadlines();
