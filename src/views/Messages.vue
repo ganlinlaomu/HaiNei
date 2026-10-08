@@ -1254,7 +1254,10 @@ function handleMessageMediaLoad() {
 }
 
 function markVisibleMessagesRead() {
-  const latest = messages.value.filter(message => !message.outgoing || message.outgoing.state === "sent").at(-1);
+  // Showing a sealed preview is not reading its content. Preserve its unread
+  // state until the user explicitly opens (and later burns) that message.
+  const latest = messages.value.filter(message => !hasDisappearingMarker(message.tags)
+    && (!message.outgoing || message.outgoing.state === "sent")).at(-1);
   if (!latest) return Promise.resolve();
   return directMessages.markPeerRead(peerPubkey.value, latest);
 }
