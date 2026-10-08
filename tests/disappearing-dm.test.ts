@@ -193,6 +193,47 @@ describe("opt-in disappearing NIP-17", () => {
     expect(await reopened.openDisappearingMessage(receiver, ephemeral.id, sender)).toBeNull();
   });
 
+  it("decrypts the same authenticated burn notification on sender and recipient devices", async () => {
+    const repo = repository();
+    const temporary = (await nip17Adapter.encode!({
+      recipientPubkeys: [receiver], plaintext: "cross-device secret", tags: [["t", "hainei-dm"]],
+      burnAfterSeconds: 10,
+    }, context)).message;
+    await repo.insertMessageIfAbsent(receiver, temporary);
+    await repo.insertMessageIfAbsent(sender, temporary);
+
+    const noticeContext = {
+      senderPubkey: receiver,
+      nip44Encrypt: (peer: string, plaintext: string) => encryptDirectMessage({
+        senderPrivateKey: b, recipientPubkey: peer, plaintext,
+      }),
+      signEvent: (event: EventTemplate) => Promise.resolve(finalizeEvent(event, b)),
+    };
+    const encrypted = await nip17Adapter.encode!({
+      recipientPubkeys: [sender],
+      plaintext: serializeBurnControl(temporary.id),
+      tags: burnControlTags(),
+    }, noticeContext);
+    expect(encrypted.events).toHaveLength(2);
+    const senderWrap = encrypted.events.find(event => event.tags[0][1] === sender)!;
+    const receiverCopy = encrypted.events.find(event => event.tags[0][1] === receiver)!;
+    const decodedOnSender = await nip17Adapter.decode(senderWrap, {
+      accountPubkey: sender,
+      nip44Decrypt: (peer: string, ciphertext: string) => decryptDirectMessage({
+        recipientPrivateKey: a, senderPubkey: peer, ciphertext,
+      }),
+    });
+    const decodedOnOwnSecondDevice = await nip17Adapter.decode(receiverCopy, decrypt);
+    expect(parseBurnControl(decodedOnSender!)).toBe(temporary.id);
+    expect(parseBurnControl(decodedOnOwnSecondDevice!)).toBe(temporary.id);
+    expect(await repo.burnDisappearingMessage(sender, temporary.id, receiver)).toBe(true);
+    expect(await repo.burnDisappearingMessage(receiver, temporary.id, sender)).toBe(true);
+    expect(await repo.get(sender, temporary.id)).toBeUndefined();
+    expect(await repo.get(receiver, temporary.id)).toBeUndefined();
+    expect((await repo.insertMessageIfAbsent(sender, temporary)).inserted).toBe(false);
+    expect((await repo.insertMessageIfAbsent(receiver, temporary)).inserted).toBe(false);
+  });
+
   it("handles a signed burn control arriving before the original message", async () => {
     const repo = repository();
     const temporary = (await nip17Adapter.encode!({
