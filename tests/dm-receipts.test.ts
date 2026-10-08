@@ -90,7 +90,7 @@ describe("encrypted DM receipts", () => {
     keys.pkHex = ACCOUNT;
     const friendship = useFriendshipsStore();
     friendship.loadedFor = ACCOUNT;
-    vi.spyOn(friendship, "isAccepted").mockReturnValue(true);
+    friendship.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "accepted" } as any];
     const direct = useDirectMessagesStore();
     direct.loadedFor = ACCOUNT;
     direct.receiptStateByPeer[PEER] = {
@@ -136,7 +136,7 @@ describe("encrypted DM receipts", () => {
     keys.pkHex = ACCOUNT;
     const friends = useFriendshipsStore();
     friends.loadedFor = ACCOUNT;
-    vi.spyOn(friends, "isAccepted").mockReturnValue(true);
+    friends.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "accepted" } as any];
     const direct = useDirectMessagesStore();
     direct.loadedFor = ACCOUNT;
     vi.spyOn(syncedMessageRepository, "get").mockResolvedValue({
