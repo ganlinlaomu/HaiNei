@@ -331,6 +331,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     receiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
     sentReceiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
     draftsByPeer: {} as Record<string, DmDraft | undefined>,
+    burnedById: {} as Record<string, { peerPubkey: string; createdAt?: number; senderPubkey?: string; conversationId?: string }>,
     outgoingTasks: [] as OutgoingDmTaskRecord[],
   }),
   getters: {
@@ -342,6 +343,23 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       : state.unreadByConversation,
   },
   actions: {
+    /** Render-only metadata, never stores a destroyed message's plaintext. */
+    async loadBurnedPeer(peerPubkey: string) {
+      const account = useKeyStore().pkHex.toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      if (!account || !peer || !useFriendshipsStore().isAccepted(peer)) return;
+      const rows = await metaRepository.listPrefix(account, "dm-burn:");
+      if (useKeyStore().pkHex.toLowerCase() !== account || peer !== peerPubkey.toLowerCase()) return;
+      const next = { ...this.burnedById };
+      for (const row of rows) {
+        const info = row.value as { peerPubkey?: string; createdAt?: number; senderPubkey?: string; conversationId?: string } | undefined;
+        if (!info || info.peerPubkey !== peer) continue;
+        const id = row.key.slice("dm-burn:".length);
+        if (!/^[0-9a-f]{64}$/i.test(id)) continue;
+        next[id] = { peerPubkey: peer, createdAt: info.createdAt, senderPubkey: info.senderPubkey, conversationId: info.conversationId };
+      }
+      this.burnedById = next;
+    },
     peerMessages(peerPubkey: string) {
       const account = this.loadedFor;
       const friendships = useFriendshipsStore();
@@ -448,7 +466,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         for (const item of items) {
           if (seen.has(item.id)) continue;
           seen.add(item.id);
-          if (!isDirectMessageTags(item.tags)
+          // Temporary plaintext must never be exposed by history search, even before first view.
+          if (hasDisappearingMarker(item.tags) || !isDirectMessageTags(item.tags)
             || directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) !== peer
             || !isAuthorizedDirectMessage(item, account, friendship)
             || !afterDeletion(item, preference)) continue;
@@ -565,6 +584,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!peer || !useFriendshipsStore().isAccepted(peer)) return false;
       const target = await syncedMessageRepository.get(account, targetId);
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, targetId, peer);
+      if (accepted) this.burnedById = { ...this.burnedById, [targetId]: { peerPubkey: peer, createdAt: target?.createdAt, senderPubkey: target?.senderPubkey, conversationId: target?.conversationId } };
       if (!accepted || useKeyStore().pkHex.toLowerCase() !== account) return false;
       for (const transportId of target?.transportEventIds || []) {
         decryptedEventCache.delete(scopedKey(account, transportId));
@@ -587,6 +607,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!target || !hasDisappearingMarker(target.tags) || !isDirectMessageTags(target.tags)
         || directMessagePeer(target, account) !== peer) return false;
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, messageId, peer);
+      if (accepted) this.burnedById = { ...this.burnedById, [messageId]: { peerPubkey: peer, createdAt: target.createdAt, senderPubkey: target.senderPubkey, conversationId: target.conversationId } };
       if (!accepted || keys.pkHex.toLowerCase() !== account) return false;
       for (const transportId of target.transportEventIds || []) {
         decryptedEventCache.delete(scopedKey(account, transportId));
@@ -1520,6 +1541,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.receiptStateByPeer = {};
       this.sentReceiptStateByPeer = {};
       this.draftsByPeer = {};
+      this.burnedById = {};
       clearReceiptTimers();
       peerHistoryWarmups.clear();
       this.outgoingTasks = [];
