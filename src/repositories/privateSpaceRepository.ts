@@ -149,6 +149,26 @@ export class PrivateSpaceRepository {
     return { added, skipped };
   }
 
+  /**
+   * PR-FIX-A: atomically materialize an in-memory draft at its first meaningful edit.
+   * Never leave behind an empty row if the user opens and dismisses the composer.
+   */
+  async createWithContent(account: string, id: string, draft: PrivateSpaceDraft): Promise<PrivateSpaceRecord> {
+    const owner = requireUnlocked(account);
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) throw new Error("invalid_private_space_id");
+    const data = validateDraft(draft);
+    if (!data.title.trim() && !data.body.trim() && !data.tasks.some(task => task.text.trim()))
+      throw new Error("private_space_empty_draft");
+    const now = Date.now();
+    const record: PrivateSpaceRecord = {
+      accountPubkey: owner, id, ...data,
+      createdAt: now, updatedAt: now, revision: 1,
+    };
+    // add (never put) guarantees another writer cannot be overwritten on ID collision.
+    await this.database.accountNotes.add(record);
+    return record;
+  }
+
   async create(account: string, kind: "note" | "todo"): Promise<PrivateSpaceRecord> {
     const owner = requireUnlocked(account);
     if (kind !== "note" && kind !== "todo") throw new Error("invalid_private_space_kind");
