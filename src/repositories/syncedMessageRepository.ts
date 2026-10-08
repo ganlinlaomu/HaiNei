@@ -1,5 +1,5 @@
 import { directMessagePeer, isDirectMessageTags } from "@/nostr/messaging/directMessages";
-import { hasDisappearingMarker, isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
+import { disappearingMetadata, hasDisappearingMarker, isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
 import Dexie from "dexie";
 import {
   db,
@@ -20,6 +20,8 @@ export type InsertMessageResult = { inserted: boolean; record: SyncedMessageReco
 export type AdvanceReadStateResult = { advanced: boolean; state: ConversationReadStateRecord };
 
 const burnKey = (messageId: string) => `dm-burn:${messageId.toLowerCase()}`;
+const openedKey = (messageId: string) => `dm-open:${messageId.toLowerCase()}`;
+export type OpenedDmState = { messageId: string; peerPubkey: string; deadlineAt: number };
 
 export const LEGACY_DM_READ_STATE_MIGRATION_VERSION = 1;
 export const LEGACY_DM_READ_PREFIX = "dm-read:";
@@ -204,6 +206,39 @@ export class SyncedMessageRepository {
     return (marker?.value as { peerPubkey?: string } | undefined)?.peerPubkey === directMessagePeer(message, account);
   }
 
+  /** Persist the absolute deadline *before* returning plaintext to the viewer.
+   * Concurrent devices cannot reset a deadline on the same account database. */
+  async openDisappearingMessage(accountPubkey: string, messageId: string, peerPubkey: string, nowMs = Date.now()) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const peer = peerPubkey.toLowerCase();
+    return this.database.transaction("rw", [this.database.syncedMessages, this.database.accountMeta], async () => {
+      const target = await this.database.syncedMessages.get([account, messageId]);
+      if (!target || !isDirectMessageTags(target.tags) || target.senderPubkey.toLowerCase() === account
+        || directMessagePeer(target, account) !== peer) return null;
+      const metadata = disappearingMetadata(target.tags);
+      if (!metadata || metadata.expiresAt * 1000 <= nowMs) return null;
+      if (await this.database.accountMeta.get([account, burnKey(messageId)])) return null;
+      const existing = (await this.database.accountMeta.get([account, openedKey(messageId)]))?.value as OpenedDmState | undefined;
+      if (existing) return existing.peerPubkey === peer ? existing.deadlineAt : null;
+      const deadlineAt = Math.min(metadata.expiresAt * 1000, nowMs + metadata.burnAfterSeconds * 1000);
+      await this.database.accountMeta.put({
+        accountPubkey: account, key: openedKey(messageId),
+        value: { messageId, peerPubkey: peer, deadlineAt } satisfies OpenedDmState,
+      });
+      return deadlineAt;
+    });
+  }
+
+  async listOpenedDisappearing(accountPubkey: string, peerPubkey: string): Promise<OpenedDmState[]> {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const peer = peerPubkey.toLowerCase();
+    const rows = await this.database.accountMeta.where("accountPubkey").equals(account)
+      .filter(record => record.key.startsWith("dm-open:")).toArray();
+    return rows.map(record => record.value as OpenedDmState)
+      .filter(record => record && record.peerPubkey === peer
+        && /^[0-9a-f]{64}$/i.test(record.messageId) && Number.isFinite(record.deadlineAt));
+  }
+
   async burnDisappearingMessage(accountPubkey: string, messageId: string, peerPubkey: string, nowMs = Date.now()) {
     const account = normalizeAccountPubkey(accountPubkey);
     const peer = peerPubkey.toLowerCase();
@@ -220,8 +255,9 @@ export class SyncedMessageRepository {
           || directMessagePeer(target, account) !== peer)) return;
         const marker = await this.database.accountMeta.get([account, burnKey(id)]);
         if (marker && (marker.value as { peerPubkey?: string })?.peerPubkey !== peer) return;
-        await this.database.accountMeta.put({ accountPubkey: account, key: burnKey(id), value: { peerPubkey: peer, burnedAt: nowMs } });
+        await this.database.accountMeta.put({ accountPubkey: account, key: burnKey(id), value: { peerPubkey: peer, burnedAt: nowMs, ...(target ? { createdAt: target.createdAt, senderPubkey: target.senderPubkey, conversationId: target.conversationId } : {}) } });
         accepted = true;
+        await this.database.accountMeta.delete([account, openedKey(id)]);
         // The optimistic-send task can contain plaintext even after the synced row is removed.
         const tasks = await this.database.outgoingDmTasks.where("accountPubkey").equals(account)
           .filter(task => task.canonicalMessageId === id || task.outgoingId === id).primaryKeys();
