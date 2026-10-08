@@ -14,6 +14,12 @@
       </header>
       <button class="top-level-row" type="button" @pointerdown="loadProfileView" @focus="loadProfileView" @click="openOwnProfile"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><strong>我的资料</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @pointerdown="loadPrivateSpaceView" @focus="loadPrivateSpaceView" @click="openPrivateSpace"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 4h12v16H6V6a2 2 0 0 1 2-2Z"/><path d="M9 9h8M9 13h8M9 17h5"/></svg></span><strong>私人空间</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
+      <div class="private-quick-actions" aria-label="私人空间快捷添加">
+        <button type="button" @pointerdown="loadPrivateSpaceView" @focus="loadPrivateSpaceView"
+          @click="quickCreate('note')">＋ 新建笔记</button>
+        <button type="button" @pointerdown="loadPrivateSpaceView" @focus="loadPrivateSpaceView"
+          @click="quickCreate('todo')">＋ 新建待办</button>
+      </div>
       <button class="top-level-row" type="button" @pointerdown="loadSavedView" @focus="loadSavedView" @click="openSaved"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg></span><strong>已收藏</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @pointerdown="loadFriendsView" @focus="loadFriendsView" @click="openFriends"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 15.5a5 5 0 0 1 7 4.5"/></svg></span><strong>好友 / 好友分组</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @pointerdown="preloadSystemSettings" @focus="preloadSystemSettings" @click="openSystemSettings"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></span><strong>设置</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
@@ -60,6 +66,12 @@ function openOwnProfile() {
 function openPrivateSpace() {
   void loadPrivateSpaceView();
   void router.push("/settings/private-space");
+}
+
+function quickCreate(kind: "note" | "todo") {
+  if (!keyStore.isUnlocked) { ui.addToast("请先解锁私人空间", 1900, "info"); return; }
+  void loadPrivateSpaceView();
+  void router.push({ path: "/settings/private-space", query: { new: kind } });
 }
 
 function openSaved() {
@@ -120,4 +132,7 @@ h2,p{margin-top:0} h2{margin-bottom:4px}
 .small{color:#64748b;font-size:.82rem}
 .btn{min-height:42px;padding:0 16px;border:0;border-radius:10px;cursor:pointer}
 .btn-primary{background:#2563eb;color:#fff}
+.private-quick-actions{display:flex;gap:9px;padding:3px 16px 14px;border-bottom:1px solid #eff1f3}
+.private-quick-actions button{flex:1;min-height:42px;border:1px solid #dce5ed;border-radius:10px;background:#f8fafc;color:#334155;font:inherit;font-size:13px;font-weight:600}
+.private-quick-actions button:active{background:#eef2f6}
 </style>
