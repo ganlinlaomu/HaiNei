@@ -46,8 +46,8 @@
     <template v-if="!editor">
       <div class="toolbar">
         <input v-model="query" type="search" aria-label="搜索私人笔记" placeholder="搜索笔记和待办" />
-        <button type="button" class="primary" :disabled="backupBusy" @click="create('note')">＋ 笔记</button>
-        <button type="button" class="primary secondary" :disabled="backupBusy" @click="create('todo')">＋ 待办</button>
+        <button type="button" class="primary" :disabled="backupBusy || loading || editorTransitionBusy" @click="create('note')">＋ 笔记</button>
+        <button type="button" class="primary secondary" :disabled="backupBusy || loading || editorTransitionBusy" @click="create('todo')">＋ 待办</button>
         <button type="button" class="more-action" :disabled="backupBusy" :aria-expanded="backupOpen" aria-label="备份与恢复"
           @click="backupOpen ? closeBackupPanel() : backupOpen = true">•••</button>
       </div>
@@ -91,7 +91,7 @@
           </label>
           <div class="add-task">
             <input v-model="newTaskText" type="text" maxlength="2000" placeholder="添加待办事项"
-              aria-label="新的待办事项" @keydown.enter.prevent="addTask" />
+              aria-label="新的待办事项" @input="pendingTaskInput" @blur="addTask" @keydown.enter.prevent="addTask" />
             <button type="button" @click="addTask">添加</button>
           </div>
           <p class="task-counter">{{ progress(editor) }}</p>
@@ -105,8 +105,8 @@
         <small>来源信息属于加密笔记，原消息不存在时无法跳转。</small>
       </div>
       <footer class="editor-footer">
-        <button type="button" @click="archiveNote">归档</button>
-        <button type="button" class="delete-button" @click="deleteNote">移到最近删除</button>
+        <button v-if="!isUnsavedDraft" type="button" @click="archiveNote">归档</button>
+        <button v-if="!isUnsavedDraft" type="button" class="delete-button" @click="deleteNote">移到最近删除</button>
       </footer>
     </section>
   </main>
@@ -120,6 +120,7 @@ import { useKeyStore } from "@/stores/keys";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { privateSpaceRepository, type PrivateSpaceDraft } from "@/repositories/privateSpaceRepository";
 import type { PrivateSpaceRecord } from "@/db/dexie";
+import { hasPrivateSpaceDraftContent, makeUnsavedPrivateSpaceDraft } from "@/services/privateSpaceDraft";
 import {
   encryptPrivateBackup, decryptPrivateBackup, exportPlainJson, exportPlainMarkdown,
   MAX_BACKUP_FILE_BYTES, type PrivateBackupPayload,
@@ -315,6 +316,9 @@ async function downloadPlainBackup(format: "json" | "md") {
 }
 const notes = ref<PrivateSpaceRecord[]>([]);
 const editor = ref<PrivateSpaceRecord | null>(null);
+const isUnsavedDraft = ref(false);
+const editorTransitionBusy = ref(false);
+let handlingQuickCreate = false;
 const query = ref("");
 const filter = ref<"all" | "note" | "todo" | "archived" | "trash">("all");
 const loading = ref(false);
@@ -342,6 +346,24 @@ let writes: Promise<void> = Promise.resolve();
 let loadVersion = 0;
 let unsubscribeLock: (() => void) | undefined;
 let unsubscribeSync: (() => void) | undefined;
+
+async function consumeQuickCreate(requested: unknown, duringLoad = false) {
+  if ((requested !== "note" && requested !== "todo") || handlingQuickCreate
+    || !keys.isUnlocked || (!duringLoad && loading.value)) return;
+  const version = loadVersion;
+  handlingQuickCreate = true;
+  try {
+    if (!editor.value) await create(requested, duringLoad);
+    if (version === loadVersion && route.query.new === requested) {
+      void router.replace({
+        path: route.path,
+        query: Object.fromEntries(Object.entries(route.query).filter(([name]) => name !== "new")),
+      });
+    }
+  } finally {
+    handlingQuickCreate = false;
+  }
+}
 
 const filtered = computed(() => {
   const term = query.value.trim().toLocaleLowerCase();
@@ -375,6 +397,8 @@ async function loadForAccount(account: string) {
   const version = ++loadVersion;
   notes.value = [];
   editor.value = null;
+  isUnsavedDraft.value = false;
+  newTaskText.value = "";
   query.value = "";
   if (timer) clearTimeout(timer);
   timer = undefined;
@@ -388,15 +412,7 @@ async function loadForAccount(account: string) {
       notes.value = records;
       syncStatus.value = getPrivateSpaceSyncState(account);
       void syncPrivateSpace(keys);
-      const requested = route.query.new;
-      if (requested === "note" || requested === "todo") {
-        await create(requested);
-        if (version === loadVersion && keys.pkHex === account) {
-          void router.replace({ path: route.path, query: Object.fromEntries(
-            Object.entries(route.query).filter(([name]) => name !== "new"),
-          ) });
-        }
-      }
+      await consumeQuickCreate(route.query.new, true);
     }
   } catch (cause) {
     if (version === loadVersion) handleError(cause);
@@ -405,12 +421,8 @@ async function loadForAccount(account: string) {
   }
 }
 
-watch(() => route.query.new, async requested => {
-  if ((requested !== "note" && requested !== "todo") || !keys.isUnlocked || loading.value) return;
-  await create(requested);
-  void router.replace({ path: route.path, query: Object.fromEntries(
-    Object.entries(route.query).filter(([name]) => name !== "new"),
-  ) });
+watch(() => route.query.new, requested => {
+  void consumeQuickCreate(requested);
 });
 
 watch(() => editor.value?.accountPubkey || "", (account, previousAccount) => {
@@ -434,13 +446,22 @@ function saveNow(): Promise<void> {
     kind: current.kind, title: current.title, body: current.body,
     tasks: current.tasks.map(task => ({ ...task })), pinned: current.pinned,
   };
+  // A never-edited draft must not create an IndexedDB row or enter PR2 cloud sync.
+  if (isUnsavedDraft.value && !hasPrivateSpaceDraftContent(draft)) {
+    saveStatus.value = "空白草稿未保存";
+    return writes;
+  }
   saveStatus.value = "保存中…";
   const operation = writes.catch(() => undefined).then(async () => {
     if (loadVersion !== version || keys.pkHex !== account || !keys.isUnlocked) {
       throw new Error("account_changed");
     }
-    const record = await privateSpaceRepository.save(account, id, draft);
+    const newDraft = isUnsavedDraft.value && editor.value?.id === id;
+    const record = newDraft
+      ? await privateSpaceRepository.createWithContent(account, id, draft)
+      : await privateSpaceRepository.save(account, id, draft);
     if (loadVersion === version && keys.pkHex === account) {
+      if (newDraft) isUnsavedDraft.value = false;
       updateInList(record);
       notePrivateSpaceMutation(keys);
       if (editor.value?.id === id && !timer) saveStatus.value = "已保存在本机";
@@ -455,50 +476,79 @@ function queueSave() {
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => { void saveNow().catch(handleError); }, 350);
 }
+/** Promote an unfinished inline task on blur, navigation, app background or account lock. */
+function commitPendingTaskInput() {
+  const value = newTaskText.value.trim();
+  if (!editor.value || editor.value.kind !== "todo" || !value) return false;
+  if (editor.value.tasks.length >= 1000) {
+    error.value = "最多只能添加 1000 项待办，当前输入未保存";
+    return false;
+  }
+  editor.value.tasks.push({ id: crypto.randomUUID(), text: value, done: false });
+  newTaskText.value = "";
+  return true;
+}
+function pendingTaskInput() {
+  if (newTaskText.value.trim()) saveStatus.value = "待办输入尚未保存";
+}
+function addTask() {
+  if (commitPendingTaskInput()) queueSave();
+}
 async function flush() {
+  const committed = commitPendingTaskInput();
+  // A full todo list must block navigation rather than silently discard typed input.
+  if (!committed && editor.value?.kind === "todo" && newTaskText.value.trim())
+    throw new Error("待办已达到 1000 项，请先处理输入内容再离开");
+  if (committed) queueSave();
   if (timer) return saveNow();
   return writes;
 }
-async function create(kind: "note" | "todo") {
-  if (backupBusy.value) return;
+async function create(kind: "note" | "todo", duringLoad = false) {
+  // Synchronous gate closes the double-tap race across the first await.
+  if (backupBusy.value || editorTransitionBusy.value || editor.value
+      || (loading.value && !duringLoad)) return;
+  editorTransitionBusy.value = true;
+  const account = keys.pkHex;
+  const version = loadVersion;
   try {
     await flush();
-    const account = keys.pkHex;
-    if (!account || !keys.isUnlocked) return;
-    const created = await privateSpaceRepository.create(account, kind);
-    updateInList(created);
-    notePrivateSpaceMutation(keys);
-    editor.value = { ...created, tasks: [] };
+    if (!account || !keys.isUnlocked || keys.pkHex !== account || version !== loadVersion) return;
+    // No repository.create() and no notePrivateSpaceMutation() until content exists.
+    isUnsavedDraft.value = true;
+    editor.value = makeUnsavedPrivateSpaceDraft(account, kind);
     newTaskText.value = "";
-    saveStatus.value = "已保存在本机";
+    saveStatus.value = "空白草稿未保存";
     error.value = "";
   } catch (cause) { handleError(cause); }
+  finally { editorTransitionBusy.value = false; }
 }
 async function open(note: PrivateSpaceRecord) {
-  if (backupBusy.value) return;
+  if (backupBusy.value || editorTransitionBusy.value || editor.value) return;
+  editorTransitionBusy.value = true;
   try {
     await flush();
+    if (!keys.isUnlocked || keys.pkHex !== note.accountPubkey) return;
+    isUnsavedDraft.value = false;
     editor.value = { ...note, tasks: note.tasks.map(task => ({ ...task })) };
     newTaskText.value = "";
     saveStatus.value = "已保存在本机";
     error.value = "";
   } catch (cause) { handleError(cause); }
+  finally { editorTransitionBusy.value = false; }
 }
 async function closeEditor() {
+  if (editorTransitionBusy.value) return;
+  editorTransitionBusy.value = true;
   try {
     await flush();
     editor.value = null;
+    isUnsavedDraft.value = false;
+    newTaskText.value = "";
     await refreshAfterSync();
     void syncPrivateSpace(keys);
   }
   catch (cause) { handleError(cause); }
-}
-function addTask() {
-  const value = newTaskText.value.trim();
-  if (!editor.value || !value || editor.value.tasks.length >= 1000) return;
-  editor.value.tasks.push({ id: crypto.randomUUID(), text: value, done: false });
-  newTaskText.value = "";
-  queueSave();
+  finally { editorTransitionBusy.value = false; }
 }
 function removeTask(index: number) {
   editor.value?.tasks.splice(index, 1);
@@ -553,7 +603,8 @@ function onCloudUpdate(event: Event) {
   if (detail?.account === keys.pkHex.toLowerCase()) void refreshAfterSync();
 }
 function onVisibilityChange() {
-  if (document.visibilityState === "hidden" && timer) void saveNow().catch(handleError);
+  if (document.visibilityState === "hidden" && (timer || (editor.value?.kind === "todo" && newTaskText.value.trim())))
+    void flush().catch(handleError);
 }
 onMounted(() => {
   unsubscribeSync = subscribePrivateSpaceSync(state => {
