@@ -1512,6 +1512,11 @@ async function load() {
     // The visible conversation is usable now. Draft restoration and read-state
     // persistence are local follow-up work and must not block first interaction.
     loadingConversation = false;
+    // PR3-B: explicit source jump from a private note; never reveal temporary DMs.
+    const target = route.query.focus;
+    if (typeof target === "string" && /^[0-9a-f]{64}$/i.test(target)) {
+      await focusMessage(target);
+    }
     void restoreDraft(account, peer).catch(() => undefined);
     void markVisibleMessagesRead().catch(() => undefined);
   } finally {
@@ -1944,6 +1949,10 @@ watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
   if (replyHighlightTimer !== null) window.clearTimeout(replyHighlightTimer);
   replyHighlightTimer = null;
   void load();
+});
+watch(() => route.query.focus, target => {
+  if (loadingConversation || typeof target !== "string" || !/^[0-9a-f]{64}$/i.test(target)) return;
+  void focusMessage(target);
 });
 watch(() => messages.value.map(message => message.id).join("\0"), async (nextSignature, previousSignature) => {
   if (windowMutationInProgress) return;

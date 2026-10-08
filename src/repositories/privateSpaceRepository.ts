@@ -108,6 +108,47 @@ export class PrivateSpaceRepository {
     return result!;
   }
 
+  /**
+   * Import a validated same-account backup without overwriting local notes.
+   * The entire merge is transactional, including deleted and archived items.
+   * Every inserted note is local-dirty so PR2 cloud CAS can reconcile safely.
+   */
+  async restoreBackup(
+    account: string,
+    rows: import("@/services/privateSpaceBackup").PrivateBackupNote[],
+    isCurrent: () => boolean = () => true,
+  ): Promise<{ added: number; skipped: number }> {
+    const owner = requireUnlocked(account);
+    if (!isCurrent()) throw new Error("account_changed");
+    let added = 0;
+    let skipped = 0;
+    await this.database.transaction("rw", this.database.accountNotes, async () => {
+      for (const row of rows) {
+        if (!isCurrent() || !isLocalVaultUnlocked(owner)) throw new Error("account_changed");
+        const existing = await this.database.accountNotes.get([owner, row.id]);
+        if (existing) {
+          skipped++;
+          continue;
+        }
+        const now = Date.now();
+        await this.database.accountNotes.add({
+          accountPubkey: owner, id: row.id, kind: row.kind,
+          title: row.title, body: row.body,
+          tasks: row.tasks.map(task => ({ ...task })),
+          pinned: row.pinned, createdAt: row.createdAt,
+          updatedAt: Math.max(now, row.updatedAt),
+          revision: Math.max(1, row.revision),
+          ...(row.archivedAt === undefined ? {} : { archivedAt: row.archivedAt }),
+          ...(row.deletedAt === undefined ? {} : { deletedAt: row.deletedAt }),
+          cloudVersion: 0, syncedRevision: 0,
+        });
+        added++;
+      }
+      if (!isCurrent() || !isLocalVaultUnlocked(owner)) throw new Error("account_changed");
+    });
+    return { added, skipped };
+  }
+
   async create(account: string, kind: "note" | "todo"): Promise<PrivateSpaceRecord> {
     const owner = requireUnlocked(account);
     if (kind !== "note" && kind !== "todo") throw new Error("invalid_private_space_kind");
