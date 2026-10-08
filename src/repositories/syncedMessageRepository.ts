@@ -111,6 +111,7 @@ export class SyncedMessageRepository {
         this.database.conversationStates,
         this.database.conversationReadStates,
         this.database.messageSyncStates,
+        this.database.accountMeta,
         async () => {
           for (const [, waiters] of batch) {
             let result: InsertMessageResult | undefined;
