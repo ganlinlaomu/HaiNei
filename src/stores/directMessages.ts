@@ -13,6 +13,9 @@ import {
   type DmReceiptStatus,
 } from "@/nostr/messaging/dmReceipts";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
+import { burnControlTags, parseBurnControl, serializeBurnControl } from "@/nostr/messaging/dmBurnControl";
+import { hasDisappearingMarker } from "@/nostr/messaging/disappearingMessages";
+import { decryptedEventCache, eventCache, scopedKey } from "@/services/nostrCache";
 import { publishQueuedOutgoing, registerOutgoingPushSigner, sendDirectMessage, type PublishedMessage } from "@/nostr/messaging/service";
 import { isMessageAfter } from "@/nostr/messaging/sync/sorting";
 import { metaRepository } from "@/repositories/metaRepository";
@@ -552,6 +555,66 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
       if (!account || useKeyStore().pkHex.toLowerCase() !== account) return;
       await metaRepository.put(account, sent ? sentReceiptStateKey(peerPubkey) : receiptStateKey(peerPubkey), state);
+    },
+    /** An encrypted burn notice is authenticated by NIP-17's signed seal and friendship gate. */
+    async processBurnControl(message: CanonicalMessage) {
+      const targetId = parseBurnControl(message);
+      const account = useKeyStore().pkHex.toLowerCase();
+      if (!targetId || !account || (this.loadedFor && this.loadedFor !== account)) return false;
+      const peer = directMessagePeer(message, account);
+      if (!peer || !useFriendshipsStore().isAccepted(peer)) return false;
+      const target = await syncedMessageRepository.get(account, targetId);
+      const accepted = await syncedMessageRepository.burnDisappearingMessage(account, targetId, peer);
+      if (!accepted || useKeyStore().pkHex.toLowerCase() !== account) return false;
+      for (const transportId of target?.transportEventIds || []) {
+        decryptedEventCache.delete(scopedKey(account, transportId));
+        eventCache.delete(transportId);
+      }
+      useMessagesStore().removeInboxMessage(targetId);
+      this.outgoingTasks = this.outgoingTasks.filter(task => task.accountPubkey !== account ||
+        (task.outgoingId !== targetId && task.canonicalMessageId !== targetId));
+      if (this.loadedFor === account) await this.reconcileDurableUnread();
+      return true;
+    },
+    /** Called after explicit viewing/expiry by PR2 UI. The encrypted notice also
+     * gift-wraps a copy to our own pubkey for other logged-in devices. */
+    async burnDisappearingMessage(peerPubkey: string, messageId: string) {
+      const keys = useKeyStore();
+      const account = keys.pkHex.toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      if (!keys.supportsNip44 || !canStartDirectMessage(account, peer, useFriendshipsStore().isAccepted)) return false;
+      const target = await syncedMessageRepository.get(account, messageId);
+      if (!target || !hasDisappearingMarker(target.tags) || !isDirectMessageTags(target.tags)
+        || directMessagePeer(target, account) !== peer) return false;
+      const accepted = await syncedMessageRepository.burnDisappearingMessage(account, messageId, peer);
+      if (!accepted || keys.pkHex.toLowerCase() !== account) return false;
+      for (const transportId of target.transportEventIds || []) {
+        decryptedEventCache.delete(scopedKey(account, transportId));
+        eventCache.delete(transportId);
+      }
+      useMessagesStore().removeInboxMessage(messageId);
+      this.outgoingTasks = this.outgoingTasks.filter(task => task.accountPubkey !== account ||
+        (task.outgoingId !== messageId && task.canonicalMessageId !== messageId));
+      if (this.loadedFor === account) await this.reconcileDurableUnread();
+      try {
+        await sendDirectMessage({
+          recipientPubkeys: [peer],
+          content: serializeBurnControl(messageId),
+          tags: burnControlTags(),
+          relays: getRelaysFromStorage("write"),
+          context: {
+            senderPubkey: account,
+            nip44Encrypt: keys.nip44Encrypt.bind(keys),
+            signEvent: keys.signEvent.bind(keys),
+          },
+        });
+      } catch (error) {
+        // The normal durable outgoing queue retries transport failures.
+        // An unavailable signer must be surfaced in diagnostics, never presented
+        // to the user as a confirmed remote deletion.
+        console.warn("[dm] encrypted burn notification unavailable", error instanceof Error ? error.message : "unknown");
+      }
+      return true;
     },
     async processReceipt(message: CanonicalMessage) {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();

@@ -3,6 +3,7 @@ import type { NostrEvent } from "nostr-tools";
 import { decodeMessageEvent, type CanonicalMessage, type DecodeContext } from "@/nostr/messaging/protocol";
 import { syncedMessageRepository, type SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { debugLog } from "@/utils/debugLog";
+import { isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
 import type { MessageDeliveryResult, MessageIngestionMetadata } from "./types";
 import {
   decryptedEventCache,
@@ -202,6 +203,12 @@ export class MessageIngestionPipeline {
   }
 
   async ingestCanonicalMessage(message: CanonicalMessage, metadata: MessageIngestionMetadata) {
+    // Enforce expiry and durable burn markers before UI mirroring, persistence or
+    // duplicate/retry branches. Old Relay wraps must not resurrect destroyed text.
+    if (isExpiredDisappearing(message.tags) || await this.repository.isBurnedMessage(this.accountPubkey, message)) {
+      await this.clearDeferredBestEffort(message.id);
+      return { inserted: false, discarded: true, deferred: false };
+    }
     const logicalKey = message.rumorId || message.id;
     const logicalToken = `logical:${logicalKey}`;
 
@@ -324,6 +331,9 @@ export class MessageIngestionPipeline {
       source: metadata.source,
       relayUrl: metadata.relayUrl || "local",
     };
+    if (isExpiredDisappearing(message.tags) || await this.repository.isBurnedMessage(this.accountPubkey, message)) {
+      return { inserted: false, discarded: true, deferred: false };
+    }
     let result: Awaited<ReturnType<SyncedMessageRepository["insertMessageIfAbsent"]>>;
     try {
       result = await this.repository.enqueueMessage(this.accountPubkey, message);

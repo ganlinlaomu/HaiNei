@@ -10,11 +10,14 @@ import {
 import { deriveConversationId, normalizePubkey, recipientPubkeys, replyReferences, verifySignedEvent } from "./common";
 import type { CanonicalMessage, EncodedMessage, MessageProtocolAdapter, OutgoingMessage, EncodeContext } from "./types";
 import { debugLog } from "@/utils/debugLog";
+import { DISAPPEARING_DM_TYPE, DISAPPEARING_DM_TTL_SECONDS, BURN_DURATIONS, disappearingMetadata, expirationFromTags, hasDisappearingMarker, isExpiredDisappearing } from "../disappearingMessages";
 
 export const GIFT_WRAP_KIND = 1059;
 export const SEAL_KIND = 13;
 export const RUMOR_KIND = 14;
 const TWO_DAYS_SECONDS = 2 * 24 * 60 * 60;
+// Separate outer expiry for each recipient to reduce deterministic cross-wrap linkage.
+const WRAP_EXPIRATION_JITTER_SECONDS = 15 * 60;
 
 type Rumor = UnsignedEvent & { id: string; sig?: never };
 
@@ -84,6 +87,10 @@ export const nip17Adapter: MessageProtocolAdapter = {
         if (!context.nip44Decrypt) return decodeFailed(event, account, "outer-validation", "nip44_decrypt_unavailable");
         if (!validateEvent(event)) return decodeFailed(event, account, "outer-validation", "invalid_event_shape");
         if (!verifySignedEvent(event)) return decodeFailed(event, account, "outer-validation", "invalid_event_signature");
+        const outerExpiry = expirationFromTags(event.tags);
+        if (event.tags.some(tag => tag[0] === "expiration") && (outerExpiry === null || outerExpiry <= Math.floor(Date.now() / 1000))) {
+          return decodeFailed(event, account, "outer-validation", "expired_or_invalid_outer_expiration");
+        }
         const outerRecipients = recipientPubkeys(event.tags);
         if (outerRecipients.length !== 1) return decodeFailed(event, account, "outer-recipient", "expected_exactly_one_recipient");
         if (outerRecipients[0] !== account) return decodeFailed(event, account, "outer-recipient", "recipient_mismatch");
@@ -127,6 +134,16 @@ export const nip17Adapter: MessageProtocolAdapter = {
       }
       debugLog("nip17", "rumor_valid", eventDiagnostic(event, account, "rumor-validation"));
 
+      if (isExpiredDisappearing(rumor.tags)) return decodeFailed(event, account, "rumor-validation", "expired_or_invalid_disappearing_message");
+      if (hasDisappearingMarker(rumor.tags)) {
+        const temporary = disappearingMetadata(rumor.tags);
+        const outerExpiration = expirationFromTags(event.tags);
+        if (!temporary || event.kind !== GIFT_WRAP_KIND || outerExpiration === null
+          || outerExpiration > temporary.expiresAt
+          || outerExpiration < temporary.expiresAt - WRAP_EXPIRATION_JITTER_SECONDS) {
+          return decodeFailed(event, account, "rumor-validation", "disappearing_expiration_mismatch");
+        }
+      }
       const recipients = recipientPubkeys(rumor.tags);
       if (rumor.pubkey !== account && !recipients.includes(account)) {
         return decodeFailed(event, account, "recipient-validation", "account_not_in_rumor");
@@ -174,7 +191,18 @@ export async function buildNip17Message(message: OutgoingMessage, context: Encod
   if (message.replyTo) tags.push(["e", message.replyTo, "", "reply"]);
   for (const tag of message.tags || []) {
     if (!Array.isArray(tag) || tag.length === 0 || tag[0] === "p" || tag[0] === "e") continue;
+    // Temporary metadata is generated, never accepted as raw caller-supplied tags.
+    if (tag[0] === "expiration" || tag[0] === "burn-after" || (tag[0] === "t" && tag[1] === DISAPPEARING_DM_TYPE)) continue;
     tags.push([...tag]);
+  }
+  let expiresAt: number | undefined;
+  if (message.burnAfterSeconds !== undefined) {
+    if (!BURN_DURATIONS.includes(message.burnAfterSeconds)) throw new Error("unsupported_burn_duration");
+    if (recipients.length !== 1 || recipients[0] === sender || !tags.some(tag => tag[0] === "t" && tag[1] === "hainei-dm")) {
+      throw new Error("disappearing_messages_require_single_direct_recipient");
+    }
+    expiresAt = Math.floor(Date.now() / 1000) + DISAPPEARING_DM_TTL_SECONDS;
+    tags.push(["t", DISAPPEARING_DM_TYPE], ["burn-after", String(message.burnAfterSeconds)], ["expiration", String(expiresAt)]);
   }
   const rumorBase: UnsignedEvent = {
     pubkey: sender,
@@ -195,10 +223,12 @@ export async function buildNip17Message(message: OutgoingMessage, context: Encod
     });
     if (seal.pubkey !== sender || !verifySignedEvent(seal)) throw new Error("signer returned an invalid NIP-17 seal");
     const ephemeralSecret = generateSecretKey();
+    const wrapExpiresAt = expiresAt === undefined ? undefined
+      : expiresAt - Math.floor(Math.random() * WRAP_EXPIRATION_JITTER_SECONDS);
     const wrap = finalizeEvent({
       kind: GIFT_WRAP_KIND,
       created_at: randomPastTimestamp(),
-      tags: [["p", target]],
+      tags: [["p", target], ...(wrapExpiresAt === undefined ? [] : [["expiration", String(wrapExpiresAt)]])],
       content: encryptWithEphemeralKey(ephemeralSecret, target, JSON.stringify(seal))
     }, ephemeralSecret);
     events.push(wrap);

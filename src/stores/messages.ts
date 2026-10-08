@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { deviceStorage } from "@/services/deviceStorage";
 import { useKeyStore } from "./keys";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import { isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { notifyCanonicalMessageAdded } from "@/services/directMessageStateEvents";
@@ -117,10 +118,12 @@ export const useMessagesStore = defineStore("messages", {
       } catch {
         // Leave the legacy key intact so a later load can retry safely.
       }
+      // Purge expired temporary plaintext before restoring the in-memory mirror.
+      await syncedMessageRepository.purgeExpiredDisappearing(targetPk);
       const records = await syncedMessageRepository.listRecent(targetPk);
       if (this.loadedFor !== targetPk) return;
       const durableInbox: InboxItem[] = records
-        .filter(record => !isHomeControl(record.tags, record.plaintext))
+        .filter(record => !isHomeControl(record.tags, record.plaintext) && !isExpiredDisappearing(record.tags))
         .map(syncedMessageRecordToInboxItem);
       const outgoing = await outgoingQueueRepository.list(targetPk);
       if (this.loadedFor !== targetPk) return;
@@ -185,6 +188,13 @@ export const useMessagesStore = defineStore("messages", {
     scheduleInboxSave() {},
 
     scheduleOutboxSave() {},
+
+    removeInboxMessage(messageId: string) {
+      const index = this.inbox.findIndex(item => item.id === messageId);
+      if (index < 0) return;
+      this.inbox.splice(index, 1);
+      this.recordInboxMutation("replace");
+    },
 
     addInbox(item: InboxItem) {
       if (!item || !item.id || isHomeControl(item.tags, item.content)) return;
