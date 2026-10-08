@@ -21,6 +21,12 @@ type Manifest = { id: string; version: number };
 type CloudRow = Manifest & { ciphertext: string };
 
 const listeners = new Set<Listener>();
+const activeEditors = new Set<string>();
+export function setPrivateSpaceEditing(account: string, editing: boolean) {
+  const owner = account.toLowerCase();
+  if (editing) activeEditors.add(owner);
+  else activeEditors.delete(owner);
+}
 const jobs = new Map<string, Promise<void>>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const retries = new Map<string, number>();
@@ -136,6 +142,7 @@ async function manifest(keys: Keys, isCurrent: () => boolean) {
 
 async function synchronize(keys: Keys, isCurrent: () => boolean): Promise<number> {
   const account = keys.pkHex.toLowerCase();
+  if (activeEditors.has(account)) throw new Error("private_space_editing");
   const remoteVersions = await manifest(keys, isCurrent);
   ensureCurrent(isCurrent);
   const locally = new Map((await privateSpaceRepository.list(account)).map(note => [note.id, note]));
@@ -152,6 +159,7 @@ async function synchronize(keys: Keys, isCurrent: () => boolean): Promise<number
         throw new Error("invalid_private_space_response");
       const plaintext = await keys.nip44Decrypt(account, row.ciphertext);
       ensureCurrent(isCurrent);
+      if (activeEditors.has(account)) throw new Error("private_space_editing");
       const record = decode(account, row.id, plaintext);
       const result = await privateSpaceRepository.applyRemote(account, record, row.version);
       if (result.conflicted) conflicts++;
@@ -160,6 +168,7 @@ async function synchronize(keys: Keys, isCurrent: () => boolean): Promise<number
   }
 
   // The server is authoritative about which IDs exist, but not about newer unsynced local edits.
+  if (activeEditors.has(account)) throw new Error("private_space_editing");
   const current = await privateSpaceRepository.list(account);
   for (const note of current) {
     ensureCurrent(isCurrent);
@@ -199,12 +208,21 @@ export async function syncPrivateSpace(keys: Keys): Promise<void> {
       const conflicts = await synchronize(keys, isCurrent);
       if (!isCurrent()) return;
       retries.delete(account);
-      publish(account, "synced", undefined, conflicts);
+      const pending = (await privateSpaceRepository.list(account))
+        .some(note => note.revision !== Number(note.syncedRevision || 0));
+      if (!isCurrent()) return;
+      publish(account, pending ? "local" : "synced", undefined, conflicts);
+      if (pending) schedulePrivateSpaceSync(keys, 1_000);
       // Other mounted views may refresh, but must not overwrite an open editor.
-      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("hainei-private-space-synced", { detail: { account } }));
+      if (typeof window !== "undefined" && typeof CustomEvent !== "undefined")
+        window.dispatchEvent(new CustomEvent("hainei-private-space-synced", { detail: { account } }));
     } catch (error) {
       if (!isCurrent()) return;
       const message = error instanceof Error ? error.message : "private_space_sync_error";
+      if (message === "private_space_editing") {
+        publish(account, "local");
+        return;
+      }
       publish(account, "error", message);
       planRetry(keys, account, generation);
     }
@@ -241,4 +259,5 @@ export function cancelPrivateSpaceSync(account: string) {
   if (timer) clearTimeout(timer);
   timers.delete(account);
   retries.delete(account);
+  activeEditors.delete(account);
 }
