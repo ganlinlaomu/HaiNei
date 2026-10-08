@@ -644,6 +644,8 @@ async function checkBurnDeadlines() {
         delete next[message.id];
         openedDeadlines.value = next;
       }
+    } catch {
+      // Retry on the next visible tick; never reveal expired plaintext again.
     } finally {
       burningMessageIds.delete(message.id);
     }
@@ -874,8 +876,11 @@ function statusKind(message: InboxItem) {
     case "upload_failed":
     case "send_failed":
       return message.outgoing.state;
-    default:
-      return directMessages.outgoingReceiptStatus(peerPubkey.value, message) || "sent";
+    default: {
+      const receipt = directMessages.outgoingReceiptStatus(peerPubkey.value, message) || "sent";
+      // The normal read cursor must not imply that a sealed message was opened.
+      return isDisappearing(message) && receipt === "read" ? "delivered" : receipt;
+    }
   }
 }
 function statusLabel(message: InboxItem) {
@@ -1667,6 +1672,15 @@ function handlePageHide() {
   stopBurnClock();
 }
 watch(() => messageStore.inboxRevision, applyLatestInboxMutation);
+// PR1 burns durable rows, but the paginated Vue history may still reference the
+// decrypted objects. Scrub that memory mirror immediately on remote or local burn.
+watch(() => directMessages.burnedById, burned => {
+  const masked = (items: InboxItem[]) => items.map(item => burned[item.id] ? { ...item, content: "" } : item);
+  historyMessages.value = masked(historyMessages.value);
+  searchContextMessages.value = masked(searchContextMessages.value);
+  searchResults.value = searchResults.value.filter(item => !burned[item.id]);
+  if (draftReplyMessage.value && burned[draftReplyMessage.value.id]) draftReplyMessage.value = undefined;
+});
 onMounted(() => {
   document.addEventListener("visibilitychange", handleBurnVisibility);
   window.addEventListener("pageshow", handleBurnVisibility);
