@@ -1,8 +1,10 @@
 import { db, type HaiNeiDatabase, type PrivateSpaceRecord, type PrivateSpaceTask } from "@/db/dexie";
 import { normalizeAccountPubkey } from "@/repositories/accountScope";
 import { isLocalVaultUnlocked } from "@/services/localVault";
+import { validatePrivateSpaceAttachments, validatePrivateSpaceSource } from "@/services/privateSpaceContent";
 
-export type PrivateSpaceDraft = Pick<PrivateSpaceRecord, "kind" | "title" | "body" | "tasks" | "pinned">;
+export type PrivateSpaceDraft = Pick<PrivateSpaceRecord, "kind" | "title" | "body" | "tasks" | "pinned"> &
+  Partial<Pick<PrivateSpaceRecord, "source" | "attachments">>;
 
 function requireUnlocked(account: string) {
   const normalized = normalizeAccountPubkey(account);
@@ -21,7 +23,13 @@ function validateDraft(draft: PrivateSpaceDraft): PrivateSpaceDraft {
     ids.add(task.id);
     return { id: task.id, text: task.text, done: !!task.done };
   });
-  return { kind: draft.kind, title: draft.title, body: draft.body, tasks, pinned: !!draft.pinned };
+  return {
+    kind: draft.kind, title: draft.title, body: draft.body, tasks, pinned: !!draft.pinned,
+    ...(draft.source ? { source: validatePrivateSpaceSource(draft.source) } : {}),
+    ...(draft.attachments !== undefined ? {
+      attachments: validatePrivateSpaceAttachments(draft.attachments),
+    } : {}),
+  };
 }
 
 /** Local-first, account-scoped storage. PR1 never publishes a Nostr event or sends data to a Worker. */
@@ -85,11 +93,14 @@ export class PrivateSpaceRepository {
    * User-initiated import with stable source-derived ID.
    * In one IndexedDB transaction, do not overwrite existing, edited, or trashed imports.
    */
-  async importNote(account: string, id: string, title: string, body: string):
+  async importNote(account: string, id: string, title: string, body: string,
+    extra: Pick<PrivateSpaceDraft, "source" | "attachments"> = {}):
     Promise<{ record: PrivateSpaceRecord; created: boolean }> {
     const owner = requireUnlocked(account);
     if (!/^[0-9a-f]{64}$/.test(id)) throw new Error("invalid_private_space_source_id");
     if (title.length > 500 || body.length > 100_000) throw new Error("private_space_size_limit");
+    const source = validatePrivateSpaceSource(extra.source);
+    const attachments = validatePrivateSpaceAttachments(extra.attachments);
     let result: { record: PrivateSpaceRecord; created: boolean } | undefined;
     await this.database.transaction("rw", this.database.accountNotes, async () => {
       const existing = await this.database.accountNotes.get([owner, id]);
@@ -101,6 +112,8 @@ export class PrivateSpaceRepository {
       const record: PrivateSpaceRecord = {
         accountPubkey: owner, id, kind: "note", title, body,
         tasks: [], pinned: false, createdAt: now, updatedAt: now, revision: 1,
+        ...(source ? { source } : {}),
+        ...(attachments.length ? { attachments } : {}),
       };
       await this.database.accountNotes.add(record);
       result = { record, created: true };
@@ -138,6 +151,8 @@ export class PrivateSpaceRepository {
           pinned: row.pinned, createdAt: row.createdAt,
           updatedAt: Math.max(now, row.updatedAt),
           revision: Math.max(1, row.revision),
+          ...(row.source ? { source: validatePrivateSpaceSource(row.source) } : {}),
+          ...(row.attachments ? { attachments: validatePrivateSpaceAttachments(row.attachments) } : {}),
           ...(row.archivedAt === undefined ? {} : { archivedAt: row.archivedAt }),
           ...(row.deletedAt === undefined ? {} : { deletedAt: row.deletedAt }),
           cloudVersion: 0, syncedRevision: 0,
@@ -198,7 +213,7 @@ export class PrivateSpaceRepository {
   async update(
     account: string,
     id: string,
-    changes: Partial<Pick<PrivateSpaceRecord, "kind" | "title" | "body" | "tasks" | "pinned" | "archivedAt" | "deletedAt">>,
+    changes: Partial<Pick<PrivateSpaceRecord, "kind" | "title" | "body" | "tasks" | "pinned" | "source" | "attachments" | "archivedAt" | "deletedAt">>,
   ): Promise<PrivateSpaceRecord> {
     const owner = requireUnlocked(account);
     if (!id) throw new Error("invalid_private_space_id");
