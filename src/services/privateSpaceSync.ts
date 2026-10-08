@@ -154,9 +154,12 @@ async function synchronize(keys: Keys, isCurrent: () => boolean): Promise<number
     const ids = needsRemote.slice(i, i + 8);
     const response = await post(keys, "/api/private-space/get", { ids }, isCurrent);
     if (!Array.isArray(response.items) || response.items.length > ids.length) throw new Error("invalid_private_space_response");
+    const received = new Set<string>();
     for (const row of response.items as CloudRow[]) {
       if (!ids.includes(row.id) || row.version !== remoteVersions.get(row.id) || typeof row.ciphertext !== "string")
         throw new Error("invalid_private_space_response");
+      if (received.has(row.id)) throw new Error("invalid_private_space_response");
+      received.add(row.id);
       const plaintext = await keys.nip44Decrypt(account, row.ciphertext);
       ensureCurrent(isCurrent);
       if (activeEditors.has(account)) throw new Error("private_space_editing");
@@ -164,6 +167,7 @@ async function synchronize(keys: Keys, isCurrent: () => boolean): Promise<number
       const result = await privateSpaceRepository.applyRemote(account, record, row.version);
       if (result.conflicted) conflicts++;
     }
+    if (received.size !== ids.length) throw new Error("private_space_incomplete_page");
     ensureCurrent(isCurrent);
   }
 
@@ -179,7 +183,10 @@ async function synchronize(keys: Keys, isCurrent: () => boolean): Promise<number
       throw new Error("private_space_remote_changed");
     }
     const expectedVersion = remoteVersions.get(note.id) || 0;
-    const ciphertext = await keys.nip44Encrypt(account, envelope(note));
+    const plaintext = envelope(note);
+    if (new TextEncoder().encode(plaintext).byteLength > 60_000)
+      throw new Error("笔记过长，超过单条 NIP-44 加密长度上限；本机内容不受影响，请拆分后同步");
+    const ciphertext = await keys.nip44Encrypt(account, plaintext);
     ensureCurrent(isCurrent);
     const result = await post(keys, "/api/private-space/put",
       { id: note.id, expectedVersion, ciphertext }, isCurrent);
@@ -259,5 +266,6 @@ export function cancelPrivateSpaceSync(account: string) {
   if (timer) clearTimeout(timer);
   timers.delete(account);
   retries.delete(account);
+  status.delete(account);
   activeEditors.delete(account);
 }
