@@ -46,9 +46,9 @@
     <template v-if="!editor">
       <div class="toolbar">
         <input v-model="query" type="search" aria-label="搜索私人笔记" placeholder="搜索笔记和待办" />
-        <button type="button" class="primary" @click="create('note')">＋ 笔记</button>
-        <button type="button" class="primary secondary" @click="create('todo')">＋ 待办</button>
-        <button type="button" class="more-action" :aria-expanded="backupOpen" aria-label="备份与恢复"
+        <button type="button" class="primary" :disabled="backupBusy" @click="create('note')">＋ 笔记</button>
+        <button type="button" class="primary secondary" :disabled="backupBusy" @click="create('todo')">＋ 待办</button>
+        <button type="button" class="more-action" :disabled="backupBusy" :aria-expanded="backupOpen" aria-label="备份与恢复"
           @click="backupOpen ? closeBackupPanel() : backupOpen = true">•••</button>
       </div>
       <div class="tabs" role="group" aria-label="笔记分类">
@@ -59,7 +59,7 @@
       <div v-else-if="!filtered.length" class="empty-state">这里还没有内容。可以新建一条笔记或待办。</div>
       <ul v-else class="items">
         <li v-for="note in filtered" :key="note.id">
-          <button type="button" class="item" :disabled="!!note.archivedAt || !!note.deletedAt" @click="open(note)">
+          <button type="button" class="item" :disabled="backupBusy || !!note.archivedAt || !!note.deletedAt" @click="open(note)">
             <span class="item-top"><strong>{{ label(note) }}</strong><span v-if="note.pinned">📌</span></span>
             <span class="preview">{{ note.kind === 'todo' ? progress(note) : note.body || '空白笔记' }}</span>
             <span class="date">{{ note.kind === 'todo' ? '待办' : '笔记' }} · {{ formatted(note.updatedAt) }}</span>
@@ -156,14 +156,17 @@ function navigateToSource() {
   });
 }
 function clearRestorePreview() { restorePreview.value = null; }
-function closeBackupPanel() {
-  if (backupBusy.value) return;
+function clearBackupSecrets() {
   backupOpen.value = false;
   backupPassword.value = ""; backupConfirm.value = "";
   restorePassword.value = "";
   restoreFileName.value = ""; restoreFileContent.value = "";
   clearRestorePreview();
   if (restoreFileInput.value) restoreFileInput.value.value = "";
+}
+function closeBackupPanel() {
+  if (backupBusy.value) return;
+  clearBackupSecrets();
 }
 function sessionSnapshot() {
   if (!keys.pkHex || !keys.isUnlocked) throw new Error("private_space_locked");
@@ -362,7 +365,7 @@ async function loadForAccount(account: string) {
   if (timer) clearTimeout(timer);
   timer = undefined;
   error.value = "";
-  closeBackupPanel();
+  clearBackupSecrets();
   loading.value = !!account && keys.isUnlocked;
   if (!loading.value) return;
   try {
@@ -443,6 +446,7 @@ async function flush() {
   return writes;
 }
 async function create(kind: "note" | "todo") {
+  if (backupBusy.value) return;
   try {
     await flush();
     const account = keys.pkHex;
@@ -457,6 +461,7 @@ async function create(kind: "note" | "todo") {
   } catch (cause) { handleError(cause); }
 }
 async function open(note: PrivateSpaceRecord) {
+  if (backupBusy.value) return;
   try {
     await flush();
     editor.value = { ...note, tasks: note.tasks.map(task => ({ ...task })) };
