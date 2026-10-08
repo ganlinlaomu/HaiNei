@@ -141,6 +141,7 @@ describe("encrypted DM receipts", () => {
         return { inserted: true, record: {} };
       }),
       clearDeferredAuthorizationMessage: vi.fn(async () => undefined),
+      isBurnedMessage: vi.fn(async () => false),
     };
 
     const pipeline = new MessageIngestionPipeline(
