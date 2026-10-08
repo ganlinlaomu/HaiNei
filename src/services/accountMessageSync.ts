@@ -311,6 +311,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         },
         isReceipt: isDmReceiptMessage,
         processReceipt: message => directMessages.processReceipt(message),
+        processBurnControl: message => directMessages.processBurnControl(message),
         isInteraction: isInteractionMessage,
         processInteraction: async message => {
           await interactions.processCanonicalInteraction(message, account);
