@@ -267,6 +267,16 @@ export type OutgoingDmTaskRecord = {
 
 // Only account/id/timestamps are indexed; the private content is encrypted by localVault.
 export type PrivateSpaceTask = { id: string; text: string; done: boolean };
+/** Encrypted, optional metadata for explicitly excerpted content. */
+export type PrivateSpaceSource = {
+  kind: "post" | "dm";
+  messageId: string;
+  author: string;
+  date: string;
+  authorPubkey?: string;
+  peerPubkey?: string;
+};
+export type PrivateSpaceAttachment = { kind: "image" | "video"; url: string };
 export type PrivateSpaceRecord = {
   accountPubkey: string;
   id: string;
@@ -275,6 +285,8 @@ export type PrivateSpaceRecord = {
   body: string;
   tasks: PrivateSpaceTask[];
   pinned: boolean;
+  source?: PrivateSpaceSource;
+  attachments?: PrivateSpaceAttachment[];
   archivedAt?: number;
   deletedAt?: number;
   createdAt: number;
