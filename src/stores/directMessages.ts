@@ -85,6 +85,8 @@ type PeerHistoryPage = {
 const PEER_HISTORY_WARM_TTL_MS = 30_000;
 const peerHistoryWarmups = new Map<string, { createdAt: number; promise: Promise<PeerHistoryPage> }>();
 const activeOutgoingTasks = new Map<string, Promise<void>>();
+const activeBurnRequests = new Set<string>();
+const scheduledBurnTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const taskPreviewUrls = new Map<string, string>();
 const pendingReceiptCursors = new Map<string, DmReceiptCursor>();
 const receiptTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -243,7 +245,7 @@ function ensureResumeListeners() {
     void useDirectMessagesStore().resumePending(true);
     // A 10-second read deadline may have elapsed while the PWA was suspended
     // or while the user was browsing another route.
-    void useDirectMessagesStore().burnDueOpenedMessages().catch(error => {
+    void useDirectMessagesStore().restoreOpenedBurnSchedules().catch(error => {
       console.warn("[dm] expired read-message cleanup failed", error instanceof Error ? error.message : "unknown");
     });
   });
@@ -580,6 +582,41 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!account || useKeyStore().pkHex.toLowerCase() !== account) return;
       await metaRepository.put(account, sent ? sentReceiptStateKey(peerPubkey) : receiptStateKey(peerPubkey), state);
     },
+    /** Keep short, account-scoped one-shot timers alive across route navigation.
+     * iOS suspension is handled by restoreOpenedBurnSchedules on resume. */
+    scheduleOpenedBurn(peerPubkey: string, messageId: string, deadlineAt: number) {
+      const account = useKeyStore().pkHex.toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      if (!account || this.loadedFor !== account || !Number.isFinite(deadlineAt)
+        || !/^[0-9a-f]{64}$/i.test(messageId) || !/^[0-9a-f]{64}$/i.test(peer)) return;
+      const key = `${account}:${messageId.toLowerCase()}`;
+      const previous = scheduledBurnTimers.get(key);
+      if (previous) clearTimeout(previous);
+      const timer = setTimeout(() => {
+        scheduledBurnTimers.delete(key);
+        if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return;
+        void this.burnDisappearingMessage(peer, messageId).catch(error => {
+          console.warn("[dm] scheduled burn failed", error instanceof Error ? error.message : "unknown");
+        });
+      }, Math.max(0, deadlineAt - Date.now()));
+      scheduledBurnTimers.set(key, timer);
+    },
+    async restoreOpenedBurnSchedules(nowMs = Date.now()) {
+      const account = useKeyStore().pkHex.toLowerCase();
+      if (!account || this.loadedFor !== account) return;
+      const records = await metaRepository.listPrefix(account, "dm-open:");
+      if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return;
+      for (const record of records) {
+        const state = record.value as { messageId?: string; peerPubkey?: string; deadlineAt?: number } | undefined;
+        if (!state || typeof state.messageId !== "string" || typeof state.peerPubkey !== "string"
+          || typeof state.deadlineAt !== "number" || !Number.isFinite(state.deadlineAt)) continue;
+        if (state.deadlineAt <= nowMs) {
+          await this.burnDisappearingMessage(state.peerPubkey, state.messageId);
+        } else {
+          this.scheduleOpenedBurn(state.peerPubkey, state.messageId, state.deadlineAt);
+        }
+      }
+    },
     /** Delete due temporary messages across all chats, not just mounted views. */
     async burnDueOpenedMessages(nowMs = Date.now()) {
       const account = useKeyStore().pkHex.toLowerCase();
@@ -623,6 +660,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const keys = useKeyStore();
       const account = keys.pkHex.toLowerCase();
       const peer = peerPubkey.toLowerCase();
+      const burnKey = `${account}:${messageId.toLowerCase()}`;
+      if (activeBurnRequests.has(burnKey)) return false;
+      activeBurnRequests.add(burnKey);
+      try {
       // Local destruction must not depend on friendship status, relay health,
       // or a currently available signer. Network notification is best effort.
       if (!account || !peer || peer === account) return false;
@@ -659,7 +700,13 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         // to the user as a confirmed remote deletion.
         console.warn("[dm] encrypted burn notification unavailable", error instanceof Error ? error.message : "unknown");
       }
+      const scheduled = scheduledBurnTimers.get(burnKey);
+      if (scheduled) clearTimeout(scheduled);
+      scheduledBurnTimers.delete(burnKey);
       return true;
+      } finally {
+        activeBurnRequests.delete(burnKey);
+      }
     },
     async processReceipt(message: CanonicalMessage) {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
@@ -1108,6 +1155,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.claimDerivedStateOwnership();
       ensureResumeListeners();
       void this.resumePending(false);
+      void this.restoreOpenedBurnSchedules().catch(() => undefined);
     },
     async markPeerRead(peerPubkey: string, readThrough?: InboxItem) {
       return this.markPeerReadInternal(peerPubkey, true, readThrough);
@@ -1555,6 +1603,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
     },
     reset() {
+      for (const timer of scheduledBurnTimers.values()) clearTimeout(timer);
+      scheduledBurnTimers.clear();
       for (const task of this.outgoingTasks) {
         const key = taskKey(task.accountPubkey, task.localId);
         const url = taskPreviewUrls.get(key);
