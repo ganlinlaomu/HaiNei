@@ -1047,6 +1047,9 @@ function flushDraft(account: string = keys.pkHex, peer: string = peerPubkey.valu
 }
 const stopBeforeLock = onBeforeAccountLock(async account => {
   if (account !== keys.pkHex) return;
+  // Do not leave an unlocked temporary message mounted while the account locks.
+  openedDeadlines.value = {};
+  stopBurnClock();
   await flushDraft(account);
   draftReady = false;
 });
@@ -1703,6 +1706,9 @@ onMounted(() => {
 });
 watch([draft, replyingToId], scheduleDraftSave);
 watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
+  historyMessages.value = [];
+  historyCursor.value = undefined;
+  historyExhausted.value = false;
   openedDeadlines.value = {};
   disappearingSeconds.value = null;
   attachmentMenuOpen.value = false;
