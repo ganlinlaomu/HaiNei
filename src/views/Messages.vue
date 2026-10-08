@@ -607,6 +607,9 @@ async function revealDisappearing(message: InboxItem) {
       return;
     }
     openedDeadlines.value = { ...openedDeadlines.value, [message.id]: deadline };
+    // Actual reveal, not opening the chat or advancing a read cursor, is the
+    // only event that emits a per-message encrypted read confirmation.
+    void directMessages.acknowledgeOpenedDisappearing(peer, message);
     // Global one-shot timer survives closing or navigating away from this chat.
     directMessages.scheduleOpenedBurn(peer, message.id, deadline);
     if (deadline <= Date.now()) void checkBurnDeadlines();
@@ -890,9 +893,9 @@ function statusKind(message: InboxItem) {
     case "send_failed":
       return message.outgoing.state;
     default: {
-      const receipt = directMessages.outgoingReceiptStatus(peerPubkey.value, message) || "sent";
-      // The normal read cursor must not imply that a sealed message was opened.
-      return isDisappearing(message) && receipt === "read" ? "delivered" : receipt;
+      // Store distinguishes the explicit opened-message receipt from the
+      // cumulative read cursor, including when the message is already burned.
+      return directMessages.outgoingReceiptStatus(peerPubkey.value, message) || "sent";
     }
   }
 }

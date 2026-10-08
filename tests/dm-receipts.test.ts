@@ -9,12 +9,17 @@ import {
   isDmReceiptMessage,
   isDmReceiptPayload,
   serializeDmReceipt,
+  serializeExactDmReadReceipt,
 } from "@/nostr/messaging/dmReceipts";
 import { createHomeMessageHandler } from "@/nostr/messaging/homeDelivery";
 import { MessageIngestionPipeline } from "@/nostr/messaging/sync/ingestion";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { receiptStatusForMessage, useDirectMessagesStore } from "@/stores/directMessages";
 import { useSettingsStore } from "@/stores/settings";
+import { useKeyStore } from "@/stores/keys";
+import { useFriendshipsStore } from "@/stores/friendships";
+import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import { metaRepository } from "@/repositories/metaRepository";
 
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
@@ -35,7 +40,7 @@ function receiptMessage(status: "delivered" | "read", createdAt = 100, messageId
   };
 }
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("encrypted DM receipts", () => {
   it("encodes and validates private delivered/read cursor controls", () => {
@@ -58,6 +63,91 @@ describe("encrypted DM receipts", () => {
         upTo: { createdAt: 100, messageId: "not-an-event-id" },
       }),
     })).toBeNull();
+  });
+
+  it("validates exact per-message read receipts without changing older cursor receipts", () => {
+    const opened = serializeExactDmReadReceipt({ createdAt: 100, messageId: FIRST });
+    expect(decodeDmReceipt({
+      ...receiptMessage("read"), plaintext: opened,
+    })).toEqual({
+      type: DM_RECEIPT_TYPE, status: "read", exact: true,
+      upTo: { createdAt: 100, messageId: FIRST },
+    });
+    for (const payload of [
+      JSON.stringify({ type: DM_RECEIPT_TYPE, status: "delivered", exact: true, upTo: { createdAt: 100, messageId: FIRST } }),
+      JSON.stringify({ type: DM_RECEIPT_TYPE, status: "read", exact: "true", upTo: { createdAt: 100, messageId: FIRST } }),
+      JSON.stringify({ type: DM_RECEIPT_TYPE, status: "read", exact: true, upTo: { createdAt: 100, messageId: "invalid" } }),
+    ]) {
+      expect(decodeDmReceipt({ ...receiptMessage("read"), plaintext: payload })).toBeNull();
+    }
+    expect(isDmReceiptPayload(opened)).toBe(true);
+    expect(decodeDmReceipt({ ...receiptMessage("read"), plaintext: opened, tags: [] })).toBeNull();
+  });
+
+  it("shows read only for the explicitly opened temporary message, never earlier unopened ones", async () => {
+    setActivePinia(createPinia());
+    const keys = useKeyStore();
+    keys.pkHex = ACCOUNT;
+    const friendship = useFriendshipsStore();
+    friendship.loadedFor = ACCOUNT;
+    friendship.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "accepted" } as any];
+    const direct = useDirectMessagesStore();
+    direct.loadedFor = ACCOUNT;
+    direct.receiptStateByPeer[PEER] = {
+      delivered: { createdAt: 105, messageId: SECOND },
+      read: { createdAt: 105, messageId: SECOND },
+    };
+    const temporary = (id: string) => ({
+      id, pubkey: ACCOUNT, created_at: 100,
+      tags: [["t", "hainei-dm"], ["t", "hainei-dm-disappearing"]],
+    });
+    // The normal cumulative receipt can cover both messages, but neither
+    // should be considered opened without the exact signed control.
+    expect(direct.outgoingReceiptStatus(PEER, temporary(FIRST))).toBe("delivered");
+    expect(direct.outgoingReceiptStatus(PEER, temporary(SECOND))).toBe("delivered");
+    vi.spyOn(syncedMessageRepository, "get").mockResolvedValue({
+      id: FIRST, senderPubkey: ACCOUNT, createdAt: 100,
+      recipientPubkeys: [PEER], conversationId: "conversation",
+      tags: [["t", "hainei-dm"], ["t", "hainei-dm-disappearing"]],
+    } as any);
+    const put = vi.spyOn(metaRepository, "put").mockImplementation(async (account, key, value) => ({
+      accountPubkey: account, key, value,
+    }));
+    const exact: CanonicalMessage = {
+      ...receiptMessage("read"), plaintext: serializeExactDmReadReceipt({ createdAt: 100, messageId: FIRST }),
+    };
+    expect(await direct.processReceipt(exact)).toBe(true);
+    expect(put).toHaveBeenCalledWith(ACCOUNT, `dm-exact-read:${FIRST}`, expect.objectContaining({ peerPubkey: PEER }));
+    expect(direct.exactReadById[FIRST]).toBe(PEER);
+    expect(direct.outgoingReceiptStatus(PEER, temporary(FIRST))).toBe("read");
+    expect(direct.outgoingReceiptStatus(PEER, temporary(SECOND))).toBe("delivered");
+    // Exact read must never advance or overwrite the ordinary cumulative cursor.
+    expect(direct.receiptStateByPeer[PEER]?.read).toEqual({ createdAt: 105, messageId: SECOND });
+    expect(await direct.processReceipt(exact)).toBe(false);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(direct.outgoingReceiptStatus(PEER, {
+      id: SECOND, created_at: 100, pubkey: ACCOUNT, tags: [["t", "hainei-dm"]],
+    })).toBe("read");
+  });
+
+  it("rejects fake exact reads for normal messages or mismatched timestamps", async () => {
+    setActivePinia(createPinia());
+    const keys = useKeyStore();
+    keys.pkHex = ACCOUNT;
+    const friends = useFriendshipsStore();
+    friends.loadedFor = ACCOUNT;
+    friends.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "accepted" } as any];
+    const direct = useDirectMessagesStore();
+    direct.loadedFor = ACCOUNT;
+    vi.spyOn(syncedMessageRepository, "get").mockResolvedValue({
+      id: FIRST, senderPubkey: ACCOUNT, createdAt: 101,
+      recipientPubkeys: [PEER], tags: [["t", "hainei-dm"]],
+    } as any);
+    const put = vi.spyOn(metaRepository, "put");
+    const exact = { ...receiptMessage("read"), plaintext: serializeExactDmReadReceipt({ createdAt: 100, messageId: FIRST }) };
+    expect(await direct.processReceipt(exact)).toBe(false);
+    expect(direct.exactReadById[FIRST]).toBeUndefined();
+    expect(put).not.toHaveBeenCalled();
   });
 
   it("advances cursors monotonically and lets read imply delivery", () => {

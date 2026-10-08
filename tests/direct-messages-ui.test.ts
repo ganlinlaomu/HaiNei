@@ -151,6 +151,17 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('return !isOwn(message) && !isBurned(message)');
   });
 
+  it("marks a disappearing message read only after an explicit reveal and an exact receipt", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    expect(chat).toContain("void directMessages.acknowledgeOpenedDisappearing(peer, message)");
+    expect(chat).toContain('return directMessages.outgoingReceiptStatus(peerPubkey.value, message) || "sent"');
+    expect(chat).not.toContain('isDisappearing(message) && receipt === "read" ? "delivered" : receipt');
+    expect(store).toContain("if (hasDisappearingMarker(message.tags)) {");
+    expect(store).toContain('this.exactReadById[message.id.toLowerCase()] === peer');
+    expect(store).toContain('return receiptStatusForMessage(message, state ? { ...state, read: undefined } : state)');
+  });
+
   it("shows a compact timestamp for every direct-message type", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain('v-if="!isMediaCaption(message) || isDisappearing(message)" class="message-meta"');

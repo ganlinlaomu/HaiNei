@@ -9,6 +9,7 @@ import {
   decodeDmReceipt,
   dmReceiptTags,
   serializeDmReceipt,
+  serializeExactDmReadReceipt,
   type DmReceiptCursor,
   type DmReceiptStatus,
 } from "@/nostr/messaging/dmReceipts";
@@ -90,6 +91,9 @@ const scheduledBurnTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const taskPreviewUrls = new Map<string, string>();
 const pendingReceiptCursors = new Map<string, DmReceiptCursor>();
 const receiptTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const activeExactReads = new Set<string>();
+const EXACT_READ_PREFIX = "dm-exact-read:";
+const EXACT_READ_SENT_PREFIX = "dm-exact-read-sent:";
 let stopResumeListener: (() => void) | null = null;
 
 function taskKey(accountPubkey: string, localId: string) { return `${accountPubkey}:${localId}`; }
@@ -336,6 +340,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     readCursors: {} as Record<string, MessageCursor | undefined>,
     preferencesByPeer: {} as Record<string, ConversationPreference | undefined>,
     receiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
+    /** Per-message read confirms only explicit temporary-message opens. */
+    exactReadById: {} as Record<string, string>,
     sentReceiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
     draftsByPeer: {} as Record<string, DmDraft | undefined>,
     burnedById: {} as Record<string, { peerPubkey: string; createdAt?: number; senderPubkey?: string; conversationId?: string }>,
@@ -568,13 +574,19 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           && afterDeletion(item, this.preferencesByPeer[peer]))
         .sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
     },
-    outgoingReceiptStatus(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey">) {
+    outgoingReceiptStatus(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey"> & Partial<Pick<InboxItem, "tags">>) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
       if (!account || message.pubkey !== account) return null;
-      const state = this.receiptStateByPeer[peerPubkey.toLowerCase()];
-      if (!readReceiptsEnabledForAccount(account)) {
+      const peer = peerPubkey.toLowerCase();
+      const state = this.receiptStateByPeer[peer];
+      const enabled = readReceiptsEnabledForAccount(account);
+      if (hasDisappearingMarker(message.tags)) {
+        // A cumulative read cursor NEVER establishes that this particular
+        // disappearing message was explicitly opened.
+        if (enabled && this.exactReadById[message.id.toLowerCase()] === peer) return "read";
         return receiptStatusForMessage(message, state ? { ...state, read: undefined } : state);
       }
+      if (!enabled) return receiptStatusForMessage(message, state ? { ...state, read: undefined } : state);
       return receiptStatusForMessage(message, state);
     },
     async persistReceiptState(peerPubkey: string, state: PeerReceiptState, sent = false) {
@@ -718,6 +730,27 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (friendships.loadedFor !== account) await friendships.load(account);
       if (!friendships.isAccepted(peer) || useKeyStore().pkHex.toLowerCase() !== account) return false;
       if (receipt.status === "read" && !readReceiptsEnabledForAccount(account)) return false;
+      if (receipt.exact === true) {
+        const id = receipt.upTo.messageId;
+        const target = await syncedMessageRepository.get(account, id);
+        const tombstone = !target ? (await metaRepository.get(account, `dm-burn:${id}`))?.value as {
+          peerPubkey?: string; senderPubkey?: string; createdAt?: number;
+        } | undefined : undefined;
+        const matches = target
+          ? target.senderPubkey.toLowerCase() === account && target.createdAt === receipt.upTo.createdAt
+            && isDirectMessageTags(target.tags) && hasDisappearingMarker(target.tags)
+            && directMessagePeer(target, account) === peer
+          : tombstone?.peerPubkey === peer && tombstone?.senderPubkey === account
+            && tombstone?.createdAt === receipt.upTo.createdAt;
+        if (!matches || useKeyStore().pkHex.toLowerCase() !== account) return false;
+        if (this.exactReadById[id] === peer) return false;
+        await metaRepository.put(account, `${EXACT_READ_PREFIX}${id}`, {
+          peerPubkey: peer, createdAt: receipt.upTo.createdAt, confirmedAt: Date.now(),
+        });
+        if (useKeyStore().pkHex.toLowerCase() !== account || (this.loadedFor && this.loadedFor !== account)) return false;
+        this.exactReadById = { ...this.exactReadById, [id]: peer };
+        return true;
+      }
 
       let current = this.receiptStateByPeer[peer];
       if (!current) {
@@ -739,6 +772,50 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.receiptStateByPeer = { ...this.receiptStateByPeer, [peer]: next };
       await this.persistReceiptState(peer, next);
       return true;
+    },
+    /** Only a successful explicit open can trigger this exact-message receipt.
+     * Enqueued NIP-17 delivery is retried by the normal durable send queue. */
+    async acknowledgeOpenedDisappearing(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey" | "tags">) {
+      const keys = useKeyStore();
+      const account = keys.pkHex.toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      const id = message.id.toLowerCase();
+      if (!account || !peer || peer !== message.pubkey.toLowerCase()
+        || !/^[0-9a-f]{64}$/i.test(id) || !hasDisappearingMarker(message.tags)
+        || !keys.supportsNip44 || !readReceiptsEnabledForAccount(account)
+        || !canStartDirectMessage(account, peer, useFriendshipsStore().isAccepted)) return false;
+      const activeKey = `${account}:${id}`;
+      if (activeExactReads.has(activeKey)) return false;
+      activeExactReads.add(activeKey);
+      try {
+        const old = await metaRepository.get(account, `${EXACT_READ_SENT_PREFIX}${id}`);
+        if (old || keys.pkHex.toLowerCase() !== account) return false;
+        const target = await syncedMessageRepository.get(account, id);
+        if (!target || target.senderPubkey.toLowerCase() !== peer
+          || target.createdAt !== message.created_at
+          || !hasDisappearingMarker(target.tags) || !isDirectMessageTags(target.tags)) return false;
+        await sendDirectMessage({
+          recipientPubkeys: [peer],
+          content: serializeExactDmReadReceipt({ createdAt: target.createdAt, messageId: id }),
+          tags: dmReceiptTags("read"),
+          relays: getRelaysFromStorage("write"),
+          context: {
+            senderPubkey: account,
+            nip44Encrypt: keys.nip44Encrypt.bind(keys),
+            signEvent: keys.signEvent.bind(keys),
+          },
+        });
+        if (keys.pkHex.toLowerCase() !== account) return false;
+        await metaRepository.put(account, `${EXACT_READ_SENT_PREFIX}${id}`, {
+          peerPubkey: peer, sentAt: Date.now(),
+        });
+        return true;
+      } catch (error) {
+        console.warn("[dm] exact temporary read receipt unavailable", error instanceof Error ? error.message : "unknown");
+        return false;
+      } finally {
+        activeExactReads.delete(activeKey);
+      }
     },
     scheduleReceipt(peerPubkey: string, status: DmReceiptStatus, upTo: DmReceiptCursor) {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
@@ -1101,6 +1178,17 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const preferences = Object.fromEntries(preferenceEntries) as Record<string, ConversationPreference | undefined>;
       const receiptStates = Object.fromEntries(receiptEntries) as Record<string, PeerReceiptState | undefined>;
       const sentReceiptStates = Object.fromEntries(sentReceiptEntries) as Record<string, PeerReceiptState | undefined>;
+      const exactReadRows = await metaRepository.listPrefix(account, EXACT_READ_PREFIX);
+      if (useKeyStore().pkHex.toLowerCase() !== account) return;
+      const exactReads: Record<string, string> = {};
+      for (const row of exactReadRows) {
+        const id = row.key.slice(EXACT_READ_PREFIX.length);
+        const value = row.value as { peerPubkey?: string } | undefined;
+        const peer = value?.peerPubkey;
+        if (/^[0-9a-f]{64}$/i.test(id) && typeof peer === "string" && /^[0-9a-f]{64}$/i.test(peer)) {
+          exactReads[id] = peer;
+        }
+      }
       for (const peer of peers) {
         const preference = preferences[peer];
         if (!preference?.hidden) continue;
@@ -1134,6 +1222,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.preferencesByPeer = preferences;
       this.receiptStateByPeer = receiptStates;
       this.sentReceiptStateByPeer = sentReceiptStates;
+      this.exactReadById = { ...exactReads, ...(this.loadedFor === account ? this.exactReadById : {}) };
       this.draftsByPeer = drafts;
       // A foreground read may complete while this refresh awaits storage or
       // account restoration. Merge at commit time so its newer cursor survives.
@@ -1619,6 +1708,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.preferencesByPeer = {};
       this.receiptStateByPeer = {};
       this.sentReceiptStateByPeer = {};
+      this.exactReadById = {};
+      for (const key of activeExactReads) activeExactReads.delete(key);
       this.draftsByPeer = {};
       this.burnedById = {};
       clearReceiptTimers();
