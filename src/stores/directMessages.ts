@@ -1282,10 +1282,15 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           enforceAuthorization: true,
         }).filter(readable).at(-1)
         : undefined;
-      // If the UI tail is an optimistic sent task, fall back to the newest
-      // canonical message instead of returning without persisting the real read
-      // position. This is what makes the cursor survive lock/login cycles.
-      const latest = requestedReadThrough || items.filter(readable).at(-1);
+      // Historical/unauthorized/sealed explicit targets may not silently advance
+      // to the newest message. Preserve the existing special case for a locally
+      // sent optimistic task: it is not a canonical cursor, but the visible
+      // conversation tail is otherwise readable and can use the newest durable
+      // canonical message (verified by the existing unread regression test).
+      const optimisticSent = readThrough?.outgoing?.state === "sent"
+        && (readThrough.id.startsWith("local:") || readThrough.conversationId?.startsWith("local:"));
+      if (readThrough && !requestedReadThrough && !optimisticSent) return;
+      const latest = requestedReadThrough || (optimisticSent || !readThrough ? items.filter(readable).at(-1) : undefined);
       if (!latest?.conversationId) return;
       const conversationId = latest.conversationId;
       const previous = this.readCursors[conversationId];

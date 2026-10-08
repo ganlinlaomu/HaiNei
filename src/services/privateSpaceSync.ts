@@ -29,10 +29,14 @@ export function setPrivateSpaceEditing(account: string, editing: boolean) {
   else activeEditors.delete(owner);
 }
 const jobs = new Map<string, Promise<void>>();
+const controllers = new Map<string, AbortController>();
+const epochs = new Map<string, number>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const retries = new Map<string, number>();
 const status = new Map<string, PrivateSpaceSyncState>();
 const RETRIES = [1_000, 5_000, 15_000, 60_000, 300_000];
+export const PRIVATE_SPACE_MAX_SYNC_BYTES = 60_000;
+type SyncResult = { conflicts: number; oversized: number };
 
 function publish(account: string, next: PrivateSpaceSyncStatus, error?: string, conflicts = 0) {
   const state: PrivateSpaceSyncState = { account, status: next, error, conflicts };
@@ -56,10 +60,11 @@ function ensureCurrent(isCurrent: () => boolean) {
 
 async function post(
   keys: Keys, path: string, payload: Record<string, unknown>, isCurrent: () => boolean,
+  signal?: AbortSignal,
 ): Promise<any> {
   ensureCurrent(isCurrent);
   const base = haineiWorkerBaseUrl();
-  const authResponse = await timedJsonFetch(base + "/api/auth/challenge", { method: "POST" });
+  const authResponse = await timedJsonFetch(base + "/api/auth/challenge", { method: "POST", signal });
   const challenge = await responseJson(authResponse);
   ensureCurrent(isCurrent);
   const url = base + path;
@@ -72,7 +77,7 @@ async function post(
   });
   ensureCurrent(isCurrent);
   const response = await timedJsonFetch(url, {
-    method: "POST",
+    method: "POST", signal,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, event, challenge: challenge.challenge }),
   });
@@ -122,12 +127,12 @@ function decode(account: string, id: string, plaintext: string): PrivateSpaceRec
   };
 }
 
-async function manifest(keys: Keys, isCurrent: () => boolean) {
+async function manifest(keys: Keys, isCurrent: () => boolean, signal?: AbortSignal) {
   const all = new Map<string, number>();
   let after: string | undefined;
   for (let pages = 0; pages < 1000; pages++) {
     const response = await post(keys, "/api/private-space/list",
-      { ...(after ? { after } : {}), limit: 60 }, isCurrent);
+      { ...(after ? { after } : {}), limit: 60 }, isCurrent, signal);
     if (!Array.isArray(response.items) || response.items.length > 60) throw new Error("invalid_private_space_manifest");
     for (const entry of response.items as Manifest[]) {
       if (typeof entry.id !== "string" || !Number.isSafeInteger(entry.version) || entry.version < 1)
@@ -143,19 +148,20 @@ async function manifest(keys: Keys, isCurrent: () => boolean) {
   throw new Error("private_space_page_limit");
 }
 
-async function synchronize(keys: Keys, isCurrent: () => boolean): Promise<number> {
+async function synchronize(keys: Keys, isCurrent: () => boolean, signal?: AbortSignal): Promise<SyncResult> {
   const account = keys.pkHex.toLowerCase();
   if (activeEditors.has(account)) throw new Error("private_space_editing");
-  const remoteVersions = await manifest(keys, isCurrent);
+  const remoteVersions = await manifest(keys, isCurrent, signal);
   ensureCurrent(isCurrent);
   const locally = new Map((await privateSpaceRepository.list(account)).map(note => [note.id, note]));
   let conflicts = 0;
+  let oversized = 0;
   const needsRemote = [...remoteVersions].filter(([id, version]) =>
     version > Number(locally.get(id)?.cloudVersion || 0)).map(([id]) => id);
 
   for (let i = 0; i < needsRemote.length; i += 8) {
     const ids = needsRemote.slice(i, i + 8);
-    const response = await post(keys, "/api/private-space/get", { ids }, isCurrent);
+    const response = await post(keys, "/api/private-space/get", { ids }, isCurrent, signal);
     if (!Array.isArray(response.items) || response.items.length > ids.length) throw new Error("invalid_private_space_response");
     const received = new Set<string>();
     for (const row of response.items as CloudRow[]) {
@@ -187,17 +193,21 @@ async function synchronize(keys: Keys, isCurrent: () => boolean): Promise<number
     }
     const expectedVersion = remoteVersions.get(note.id) || 0;
     const plaintext = envelope(note);
-    if (new TextEncoder().encode(plaintext).byteLength > 60_000)
-      throw new Error("笔记过长，超过单条 NIP-44 加密长度上限；本机内容不受影响，请拆分后同步");
+    if (new TextEncoder().encode(plaintext).byteLength > PRIVATE_SPACE_MAX_SYNC_BYTES) {
+      // A single unsyncable note cannot starve all later notes. Never mutate
+      // or silently truncate it; leave local revision dirty for user action.
+      oversized++;
+      continue;
+    }
     const ciphertext = await keys.nip44Encrypt(account, plaintext);
     ensureCurrent(isCurrent);
     const result = await post(keys, "/api/private-space/put",
-      { id: note.id, expectedVersion, ciphertext }, isCurrent);
+      { id: note.id, expectedVersion, ciphertext }, isCurrent, signal);
     if (result.id !== note.id || result.version !== expectedVersion + 1)
       throw new Error("invalid_private_space_upload_ack");
     await privateSpaceRepository.markSynced(account, note.id, note.revision, result.version);
   }
-  return conflicts;
+  return { conflicts, oversized };
 }
 export async function syncPrivateSpace(keys: Keys): Promise<void> {
   const account = keys.pkHex.toLowerCase();
@@ -211,18 +221,28 @@ export async function syncPrivateSpace(keys: Keys): Promise<void> {
     planRetry(keys, account, generation);
     return;
   }
-  const isCurrent = () => active(keys, account, generation);
+  const epoch = epochs.get(account) || 0;
+  const controller = new AbortController();
+  controllers.set(account, controller);
+  const isCurrent = () => !controller.signal.aborted
+    && (epochs.get(account) || 0) === epoch && active(keys, account, generation);
   publish(account, "syncing");
   const work = (async () => {
     try {
-      const conflicts = await synchronize(keys, isCurrent);
+      const { conflicts, oversized } = await synchronize(keys, isCurrent, controller.signal);
       if (!isCurrent()) return;
       retries.delete(account);
       const pending = (await privateSpaceRepository.list(account))
         .some(note => note.revision !== Number(note.syncedRevision || 0));
       if (!isCurrent()) return;
-      publish(account, pending ? "local" : "synced", undefined, conflicts);
-      if (pending) schedulePrivateSpaceSync(keys, 1_000);
+      if (oversized) {
+        // Do not retry forever when a note is permanently above the limit.
+        // New edits or a manual retry will attempt reconciliation again.
+        publish(account, "error", "有 " + oversized + " 条笔记过长，仅保存在本机；请缩短或拆分后重新同步", conflicts);
+      } else {
+        publish(account, pending ? "local" : "synced", undefined, conflicts);
+        if (pending) schedulePrivateSpaceSync(keys, 1_000);
+      }
       // Other mounted views may refresh, but must not overwrite an open editor.
       if (typeof window !== "undefined" && typeof CustomEvent !== "undefined")
         window.dispatchEvent(new CustomEvent("hainei-private-space-synced", { detail: { account } }));
@@ -239,7 +259,10 @@ export async function syncPrivateSpace(keys: Keys): Promise<void> {
   })();
   jobs.set(account, work);
   try { await work; }
-  finally { if (jobs.get(account) === work) jobs.delete(account); }
+  finally {
+    if (jobs.get(account) === work) jobs.delete(account);
+    if (controllers.get(account) === controller) controllers.delete(account);
+  }
 }
 function planRetry(keys: Keys, account: string, generation: number | undefined) {
   if (typeof window === "undefined" || !active(keys, account, generation)) return;
@@ -265,10 +288,17 @@ export function notePrivateSpaceMutation(keys: Keys) {
   }
 }
 export function cancelPrivateSpaceSync(account: string) {
-  const timer = timers.get(account);
+  const owner = account.toLowerCase();
+  // Invalidate in-flight jobs immediately, even if account A gets unlocked
+  // again before an old request finishes.
+  epochs.set(owner, (epochs.get(owner) || 0) + 1);
+  controllers.get(owner)?.abort();
+  controllers.delete(owner);
+  jobs.delete(owner);
+  const timer = timers.get(owner);
   if (timer) clearTimeout(timer);
-  timers.delete(account);
-  retries.delete(account);
-  status.delete(account);
-  activeEditors.delete(account);
+  timers.delete(owner);
+  retries.delete(owner);
+  status.delete(owner);
+  activeEditors.delete(owner);
 }

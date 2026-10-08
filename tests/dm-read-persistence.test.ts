@@ -160,6 +160,18 @@ describe("reading paged DM history with an encrypted database", () => {
     expect(direct.unreadByConversation[CONVERSATION]).toBe(151);
   });
 
+  it("never advances unread for explicitly targeted ephemeral or foreign history", async () => {
+    for (let i = 1; i <= 5; i++) await save(item(i));
+    const direct = await restore();
+    expect(direct.unreadCount).toBe(5);
+    await direct.markPeerRead(PEER, {
+      ...item(2), tags: [["t", "hainei-dm"], ["t", "hainei-dm-disappearing"]],
+    });
+    await direct.markPeerRead(PEER, { ...item(2), pubkey: "c".repeat(64) });
+    expect(await syncedMessageRepository.getReadState(ACCOUNT, CONVERSATION)).toBeUndefined();
+    expect(direct.unreadCount).toBe(5);
+  });
+
   it("does not persist a sent optimistic task as the conversation read cursor", async () => {
     for (let i = 1; i <= 151; i++) await save(item(i));
     let direct = await restore();
