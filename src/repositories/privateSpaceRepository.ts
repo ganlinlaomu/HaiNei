@@ -44,7 +44,7 @@ export class PrivateSpaceRepository {
     const owner = requireUnlocked(account);
     await this.database.transaction("rw", this.database.accountNotes, async () => {
       const current = await this.database.accountNotes.get([owner, id]);
-      if (!current || Number(current.cloudVersion || 0) >= version) return;
+      if (!current || Number(current.syncedRevision || 0) > sentRevision) return;
       await this.database.accountNotes.put({
         ...current, cloudVersion: version, syncedRevision: sentRevision,
       });
