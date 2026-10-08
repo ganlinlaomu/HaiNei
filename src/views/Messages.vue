@@ -194,8 +194,13 @@
           <span>回复</span>
         </button>
         <button v-if="actionMenuCopyText" type="button" role="menuitem" @click="copyFromActionMenu">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="10" height="10" rx="2"/><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2 2v1"/></svg>
           <span>复制</span>
+        </button>
+        <button v-if="actionMenuImportable" type="button" role="menuitem"
+          :disabled="importingDm" @click="saveDmFromActionMenu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4"/></svg>
+          <span>{{ importingDm ? "保存中…" : "保存到私人空间" }}</span>
         </button>
       </div>
     </div>
@@ -404,6 +409,7 @@ import { parseFriendRecommendation, serializeFriendRecommendation, type FriendRe
 import { shortNpub } from "@/utils/nostrQr";
 import { disappearingMetadata, hasDisappearingMarker, isExpiredDisappearing, DISAPPEARING_DM_TYPE, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import { canImportDirectMessage } from "@/services/privateSpaceImport";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { directMessagesForPeer, useDirectMessagesStore, type DmSearchResult } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
@@ -590,6 +596,13 @@ const actionMenuStyle = computed(() => ({
 }));
 const actionMenuMessage = computed(() => lookupMessage(actionMenuMessageId.value));
 const actionMenuCopyText = computed(() => actionMenuMessage.value ? messageText(actionMenuMessage.value.content) : "");
+const importingDm = ref(false);
+const actionMenuImportable = computed(() => {
+  const message = actionMenuMessage.value;
+  return !!message && canImportDirectMessage(
+    message, keys.pkHex, peerPubkey.value, isDisappearing(message) || isBurned(message),
+  );
+});
 const voiceCaptureOwnsAudioSession = computed(() => startingRecording.value || !!recording.value || finishingRecording.value);
 const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
 const INITIAL_MESSAGE_COUNT = 60;
@@ -864,7 +877,8 @@ function openMessageActionMenu(message: InboxItem, event?: MouseEvent) {
   const viewportHeight = window.visualViewport?.height || window.innerHeight;
   const menuWidth = Math.min(300, Math.max(240, viewportWidth - 24));
   const hasCopyAction = !!messageText(message.content);
-  const estimatedHeight = 62 + (hasCopyAction ? 104 : 52);
+  const estimatedHeight = 62 + (hasCopyAction ? 104 : 52)
+    + (canImportDirectMessage(message, keys.pkHex, peerPubkey.value, isDisappearing(message) || isBurned(message)) ? 52 : 0);
   const edge = 12;
   const gap = 8;
 
@@ -893,6 +907,36 @@ function replyFromActionMenu() {
   const message = actionMenuMessage.value;
   closeMessageActionMenu();
   if (message) startReply(message);
+}
+async function saveDmFromActionMenu() {
+  const message = actionMenuMessage.value;
+  if (!message || importingDm.value || !canImportDirectMessage(
+    message, keys.pkHex, peerPubkey.value, isDisappearing(message) || isBurned(message),
+  )) return;
+  const account = keys.pkHex;
+  const generation = keys.sessionGeneration;
+  const peer = peerPubkey.value;
+  importingDm.value = true;
+  try {
+    const { importDirectMessageToPrivateSpace } = await import("@/services/privateSpaceImport");
+    // Recheck the burn marker / deletion state just before copying.
+    if (isDisappearing(message) || isBurned(message)) return;
+    const result = await importDirectMessageToPrivateSpace(
+      keys, message, peer, displayName.value, isDisappearing(message) || isBurned(message),
+    );
+    if (disposed || account !== keys.pkHex || generation !== keys.sessionGeneration || peer !== peerPubkey.value) return;
+    closeMessageActionMenu();
+    if (result.created) {
+      const { notePrivateSpaceMutation } = await import("@/services/privateSpaceSync");
+      if (!disposed && account === keys.pkHex && generation === keys.sessionGeneration) {
+        notePrivateSpaceMutation(keys);
+        ui.addToast("已保存到私人空间", 1800, "success");
+      }
+    } else ui.addToast("私人空间中已存在这条私信", 1800, "info");
+  } catch {
+    if (!disposed && account === keys.pkHex && generation === keys.sessionGeneration)
+      ui.addToast("保存失败，请确认私人空间已解锁或内容未超出限制", 2300, "error");
+  } finally { importingDm.value = false; }
 }
 async function copyFromActionMenu() {
   const text = actionMenuCopyText.value;

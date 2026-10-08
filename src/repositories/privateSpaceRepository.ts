@@ -81,6 +81,33 @@ export class PrivateSpaceRepository {
     return { changed, conflicted };
   }
 
+  /**
+   * User-initiated import with stable source-derived ID.
+   * In one IndexedDB transaction, do not overwrite existing, edited, or trashed imports.
+   */
+  async importNote(account: string, id: string, title: string, body: string):
+    Promise<{ record: PrivateSpaceRecord; created: boolean }> {
+    const owner = requireUnlocked(account);
+    if (!/^[0-9a-f]{64}$/.test(id)) throw new Error("invalid_private_space_source_id");
+    if (title.length > 500 || body.length > 100_000) throw new Error("private_space_size_limit");
+    let result: { record: PrivateSpaceRecord; created: boolean } | undefined;
+    await this.database.transaction("rw", this.database.accountNotes, async () => {
+      const existing = await this.database.accountNotes.get([owner, id]);
+      if (existing) {
+        result = { record: existing, created: false };
+        return;
+      }
+      const now = Date.now();
+      const record: PrivateSpaceRecord = {
+        accountPubkey: owner, id, kind: "note", title, body,
+        tasks: [], pinned: false, createdAt: now, updatedAt: now, revision: 1,
+      };
+      await this.database.accountNotes.add(record);
+      result = { record, created: true };
+    });
+    return result!;
+  }
+
   async create(account: string, kind: "note" | "todo"): Promise<PrivateSpaceRecord> {
     const owner = requireUnlocked(account);
     if (kind !== "note" && kind !== "todo") throw new Error("invalid_private_space_kind");
