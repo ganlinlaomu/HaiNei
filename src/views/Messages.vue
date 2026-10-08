@@ -96,8 +96,9 @@
                   <span aria-hidden="true">✓</span> 临时消息已销毁
                 </div>
                 <div v-else-if="isOwn(message)" class="temporary-message">
-                  <span class="temporary-heading"><span aria-hidden="true">♨</span> 阅后即焚消息</span>
-                  <span class="temporary-caption">对方打开后 {{ burnDuration(message) }} 秒销毁</span>
+                  <MentionText v-if="messageText(message.content)" class="bubble-text" :text="messageText(message.content)" />
+                  <span v-else class="temporary-caption">临时消息</span>
+                  <span class="temporary-caption">♨ 阅后即焚 · {{ burnDuration(message) }} 秒</span>
                 </div>
                 <div v-else-if="canShowTemporaryText(message)" class="temporary-message">
                   <MentionText class="bubble-text" :text="messageText(message.content)" />
