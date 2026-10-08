@@ -38,6 +38,8 @@ export interface OutgoingMessage {
   replyTo?: string;
   rootId?: string;
   tags?: string[][];
+  /** Opt-in disappearing DM; normal NIP-17 messages are unchanged. */
+  burnAfterSeconds?: 10 | 30 | 60;
 }
 
 export interface EncodedMessage {
