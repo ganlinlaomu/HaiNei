@@ -12,6 +12,7 @@ import {
 import { HttpError, integerSetting, type Env } from "./types";
 import { enforceChallengeRateLimit, readJsonBody } from "./requestGuards";
 import { AccountStateConflict, getAccountState, putAccountState } from "./accountState";
+import { authorizeMetricsRequest, getRuntimeMetrics } from "./adminMetrics";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -24,6 +25,13 @@ function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {
     status,
     headers: { ...CORS, "Content-Type": "application/json; charset=utf-8" },
+  });
+}
+
+function adminJson(value: unknown, status = 200) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
   });
 }
 
@@ -44,9 +52,17 @@ function authBinding(request: Request, payload: Record<string, unknown>) {
 }
 
 export async function handleRequest(request: Request, env: Env) {
-  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   const path = new URL(request.url).pathname.replace(/\/+$/, "") || "/";
+  if (request.method === "OPTIONS") return new Response(null, {
+    status: 204,
+    headers: path.startsWith("/api/admin/") ? { "Cache-Control": "no-store" } : CORS,
+  });
   try {
+    if (path === "/api/admin/metrics") {
+      if (request.method !== "GET") return adminJson({ error: "method_not_allowed" }, 405);
+      await authorizeMetricsRequest(request, env);
+      return adminJson(await getRuntimeMetrics(env));
+    }
     if (path === "/api/relay/config" && request.method === "GET") {
       return json(relayPublicConfig(env));
     }
@@ -132,7 +148,9 @@ export async function handleRequest(request: Request, env: Env) {
     const message = error instanceof HttpError
       ? error.message
       : path.startsWith("/api/push/") ? "push_storage_unavailable" : "internal_error";
-    return json({ error: message }, status);
+    return path.startsWith("/api/admin/")
+      ? adminJson({ error: message }, status)
+      : json({ error: message }, status);
   }
 }
 
