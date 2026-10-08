@@ -145,6 +145,54 @@ describe("opt-in disappearing NIP-17", () => {
     expect(await repo.openDisappearingMessage(receiver, disappearing.id, sender, Date.now() + 49 * 3600 * 1000)).toBeNull();
   });
 
+  it("purges an elapsed read timer on account restore without opening its chat", async () => {
+    const repo = repository();
+    const ephemeral = (await nip17Adapter.encode!({
+      recipientPubkeys: [receiver], plaintext: "do not restore", tags: [["t", "hainei-dm"]],
+      burnAfterSeconds: 10,
+    }, context)).message;
+    const ordinary = (await nip17Adapter.encode!({
+      recipientPubkeys: [receiver], plaintext: "keep this", tags: [["t", "hainei-dm"]],
+    }, context)).message;
+    await repo.insertMessageIfAbsent(receiver, ephemeral);
+    await repo.insertMessageIfAbsent(receiver, ordinary);
+    const openedAt = Date.now();
+    const deadline = await repo.openDisappearingMessage(receiver, ephemeral.id, sender, openedAt);
+    expect(await repo.listDueOpenedDisappearing(receiver, openedAt + 9_000)).toEqual([]);
+    expect(await repo.listDueOpenedDisappearing(sender, openedAt + 11_000)).toEqual([]);
+    expect(await repo.listDueOpenedDisappearing(receiver, openedAt + 11_000))
+      .toContainEqual({ messageId: ephemeral.id, peerPubkey: sender, deadlineAt: deadline });
+
+    expect(await repo.purgeExpiredDisappearing(receiver, openedAt + 11_000)).toBe(1);
+    expect(await repo.get(receiver, ephemeral.id)).toBeUndefined();
+    expect(await repo.get(receiver, ordinary.id)).toEqual(expect.objectContaining({ plaintext: "keep this" }));
+    expect(await repo.listDueOpenedDisappearing(receiver, openedAt + 11_000)).toEqual([]);
+    expect((await repo.insertMessageIfAbsent(receiver, ephemeral)).inserted).toBe(false);
+    expect(await repo.isBurnedMessage(receiver, ephemeral)).toBe(true);
+  });
+
+  it("honors an elapsed deadline after a database reopen across login sessions", async () => {
+    const repo = repository();
+    const ephemeral = (await nip17Adapter.encode!({
+      recipientPubkeys: [receiver], plaintext: "suspend", tags: [["t", "hainei-dm"]],
+      burnAfterSeconds: 30,
+    }, context)).message;
+    await repo.insertMessageIfAbsent(receiver, ephemeral);
+    const base = Date.now();
+    const deadline = await repo.openDisappearingMessage(receiver, ephemeral.id, sender, base);
+    const existing = opened.at(-1)!;
+    const name = existing.name;
+    existing.close();
+    const restored = new HaiNeiDatabase(name);
+    opened.push(restored);
+    const reopened = new SyncedMessageRepository(restored);
+    expect(await reopened.listDueOpenedDisappearing(receiver, base + 31_000))
+      .toContainEqual({ messageId: ephemeral.id, peerPubkey: sender, deadlineAt: deadline });
+    await reopened.purgeExpiredDisappearing(receiver, base + 31_000);
+    expect(await reopened.get(receiver, ephemeral.id)).toBeUndefined();
+    expect(await reopened.openDisappearingMessage(receiver, ephemeral.id, sender)).toBeNull();
+  });
+
   it("handles a signed burn control arriving before the original message", async () => {
     const repo = repository();
     const temporary = (await nip17Adapter.encode!({
