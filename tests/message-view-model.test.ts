@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SyncedMessageRecord } from "@/db/dexie";
 import { DM_RECEIPT_TYPE } from "@/nostr/messaging/dmReceipts";
+import { DM_BURN_CONTROL_TYPE, isBurnControlPayload, parseBurnControl, serializeBurnControl } from "@/nostr/messaging/dmBurnControl";
 import {
   isFeedRenderableMessage,
   isHomeControl,
@@ -61,6 +62,34 @@ describe("message view model", () => {
     expect(item.content).toBe("");
     expect(item.transportEventId).toBeUndefined();
     expect(item.tags).toEqual([]);
+  });
+
+  it("excludes tagged burn notices and previously stored untagged burn JSON from Home/Profile", () => {
+    const payload = serializeBurnControl("d833991ad5b314c30fd6038e1ce0da43958ddba6fb59e35ff319678e21aa0e47");
+    const tag = [["t", DM_BURN_CONTROL_TYPE]];
+    expect(isHomeControl(tag, payload)).toBe(true);
+    expect(isFeedRenderableMessage({ tags: tag, content: payload })).toBe(false);
+    expect(isHomeControl([], payload)).toBe(true);
+    expect(isFeedRenderableMessage({ tags: [], content: payload })).toBe(false);
+    // Old IndexedDB records with lost tags must not reappear when converted for Home history.
+    const restored = syncedMessageRecordToInboxItem(record({ tags: [], plaintext: payload }));
+    expect(isFeedRenderableMessage(restored)).toBe(false);
+  });
+
+  it("does not hide ordinary messages or treat untagged JSON as deletion commands", () => {
+    const id = "d833991ad5b314c30fd6038e1ce0da43958ddba6fb59e35ff319678e21aa0e47";
+    const valid = serializeBurnControl(id);
+    expect(isBurnControlPayload(valid)).toBe(true);
+    expect(parseBurnControl({ tags: [], plaintext: valid })).toBeNull();
+    expect(parseBurnControl({ tags: [["t", DM_BURN_CONTROL_TYPE]], plaintext: valid })).toBe(id);
+    const unrelated = JSON.stringify({ type: "user-note", messageId: id });
+    const malformed = JSON.stringify({ type: DM_BURN_CONTROL_TYPE, messageId: "not-an-event-id" });
+    for (const content of [unrelated, malformed, '{"type":"hainei-dm-burn"', "regular post"]) {
+      expect(isBurnControlPayload(content)).toBe(false);
+      expect(isFeedRenderableMessage({ tags: [], content })).toBe(true);
+    }
+    // A missing/invalid payload with a burn-control tag remains a control, never a post.
+    expect(isFeedRenderableMessage({ tags: [["t", DM_BURN_CONTROL_TYPE]], content: malformed })).toBe(false);
   });
 
   it("uses one feed predicate for normal posts, DMs, controls and receipts", () => {
