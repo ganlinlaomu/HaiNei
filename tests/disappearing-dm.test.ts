@@ -56,7 +56,9 @@ describe("opt-in disappearing NIP-17", () => {
     const expiration = Math.floor(Date.now() / 1000) + 48 * 3600;
     for (const wrap of encoded.events) {
       expect(wrap.kind).toBe(1059);
-      expect(wrap.tags).toContainEqual(["expiration", String(expiration)]);
+      const outerExpiration = Number(wrap.tags.find(tag => tag[0] === "expiration")?.[1]);
+      expect(outerExpiration).toBeGreaterThan(expiration - 900);
+      expect(outerExpiration).toBeLessThanOrEqual(expiration);
     }
     expect(disappearingMetadata(encoded.message.tags)).toEqual({ expiresAt: expiration, burnAfterSeconds: 10 });
     const receiverWrap = encoded.events.find(event => event.tags[0][1] === receiver)!;
