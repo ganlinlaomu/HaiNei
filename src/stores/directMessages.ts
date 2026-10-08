@@ -241,6 +241,11 @@ function ensureResumeListeners() {
   if (stopResumeListener) return;
   stopResumeListener = onAppResume(() => {
     void useDirectMessagesStore().resumePending(true);
+    // A 10-second read deadline may have elapsed while the PWA was suspended
+    // or while the user was browsing another route.
+    void useDirectMessagesStore().burnDueOpenedMessages().catch(error => {
+      console.warn("[dm] expired read-message cleanup failed", error instanceof Error ? error.message : "unknown");
+    });
   });
 }
 function cursor(createdAt?: number, messageId?: string) {
@@ -575,14 +580,30 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!account || useKeyStore().pkHex.toLowerCase() !== account) return;
       await metaRepository.put(account, sent ? sentReceiptStateKey(peerPubkey) : receiptStateKey(peerPubkey), state);
     },
+    /** Delete due temporary messages across all chats, not just mounted views. */
+    async burnDueOpenedMessages(nowMs = Date.now()) {
+      const account = useKeyStore().pkHex.toLowerCase();
+      if (!account || this.loadedFor !== account) return 0;
+      const due = await syncedMessageRepository.listDueOpenedDisappearing(account, nowMs);
+      if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return 0;
+      let burned = 0;
+      for (const item of due) {
+        if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) break;
+        if (await this.burnDisappearingMessage(item.peerPubkey, item.messageId)) burned++;
+      }
+      return burned;
+    },
     /** An encrypted burn notice is authenticated by NIP-17's signed seal and friendship gate. */
     async processBurnControl(message: CanonicalMessage) {
       const targetId = parseBurnControl(message);
       const account = useKeyStore().pkHex.toLowerCase();
       if (!targetId || !account || (this.loadedFor && this.loadedFor !== account)) return false;
       const peer = directMessagePeer(message, account);
-      if (!peer || !useFriendshipsStore().isAccepted(peer)) return false;
+      if (!peer) return false;
       const target = await syncedMessageRepository.get(account, targetId);
+      // Former friends can still request destruction of an existing matching
+      // temporary message; unknown non-friends cannot plant future tombstones.
+      if (!useFriendshipsStore().isAccepted(peer) && !target) return false;
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, targetId, peer);
       if (accepted) this.burnedById = { ...this.burnedById, [targetId]: { peerPubkey: peer, createdAt: target?.createdAt, senderPubkey: target?.senderPubkey, conversationId: target?.conversationId } };
       if (!accepted || useKeyStore().pkHex.toLowerCase() !== account) return false;
@@ -602,7 +623,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const keys = useKeyStore();
       const account = keys.pkHex.toLowerCase();
       const peer = peerPubkey.toLowerCase();
-      if (!keys.supportsNip44 || !canStartDirectMessage(account, peer, useFriendshipsStore().isAccepted)) return false;
+      // Local destruction must not depend on friendship status, relay health,
+      // or a currently available signer. Network notification is best effort.
+      if (!account || !peer || peer === account) return false;
+      const canNotify = keys.supportsNip44 && canStartDirectMessage(account, peer, useFriendshipsStore().isAccepted);
       const target = await syncedMessageRepository.get(account, messageId);
       if (!target || !hasDisappearingMarker(target.tags) || !isDirectMessageTags(target.tags)
         || directMessagePeer(target, account) !== peer) return false;
@@ -617,7 +641,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.outgoingTasks = this.outgoingTasks.filter(task => task.accountPubkey !== account ||
         (task.outgoingId !== messageId && task.canonicalMessageId !== messageId));
       if (this.loadedFor === account) await this.reconcileDurableUnread();
-      try {
+      if (canNotify) try {
         await sendDirectMessage({
           recipientPubkeys: [peer],
           content: serializeBurnControl(messageId),
