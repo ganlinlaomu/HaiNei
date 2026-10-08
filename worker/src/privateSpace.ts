@@ -20,7 +20,7 @@ function encrypted(value: unknown): string {
 
 /** Account-isolated, cursor-paginated version manifest; never exposes note contents. */
 export async function listPrivateSpace(env: Env, account: string, afterValue: unknown, limitValue?: unknown) {
-  const after = afterValue == null ? "" : id(afterValue);
+  const after = afterValue == null || afterValue === "" ? "" : id(afterValue);
   const limit = limitValue == null ? 60 : Number(limitValue);
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > PAGE_LIMIT) throw new HttpError(400, "invalid_private_space_limit");
   const response = await env.DB.prepare(
