@@ -229,6 +229,37 @@ export class SyncedMessageRepository {
     });
   }
 
+  /** An authenticated exact-read receipt can establish the sender's own
+   * absolute burn deadline. Keep it durable across PWA suspension/relogin so
+   * the sender does not depend solely on a later remote burn notification. */
+  async recordSenderBurnDeadline(accountPubkey: string, messageId: string, peerPubkey: string, deadlineAt: number) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const id = messageId.toLowerCase();
+    const peer = peerPubkey.toLowerCase();
+    if (!/^[0-9a-f]{64}$/i.test(id) || !/^[0-9a-f]{64}$/i.test(peer)
+      || peer === account || !Number.isSafeInteger(deadlineAt) || deadlineAt <= 0) return null;
+    return this.database.transaction("rw", [this.database.syncedMessages, this.database.accountMeta], async () => {
+      const target = await this.database.syncedMessages.get([account, id]);
+      if (!target || target.senderPubkey.toLowerCase() !== account
+        || !isDirectMessageTags(target.tags) || directMessagePeer(target, account) !== peer) return null;
+      const metadata = disappearingMetadata(target.tags);
+      if (!metadata || deadlineAt > metadata.expiresAt * 1000) return null;
+      if (await this.database.accountMeta.get([account, burnKey(id)])) return null;
+      const key = openedKey(id);
+      const existing = (await this.database.accountMeta.get([account, key]))?.value as OpenedDmState | undefined;
+      if (existing) {
+        if (existing.peerPubkey !== peer || !Number.isFinite(existing.deadlineAt)) return null;
+        // Never extend or reset a previously confirmed deletion deadline.
+        return existing.deadlineAt;
+      }
+      await this.database.accountMeta.put({
+        accountPubkey: account, key,
+        value: { messageId: id, peerPubkey: peer, deadlineAt } satisfies OpenedDmState,
+      });
+      return deadlineAt;
+    });
+  }
+
   async listOpenedDisappearing(accountPubkey: string, peerPubkey: string): Promise<OpenedDmState[]> {
     const account = normalizeAccountPubkey(accountPubkey);
     const peer = peerPubkey.toLowerCase();
