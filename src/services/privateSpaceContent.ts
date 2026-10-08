@@ -10,21 +10,40 @@ const videos = getVideoUrlRemovalPatterns();
 const MARKDOWN_IMAGE = /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/gi;
 const PLAIN_IMAGE = /https?:\/\/[^\s)]+?\.(?:png|jpe?g|gif|webp|avif|svg)(?:\?[^\s)]*)?/gi;
 
+/**
+ * Some older local messages accidentally stored a serialized Nostr event as content.
+ * Unwrap only an unmistakable event envelope, never a generic user-authored JSON note.
+ */
+function unwrapSerializedEvent(content: string): string {
+  if (!content.trimStart().startsWith("{")) return content;
+  try {
+    const event = JSON.parse(content) as Record<string, unknown>;
+    if (event && typeof event === "object" && !Array.isArray(event) &&
+      typeof event.content === "string" && typeof event.pubkey === "string" &&
+      HEX_ID.test(event.pubkey) && Number.isSafeInteger(event.kind) &&
+      Number.isSafeInteger(event.created_at) && Array.isArray(event.tags) &&
+      (typeof event.id === "string" && HEX_ID.test(event.id) ||
+        typeof event.sig === "string" && /^[0-9a-f]{128}$/i.test(event.sig)))
+      return event.content;
+  } catch { /* Preserve ordinary JSON text. */ }
+  return content;
+}
 /** Content extracted from a renderable post; not the Nostr event or NIP-17 wrapper. */
 export function extractPrivateSpaceContent(content: string, includeMedia = true):
   { text: string; attachments: PrivateSpaceAttachment[] } {
+  const visible = unwrapSerializedEvent(content);
   const attachments: PrivateSpaceAttachment[] = [];
   if (includeMedia) {
-    for (const url of extractImageUrls(content).slice(0, MAX_ATTACHMENTS)) {
+    for (const url of extractImageUrls(visible).slice(0, MAX_ATTACHMENTS)) {
       if (URL_SAFE.test(url)) attachments.push({ kind: "image", url });
     }
-    const video = extractVideoData(content);
+    const video = extractVideoData(visible);
     if (video?.url && URL_SAFE.test(video.url) && attachments.length < MAX_ATTACHMENTS) {
       attachments.push({ kind: "video", url: video.url });
     }
   }
   // Match the visible feed's filtering rules; never include transport metadata in the editor body.
-  const text = content
+  const text = visible
     .replace(MARKDOWN_IMAGE, "")
     .replace(PLAIN_IMAGE, "")
     .replace(videos.videoDataPattern, "")
