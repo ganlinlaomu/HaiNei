@@ -32,6 +32,25 @@ function validateDraft(draft: PrivateSpaceDraft): PrivateSpaceDraft {
   };
 }
 
+/**
+ * A restored backup has no cloud CAS marker and may have a newer local timestamp
+ * than the identical remote record. Compare semantic content (including deletion)
+ * before making an artificial conflict copy. Never compare only title/body.
+ */
+export function samePrivateSpaceContents(
+  left: PrivateSpaceRecord, right: PrivateSpaceRecord,
+): boolean {
+  return left.kind === right.kind
+    && left.title === right.title
+    && left.body === right.body
+    && left.pinned === right.pinned
+    && Number(left.archivedAt || 0) === Number(right.archivedAt || 0)
+    && Number(left.deletedAt || 0) === Number(right.deletedAt || 0)
+    && JSON.stringify(left.tasks) === JSON.stringify(right.tasks)
+    && JSON.stringify(left.source ?? null) === JSON.stringify(right.source ?? null)
+    && JSON.stringify(left.attachments ?? []) === JSON.stringify(right.attachments ?? []);
+}
+
 /** Local-first, account-scoped storage. PR1 never publishes a Nostr event or sends data to a Worker. */
 export class PrivateSpaceRepository {
   constructor(private readonly database: HaiNeiDatabase = db) {}
@@ -69,8 +88,10 @@ export class PrivateSpaceRepository {
     await this.database.transaction("rw", this.database.accountNotes, async () => {
       const existing = await this.database.accountNotes.get([owner, remote.id]);
       if (existing && Number(existing.cloudVersion || 0) >= version) return;
-      if (existing && existing.revision !== Number(existing.syncedRevision || 0)) {
-        // A newer local edit, including a tombstone, must never be overwritten.
+      if (existing && existing.revision !== Number(existing.syncedRevision || 0)
+          && !samePrivateSpaceContents(existing, remote)) {
+        // Preserve genuine divergent edits, including tombstones. Identical
+        // backup restores are already represented by the remote version.
         const copyId = crypto.randomUUID();
         const now = Date.now();
         await this.database.accountNotes.add({
