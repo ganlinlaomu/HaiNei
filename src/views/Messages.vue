@@ -137,16 +137,17 @@
                   <div class="recommendation-identity">
                     <ProfileAvatar :pubkey="friendRecommendation(message.content)!.pubkey" :size="42" />
                     <div class="recommendation-identity-text">
-                      <strong>{{ recommendationName(friendRecommendation(message.content)!.pubkey) }}</strong>
+                      <strong>{{ recommendationName(friendRecommendation(message.content)!) }}</strong>
                       <small>{{ shortNpub(friendRecommendation(message.content)!.pubkey, 13, 8) }}</small>
                     </div>
                   </div>
+                  <p class="recommendation-bio">{{ recommendationBio(friendRecommendation(message.content)!) || "暂无简介" }}</p>
                   <button class="recommendation-action" type="button"
                     :disabled="recommendationActionDisabled(friendRecommendation(message.content)!.pubkey)"
                     @click.stop="actOnRecommendation(friendRecommendation(message.content)!.pubkey)">
                     {{ recommendationActionLabel(friendRecommendation(message.content)!.pubkey) }}
                   </button>
-                  <span class="recommendation-hint">好友申请需要对方确认后才能查看完整资料</span>
+                  <span class="recommendation-hint">昵称和简介由推荐人转发，尚未由被推荐人向你确认</span>
                 </div>
               </template>
               <template v-else-if="isMediaCaption(message)">
@@ -351,16 +352,39 @@
           <h2>推荐朋友</h2>
           <button type="button" aria-label="关闭推荐朋友" @click="closeRecommendationPicker">×</button>
         </header>
-        <p class="recommendation-picker-help">选择一位好友，将其公钥名片加密发送给 {{ displayName }}。</p>
-        <input v-model.trim="recommendationQuery" class="recommendation-search" type="search" autocomplete="off" placeholder="搜索好友" aria-label="搜索要推荐的好友" />
-        <div class="recommendation-picker-list">
-          <button v-for="friend in recommendableFriends" :key="friend.pubkey" class="recommendation-picker-item" type="button" @click="sendRecommendation(friend.pubkey)">
-            <ProfileAvatar :pubkey="friend.pubkey" :local-name="friend.name" :size="40" />
-            <span>{{ recommendationPickerName(friend.pubkey) }}</span>
-            <span class="recommendation-picker-arrow" aria-hidden="true">→</span>
-          </button>
-          <p v-if="recommendableFriends.length === 0" class="recommendation-picker-empty">没有可推荐的好友</p>
-        </div>
+        <template v-if="selectedRecommendation">
+          <div class="recommendation-send-preview">
+            <span class="recommendation-eyebrow">确认推荐的名片</span>
+            <div class="recommendation-identity">
+              <ProfileAvatar :pubkey="selectedRecommendation.pubkey" :size="44" />
+              <div class="recommendation-identity-text">
+                <strong>{{ selectedRecommendation.nickname || "未设置昵称" }}</strong>
+                <small>{{ shortNpub(selectedRecommendation.pubkey, 13, 8) }}</small>
+              </div>
+            </div>
+            <p class="recommendation-bio">{{ selectedRecommendation.bio || "暂无简介" }}</p>
+          </div>
+          <p class="recommendation-privacy-note">确认后会将该好友本人设置的昵称和简介作为名片快照，以加密私信发送给 {{ displayName }}。对方即使还不是他的好友，也能看到这些资料。</p>
+          <div class="recommendation-confirm-actions">
+            <button type="button" @click="selectedRecommendation = null">返回选择</button>
+            <button type="button" class="recommendation-confirm-send" @click="sendRecommendation">确认发送</button>
+          </div>
+        </template>
+        <template v-else>
+          <p class="recommendation-picker-help">选择一位好友，将其昵称、简介和公钥加密发送给 {{ displayName }}。</p>
+          <input v-model.trim="recommendationQuery" class="recommendation-search" type="search" autocomplete="off" placeholder="搜索好友" aria-label="搜索要推荐的好友" />
+          <div class="recommendation-picker-list">
+            <button v-for="friend in recommendableFriends" :key="friend.pubkey" class="recommendation-picker-item" type="button" @click="selectRecommendation(friend.pubkey)">
+              <ProfileAvatar :pubkey="friend.pubkey" :local-name="recommendationPickerName(friend.pubkey)" :size="40" />
+              <span class="recommendation-picker-identity">
+                <strong>{{ recommendationPickerName(friend.pubkey) }}</strong>
+                <small>{{ recommendationPickerBio(friend.pubkey) || "暂无简介" }}</small>
+              </span>
+              <span class="recommendation-picker-arrow" aria-hidden="true">→</span>
+            </button>
+            <p v-if="recommendableFriends.length === 0" class="recommendation-picker-empty">没有可推荐的好友</p>
+          </div>
+        </template>
       </section>
     </div>
   </main>
@@ -376,7 +400,7 @@ import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import MentionText from "@/components/MentionText.vue";
 import { DIRECT_MESSAGE_TYPE, directMessagePreview } from "@/nostr/messaging/directMessages";
-import { parseFriendRecommendation, serializeFriendRecommendation } from "@/nostr/messaging/friendRecommendation";
+import { parseFriendRecommendation, serializeFriendRecommendation, type FriendRecommendation } from "@/nostr/messaging/friendRecommendation";
 import { shortNpub } from "@/utils/nostrQr";
 import { disappearingMetadata, hasDisappearingMarker, isExpiredDisappearing, DISAPPEARING_DM_TYPE, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -482,6 +506,7 @@ const selectedImage = ref<{ file: File; preview: string } | null>(null);
 const attachmentMenuOpen = ref(false);
 const recommendationPickerOpen = ref(false);
 const recommendationQuery = ref("");
+const selectedRecommendation = ref<FriendRecommendation | null>(null);
 const recommendationRequestPubkey = ref("");
 const recommendableFriends = computed(() => {
   const query = recommendationQuery.value.trim().toLocaleLowerCase();
@@ -617,12 +642,24 @@ const burningMessageIds = new Set<string>();
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
 const messageText = (content: string) => ["[图片]", "[语音]", "[好友推荐]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
 const friendRecommendation = parseFriendRecommendation;
-function recommendationName(pubkey: string) {
-  if (!friendships.isAccepted(pubkey)) return "一位新朋友";
-  const local = friends.list.find(friend => friend.pubkey === pubkey)?.name;
-  return privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, local);
+// Only profiles delivered by their own author to this account are trusted as owner-authored.
+function ownKnownRecommendationProfile(pubkey: string) {
+  return profiles.loadedFor === keys.pkHex && friendships.isAccepted(pubkey)
+    ? profiles.getProfile(pubkey)
+    : undefined;
 }
-function recommendationPickerName(pubkey: string) { return recommendationName(pubkey); }
+function recommendationName(card: FriendRecommendation) {
+  return ownKnownRecommendationProfile(card.pubkey)?.nickname?.trim() || card.nickname || "未设置昵称";
+}
+function recommendationBio(card: FriendRecommendation) {
+  return ownKnownRecommendationProfile(card.pubkey)?.bio?.trim() || card.bio || "";
+}
+function recommendationPickerName(pubkey: string) {
+  return ownKnownRecommendationProfile(pubkey)?.nickname?.trim() || shortNpub(pubkey, 13, 8) || "未设置昵称";
+}
+function recommendationPickerBio(pubkey: string) {
+  return ownKnownRecommendationProfile(pubkey)?.bio?.trim() || "";
+}
 function recommendationActionLabel(pubkey: string) {
   if (pubkey === keys.pkHex) return "这是你自己";
   const status = friendships.getState(pubkey);
@@ -1444,18 +1481,31 @@ function openRecommendationPicker() {
     return;
   }
   recommendationQuery.value = "";
+  selectedRecommendation.value = null;
   textInput.value?.blur();
   recommendationPickerOpen.value = true;
 }
 function closeRecommendationPicker() {
   recommendationPickerOpen.value = false;
   recommendationQuery.value = "";
+  selectedRecommendation.value = null;
 }
-function sendRecommendation(pubkey: string) {
-  if (!recommendationPickerOpen.value || !accepted.value || !friendships.isAccepted(pubkey)
+function selectRecommendation(pubkey: string) {
+  if (!accepted.value || !friendships.isAccepted(pubkey)
     || pubkey === peerPubkey.value || pubkey === keys.pkHex) return;
+  const profile = ownKnownRecommendationProfile(pubkey);
+  selectedRecommendation.value = {
+    pubkey,
+    ...(profile?.nickname?.trim() ? { nickname: profile.nickname.trim() } : {}),
+    ...(profile?.bio?.trim() ? { bio: profile.bio.trim() } : {}),
+  };
+}
+function sendRecommendation() {
+  const card = selectedRecommendation.value;
+  if (!card || !recommendationPickerOpen.value || !accepted.value || !friendships.isAccepted(card.pubkey)
+    || card.pubkey === peerPubkey.value || card.pubkey === keys.pkHex) return;
   try {
-    directMessages.send(peerPubkey.value, serializeFriendRecommendation(pubkey), undefined, undefined, undefined, { preserveDraft: true });
+    directMessages.send(peerPubkey.value, serializeFriendRecommendation(card.pubkey, card), undefined, undefined, undefined, { preserveDraft: true });
     closeRecommendationPicker();
     ui.addToast("好友名片已加入发送队列", 1800, "success");
   } catch (error) {
@@ -1979,6 +2029,7 @@ onBeforeUnmount(() => {
 .message-line .recommendation-bubble{min-width:215px;max-width:min(80vw,320px);padding:0;border:1px solid #e1e7ed;background:#fff;color:#0f1419;overflow:hidden}
 .recommended-friend-card{display:flex;flex-direction:column;gap:10px;min-width:215px;padding:14px;box-sizing:border-box}
 .recommendation-eyebrow{font-size:11px;font-weight:700;color:#536471}
+.recommendation-bio{margin:0;color:#536471;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden}
 .recommendation-identity{display:flex;align-items:center;gap:10px;min-width:0}
 .recommendation-identity-text{display:flex;min-width:0;flex-direction:column;gap:4px}
 .recommendation-identity-text strong{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1994,7 +2045,10 @@ onBeforeUnmount(() => {
 .recommendation-search{width:100%;min-height:42px;box-sizing:border-box;padding:0 13px;border:1px solid #e2e8f0;border-radius:11px;background:#f8fafc;font:inherit;font-size:16px;outline-offset:2px}
 .recommendation-picker-list{min-height:64px;overflow:auto;overscroll-behavior:contain}
 .recommendation-picker-item{display:flex;width:100%;min-height:64px;align-items:center;gap:11px;padding:8px 2px;border:0;border-bottom:1px solid #f1f5f9;background:#fff;text-align:left;color:#0f1419;font-size:14px}
-.recommendation-picker-item>span:nth-child(2){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.recommendation-picker-identity{display:flex;min-width:0;flex:1;flex-direction:column;gap:3px}.recommendation-picker-identity strong{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.recommendation-picker-identity small{color:#64748b;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recommendation-send-preview{display:flex;flex-direction:column;gap:11px;border:1px solid #e2e8f0;border-radius:15px;padding:14px}
+.recommendation-privacy-note{color:#64748b;font-size:12px;line-height:1.6;margin:0}
+.recommendation-confirm-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.recommendation-confirm-actions button{min-height:44px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;color:#334155;font-weight:650;font:inherit}.recommendation-confirm-actions .recommendation-confirm-send{background:#1687e8;border-color:#1687e8;color:#fff}
 .recommendation-picker-arrow{color:#94a3b8}.recommendation-picker-empty{padding:16px;text-align:center;color:#64748b;font-size:13px}
 .sr-file-input{position:absolute!important;width:1px!important;height:1px!important;left:-9999px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}
 .message-line .disappearing-bubble{min-width:154px;max-width:min(76vw,290px);border:1px solid #eae2e0;background:#fcf9f8;color:#3b3030}
