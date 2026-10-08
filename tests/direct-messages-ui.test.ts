@@ -130,7 +130,7 @@ describe("direct-message navigation and UI contract", () => {
 
   it("shows a compact timestamp for every direct-message type", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(chat).toContain('v-if="!isMediaCaption(message)" class="message-meta"');
+    expect(chat).toContain('v-if="!isMediaCaption(message) || isDisappearing(message)" class="message-meta"');
     expect(chat).toContain('<time>{{ formatBubbleTime(message.created_at) }}</time>');
     expect(chat).toContain(".message-meta{display:flex");
     expect(chat).toContain("font-size:9px");
@@ -169,7 +169,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain(".post-image-preview, .optimistic-image, .voice-message");
     expect(chat).toContain('target.scrollIntoView({ behavior: "smooth", block: "center" })');
     expect(chat).toContain("'message-highlight': highlightedMessageId === message.id");
-    expect(chat).toContain("directMessages.send(peerPubkey.value, text, image, replyTo)");
+    expect(chat).toContain("directMessages.send(peerPubkey.value, text, image, replyTo, disappearingSeconds.value ?? undefined)");
     expect(chat).toContain("directMessages.sendAudio(peerPubkey.value, audio, replyTo)");
     expect(store).toContain("replyTo: task.replyTo");
     expect(store).toContain("replyTo === message.replyTo");
@@ -525,7 +525,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).not.toContain("sending = ref(");
     expect(chat).not.toContain(':disabled="!accepted || sending"');
     expect(chat).toContain(':disabled="!accepted || !keys.pkHex ||');
-    expect(chat).toContain("directMessages.mergePeerHistory(peerPubkey.value, historyMessages.value)");
+    expect(chat).toContain("directMessages.mergePeerHistory(peer, historyMessages.value)");
     expect(chat).not.toContain("directMessages.peerMessages(peerPubkey.value)");
     expect(chat).toContain("'输入消息……'");
     expect(chat).toContain('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>');
@@ -548,7 +548,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(conversations).toContain("scheduleConversationWarmup()");
     expect(chat).toContain("await waitForFirstPaint()");
     expect(chat).toContain("await fetchOlderPage(true)");
-    expect(chat).toContain("directMessages.mergePeerHistory(peerPubkey.value, historyMessages.value)");
+    expect(chat).toContain("directMessages.mergePeerHistory(peer, historyMessages.value)");
     expect(chat).toContain("watch(() => messageStore.inboxRevision, applyLatestInboxMutation)");
     expect(chat).toContain("loadingConversation = false");
     expect(chat).toContain("void restoreDraft(account, peer)");
@@ -661,7 +661,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('class="composer-icon-visual"');
     expect(chat).toContain('class="composer-icon-visual send-visual"');
     expect(chat).toContain('<path d="M12 5v14M5 12h14"/>');
-    expect(chat).toContain('class="attachment-file-input"');
+    expect(chat).toContain('class="attachment-file-input sr-file-input"');
     expect(chat).toContain(".attachment-file-input{position:absolute;inset:0;width:100%;height:100%");
     expect(chat).not.toContain('@click="chooseImage"');
     expect(chat).toContain("width:44px;height:44px");
