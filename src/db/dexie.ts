@@ -3,8 +3,8 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.30";
-export const DB_VERSION = 17;
+export const APP_VERSION = "0.1.31";
+export const DB_VERSION = 18;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -265,6 +265,23 @@ export type OutgoingDmTaskRecord = {
   lastError?: string;
 };
 
+// Only account/id/timestamps are indexed; the private content is encrypted by localVault.
+export type PrivateSpaceTask = { id: string; text: string; done: boolean };
+export type PrivateSpaceRecord = {
+  accountPubkey: string;
+  id: string;
+  kind: "note" | "todo";
+  title: string;
+  body: string;
+  tasks: PrivateSpaceTask[];
+  pinned: boolean;
+  archivedAt?: number;
+  deletedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  revision: number;
+};
+
 export type BookmarkRecord = {
   accountPubkey: string;
   messageId: string;
@@ -400,6 +417,7 @@ export class HaiNeiDatabase extends Dexie {
   outgoingQueue!: Table<OutgoingQueueRecord, [string, string]>;
   outgoingDmTasks!: Table<OutgoingDmTaskRecord, [string, string]>;
   accountBookmarks!: Table<BookmarkRecord, [string, string]>;
+  accountNotes!: Table<PrivateSpaceRecord, [string, string]>;
   deviceKeyValues!: Table<DeviceKeyValueRecord, string>;
   accountStateMirrors!: Table<AccountStateMirrorRecord, [string, AccountStateNamespace]>;
   replaceableEventOutbox!: Table<ReplaceableEventOutboxRecord, [string, string]>;
@@ -665,6 +683,11 @@ export class HaiNeiDatabase extends Dexie {
 
     this.version(17).stores({
       dmRelayDirectory: "[accountPubkey+ownerPubkey], accountPubkey, [accountPubkey+expiresAt]"
+    });
+
+    // PR1: additive account-scoped private notes. No existing data is rewritten.
+    this.version(18).stores({
+      accountNotes: "[accountPubkey+id], accountPubkey, [accountPubkey+updatedAt]"
     });
 
   }

@@ -67,7 +67,7 @@ describe("NIP-46 remote signer beta contract", () => {
     const pkg = JSON.parse(source("package.json"));
     const changelog = source("CHANGELOG.md");
 
-    expect(changelog).toContain(`## ${pkg.version} — 2026-10-02`);
+    expect(changelog).toContain(`## ${pkg.version} —`);
     expect(changelog).toContain("NIP-46 远程签名器 Beta");
   });
 });

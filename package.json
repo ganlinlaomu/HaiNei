@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.30",
-  "releaseSummary": "新增托管专用 Relay 短效会话：长期 App Token 仅保存在 Worker，系统 Relay 自动接入",
+  "version": "0.1.31",
+  "releaseSummary": "新增私人空间首版：本地加密笔记与待办、搜索、自动保存及恢复",
   "private": true,
   "scripts": {
     "dev": "vite",
