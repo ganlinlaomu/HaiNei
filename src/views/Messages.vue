@@ -560,6 +560,7 @@ let draftSaveTimer: number | null = null;
 let draftReady = false;
 let suppressDraftPersistence = false;
 let burnTimer: number | null = null;
+let burnTimerPeriod = 0;
 const burningMessageIds = new Set<string>();
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
@@ -616,14 +617,22 @@ async function revealDisappearing(message: InboxItem) {
 function stopBurnClock() {
   if (burnTimer !== null) window.clearInterval(burnTimer);
   burnTimer = null;
+  burnTimerPeriod = 0;
 }
 function startBurnClock() {
-  if (burnTimer !== null || document.hidden) return;
+  if (document.hidden) return;
+  // Unopened DM history requires no high-frequency polling. A live reading
+  // countdown needs only second precision; background execution is suspended.
+  const active = Object.values(openedDeadlines.value).some(deadline => deadline > Date.now());
+  const period = active ? 1000 : 60_000;
+  if (burnTimer !== null && burnTimerPeriod === period) return;
+  stopBurnClock();
   clockNow.value = Date.now();
+  burnTimerPeriod = period;
   burnTimer = window.setInterval(() => {
     clockNow.value = Date.now();
     void checkBurnDeadlines();
-  }, 500);
+  }, period);
 }
 async function checkBurnDeadlines() {
   if (disposed || !keys.pkHex || !accepted.value) return;
@@ -643,6 +652,7 @@ async function checkBurnDeadlines() {
         const next = { ...openedDeadlines.value };
         delete next[message.id];
         openedDeadlines.value = next;
+        startBurnClock();
       }
     } catch {
       // Retry on the next visible tick; never reveal expired plaintext again.
@@ -1310,6 +1320,7 @@ async function load() {
     const openRows = await syncedMessageRepository.listOpenedDisappearing(account, peer);
     if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
     openedDeadlines.value = Object.fromEntries(openRows.map(row => [row.messageId, row.deadlineAt]));
+    startBurnClock();
     clockNow.value = Date.now();
     void checkBurnDeadlines();
     if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
