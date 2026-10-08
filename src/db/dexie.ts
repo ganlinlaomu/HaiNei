@@ -244,6 +244,8 @@ export type OutgoingDmTaskRecord = {
   localId: string;
   peerPubkey: string;
   text: string;
+  /** Opt-in disappearing text message setting. */
+  burnAfterSeconds?: 10 | 30 | 60;
   replyTo?: string;
   imageBytes?: ArrayBuffer;
   imageName?: string;
