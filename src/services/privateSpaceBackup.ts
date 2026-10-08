@@ -121,7 +121,7 @@ export function parseBackupPayload(content: string, account: string): PrivateBac
 async function deriveKey(password: string, salt: Uint8Array, usage: KeyUsage) {
   const material = await crypto.subtle.importKey("raw", textEncoder.encode(password), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
-    { name: "PBKDF2", hash: "SHA-256", iterations: BACKUP_KDF_ITERATIONS, salt },
+    { name: "PBKDF2", hash: "SHA-256", iterations: BACKUP_KDF_ITERATIONS, salt: Uint8Array.from(salt).buffer },
     material, { name: "AES-GCM", length: 256 }, false, [usage],
   );
 }
@@ -139,7 +139,7 @@ export async function encryptPrivateBackup(
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await deriveKey(password, salt, "encrypt");
   const encrypted = await crypto.subtle.encrypt({
-    name: "AES-GCM", iv, additionalData: associatedData(account), tagLength: 128,
+    name: "AES-GCM", iv: Uint8Array.from(iv).buffer, additionalData: associatedData(account), tagLength: 128,
   }, key, plaintext);
   const envelope: PrivateBackupEnvelope = {
     format: PRIVATE_BACKUP_FORMAT, version: 1, accountPubkey: account,
@@ -174,7 +174,7 @@ export async function decryptPrivateBackup(
   try {
     plaintext = await crypto.subtle.decrypt({
       name: "AES-GCM", iv, additionalData: associatedData(account), tagLength: 128,
-    }, key, ciphertext);
+    }, key, Uint8Array.from(ciphertext).buffer);
   } catch { throw new Error("backup_password_or_integrity_failure"); }
   return parseBackupPayload(textDecoder.decode(plaintext), account);
 }
