@@ -219,6 +219,11 @@ export default defineComponent({
       stopForegroundResume = onAppResume(reason => {
         reconcileFriendStateOnForeground();
         reconcileBookmarksOnForeground(reason === "online");
+        if (keys.isLoggedIn && keys.isUnlocked) {
+          void import("@/services/privateSpaceSync").then(({ schedulePrivateSpaceSync }) => {
+            if (keys.isLoggedIn && keys.isUnlocked) schedulePrivateSpaceSync(keys, reason === "online" ? 0 : 3_000);
+          }).catch(() => { /* Keep foreground navigation responsive if notes cannot sync. */ });
+        }
         prewarmRemoteSignerOnForeground();
       });
     });
