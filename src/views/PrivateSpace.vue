@@ -17,11 +17,12 @@
       <div v-else-if="!filtered.length" class="empty-state">这里还没有内容。可以新建一条笔记或待办。</div>
       <ul v-else class="items">
         <li v-for="note in filtered" :key="note.id">
-          <button type="button" class="item" @click="open(note)">
+          <button type="button" class="item" :disabled="!!note.archivedAt || !!note.deletedAt" @click="open(note)">
             <span class="item-top"><strong>{{ label(note) }}</strong><span v-if="note.pinned">📌</span></span>
             <span class="preview">{{ note.kind === 'todo' ? progress(note) : note.body || '空白笔记' }}</span>
             <span class="date">{{ note.kind === 'todo' ? '待办' : '笔记' }} · {{ formatted(note.updatedAt) }}</span>
           </button>
+          <button v-if="note.archivedAt || note.deletedAt" type="button" class="restore-button" @click="restoreNote(note)">恢复</button>
         </li>
       </ul>
     </template>
@@ -75,13 +76,14 @@ const keys = useKeyStore();
 const notes = ref<PrivateSpaceRecord[]>([]);
 const editor = ref<PrivateSpaceRecord | null>(null);
 const query = ref("");
-const filter = ref<"all" | "note" | "todo">("all");
+const filter = ref<"all" | "note" | "todo" | "archived" | "trash">("all");
 const loading = ref(false);
 const error = ref("");
 const saveStatus = ref("已保存在本机");
 const newTaskText = ref("");
 const tabs = [
   { value: "all", label: "全部" }, { value: "note", label: "笔记" }, { value: "todo", label: "待办" },
+  { value: "archived", label: "归档" }, { value: "trash", label: "最近删除" },
 ] as const;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let writes: Promise<void> = Promise.resolve();
@@ -91,7 +93,9 @@ let unsubscribeLock: (() => void) | undefined;
 const filtered = computed(() => {
   const term = query.value.trim().toLocaleLowerCase();
   return notes.value
-    .filter(note => !note.deletedAt && !note.archivedAt && (filter.value === "all" || note.kind === filter.value))
+    .filter(note => filter.value === "trash" ? !!note.deletedAt
+      : filter.value === "archived" ? !!note.archivedAt && !note.deletedAt
+        : !note.deletedAt && !note.archivedAt && (filter.value === "all" || note.kind === filter.value))
     .filter(note => !term || [note.title, note.body, ...note.tasks.map(task => task.text)]
       .some(value => value.toLocaleLowerCase().includes(term)));
 });
@@ -225,9 +229,17 @@ async function archiveNote() {
     editor.value = null;
   } catch (cause) { handleError(cause); }
 }
+async function restoreNote(note: PrivateSpaceRecord) {
+  try {
+    updateInList(await privateSpaceRepository.update(note.accountPubkey, note.id, {
+      deletedAt: 0, archivedAt: 0,
+    }));
+    error.value = "";
+  } catch (cause) { handleError(cause); }
+}
 async function deleteNote() {
   if (!editor.value) return;
-  if (!window.confirm("移到最近删除？后续版本会提供恢复界面。")) return;
+  if (!window.confirm("移到最近删除？可以从最近删除中恢复。")) return;
   try {
     await flush();
     const note = editor.value;
@@ -266,11 +278,12 @@ onBeforeUnmount(() => {
 button{font:inherit;cursor:pointer}
 .primary{padding:10px;border:0;border-radius:11px;background:#172033;color:white;white-space:nowrap;font-size:13px}
 .primary.secondary{background:#e9edf3;color:#172033}
-.tabs{display:flex;gap:8px;padding:0 14px 12px;border-bottom:1px solid #f1f3f5}
-.tabs button{flex:1;border:0;border-radius:9px;background:#f1f5f9;padding:10px 4px;color:#64748b;font-size:13px}
+.tabs{display:flex;gap:4px;padding:0 14px 12px;border-bottom:1px solid #f1f3f5}
+.tabs button{flex:1;min-width:0;border:0;border-radius:9px;background:#f1f5f9;padding:10px 2px;color:#64748b;font-size:12px}
 .tabs button.selected{color:#0f172a;background:#dfe8f4;font-weight:650}
 .items{list-style:none;margin:0;padding:0 14px}
 .items li{border-bottom:1px solid #edf0f2}
+.restore-button{border:0;background:#f1f5f9;color:#334155;border-radius:7px;padding:7px 12px;margin:0 0 12px 4px;font-size:12px}
 .item{width:100%;display:flex;flex-direction:column;gap:6px;border:0;background:#fff;text-align:left;padding:17px 4px}
 .item-top{display:flex;justify-content:space-between;gap:8px}
 .item-top strong{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
