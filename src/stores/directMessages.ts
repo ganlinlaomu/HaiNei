@@ -1184,8 +1184,9 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       for (const row of exactReadRows) {
         const id = row.key.slice(EXACT_READ_PREFIX.length);
         const value = row.value as { peerPubkey?: string } | undefined;
-        if (/^[0-9a-f]{64}$/i.test(id) && /^[0-9a-f]{64}$/i.test(value?.peerPubkey || "")) {
-          exactReads[id] = value.peerPubkey;
+        const peer = value?.peerPubkey;
+        if (/^[0-9a-f]{64}$/i.test(id) && typeof peer === "string" && /^[0-9a-f]{64}$/i.test(peer)) {
+          exactReads[id] = peer;
         }
       }
       for (const peer of peers) {
