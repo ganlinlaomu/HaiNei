@@ -16,13 +16,25 @@ export function serializeBurnControl(messageId: string) {
   return JSON.stringify({ type: DM_BURN_CONTROL_TYPE, messageId: messageId.toLowerCase() });
 }
 
-export function parseBurnControl(message: Pick<CanonicalMessage, "tags" | "plaintext">): string | null {
-  if (!isBurnControl(message)) return null;
+/** Recognize historical control payloads even when their tags were lost on
+ * local restore. Detection does not authorize a deletion operation. */
+export function decodeBurnControlPayload(plaintext?: string): string | null {
+  if (!plaintext) return null;
   try {
-    const obj = JSON.parse(message.plaintext || "") as { type?: unknown; messageId?: unknown };
-    if (obj?.type !== DM_BURN_CONTROL_TYPE || typeof obj.messageId !== "string" || !ID.test(obj.messageId)) return null;
+    const obj = JSON.parse(plaintext) as { type?: unknown; messageId?: unknown } | null;
+    if (!obj || obj.type !== DM_BURN_CONTROL_TYPE || typeof obj.messageId !== "string" || !ID.test(obj.messageId)) return null;
     return obj.messageId.toLowerCase();
   } catch {
     return null;
   }
+}
+
+export function isBurnControlPayload(plaintext?: string) {
+  return decodeBurnControlPayload(plaintext) !== null;
+}
+
+export function parseBurnControl(message: Pick<CanonicalMessage, "tags" | "plaintext">): string | null {
+  // A JSON-looking ordinary post must never be treated as a deletion command.
+  if (!isBurnControl(message)) return null;
+  return decodeBurnControlPayload(message.plaintext);
 }

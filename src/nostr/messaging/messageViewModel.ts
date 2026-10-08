@@ -1,5 +1,6 @@
 import type { SyncedMessageRecord } from "@/db/dexie";
 import { DM_RECEIPT_TYPE, isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
+import { DM_BURN_CONTROL_TYPE, isBurnControlPayload } from "@/nostr/messaging/dmBurnControl";
 import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
 
 export type InboxItem = {
@@ -60,7 +61,9 @@ export function isHomeControl(tags: string[][] | undefined, content?: string) {
     || values.has("t:hainei-profile-request")
     || values.has("t:hainei-tombstone")
     || values.has(`t:${DM_RECEIPT_TYPE}`)
-    || isDmReceiptPayload(content);
+    || values.has(`t:${DM_BURN_CONTROL_TYPE}`)
+    || isDmReceiptPayload(content)
+    || isBurnControlPayload(content);
 }
 
 export function isFeedRenderableMessage(message: Pick<InboxItem, "tags" | "content">) {
