@@ -16,6 +16,8 @@ export const GIFT_WRAP_KIND = 1059;
 export const SEAL_KIND = 13;
 export const RUMOR_KIND = 14;
 const TWO_DAYS_SECONDS = 2 * 24 * 60 * 60;
+// Separate outer expiry for each recipient to reduce deterministic cross-wrap linkage.
+const WRAP_EXPIRATION_JITTER_SECONDS = 15 * 60;
 
 type Rumor = UnsignedEvent & { id: string; sig?: never };
 
@@ -135,7 +137,10 @@ export const nip17Adapter: MessageProtocolAdapter = {
       if (isExpiredDisappearing(rumor.tags)) return decodeFailed(event, account, "rumor-validation", "expired_or_invalid_disappearing_message");
       if (hasDisappearingMarker(rumor.tags)) {
         const temporary = disappearingMetadata(rumor.tags);
-        if (!temporary || event.kind !== GIFT_WRAP_KIND || expirationFromTags(event.tags) !== temporary.expiresAt) {
+        const outerExpiration = expirationFromTags(event.tags);
+        if (!temporary || event.kind !== GIFT_WRAP_KIND || outerExpiration === null
+          || outerExpiration > temporary.expiresAt
+          || outerExpiration < temporary.expiresAt - WRAP_EXPIRATION_JITTER_SECONDS) {
           return decodeFailed(event, account, "rumor-validation", "disappearing_expiration_mismatch");
         }
       }
@@ -218,10 +223,12 @@ export async function buildNip17Message(message: OutgoingMessage, context: Encod
     });
     if (seal.pubkey !== sender || !verifySignedEvent(seal)) throw new Error("signer returned an invalid NIP-17 seal");
     const ephemeralSecret = generateSecretKey();
+    const wrapExpiresAt = expiresAt === undefined ? undefined
+      : expiresAt - Math.floor(Math.random() * WRAP_EXPIRATION_JITTER_SECONDS);
     const wrap = finalizeEvent({
       kind: GIFT_WRAP_KIND,
       created_at: randomPastTimestamp(),
-      tags: [["p", target], ...(expiresAt === undefined ? [] : [["expiration", String(expiresAt)]])],
+      tags: [["p", target], ...(wrapExpiresAt === undefined ? [] : [["expiration", String(wrapExpiresAt)]])],
       content: encryptWithEphemeralKey(ephemeralSecret, target, JSON.stringify(seal))
     }, ephemeralSecret);
     events.push(wrap);
