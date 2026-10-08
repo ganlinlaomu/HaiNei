@@ -51,7 +51,7 @@ describe("PR-FIX-B excerpt semantics", () => {
     const envelope = JSON.stringify({
       id: ID, kind: 1, pubkey: PEER, created_at: 1_760_000_000,
       tags: [], sig: "f".repeat(128),
-      content: "真正的文字\\n![pic](https://img.example/photo.png)",
+      content: "真正的文字\n![pic](https://img.example/photo.png)",
     });
     const extracted = extractPrivateSpaceContent(envelope);
     expect(extracted.text).toBe("真正的文字");
