@@ -73,6 +73,7 @@ import { useRouter } from "vue-router";
 import NewConversationSheet from "@/components/NewConversationSheet.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { directMessagePreview } from "@/nostr/messaging/directMessages";
+import { hasDisappearingMarker } from "@/nostr/messaging/disappearingMessages";
 import { buildDirectConversationSummaries, useDirectMessagesStore, type DmDraft } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
@@ -137,6 +138,8 @@ const preview = (message: InboxItem, draft?: DmDraft) => {
     const text = draft.text.trim() || (draft.replyTo ? "引用回复" : "");
     if (text) return `草稿：${text}`;
   }
+  // Never surface concealed temporary plaintext in the conversation preview.
+  if (hasDisappearingMarker(message.tags)) return directMessages.burnedById[message.id] ? "临时消息已销毁" : "♨ 阅后即焚消息";
   if (message.outgoing?.state === "uploading") return "[图片] · 上传中…";
   if (message.outgoing?.state === "sending") return message.outgoing.hasImage ? "[图片] · 发送中…" : "消息发送中…";
   if (message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed") return "发送失败";

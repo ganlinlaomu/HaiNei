@@ -14,7 +14,7 @@ import {
 } from "@/nostr/messaging/dmReceipts";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { burnControlTags, parseBurnControl, serializeBurnControl } from "@/nostr/messaging/dmBurnControl";
-import { hasDisappearingMarker } from "@/nostr/messaging/disappearingMessages";
+import { BURN_DURATIONS, DISAPPEARING_DM_TYPE, hasDisappearingMarker, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
 import { decryptedEventCache, eventCache, scopedKey } from "@/services/nostrCache";
 import { publishQueuedOutgoing, registerOutgoingPushSigner, sendDirectMessage, type PublishedMessage } from "@/nostr/messaging/service";
 import { isMessageAfter } from "@/nostr/messaging/sync/sorting";
@@ -180,7 +180,7 @@ function taskInboxItem(task: OutgoingDmTaskRecord): InboxItem {
     replyTo: task.replyTo,
     protocol: "nip17",
     transportKind: 1059,
-    tags: [["t", DIRECT_MESSAGE_TYPE]],
+    tags: [["t", DIRECT_MESSAGE_TYPE], ...(task.burnAfterSeconds ? [["t", DISAPPEARING_DM_TYPE], ["burn-after", String(task.burnAfterSeconds)], ["expiration", String(task.createdAt + 48 * 3600)]] : [])],
     outgoing: {
       localId: task.localId,
       state: task.state,
@@ -331,6 +331,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     receiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
     sentReceiptStateByPeer: {} as Record<string, PeerReceiptState | undefined>,
     draftsByPeer: {} as Record<string, DmDraft | undefined>,
+    burnedById: {} as Record<string, { peerPubkey: string; createdAt?: number; senderPubkey?: string; conversationId?: string }>,
     outgoingTasks: [] as OutgoingDmTaskRecord[],
   }),
   getters: {
@@ -342,6 +343,23 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       : state.unreadByConversation,
   },
   actions: {
+    /** Render-only metadata, never stores a destroyed message's plaintext. */
+    async loadBurnedPeer(peerPubkey: string) {
+      const account = useKeyStore().pkHex.toLowerCase();
+      const peer = peerPubkey.toLowerCase();
+      if (!account || !peer || !useFriendshipsStore().isAccepted(peer)) return;
+      const rows = await metaRepository.listPrefix(account, "dm-burn:");
+      if (useKeyStore().pkHex.toLowerCase() !== account || peer !== peerPubkey.toLowerCase()) return;
+      const next = { ...this.burnedById };
+      for (const row of rows) {
+        const info = row.value as { peerPubkey?: string; createdAt?: number; senderPubkey?: string; conversationId?: string } | undefined;
+        if (!info || info.peerPubkey !== peer) continue;
+        const id = row.key.slice("dm-burn:".length);
+        if (!/^[0-9a-f]{64}$/i.test(id)) continue;
+        next[id] = { peerPubkey: peer, createdAt: info.createdAt, senderPubkey: info.senderPubkey, conversationId: info.conversationId };
+      }
+      this.burnedById = next;
+    },
     peerMessages(peerPubkey: string) {
       const account = this.loadedFor;
       const friendships = useFriendshipsStore();
@@ -448,7 +466,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         for (const item of items) {
           if (seen.has(item.id)) continue;
           seen.add(item.id);
-          if (!isDirectMessageTags(item.tags)
+          // Temporary plaintext must never be exposed by history search, even before first view.
+          if (hasDisappearingMarker(item.tags) || !isDirectMessageTags(item.tags)
             || directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) !== peer
             || !isAuthorizedDirectMessage(item, account, friendship)
             || !afterDeletion(item, preference)) continue;
@@ -565,6 +584,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!peer || !useFriendshipsStore().isAccepted(peer)) return false;
       const target = await syncedMessageRepository.get(account, targetId);
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, targetId, peer);
+      if (accepted) this.burnedById = { ...this.burnedById, [targetId]: { peerPubkey: peer, createdAt: target?.createdAt, senderPubkey: target?.senderPubkey, conversationId: target?.conversationId } };
       if (!accepted || useKeyStore().pkHex.toLowerCase() !== account) return false;
       for (const transportId of target?.transportEventIds || []) {
         decryptedEventCache.delete(scopedKey(account, transportId));
@@ -587,6 +607,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!target || !hasDisappearingMarker(target.tags) || !isDirectMessageTags(target.tags)
         || directMessagePeer(target, account) !== peer) return false;
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, messageId, peer);
+      if (accepted) this.burnedById = { ...this.burnedById, [messageId]: { peerPubkey: peer, createdAt: target.createdAt, senderPubkey: target.senderPubkey, conversationId: target.conversationId } };
       if (!accepted || keys.pkHex.toLowerCase() !== account) return false;
       for (const transportId of target.transportEventIds || []) {
         decryptedEventCache.delete(scopedKey(account, transportId));
@@ -1204,7 +1225,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       for (const item of items) if (item.conversationId) this.unreadByConversation[item.conversationId] = 0;
       await this.markPeerReadInternal(peer, false);
     },
-    send(peerPubkey: string, content: string, image?: File, replyTo?: string) {
+    send(peerPubkey: string, content: string, image?: File, replyTo?: string, burnAfterSeconds?: BurnDuration) {
       const keys = useKeyStore();
       const account = keys.pkHex.toLowerCase();
       const peer = peerPubkey.trim().toLowerCase();
@@ -1212,12 +1233,16 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!canStartDirectMessage(account, peer, friendships.isAccepted)) throw new Error(peer === account ? "无法向自己发送私信" : "只能向已接受的好友发送私信");
       const text = content.trim();
       if (!text && !image) throw new Error("消息不能为空");
+      if (burnAfterSeconds !== undefined && (!BURN_DURATIONS.includes(burnAfterSeconds) || image || replyTo || !text)) {
+        throw new Error("阅后即焚目前仅支持不带引用或图片的文字消息");
+      }
       const now = Date.now();
       const task: OutgoingDmTaskRecord = {
         accountPubkey: account,
         localId: createLocalId(),
         peerPubkey: peer,
         text,
+        ...(burnAfterSeconds ? { burnAfterSeconds } : {}),
         ...(replyTo ? { replyTo } : {}),
         ...(image ? { imageName: image.name, imageType: image.type } : {}),
         state: image ? "uploading" : "sending",
@@ -1451,6 +1476,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
             : await sendDirectMessage({
               recipientPubkeys: [task.peerPubkey], content, createdAt: task.createdAt,
               replyTo: task.replyTo,
+              burnAfterSeconds: task.burnAfterSeconds,
               tags: [["t", DIRECT_MESSAGE_TYPE]], relays: getRelaysFromStorage("write"), pushCategory: "message",
               context: { senderPubkey: account, nip44Encrypt: keys.supportsNip44 ? keys.nip44Encrypt.bind(keys) : undefined, signEvent: keys.signEvent.bind(keys) },
               onQueued: async outgoingId => { await this.patchTask(localId, { outgoingId }); },
@@ -1515,6 +1541,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.receiptStateByPeer = {};
       this.sentReceiptStateByPeer = {};
       this.draftsByPeer = {};
+      this.burnedById = {};
       clearReceiptTimers();
       peerHistoryWarmups.clear();
       this.outgoingTasks = [];

@@ -24,6 +24,7 @@ function plainOutgoingTask(record: OutgoingDmTaskRecord): OutgoingDmTaskRecord {
     localId: record.localId,
     peerPubkey: record.peerPubkey,
     text: record.text,
+    ...(record.burnAfterSeconds ? { burnAfterSeconds: record.burnAfterSeconds } : {}),
     ...(record.replyTo ? { replyTo: record.replyTo } : {}),
     ...(record.imageBytes ? { imageBytes: cloneBuffer(record.imageBytes) } : {}),
     ...(record.imageName ? { imageName: record.imageName } : {}),

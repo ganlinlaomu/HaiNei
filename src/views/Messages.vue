@@ -58,7 +58,7 @@
       </div>
     </header>
 
-    <section ref="messageList" class="message-list" aria-live="polite" @scroll.passive="handleMessageScroll">
+    <section ref="messageList" class="message-list" aria-live="polite" @scroll.passive="handleMessageScroll" @click="attachmentMenuOpen = false">
       <div v-if="!accepted" class="relationship-notice">已不是已接受的好友，无法发送新消息。</div>
       <div v-if="accepted && messages.length === 0" class="empty-chat">开始一段私密对话</div>
       <template v-for="(message, index) in windowMessages" :key="message.id">
@@ -90,7 +90,26 @@
             <svg viewBox="0 0 24 24"><path d="M9 8 4 12l5 4"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg>
           </span>
           <div class="message-stack">
-            <div class="message-bubble" :class="{ 'media-caption-bubble': isMediaCaption(message), 'audio-bubble': hasAudio(message) }">
+            <div class="message-bubble" :class="{ 'media-caption-bubble': !isDisappearing(message) && isMediaCaption(message), 'audio-bubble': !isDisappearing(message) && hasAudio(message), 'disappearing-bubble': isDisappearing(message) }">
+              <template v-if="isDisappearing(message)">
+                <div v-if="isBurned(message)" class="burned-placeholder" role="status">
+                  <span aria-hidden="true">✓</span> 临时消息已销毁
+                </div>
+                <div v-else-if="isOwn(message)" class="temporary-message">
+                  <span class="temporary-heading"><span aria-hidden="true">♨</span> 阅后即焚消息</span>
+                  <span class="temporary-caption">对方打开后 {{ burnDuration(message) }} 秒销毁</span>
+                </div>
+                <div v-else-if="canShowTemporaryText(message)" class="temporary-message">
+                  <MentionText class="bubble-text" :text="messageText(message.content)" />
+                  <span class="temporary-countdown" role="timer" aria-live="off">♨ {{ remainingBurnSeconds(message) }} 秒后销毁</span>
+                </div>
+                <button v-else class="temporary-reveal" type="button" :disabled="openingMessageId === message.id" @click.stop="revealDisappearing(message)">
+                  <strong>♨ 阅后即焚消息</strong>
+                  <span>{{ openingMessageId === message.id ? "正在开启…" : "点击查看" }}</span>
+                  <small>查看后 {{ burnDuration(message) }} 秒自动销毁</small>
+                </button>
+              </template>
+              <template v-else>
               <button
                 v-if="message.replyTo"
                 class="quoted-message"
@@ -130,8 +149,9 @@
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else-if="hasImage(message.content)" :content="message.content" :show-all="true" alt-text="私信图片" />
               </template>
+              </template>
             </div>
-            <span v-if="!isMediaCaption(message)" class="message-meta" :class="{ failed: isFailed(message), read: statusKind(message) === 'read' }">
+            <span v-if="!isMediaCaption(message) || isDisappearing(message)" class="message-meta" :class="{ failed: isFailed(message), read: statusKind(message) === 'read' }">
               <time>{{ formatBubbleTime(message.created_at) }}</time>
               <template v-if="isOwn(message)">
                 <span>{{ statusLabel(message) }}</span>
@@ -184,6 +204,24 @@
         <button type="button" aria-label="移除图片" @click="removeSelectedImage">×</button>
       </div>
       <p v-if="voiceError" class="voice-error" role="alert">{{ voiceError }}</p>
+      <div v-if="attachmentMenuOpen" class="dm-attachment-menu" role="menu" aria-label="添加消息内容">
+        <button type="button" role="menuitem" @click="chooseImageFromMenu">
+          <span aria-hidden="true">▧</span> 图片
+        </button>
+        <button type="button" role="menuitem" @click="enableDisappearing">
+          <span aria-hidden="true">♨</span> 阅后即焚
+        </button>
+      </div>
+      <div v-if="disappearingSeconds !== null && !voiceCaptureOwnsAudioSession" class="temporary-composer-mode" role="status">
+        <span>♨ 阅后即焚</span>
+        <label for="temporary-duration">阅后</label>
+        <select id="temporary-duration" v-model.number="disappearingSeconds" aria-label="阅后销毁时间">
+          <option :value="10">10 秒</option>
+          <option :value="30">30 秒</option>
+          <option :value="60">60 秒</option>
+        </select>
+        <button type="button" aria-label="关闭阅后即焚模式" @click="disableDisappearing">×</button>
+      </div>
       <form class="chat-composer" @submit.prevent="submitMessage">
         <MentionSuggestions
           v-if="mentionOpen"
@@ -230,7 +268,7 @@
               rows="1"
               enterkeyhint="enter"
               autocomplete="off"
-              :placeholder="accepted ? '输入消息……' : '仅已接受好友可发送私信'"
+              :placeholder="accepted ? (disappearingSeconds !== null ? '输入临时消息……' : '输入消息……') : '仅已接受好友可发送私信'"
               :disabled="!accepted || !keys.pkHex"
               @input="onMentionInput"
               @focus="handleComposerFocus"
@@ -239,23 +277,18 @@
               @keydown="onMentionKeydown"
             ></textarea>
             <div class="composer-actions">
-              <label
+              <button
+                type="button"
                 class="composer-icon-button attachment-button"
-                :class="{ disabled: !accepted || !keys.pkHex }"
-                aria-label="添加图片"
+                :disabled="!accepted || !keys.pkHex || disappearingSeconds !== null"
+                aria-label="添加内容"
+                :aria-expanded="attachmentMenuOpen"
+                @click="attachmentMenuOpen = !attachmentMenuOpen"
               >
                 <span class="composer-icon-visual" aria-hidden="true">
                   <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
                 </span>
-                <input
-                  ref="imageInput"
-                  class="attachment-file-input"
-                  type="file"
-                  accept="image/*"
-                  :disabled="!accepted || !keys.pkHex"
-                  @change="selectImage"
-                />
-              </label>
+              </button>
               <span class="composer-actions-spacer" aria-hidden="true"></span>
               <button
                 v-if="draft.trim() || selectedImage"
@@ -277,7 +310,7 @@
             type="button"
             aria-label="按住录音"
             :aria-pressed="voiceCaptureOwnsAudioSession"
-            :disabled="!accepted || !keys.pkHex || finishingRecording"
+            :disabled="!accepted || !keys.pkHex || finishingRecording || disappearingSeconds !== null"
             @touchstart.prevent="handleVoiceTouchStart"
             @mousedown.prevent="handleVoiceMouseDown"
             @click.prevent
@@ -288,6 +321,7 @@
           </button>
         </div>
       </form>
+      <input ref="imageInput" class="attachment-file-input sr-file-input" type="file" accept="image/*" :disabled="!accepted || !keys.pkHex" @change="selectImage" />
     </div>
   </main>
 </template>
@@ -301,7 +335,9 @@ import DmAudioMessage from "@/components/DmAudioMessage.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import MentionText from "@/components/MentionText.vue";
-import { directMessagePreview } from "@/nostr/messaging/directMessages";
+import { DIRECT_MESSAGE_TYPE, directMessagePreview } from "@/nostr/messaging/directMessages";
+import { disappearingMetadata, hasDisappearingMarker, isExpiredDisappearing, DISAPPEARING_DM_TYPE, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
+import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { directMessagesForPeer, useDirectMessagesStore, type DmSearchResult } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
@@ -344,7 +380,26 @@ const displayName = computed(() => privateProfileDisplayName(profiles.getProfile
 const historyMessages = ref<InboxItem[]>([]);
 const historyCursor = ref<{createdAt:number;id:string}>();
 const historyExhausted = ref(false);
-const messages = computed(() => directMessages.mergePeerHistory(peerPubkey.value, historyMessages.value));
+const messages = computed(() => {
+  const peer = peerPubkey.value;
+  const existing = directMessages.mergePeerHistory(peer, historyMessages.value);
+  const results = new Map(existing.map(message => [message.id, message]));
+  // A tombstone is only metadata: do not reconstruct decrypted content.
+  for (const [id, info] of Object.entries(directMessages.burnedById)) {
+    if (info.peerPubkey !== peer) continue;
+    const found = results.get(id);
+    if (found) {
+      results.set(id, { ...found, content: "" });
+    } else if (info.createdAt && info.senderPubkey && info.conversationId && accepted.value) {
+      results.set(id, {
+        id, pubkey: info.senderPubkey, recipientPubkeys: [info.senderPubkey === keys.pkHex ? peer : keys.pkHex],
+        conversationId: info.conversationId, created_at: info.createdAt, content: "",
+        protocol: "nip17", transportKind: 1059, tags: [["t", DIRECT_MESSAGE_TYPE], ["t", DISAPPEARING_DM_TYPE]],
+      });
+    }
+  }
+  return [...results.values()].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+});
 async function fetchOlderPage(reset = false) {
   if (!reset && historyExhausted.value) return;
   const account=keys.pkHex, peer=peerPubkey.value;
@@ -382,6 +437,11 @@ const searchStatusText = computed(() => {
   return searchComplete.value ? `${searchResults.value.length} 条 · 已完成` : "";
 });
 const selectedImage = ref<{ file: File; preview: string } | null>(null);
+const attachmentMenuOpen = ref(false);
+const disappearingSeconds = ref<BurnDuration | null>(null);
+const openedDeadlines = ref<Record<string, number>>({});
+const clockNow = ref(Date.now());
+const openingMessageId = ref("");
 const recording = shallowRef<VoiceRecordingSession | null>(null);
 const startingRecording = ref(false);
 const finishingRecording = ref(false);
@@ -499,6 +559,9 @@ let searchAbortController: AbortController | null = null;
 let draftSaveTimer: number | null = null;
 let draftReady = false;
 let suppressDraftPersistence = false;
+let burnTimer: number | null = null;
+let burnTimerPeriod = 0;
+const burningMessageIds = new Set<string>();
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
 const messageText = (content: string) => ["[图片]", "[语音]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
@@ -508,8 +571,107 @@ const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreview
 const isMediaCaption = (message: InboxItem) => hasMessageImage(message) && !!messageText(message.content);
 const isOwn = (message: InboxItem) => message.pubkey === keys.pkHex;
 const isFailed = (message: InboxItem) => message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed";
+function isDisappearing(message: InboxItem) {
+  return hasDisappearingMarker(message.tags) || directMessages.burnedById[message.id]?.peerPubkey === peerPubkey.value;
+}
+function burnDuration(message: InboxItem) {
+  return disappearingMetadata(message.tags)?.burnAfterSeconds || 10;
+}
+function remainingBurnSeconds(message: InboxItem) {
+  const deadline = openedDeadlines.value[message.id] || 0;
+  return Math.max(0, Math.ceil((deadline - clockNow.value) / 1000));
+}
+function isBurned(message: InboxItem) {
+  return !!directMessages.burnedById[message.id]
+    || isExpiredDisappearing(message.tags, Math.floor(clockNow.value / 1000))
+    || (openedDeadlines.value[message.id] !== undefined && remainingBurnSeconds(message) === 0);
+}
+function canShowTemporaryText(message: InboxItem) {
+  return !isOwn(message) && !isBurned(message)
+    && openedDeadlines.value[message.id] !== undefined && remainingBurnSeconds(message) > 0;
+}
+async function revealDisappearing(message: InboxItem) {
+  if (openingMessageId.value || isOwn(message) || isBurned(message) || !accepted.value
+    || !/^[0-9a-f]{64}$/i.test(message.id)) return;
+  const account = keys.pkHex;
+  const peer = peerPubkey.value;
+  openingMessageId.value = message.id;
+  try {
+    const deadline = await syncedMessageRepository.openDisappearingMessage(account, message.id, peer);
+    if (disposed || account !== keys.pkHex || peer !== peerPubkey.value) return;
+    clockNow.value = Date.now();
+    if (deadline === null) {
+      ui.addToast("临时消息已不可查看", 1800, "info");
+      void checkBurnDeadlines();
+      return;
+    }
+    openedDeadlines.value = { ...openedDeadlines.value, [message.id]: deadline };
+    if (deadline <= Date.now()) void checkBurnDeadlines();
+    else startBurnClock();
+  } catch {
+    if (!disposed && account === keys.pkHex) ui.addToast("临时消息打开失败，请重试", 2100, "error");
+  } finally {
+    if (openingMessageId.value === message.id) openingMessageId.value = "";
+  }
+}
+function stopBurnClock() {
+  if (burnTimer !== null) window.clearInterval(burnTimer);
+  burnTimer = null;
+  burnTimerPeriod = 0;
+}
+function startBurnClock() {
+  if (document.hidden) return;
+  // Unopened DM history requires no high-frequency polling. A live reading
+  // countdown needs only second precision; background execution is suspended.
+  const active = Object.values(openedDeadlines.value).some(deadline => deadline > Date.now());
+  const period = active ? 1000 : 60_000;
+  if (burnTimer !== null && burnTimerPeriod === period) return;
+  stopBurnClock();
+  clockNow.value = Date.now();
+  burnTimerPeriod = period;
+  burnTimer = window.setInterval(() => {
+    clockNow.value = Date.now();
+    void checkBurnDeadlines();
+  }, period);
+}
+async function checkBurnDeadlines() {
+  if (disposed || !keys.pkHex || !accepted.value) return;
+  const account = keys.pkHex;
+  const peer = peerPubkey.value;
+  const now = Date.now();
+  for (const message of messages.value) {
+    if (!isDisappearing(message) || directMessages.burnedById[message.id]
+      || !/^[0-9a-f]{64}$/i.test(message.id) || burningMessageIds.has(message.id)) continue;
+    const deadline = openedDeadlines.value[message.id];
+    if (deadline === undefined && !isExpiredDisappearing(message.tags, Math.floor(now / 1000))) continue;
+    if (deadline !== undefined && deadline > now && !isExpiredDisappearing(message.tags, Math.floor(now / 1000))) continue;
+    burningMessageIds.add(message.id);
+    try {
+      if (await directMessages.burnDisappearingMessage(peer, message.id)
+        && account === keys.pkHex && peer === peerPubkey.value) {
+        const next = { ...openedDeadlines.value };
+        delete next[message.id];
+        openedDeadlines.value = next;
+        startBurnClock();
+      }
+    } catch {
+      // Retry on the next visible tick; never reveal expired plaintext again.
+    } finally {
+      burningMessageIds.delete(message.id);
+    }
+  }
+}
+function handleBurnVisibility() {
+  clockNow.value = Date.now();
+  if (document.hidden) stopBurnClock();
+  else {
+    startBurnClock();
+    void checkBurnDeadlines();
+  }
+}
 function quotePreview(message?: InboxItem) {
   if (!message) return "引用的消息暂不可用";
+  if (isDisappearing(message)) return "阅后即焚消息";
   const preview = directMessagePreview(message.content);
   return preview || (hasAudio(message) ? "[语音]" : hasMessageImage(message) ? "[图片]" : "消息");
 }
@@ -524,7 +686,7 @@ function quotedPreview(replyTo?: string) {
   return quotePreview(quotedMessage(replyTo));
 }
 function canReplyTo(message: InboxItem) {
-  return accepted.value
+  return !isDisappearing(message) && accepted.value
     && /^[0-9a-f]{64}$/i.test(message.id)
     && (!message.outgoing || message.outgoing.state === "sent");
 }
@@ -724,8 +886,11 @@ function statusKind(message: InboxItem) {
     case "upload_failed":
     case "send_failed":
       return message.outgoing.state;
-    default:
-      return directMessages.outgoingReceiptStatus(peerPubkey.value, message) || "sent";
+    default: {
+      const receipt = directMessages.outgoingReceiptStatus(peerPubkey.value, message) || "sent";
+      // The normal read cursor must not imply that a sealed message was opened.
+      return isDisappearing(message) && receipt === "read" ? "delivered" : receipt;
+    }
   }
 }
 function statusLabel(message: InboxItem) {
@@ -882,6 +1047,9 @@ function flushDraft(account: string = keys.pkHex, peer: string = peerPubkey.valu
 }
 const stopBeforeLock = onBeforeAccountLock(async account => {
   if (account !== keys.pkHex) return;
+  // Do not leave an unlocked temporary message mounted while the account locks.
+  openedDeadlines.value = {};
+  stopBurnClock();
   await flushDraft(account);
   draftReady = false;
 });
@@ -1151,6 +1319,13 @@ async function load() {
     // This is an indexed conversation query (and is normally already warmed by
     // the conversation list), so no full inbox scan is needed to render chat.
     await fetchOlderPage(true);
+    await directMessages.loadBurnedPeer(peer);
+    const openRows = await syncedMessageRepository.listOpenedDisappearing(account, peer);
+    if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
+    openedDeadlines.value = Object.fromEntries(openRows.map(row => [row.messageId, row.deadlineAt]));
+    startBurnClock();
+    clockNow.value = Date.now();
+    void checkBurnDeadlines();
     if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
 
     resetMessageWindow();
@@ -1165,6 +1340,27 @@ async function load() {
   } finally {
     if (generation === loadGeneration) loadingConversation = false;
   }
+}
+function chooseImageFromMenu() {
+  attachmentMenuOpen.value = false;
+  if (accepted.value && disappearingSeconds.value === null) imageInput.value?.click();
+}
+function enableDisappearing() {
+  attachmentMenuOpen.value = false;
+  if (!accepted.value || !keys.supportsNip44) {
+    ui.addToast("当前账号无法发送加密临时消息", 2000, "info");
+    return;
+  }
+  if (selectedImage.value || recordedAudio.value || voiceCaptureOwnsAudioSession.value) {
+    ui.addToast("请先移除图片或语音，阅后即焚仅支持文字", 2200, "info");
+    return;
+  }
+  cancelReply();
+  disappearingSeconds.value = 10;
+  void nextTick(() => textInput.value?.focus());
+}
+function disableDisappearing() {
+  disappearingSeconds.value = null;
 }
 function removeSelectedImage() {
   if (selectedImage.value) URL.revokeObjectURL(selectedImage.value.preview);
@@ -1412,6 +1608,10 @@ async function finishVoiceRecording(target?: VoiceRecordingSession, sendImmediat
 }
 function submitMessage() {
   if (!canSend.value) return;
+  if (disappearingSeconds.value !== null && (recordedAudio.value || selectedImage.value || replyingToId.value)) {
+    ui.addToast("阅后即焚仅支持纯文字消息", 2200, "info");
+    return;
+  }
   if (recordedAudio.value) {
     const audio = recordedAudio.value;
     const replyTo = replyingToMessage.value?.id;
@@ -1436,7 +1636,9 @@ function submitMessage() {
   const image = selectedImage.value?.file;
   const replyTo = replyingToMessage.value?.id;
   try {
-    directMessages.send(peerPubkey.value, text, image, replyTo);
+    directMessages.send(peerPubkey.value, text, image, replyTo, disappearingSeconds.value ?? undefined);
+    disappearingSeconds.value = null;
+    attachmentMenuOpen.value = false;
     clearDraftSaveTimer();
     suppressDraftPersistence = true;
     draft.value = "";
@@ -1481,9 +1683,22 @@ function applyLatestInboxMutation() {
 
 function handlePageHide() {
   flushDraft();
+  stopBurnClock();
 }
 watch(() => messageStore.inboxRevision, applyLatestInboxMutation);
+// PR1 burns durable rows, but the paginated Vue history may still reference the
+// decrypted objects. Scrub that memory mirror immediately on remote or local burn.
+watch(() => directMessages.burnedById, burned => {
+  const masked = (items: InboxItem[]) => items.map(item => burned[item.id] ? { ...item, content: "" } : item);
+  historyMessages.value = masked(historyMessages.value);
+  searchContextMessages.value = masked(searchContextMessages.value);
+  searchResults.value = searchResults.value.filter(item => !burned[item.id]);
+  if (draftReplyMessage.value && burned[draftReplyMessage.value.id]) draftReplyMessage.value = undefined;
+});
 onMounted(() => {
+  document.addEventListener("visibilitychange", handleBurnVisibility);
+  window.addEventListener("pageshow", handleBurnVisibility);
+  startBurnClock();
   window.visualViewport?.addEventListener("resize", handleVisualViewportResize);
   window.addEventListener("pagehide", handlePageHide);
   messageList.value?.addEventListener("load", handleMessageMediaLoad, true);
@@ -1491,6 +1706,13 @@ onMounted(() => {
 });
 watch([draft, replyingToId], scheduleDraftSave);
 watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
+  historyMessages.value = [];
+  historyCursor.value = undefined;
+  historyExhausted.value = false;
+  openedDeadlines.value = {};
+  disappearingSeconds.value = null;
+  attachmentMenuOpen.value = false;
+  openingMessageId.value = "";
   if (previous?.[0] && previous?.[1]) flushDraft(previous[0], previous[1]);
   draftReady = false;
   clearDraftSaveTimer();
@@ -1583,6 +1805,9 @@ onBeforeUnmount(() => {
   clearDraftSaveTimer();
   cancelSearchRequest();
   window.removeEventListener("pagehide", handlePageHide);
+  document.removeEventListener("visibilitychange", handleBurnVisibility);
+  window.removeEventListener("pageshow", handleBurnVisibility);
+  stopBurnClock();
   window.visualViewport?.removeEventListener("resize", handleVisualViewportResize);
   messageList.value?.removeEventListener("load", handleMessageMediaLoad, true);
   handleComposerBlur();
@@ -1620,4 +1845,22 @@ onBeforeUnmount(() => {
 @keyframes recording-pulse{50%{opacity:.35}}@keyframes voice-wave{from{height:5px}to{height:19px}}
 @media (min-width:768px){.composer-region{padding-bottom:16px}.message-list{width:min(100%,720px);margin:0 auto}}
 @media (prefers-reduced-motion:reduce){.message-line.message-highlight .message-bubble{animation:none;box-shadow:0 0 0 3px rgba(22,135,232,.16)}}
+
+/* PR2 disappearing-message UI: small opt-in control without changing composer geometry. */
+.dm-attachment-menu{position:absolute;z-index:12;left:24px;bottom:calc(100% + 5px);display:grid;min-width:188px;overflow:hidden;border:1px solid #e5eaf0;border-radius:17px;background:#fff;box-shadow:0 10px 32px rgba(15,23,42,.17)}
+.dm-attachment-menu button{display:flex;min-height:48px;align-items:center;gap:12px;padding:0 16px;border:0;border-bottom:1px solid #f0f2f4;background:transparent;color:#0f1419;text-align:left;font:inherit;font-size:14px}
+.dm-attachment-menu button:last-child{border-bottom:0}.dm-attachment-menu button:active{background:#f4f6f8}.dm-attachment-menu button span{display:inline-grid;width:23px;place-items:center;font-size:21px;color:#64748b}
+.temporary-composer-mode{display:flex;align-items:center;gap:8px;margin:0 24px 7px;padding:6px 9px 6px 12px;border:1px solid #f4ddd9;border-radius:13px;background:#fff8f7;color:#94423c;font-size:12px}
+.temporary-composer-mode>span{font-weight:650;flex:1;white-space:nowrap}.temporary-composer-mode label{color:#8d5752}.temporary-composer-mode select{max-width:100px;min-height:30px;padding:3px 6px;border:1px solid #e9c8c3;border-radius:9px;background:#fff;color:#5d342f;font:inherit;font-size:13px}
+.temporary-composer-mode button{width:28px;height:30px;flex-shrink:0;padding:0;border:0;background:transparent;color:#8d5752;font-size:23px}
+.sr-file-input{position:absolute!important;width:1px!important;height:1px!important;left:-9999px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}
+.message-line .disappearing-bubble{min-width:154px;max-width:min(76vw,290px);border:1px solid #eae2e0;background:#fcf9f8;color:#3b3030}
+.message-line.own .disappearing-bubble{border-color:#e9d0cd;background:#fbebea}
+.temporary-message{display:flex;min-width:0;flex-direction:column;gap:5px}
+.temporary-heading{font-size:13px;font-weight:650;color:#995950}.temporary-caption{font-size:11px;color:#996b65}
+.temporary-countdown{display:block;padding-top:5px;border-top:1px solid #e8dcd9;color:#a55249;font-size:11px;font-variant-numeric:tabular-nums}
+.temporary-reveal{display:flex;width:100%;min-width:150px;flex-direction:column;gap:4px;padding:2px 0;border:0;background:transparent;color:#6c403d;text-align:left;cursor:pointer}
+.temporary-reveal strong{font-size:13px;font-weight:650}.temporary-reveal>span{font-size:14px;color:#bd584f}.temporary-reveal small{font-size:11px;color:#927370}.temporary-reveal:disabled{opacity:.5}
+.burned-placeholder{display:flex;align-items:center;gap:6px;color:#8c8280;font-size:12px;white-space:nowrap}
+@media (max-width:360px){.temporary-composer-mode{margin-right:16px;margin-left:16px}.temporary-composer-mode select{max-width:85px}}
 </style>
