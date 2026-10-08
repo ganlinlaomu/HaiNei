@@ -743,6 +743,17 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           : tombstone?.peerPubkey === peer && tombstone?.senderPubkey === account
             && tombstone?.createdAt === receipt.upTo.createdAt;
         if (!matches || useKeyStore().pkHex.toLowerCase() !== account) return false;
+        // Once the recipient has opened the temporary DM, the original sender
+        // must independently erase its copy even if the later burn control
+        // arrives late or never reaches this device.
+        if (receipt.deadlineAt !== undefined && target) {
+          const deadline = await syncedMessageRepository.recordSenderBurnDeadline(
+            account, id, peer, receipt.deadlineAt,
+          );
+          if (deadline !== null && useKeyStore().pkHex.toLowerCase() === account) {
+            this.scheduleOpenedBurn(peer, id, deadline);
+          }
+        }
         if (this.exactReadById[id] === peer) return false;
         await metaRepository.put(account, `${EXACT_READ_PREFIX}${id}`, {
           peerPubkey: peer, createdAt: receipt.upTo.createdAt, confirmedAt: Date.now(),
@@ -775,7 +786,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     },
     /** Only a successful explicit open can trigger this exact-message receipt.
      * Enqueued NIP-17 delivery is retried by the normal durable send queue. */
-    async acknowledgeOpenedDisappearing(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey" | "tags">) {
+    async acknowledgeOpenedDisappearing(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey" | "tags">, deadlineAt?: number) {
       const keys = useKeyStore();
       const account = keys.pkHex.toLowerCase();
       const peer = peerPubkey.toLowerCase();
@@ -796,7 +807,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           || !hasDisappearingMarker(target.tags) || !isDirectMessageTags(target.tags)) return false;
         await sendDirectMessage({
           recipientPubkeys: [peer],
-          content: serializeExactDmReadReceipt({ createdAt: target.createdAt, messageId: id }),
+          content: serializeExactDmReadReceipt({ createdAt: target.createdAt, messageId: id }, deadlineAt),
           tags: dmReceiptTags("read"),
           relays: getRelaysFromStorage("write"),
           context: {
