@@ -335,7 +335,9 @@ import DmAudioMessage from "@/components/DmAudioMessage.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import MentionText from "@/components/MentionText.vue";
-import { directMessagePreview } from "@/nostr/messaging/directMessages";
+import { DIRECT_MESSAGE_TYPE, directMessagePreview } from "@/nostr/messaging/directMessages";
+import { disappearingMetadata, hasDisappearingMarker, isExpiredDisappearing, DISAPPEARING_DM_TYPE, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
+import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { directMessagesForPeer, useDirectMessagesStore, type DmSearchResult } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
@@ -378,7 +380,26 @@ const displayName = computed(() => privateProfileDisplayName(profiles.getProfile
 const historyMessages = ref<InboxItem[]>([]);
 const historyCursor = ref<{createdAt:number;id:string}>();
 const historyExhausted = ref(false);
-const messages = computed(() => directMessages.mergePeerHistory(peerPubkey.value, historyMessages.value));
+const messages = computed(() => {
+  const peer = peerPubkey.value;
+  const existing = directMessages.mergePeerHistory(peer, historyMessages.value);
+  const results = new Map(existing.map(message => [message.id, message]));
+  // A tombstone is only metadata: do not reconstruct decrypted content.
+  for (const [id, info] of Object.entries(directMessages.burnedById)) {
+    if (info.peerPubkey !== peer) continue;
+    const found = results.get(id);
+    if (found) {
+      results.set(id, { ...found, content: "" });
+    } else if (info.createdAt && info.senderPubkey && info.conversationId && accepted.value) {
+      results.set(id, {
+        id, pubkey: info.senderPubkey, recipientPubkeys: [info.senderPubkey === keys.pkHex ? peer : keys.pkHex],
+        conversationId: info.conversationId, created_at: info.createdAt, content: "",
+        protocol: "nip17", transportKind: 1059, tags: [["t", DIRECT_MESSAGE_TYPE], ["t", DISAPPEARING_DM_TYPE]],
+      });
+    }
+  }
+  return [...results.values()].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+});
 async function fetchOlderPage(reset = false) {
   if (!reset && historyExhausted.value) return;
   const account=keys.pkHex, peer=peerPubkey.value;
@@ -416,6 +437,11 @@ const searchStatusText = computed(() => {
   return searchComplete.value ? `${searchResults.value.length} 条 · 已完成` : "";
 });
 const selectedImage = ref<{ file: File; preview: string } | null>(null);
+const attachmentMenuOpen = ref(false);
+const disappearingSeconds = ref<BurnDuration | null>(null);
+const openedDeadlines = ref<Record<string, number>>({});
+const clockNow = ref(Date.now());
+const openingMessageId = ref("");
 const recording = shallowRef<VoiceRecordingSession | null>(null);
 const startingRecording = ref(false);
 const finishingRecording = ref(false);
@@ -533,6 +559,8 @@ let searchAbortController: AbortController | null = null;
 let draftSaveTimer: number | null = null;
 let draftReady = false;
 let suppressDraftPersistence = false;
+let burnTimer: number | null = null;
+const burningMessageIds = new Set<string>();
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
 const messageText = (content: string) => ["[图片]", "[语音]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
@@ -544,6 +572,7 @@ const isOwn = (message: InboxItem) => message.pubkey === keys.pkHex;
 const isFailed = (message: InboxItem) => message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed";
 function quotePreview(message?: InboxItem) {
   if (!message) return "引用的消息暂不可用";
+  if (isDisappearing(message)) return "阅后即焚消息";
   const preview = directMessagePreview(message.content);
   return preview || (hasAudio(message) ? "[语音]" : hasMessageImage(message) ? "[图片]" : "消息");
 }
@@ -558,7 +587,7 @@ function quotedPreview(replyTo?: string) {
   return quotePreview(quotedMessage(replyTo));
 }
 function canReplyTo(message: InboxItem) {
-  return accepted.value
+  return !isDisappearing(message) && accepted.value
     && /^[0-9a-f]{64}$/i.test(message.id)
     && (!message.outgoing || message.outgoing.state === "sent");
 }
@@ -1185,6 +1214,12 @@ async function load() {
     // This is an indexed conversation query (and is normally already warmed by
     // the conversation list), so no full inbox scan is needed to render chat.
     await fetchOlderPage(true);
+    await directMessages.loadBurnedPeer(peer);
+    const openRows = await syncedMessageRepository.listOpenedDisappearing(account, peer);
+    if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
+    openedDeadlines.value = Object.fromEntries(openRows.map(row => [row.messageId, row.deadlineAt]));
+    clockNow.value = Date.now();
+    void checkBurnDeadlines();
     if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
 
     resetMessageWindow();
@@ -1199,6 +1234,27 @@ async function load() {
   } finally {
     if (generation === loadGeneration) loadingConversation = false;
   }
+}
+function chooseImageFromMenu() {
+  attachmentMenuOpen.value = false;
+  if (accepted.value && disappearingSeconds.value === null) imageInput.value?.click();
+}
+function enableDisappearing() {
+  attachmentMenuOpen.value = false;
+  if (!accepted.value || !keys.supportsNip44) {
+    ui.addToast("当前账号无法发送加密临时消息", 2000, "info");
+    return;
+  }
+  if (selectedImage.value || recordedAudio.value || voiceCaptureOwnsAudioSession.value) {
+    ui.addToast("请先移除图片或语音，阅后即焚仅支持文字", 2200, "info");
+    return;
+  }
+  cancelReply();
+  disappearingSeconds.value = 10;
+  void nextTick(() => textInput.value?.focus());
+}
+function disableDisappearing() {
+  disappearingSeconds.value = null;
 }
 function removeSelectedImage() {
   if (selectedImage.value) URL.revokeObjectURL(selectedImage.value.preview);
@@ -1446,6 +1502,10 @@ async function finishVoiceRecording(target?: VoiceRecordingSession, sendImmediat
 }
 function submitMessage() {
   if (!canSend.value) return;
+  if (disappearingSeconds.value !== null && (recordedAudio.value || selectedImage.value || replyingToId.value)) {
+    ui.addToast("阅后即焚仅支持纯文字消息", 2200, "info");
+    return;
+  }
   if (recordedAudio.value) {
     const audio = recordedAudio.value;
     const replyTo = replyingToMessage.value?.id;
@@ -1470,7 +1530,9 @@ function submitMessage() {
   const image = selectedImage.value?.file;
   const replyTo = replyingToMessage.value?.id;
   try {
-    directMessages.send(peerPubkey.value, text, image, replyTo);
+    directMessages.send(peerPubkey.value, text, image, replyTo, disappearingSeconds.value ?? undefined);
+    disappearingSeconds.value = null;
+    attachmentMenuOpen.value = false;
     clearDraftSaveTimer();
     suppressDraftPersistence = true;
     draft.value = "";
@@ -1515,6 +1577,7 @@ function applyLatestInboxMutation() {
 
 function handlePageHide() {
   flushDraft();
+  stopBurnClock();
 }
 watch(() => messageStore.inboxRevision, applyLatestInboxMutation);
 onMounted(() => {
