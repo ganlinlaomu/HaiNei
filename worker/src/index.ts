@@ -12,6 +12,7 @@ import {
 import { HttpError, integerSetting, type Env } from "./types";
 import { enforceChallengeRateLimit, readJsonBody } from "./requestGuards";
 import { AccountStateConflict, getAccountState, putAccountState } from "./accountState";
+import { PrivateSpaceConflict, listPrivateSpace, getPrivateSpace, putPrivateSpace } from "./privateSpace";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -83,6 +84,15 @@ export async function handleRequest(request: Request, env: Env) {
       );
       return json(await putAccountState(env, pubkey, payload));
     }
+    if (path === "/api/private-space/list" || path === "/api/private-space/get" || path === "/api/private-space/put") {
+      const payload = await body(request, env, path.endsWith("/put") ? 384 * 1024 : 24 * 1024);
+      const pubkey = await verifyAndConsumeChallenge(
+        env, payload.challenge, payload.event, undefined, "hainei_private_space", authBinding(request, payload),
+      );
+      if (path.endsWith("/list")) return json(await listPrivateSpace(env, pubkey, payload.after, payload.limit));
+      if (path.endsWith("/get")) return json(await getPrivateSpace(env, pubkey, payload.ids));
+      return json(await putPrivateSpace(env, pubkey, payload));
+    }
     if (path === "/api/push/public-key") return json(getPushPublicKey(env));
     if (path === "/api/push/subscribe") {
       const payload = await body(request, env, 16 * 1024);
@@ -124,6 +134,9 @@ export async function handleRequest(request: Request, env: Env) {
     }
     return json({ error: "not_found" }, 404);
   } catch (error) {
+    if (error instanceof PrivateSpaceConflict) {
+      return json({ error: error.message, currentVersion: error.currentVersion }, 409);
+    }
     if (error instanceof AccountStateConflict) {
       return json({ error: error.message, currentVersion: error.currentVersion }, 409);
     }

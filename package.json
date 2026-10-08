@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.31",
-  "releaseSummary": "新增私人空间首版：本地加密笔记与待办、搜索、自动保存及恢复",
+  "version": "0.1.32",
+  "releaseSummary": "私人空间支持 NIP-44 加密跨设备同步、离线重试与冲突副本保护",
   "private": true,
   "scripts": {
     "dev": "vite",
