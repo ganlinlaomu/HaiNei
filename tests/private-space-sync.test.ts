@@ -138,6 +138,95 @@ describe("private space NIP-44 cloud reconciliation", () => {
     expect(downloaded?.attachments).toEqual([{ kind: "image", url: "https://img.example/post.jpg" }]);
   });
 
+  it("reconciles identical backup restores with cloud without artificial conflict copies", async () => {
+    const note = await privateSpaceRepository.create(ACCOUNT, "note");
+    const original = await privateSpaceRepository.save(ACCOUNT, note.id, {
+      kind: "note", title: "恢复前", body: "完全相同的正文", tasks: [], pinned: true,
+    });
+    await syncPrivateSpace(keys());
+    await db.accountNotes.delete([ACCOUNT, note.id]); // fresh device
+    const result = await privateSpaceRepository.restoreBackup(ACCOUNT, [original]);
+    expect(result).toEqual({ added: 1, skipped: 0 });
+    const restored = await privateSpaceRepository.get(ACCOUNT, note.id);
+    expect(restored?.cloudVersion).toBe(0);
+    expect(restored?.updatedAt).toBeGreaterThanOrEqual(original.updatedAt);
+    await syncPrivateSpace(keys());
+    const rows = await privateSpaceRepository.list(ACCOUNT);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toBe("恢复前");
+    expect(rows[0].cloudVersion).toBe(1);
+    expect(rows[0].syncedRevision).toBe(2);
+    expect(getPrivateSpaceSyncState(ACCOUNT).conflicts).toBe(0);
+  });
+
+  it("does not overwrite divergent restored notes; preserves a genuine conflict copy", async () => {
+    const note = await privateSpaceRepository.create(ACCOUNT, "note");
+    const cloudNote = await privateSpaceRepository.save(ACCOUNT, note.id, {
+      kind: "note", title: "云端版本", body: "来自云端", tasks: [], pinned: false,
+    });
+    await syncPrivateSpace(keys());
+    await db.accountNotes.delete([ACCOUNT, note.id]);
+    const changed = { ...cloudNote, title: "备份版本", body: "不能丢失的修改" };
+    await privateSpaceRepository.restoreBackup(ACCOUNT, [changed]);
+    await syncPrivateSpace(keys());
+    const all = await privateSpaceRepository.list(ACCOUNT);
+    expect(all).toHaveLength(2);
+    expect(all.find(row => row.id === note.id)?.body).toBe("来自云端");
+    expect(all.find(row => row.id !== note.id)?.body).toBe("不能丢失的修改");
+    expect(getPrivateSpaceSyncState(ACCOUNT).conflicts).toBe(1);
+  });
+
+  it("skips only oversized note, uploads subsequent notes, and avoids retry storms", async () => {
+    const huge = await privateSpaceRepository.create(ACCOUNT, "note");
+    await privateSpaceRepository.save(ACCOUNT, huge.id, {
+      kind: "note", title: "本机大笔记", body: "大".repeat(31_000), tasks: [], pinned: false,
+    });
+    const normal = await privateSpaceRepository.create(ACCOUNT, "note");
+    await privateSpaceRepository.save(ACCOUNT, normal.id, {
+      kind: "note", title: "普通笔记", body: "继续同步", tasks: [], pinned: false,
+    });
+    await syncPrivateSpace(keys());
+    expect(cloud.has(normal.id)).toBe(true);
+    expect(cloud.has(huge.id)).toBe(false);
+    expect((await privateSpaceRepository.get(ACCOUNT, huge.id))?.body).toBe("大".repeat(31_000));
+    expect(getPrivateSpaceSyncState(ACCOUNT)).toMatchObject({ status: "error" });
+    expect(getPrivateSpaceSyncState(ACCOUNT).error).toContain("仅保存在本机");
+    // No repetitive retry when the oversize content has not changed.
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(cloud.size).toBe(1);
+    await privateSpaceRepository.save(ACCOUNT, huge.id, {
+      kind: "note", title: "缩短后", body: "现在可以同步", tasks: [], pinned: false,
+    });
+    await syncPrivateSpace(keys());
+    expect(cloud.has(huge.id)).toBe(true);
+    expect(getPrivateSpaceSyncState(ACCOUNT).status).toBe("synced");
+  });
+
+  it("invalidates a cancelled in-flight sync so a new session can start immediately", async () => {
+    const originalFetch = globalThis.fetch.bind(globalThis);
+    let unblock!: (value: Response) => void;
+    let captured = false;
+    vi.stubGlobal("fetch", vi.fn((url: string, options?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (!captured && path === "/api/private-space/list") {
+        captured = true;
+        return new Promise<Response>(resolve => { unblock = resolve; });
+      }
+      return originalFetch(url, options);
+    }));
+    const old = syncPrivateSpace(keys());
+    // Allow the first job to reach the delayed list endpoint.
+    for (let i = 0; i < 30 && !captured; i++) await new Promise(resolve => setTimeout(resolve, 0));
+    expect(captured).toBe(true);
+    cancelPrivateSpaceSync(ACCOUNT);
+    const later = await syncPrivateSpace({ ...keys(), sessionGeneration: 2 });
+    expect(later).toBeUndefined();
+    expect(getPrivateSpaceSyncState(ACCOUNT).status).toBe("synced");
+    unblock(result({ items: [], nextCursor: null }));
+    await old;
+    expect(getPrivateSpaceSyncState(ACCOUNT).status).toBe("synced");
+  });
+
   it("never discards locally saved notes when offline", async () => {
     const note = await privateSpaceRepository.create(ACCOUNT, "todo");
     vi.stubGlobal("navigator", { onLine: false });
