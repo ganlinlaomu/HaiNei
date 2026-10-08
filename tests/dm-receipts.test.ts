@@ -84,6 +84,60 @@ describe("encrypted DM receipts", () => {
     expect(decodeDmReceipt({ ...receiptMessage("read"), plaintext: opened, tags: [] })).toBeNull();
   });
 
+  it("carries a validated absolute deletion deadline only in exact read receipts", () => {
+    const deadlineAt = 1_800_000_010_000;
+    const encoded = serializeExactDmReadReceipt({ createdAt: 100, messageId: FIRST }, deadlineAt);
+    expect(decodeDmReceipt({ ...receiptMessage("read"), plaintext: encoded })).toEqual({
+      type: DM_RECEIPT_TYPE, status: "read", exact: true, deadlineAt,
+      upTo: { createdAt: 100, messageId: FIRST },
+    });
+    for (const value of [0, -1, 1.25, "1800000010000", Number.MAX_SAFE_INTEGER + 2]) {
+      const candidate = JSON.stringify({
+        type: DM_RECEIPT_TYPE, status: "read", exact: true,
+        upTo: { createdAt: 100, messageId: FIRST }, deadlineAt: value,
+      });
+      expect(decodeDmReceipt({ ...receiptMessage("read"), plaintext: candidate })).toBeNull();
+    }
+    expect(decodeDmReceipt({ ...receiptMessage("read"), plaintext: JSON.stringify({
+      type: DM_RECEIPT_TYPE, status: "read",
+      upTo: { createdAt: 100, messageId: FIRST }, deadlineAt,
+    }) })).toBeNull();
+  });
+
+  it("schedules the sender's durable burn when a verified exact read has a deadline", async () => {
+    setActivePinia(createPinia());
+    const keys = useKeyStore();
+    keys.pkHex = ACCOUNT;
+    const friendship = useFriendshipsStore();
+    friendship.loadedFor = ACCOUNT;
+    friendship.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "accepted" } as any];
+    const direct = useDirectMessagesStore();
+    direct.loadedFor = ACCOUNT;
+    const deadlineAt = Date.now() + 10_000;
+    vi.spyOn(syncedMessageRepository, "get").mockResolvedValue({
+      id: FIRST, senderPubkey: ACCOUNT, createdAt: 100,
+      recipientPubkeys: [PEER], conversationId: "conversation",
+      tags: [["t", "hainei-dm"], ["t", "hainei-dm-disappearing"]],
+    } as any);
+    const storeDeadline = vi.spyOn(syncedMessageRepository, "recordSenderBurnDeadline").mockResolvedValue(deadlineAt);
+    const schedule = vi.spyOn(direct, "scheduleOpenedBurn").mockImplementation(() => undefined);
+    vi.spyOn(metaRepository, "put").mockImplementation(async (accountPubkey, key, value) => ({
+      accountPubkey, key, value,
+    }));
+    const receipt = {
+      ...receiptMessage("read"),
+      plaintext: serializeExactDmReadReceipt({ createdAt: 100, messageId: FIRST }, deadlineAt),
+    };
+    expect(await direct.processReceipt(receipt)).toBe(true);
+    expect(storeDeadline).toHaveBeenCalledWith(ACCOUNT, FIRST, PEER, deadlineAt);
+    expect(schedule).toHaveBeenCalledWith(PEER, FIRST, deadlineAt);
+    expect(direct.exactReadById[FIRST]).toBe(PEER);
+    // A repeated encrypted copy cannot extend the stored deadline.
+    expect(await direct.processReceipt(receipt)).toBe(false);
+    expect(storeDeadline).toHaveBeenCalledTimes(2);
+    expect(schedule).toHaveBeenCalledTimes(2);
+  });
+
   it("shows read only for the explicitly opened temporary message, never earlier unopened ones", async () => {
     setActivePinia(createPinia());
     const keys = useKeyStore();
