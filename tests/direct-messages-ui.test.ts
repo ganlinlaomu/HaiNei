@@ -128,6 +128,29 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('openProfile(router, keys.pkHex, peerPubkey.value, event)');
   });
 
+  it("shows the sender's temporary text until burn without revealing the receiver's unopened text", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const burned = chat.indexOf('v-if="isBurned(message)" class="burned-placeholder"');
+    const sent = chat.indexOf('v-else-if="isOwn(message)" class="temporary-message"');
+    const opened = chat.indexOf('v-else-if="canShowTemporaryText(message)" class="temporary-message"');
+    const reveal = chat.indexOf('class="temporary-reveal"');
+    expect(burned).toBeGreaterThan(0);
+    expect(sent).toBeGreaterThan(burned);
+    expect(opened).toBeGreaterThan(sent);
+    expect(reveal).toBeGreaterThan(opened);
+
+    const senderBranch = chat.slice(sent, opened);
+    expect(senderBranch).toContain('v-if="messageText(message.content)" class="bubble-text"');
+    expect(senderBranch).toContain(':text="messageText(message.content)"');
+    expect(senderBranch).toContain('♨ 阅后即焚 · {{ burnDuration(message) }} 秒');
+    expect(senderBranch).not.toContain("对方打开后");
+    const recipientBranch = chat.slice(opened, reveal);
+    expect(recipientBranch).toContain('v-else-if="canShowTemporaryText(message)"');
+    expect(chat).toContain('@click.stop="revealDisappearing(message)"');
+    expect(chat).toContain('临时消息已销毁');
+    expect(chat).toContain('return !isOwn(message) && !isBurned(message)');
+  });
+
   it("shows a compact timestamp for every direct-message type", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain('v-if="!isMediaCaption(message) || isDisappearing(message)" class="message-meta"');
