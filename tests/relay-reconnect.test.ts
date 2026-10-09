@@ -213,13 +213,21 @@ describe("relay reconnect", () => {
     const firstRequest = JSON.parse(first.sent.find(payload => JSON.parse(payload)[0] === "REQ")!);
 
     first.emit("close", {});
-    await vi.advanceTimersByTimeAsync(30_100);
+    // Reconnect uses a 1-second first retry with deterministic jitter.
+    // Do not advance past the 10-second connection-open deadline before opening it.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(MockWebSocket.instances).toHaveLength(2);
     const second = MockWebSocket.instances[1];
-    expect(second).toBeTruthy();
     second.emit("open", {});
-    const replay = JSON.parse(second.sent.find(payload => JSON.parse(payload)[0] === "REQ")!);
+    const replayPayload = second.sent.find(payload => JSON.parse(payload)[0] === "REQ");
+    expect(replayPayload).toBeDefined();
+    const replay = JSON.parse(replayPayload!);
     expect(replay[1]).toBe(firstRequest[1]);
     expect(replay.slice(2)).toEqual(firstRequest.slice(2));
+    expect(second.sent.filter(payload => JSON.parse(payload)[0] === "REQ")).toHaveLength(1);
+    // A late event from the closed socket must never revive the old generation.
+    first.emit("open", {});
+    expect(second.sent.filter(payload => JSON.parse(payload)[0] === "REQ")).toHaveLength(1);
     subscription.unsub();
     vi.restoreAllMocks();
   });
