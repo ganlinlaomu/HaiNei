@@ -8,6 +8,11 @@ const P256_LENGTH = 65;
 const HEX_ID = /^[0-9a-f]{32}$/;
 const B64 = /^[A-Za-z0-9_-]{87}$/;
 const encoder = new TextEncoder();
+function buffer(value: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(value.length);
+  copy.set(value);
+  return copy.buffer as ArrayBuffer;
+}
 
 export type PairKeys = { privateKey: CryptoKey; publicKey: string };
 export type PairSession = { id: string; pollToken: string; expiresAt: number; receiverKey: string };
@@ -97,7 +102,7 @@ async function secret(privateKey: CryptoKey, otherKey: string): Promise<ArrayBuf
   if (!B64.test(otherKey)) throw new Error("invalid_remote_pair_key");
   const raw = decode(otherKey);
   if (raw.length !== P256_LENGTH || raw[0] !== 4) throw new Error("invalid_remote_pair_key");
-  const peer = await crypto.subtle.importKey("raw", raw, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const peer = await crypto.subtle.importKey("raw", buffer(raw), { name: "ECDH", namedCurve: "P-256" }, false, []);
   return crypto.subtle.deriveBits({ name: "ECDH", public: peer }, privateKey, 256);
 }
 async function material(privateKey: CryptoKey, remoteKey: string, id: string): Promise<{ key: CryptoKey; code: string }> {
@@ -126,14 +131,14 @@ export async function sealKey(ownKey: CryptoKey, receiverKey: string, id: string
   const { key } = await material(ownKey, receiverKey, id);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = encoder.encode(JSON.stringify({ version: 1, id, pubkey, skHex }));
-  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encoder.encode(id) }, key, plaintext);
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv: buffer(iv), additionalData: encoder.encode(id) }, key, plaintext);
   return { ciphertext: encode(new Uint8Array(encrypted)), iv: encode(iv) };
 }
 export async function openKey(ownKey: CryptoKey, senderKey: string, id: string, ciphertext: string, ivText: string, senderPubkey: string) {
   const iv = decode(ivText);
   if (iv.length !== 12) throw new Error("invalid_pair_nonce");
   const { key } = await material(ownKey, senderKey, id);
-  const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: encoder.encode(id) }, key, decode(ciphertext));
+  const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buffer(iv), additionalData: encoder.encode(id) }, key, buffer(decode(ciphertext)));
   const decoded = JSON.parse(new TextDecoder().decode(bytes)) as { version: number; id: string; pubkey: string; skHex: string };
   if (decoded.version !== 1 || decoded.id !== id || decoded.pubkey !== senderPubkey ||
       !/^[0-9a-f]{64}$/.test(decoded.skHex) || getPublicKey(utils.hexToBytes(decoded.skHex)) !== senderPubkey) {
