@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory, RouteRecordRaw } from "vue-router";
 import { nextTick } from "vue";
 import Login from "@/views/Login.vue";
+const DevicePair = () => import("@/views/DevicePair.vue");
 import Home from "@/views/Home.vue";
 import {
   loadConversationsView,
@@ -38,6 +39,12 @@ const routes: Array<RouteRecordRaw> = [
     name: "Login",
     component: Login,
     meta: { requiresAuth: false, hideHeader: true }
+  },
+  {
+    path: "/device-pair",
+    name: "DevicePair",
+    component: DevicePair,
+    meta: { requiresAuth: false, hideHeader: true, hideBottomNav: true }
   },
   {
     path: "/",
