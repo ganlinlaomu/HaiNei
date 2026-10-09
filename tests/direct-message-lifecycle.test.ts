@@ -182,6 +182,41 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(context.direct.visibleUnreadByConversation).toEqual({ [CONVERSATION]: 151 });
   });
 
+  it("does not reveal hundreds of provisional unread between remote read state and first history reconciliation", async () => {
+    const context = seed([dm("first", 5)], relationship("accepted"));
+    context.direct.beginReadStateRestore(ACCOUNT);
+    await context.direct.refresh(ACCOUNT);
+    context.direct.unreadByConversation = { [CONVERSATION]: 351 };
+    expect(context.direct.unreadCount).toBe(0);
+
+    // The first account-state refresh has completed but NIP-17 history and
+    // friendship authorization are still reconciling asynchronously.
+    context.direct.beginHistoryHydration(ACCOUNT);
+    context.direct.finishReadStateRestore(ACCOUNT); // A premature caller
+    expect(context.direct.readStateRestorePhase).toBe("restoring");
+    expect(context.direct.unreadCount).toBe(0);
+    expect(context.direct.visibleUnreadByConversation).toEqual({});
+
+    let finish!: () => void;
+    const historyPending = new Promise<void>(resolve => { finish = resolve; });
+    vi.spyOn(context.direct, "reconcileDurableUnread").mockImplementation(async () => {
+      await historyPending;
+      context.direct.unreadByConversation = { [CONVERSATION]: 0 };
+    });
+    const ready = context.direct.finishHistoryHydration(ACCOUNT);
+    expect(context.direct.historyHydrationPhase).toBe("hydrating");
+    expect(context.direct.unreadCount).toBe(0);
+    finish();
+    await ready;
+    expect(context.direct.historyHydrationPhase).toBe("live");
+    // History completion itself is not permission to reveal stale unverified
+    // data: the current session's sync coordinator owns the final transition.
+    expect(context.direct.readStateRestorePhase).toBe("restoring");
+    context.direct.finishReadStateRestore(ACCOUNT);
+    expect(context.direct.readStateRestorePhase).toBe("ready");
+    expect(context.direct.unreadCount).toBe(0);
+  });
+
   it("keeps unread stable while startup Relay history is hydrating", async () => {
     const context = seed([dm("first", 5)], relationship("accepted"));
     await context.direct.refresh(ACCOUNT);

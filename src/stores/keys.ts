@@ -132,6 +132,10 @@ export const useKeyStore = defineStore("keys", {
       if (this.pkHex && this.pkHex !== pk) clearAccountScopedCaches(this.pkHex);
       const generation = ++this.sessionGeneration;
       const isCurrent = () => this.pkHex === pk && this.sessionGeneration === generation && this.isUnlocked;
+      // Establish the unread display barrier synchronously, before awaiting
+      // the vault or account-store loads. A mounted PWA can render between
+      // these awaits even when the previous account is already unlocked.
+      useDirectMessagesStore().beginReadStateRestore(pk);
       await unlockLocalVault(pk, vaultSecretHex, isCurrent);
       if (!isCurrent()) return;
       await migrateLocalVault(db, pk);
@@ -151,9 +155,6 @@ export const useKeyStore = defineStore("keys", {
       // an account switch can briefly reconnect using the previous account's Relay mirror.
       if (!isCurrent()) return;
       warmReadRelaysForSession(this);
-      // Hide provisional DM unread *before* the first local refresh can paint
-      // a badge. The authoritative read_state is still being restored below.
-      useDirectMessagesStore().beginReadStateRestore(pk);
       // DM read state, notification read state and friendship authorization are
       // startup-critical. Do not let Relay history race ahead of them: otherwise
       // old history is temporarily counted as unread during a new-device login.
@@ -240,7 +241,10 @@ export const useKeyStore = defineStore("keys", {
         }
         await directMessages.refresh(pk);
         if (!isCurrent()) return;
-        directMessages.finishReadStateRestore(pk);
+        // Keep the initial unread badge suppressed through the first NIP-17
+        // history reconciliation. Merely loading the cloud read_state does
+        // not mean the startup message/authorization pipeline is settled.
+        // accountMessageSync releases this barrier after durable hydration.
 
         if (this.supportsNip44) {
           const backgroundNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
@@ -270,7 +274,8 @@ export const useKeyStore = defineStore("keys", {
         );
         await Promise.allSettled(namespaces.map(namespace => syncAccountStateNamespace(this, namespace)));
       })().catch(error => {
-        if (isCurrent()) directMessages.finishReadStateRestore(pk);
+        // A failed bootstrap is NOT an authoritative zero-unread check.
+        // Remain in restoring state until a successful sync reconciliation.
         console.warn(`[account] background account bootstrap unavailable account=${account}`, error instanceof Error ? error.message : "unknown");
       });
     },

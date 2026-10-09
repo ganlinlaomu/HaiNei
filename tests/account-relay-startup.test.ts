@@ -20,23 +20,30 @@ describe("account relay startup ordering", () => {
     const remoteWait = source.indexOf("const criticalState = await criticalStateRestore");
     const authoritativeRefresh = source.indexOf("await directMessages.refresh(pk)", localRefresh + 1);
     const notificationRefresh = source.indexOf("await useNotificationsStore().refreshSyncedState(pk)");
-    const finishUnread = source.indexOf("directMessages.finishReadStateRestore(pk)");
     const relayStart = source.indexOf("await startAccountMessageSync(this)");
+    const vaultUnlock = source.indexOf("await unlockLocalVault(pk, vaultSecretHex, isCurrent)");
+    const service = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
+    const historyReconcile = service.indexOf('directMessages.finishHistoryHydration(account, "live").then(');
+    const finishUnread = service.indexOf("directMessages.finishReadStateRestore(account)", historyReconcile);
 
     expect(criticalRequest).toBeGreaterThan(-1);
     expect(criticalNamespaces).toBeGreaterThan(-1);
     expect(localRefresh).toBeGreaterThan(criticalRequest);
     // The first refresh calculates durable local unread asynchronously.
     // The badge must be suppressed BEFORE that refresh can render.
-    expect(pendingUnread).toBeGreaterThan(source.indexOf("warmReadRelaysForSession(this)"));
+    expect(pendingUnread).toBeGreaterThan(-1);
+    expect(pendingUnread).toBeLessThan(vaultUnlock);
     expect(pendingUnread).toBeLessThan(criticalRequest);
     expect(pendingUnread).toBeLessThan(localRefresh);
     expect(remoteWait).toBeGreaterThan(localRefresh);
     expect(notificationRefresh).toBeGreaterThan(remoteWait);
     expect(notificationRefresh).toBeLessThan(authoritativeRefresh);
     expect(authoritativeRefresh).toBeGreaterThan(remoteWait);
-    expect(finishUnread).toBeGreaterThan(authoritativeRefresh);
-    expect(relayStart).toBeGreaterThan(finishUnread);
+    // Critical cloud state completion does NOT authorize showing the badge.
+    expect(source).not.toContain("directMessages.finishReadStateRestore(pk)");
+    expect(relayStart).toBeGreaterThan(authoritativeRefresh);
+    expect(historyReconcile).toBeGreaterThan(-1);
+    expect(finishUnread).toBeGreaterThan(historyReconcile);
 
     const beforeNetworkPhase = source.slice(source.indexOf("// Local-first phase:"), source.indexOf("// Network phase:"));
     expect(beforeNetworkPhase).not.toContain("await criticalStateRestore");
@@ -75,6 +82,8 @@ describe("account message sync generation", () => {
     const gateA = new Promise<void>(resolve => { releaseA = resolve; });
     const managerStart = vi.fn(async (_options: any) => undefined);
     const managerStop = vi.fn();
+    let releaseHistory!: () => void;
+    const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
     const registerSigner = vi.fn();
     const ensureOwnDmRelayList = vi.fn(async () => true);
     const cancelDmRelayDirectoryWork = vi.fn();
@@ -93,8 +102,13 @@ describe("account message sync generation", () => {
       }),
     };
     const directMessages = {
-      beginHistoryHydration: vi.fn(),
-      finishHistoryHydration: vi.fn(async () => undefined),
+      historyHydrationPhase: "idle",
+      beginHistoryHydration: vi.fn(() => { directMessages.historyHydrationPhase = "hydrating"; }),
+      finishHistoryHydration: vi.fn(async () => {
+        await historyGate;
+        directMessages.historyHydrationPhase = "live";
+      }),
+      finishReadStateRestore: vi.fn(),
       processReceipt: vi.fn(),
       acknowledgePersistedIncoming: vi.fn(async () => undefined),
     };
@@ -186,6 +200,17 @@ describe("account message sync generation", () => {
     expect(managerStart.mock.calls[0][0].relays).toEqual(["wss://relay.test"]);
     expect(ensureOwnDmRelayList).toHaveBeenCalledTimes(1);
     expect(ensureOwnDmRelayList.mock.calls[0][0]).toBe(accountB);
+
+    // An apparently live Relay must NOT reveal provisional read counts
+    // before durable history/authorization reconciliation resolves.
+    const onStatus = managerStart.mock.calls[0][0].onStatus as (status: string) => void;
+    expect(directMessages.historyHydrationPhase).toBe("hydrating");
+    onStatus("live");
+    expect(directMessages.finishHistoryHydration).toHaveBeenCalledWith(accountB, "live");
+    expect(directMessages.finishReadStateRestore).not.toHaveBeenCalled();
+    releaseHistory();
+    await vi.waitFor(() => expect(directMessages.finishReadStateRestore).toHaveBeenCalledOnce());
+    expect(directMessages.finishReadStateRestore).toHaveBeenCalledWith(accountB);
 
     releaseA();
     await expect(pendingA).resolves.toBe(false);
