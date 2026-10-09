@@ -629,7 +629,7 @@ describe("message sync session", () => {
     manager.stop();
   });
 
-  it("reconnects active read relays before foreground catch-up without duplicating realtime", async () => {
+  it("recovers account NIP-17 inbox relays and read relays before foreground catch-up without duplicating realtime", async () => {
     const repo = new SyncedMessageRepository(database());
     const subscriptions: Array<{ relays: string[]; filters: any[]; handlers: Record<string, Array<(...args: any[]) => void>> }> = [];
     const subscribeFake = (relays: string[], filters: any[]) => {
@@ -676,7 +676,7 @@ describe("message sync session", () => {
     });
     await manager.start({
       accountPubkey: ACCOUNT_A,
-      relays: ["wss://active-read.test"],
+      relays: ["wss://dm-inbox.test"],
       authors: [PEER, ACCOUNT_A],
       decodeContext: { accountPubkey: ACCOUNT_A },
     });
@@ -690,7 +690,7 @@ describe("message sync session", () => {
     windowHandlers.get("pageshow")?.();
     documentHandlers.get("visibilitychange")?.();
     expect(resumeRelays).toHaveBeenCalledTimes(1);
-    expect(resumeRelays).toHaveBeenCalledWith(["wss://active-read.test"]);
+    expect(resumeRelays).toHaveBeenCalledWith(["wss://dm-inbox.test", "wss://active-read.test"]);
     expect(retryOutgoing).toHaveBeenCalledTimes(1);
     expect(retryOutgoing).toHaveBeenCalledWith(ACCOUNT_A);
     for (let attempt = 0; attempt < 20 && subscriptions.length < 3; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
