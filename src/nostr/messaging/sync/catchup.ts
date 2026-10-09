@@ -28,6 +28,32 @@ function normalizedRelaySet(relays: string[]) {
   return [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))];
 }
 
+// Historical decryption is optional background work. Yield after small chunks
+// without delaying realtime ingestion or a message's durable persistence.
+async function yieldHistoryWork(signal?: AbortSignal) {
+  if (signal?.aborted) return;
+  await new Promise<void>(resolve => {
+    let idleId: number | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      if (idleId !== undefined) cancelIdleCallback(idleId);
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    if (typeof requestIdleCallback === "function") {
+      idleId = requestIdleCallback(done, { timeout: 60 });
+    } else {
+      timer = setTimeout(done, 0);
+    }
+    signal?.addEventListener("abort", done, { once: true });
+    if (signal?.aborted) done();
+  });
+}
+
 export async function fetchCatchupPage(
   relays: string[],
   filters: any[],
@@ -41,6 +67,13 @@ export async function fetchCatchupPage(
   const completedRelays = new Set<string>();
   const failedRelays = new Map<string, RelaySubscriptionFailureReason>();
   const events: Array<{ event: NostrEvent; relayUrl?: string }> = [];
+  // A task suspended in the background must not open a new network subscription.
+  if (signal?.aborted) {
+    return {
+      events, completedRelays, failedRelays, allRelaysCompleted: false,
+      timedOut: false, aborted: true,
+    };
+  }
   const subscription = subscribeFn(normalizedRelays, filters);
   const untrack = trackSubscription?.(subscription);
 
@@ -70,7 +103,9 @@ export async function fetchCatchupPage(
     };
     const abort = () => finish("abort");
 
-    subscription.on("event", (event: NostrEvent, relayUrl?: string) => events.push({ event, relayUrl }));
+    subscription.on("event", (event: NostrEvent, relayUrl?: string) => {
+      if (!settled && !signal?.aborted) events.push({ event, relayUrl });
+    });
     subscription.on("eose", (rawRelayUrl: string) => {
       const relayUrl = normalizeRelayUrl(rawRelayUrl);
       if (!relayUrl || !expectedRelays.has(relayUrl) || completedRelays.has(relayUrl) || failedRelays.has(relayUrl)) return;
@@ -118,7 +153,8 @@ export async function runPagedCatchup(options: {
   let allRelaysCompleted = true;
   let timedOut = false;
   let aborted = false;
-  const maxBatches = options.maxBatches ?? 100;
+  const maxBatches = Math.max(1, options.maxBatches ?? 100);
+  const canContinue = () => options.isCurrent() && !options.signal?.aborted;
   const relayProgress: Record<string, RelayCatchupProgress> = {};
   const relays = normalizedRelaySet(options.relays);
 
@@ -128,7 +164,7 @@ export async function runPagedCatchup(options: {
     let batches = 0;
     let relayIncomplete = false;
 
-    for (let batch = 0; batch < maxBatches && options.isCurrent(); batch++) {
+    for (let batch = 0; batch < maxBatches && canContinue(); batch++) {
       batches++;
       const pageUntil = currentUntil;
       const pageFilters = options.filters.map(filter => ({
@@ -154,21 +190,27 @@ export async function runPagedCatchup(options: {
 
       let newUnique = 0;
       let oldest: number | undefined;
+      let processedInChunk = 0;
       for (const { event, relayUrl } of page.events) {
-        if (!options.isCurrent()) break;
+        if (!canContinue()) break;
         oldest = oldest === undefined ? event.created_at : Math.min(oldest, event.created_at);
         if (!event.id || seenEventIds.has(event.id)) continue;
         seenEventIds.add(event.id);
         newUnique++;
         insertedCandidates++;
+        // Wait for persistence before yielding or advancing the checkpoint.
         await options.onEvent(event, relayUrl || relay);
+        if (++processedInChunk >= 24) {
+          processedInChunk = 0;
+          await yieldHistoryWork(options.signal);
+        }
       }
 
       const pageFailed = page.aborted
+        || !canContinue()
         || page.timedOut
         || page.failedRelays.size > 0
-        || !page.allRelaysCompleted
-        || !options.isCurrent();
+        || !page.allRelaysCompleted;
       if (pageFailed) {
         // Keep this relay at its previous boundary. Other relays continue with
         // their own cursors, so one unavailable server cannot stall the round.
@@ -190,15 +232,15 @@ export async function runPagedCatchup(options: {
       nextUntil: currentUntil,
       naturalEnd,
       hitMaxBatches,
-      incomplete: relayIncomplete || !options.isCurrent(),
+      incomplete: relayIncomplete || !canContinue(),
     };
   };
 
   // A small pool avoids opening every configured relay at once on mobile.
-  const concurrency = Math.max(1, Math.min(options.relayConcurrency ?? 2, relays.length || 1));
+  const concurrency = Math.max(1, Math.min(options.relayConcurrency ?? 1, relays.length || 1));
   let relayIndex = 0;
   await Promise.all(Array.from({ length: concurrency }, async () => {
-    while (relayIndex < relays.length && options.isCurrent()) {
+    while (relayIndex < relays.length && canContinue()) {
       const relay = relays[relayIndex++];
       await runRelay(relay);
     }
@@ -208,11 +250,13 @@ export async function runPagedCatchup(options: {
   const naturalEnd = relays.length > 0 && progress.length === relays.length && progress.every(item => item.naturalEnd);
   const hitMaxBatches = progress.some(item => item.hitMaxBatches);
   const incomplete = aborted
+    || !!options.signal?.aborted
     || timedOut
     || failedRelays.size > 0
     || !allRelaysCompleted
     || progress.some(item => item.incomplete)
-    || !options.isCurrent();
+    || !options.isCurrent()
+    || progress.length !== relays.length;
   const nextUntilByRelay = Object.fromEntries(
     Object.entries(relayProgress).map(([relay, value]) => [relay, value.nextUntil])
   );
@@ -230,7 +274,7 @@ export async function runPagedCatchup(options: {
     nextUntilByRelay,
     relayProgress,
     timedOut,
-    aborted,
+    aborted: aborted || !!options.signal?.aborted,
     incomplete,
   };
 }
