@@ -146,6 +146,33 @@ describe("relay reconnect", () => {
     subscription.unsub();
   });
 
+  it("preserves the REQ id across forced reconnect without accepting events from the replaced socket", async () => {
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { subscribe, reconnectRelay, inspectRelays } = await import("@/nostr/relays");
+    const onEvent = vi.fn();
+    const subscription = subscribe(["wss://forced.test"], [{ kinds: [1059] }]);
+    subscription.on("event", onEvent);
+    const old = MockWebSocket.instances[0];
+    old.emit("open", {});
+    const initial = old.sent.map(item => JSON.parse(item)).find(item => item[0] === "REQ");
+    reconnectRelay("wss://forced.test");
+    expect(MockWebSocket.instances).toHaveLength(2);
+    old.emit("open", {});
+    expect(inspectRelays()["wss://forced.test"].state).toBe("connecting");
+    const current = MockWebSocket.instances[1];
+    current.emit("open", {});
+    const frames = current.sent.map(item => JSON.parse(item)).filter(item => item[0] === "REQ");
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toEqual(initial);
+    old.emit("message", { data: JSON.stringify(["EVENT", initial[1], { id: "stale" }]) });
+    expect(onEvent).not.toHaveBeenCalled();
+    current.emit("message", { data: JSON.stringify(["EVENT", initial[1], { id: "current" }]) });
+    expect(onEvent).toHaveBeenCalledOnce();
+    subscription.unsub();
+  });
+
   it("backs off progressively on flapping sockets and resets after a stable connection", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0.5);
