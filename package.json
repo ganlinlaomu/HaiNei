@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.40",
-  "releaseSummary": "精简登录页：移除远程签名器新登录入口，将扫描旧设备登录改为扫码登录",
+  "version": "0.1.41",
+  "releaseSummary": "更新默认 Relay，并将 Google 登录入口改为「使用Google登录」",
   "private": true,
   "scripts": {
     "dev": "vite",

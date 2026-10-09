@@ -7,7 +7,7 @@
     @click="beginGoogle"
   >
     <span class="google-mark" aria-hidden="true">G</span>
-    <span>使用 Google 继续</span>
+    <span>使用Google登录</span>
   </button>
   <p v-if="phase === 'idle' && errorMessage" class="inline-google-error" role="alert">{{ errorMessage }}</p>
 
@@ -17,7 +17,7 @@
       <div class="provider-heading">
         <span class="google-mark large" aria-hidden="true">G</span>
         <div>
-          <h2 id="google-recovery-title">使用 Google 继续</h2>
+          <h2 id="google-recovery-title">使用Google登录</h2>
           <p>私钥只会以加密形式保存到 Google Drive 应用数据区。</p>
         </div>
       </div>

@@ -53,7 +53,7 @@ describe("Relay configuration", () => {
   it("uses the current built-in Relay and media fallbacks", () => {
     expect(DEFAULT_RELAY_URLS).toEqual([
       "wss://nostr.dzo-hadar.ts.net",
-      "wss://relay.gulugulu.moe"
+      "wss://cloudflare-nostr-relay.noster.workers.dev"
     ]);
     expect(DEFAULT_MEDIA_SERVERS).toEqual([
       expect.objectContaining({ url: "https://blossom-imgbed.noster.workers.dev" })
@@ -117,6 +117,53 @@ describe("Relay configuration", () => {
     expect(migrated.relays.some(item => item.url === "wss://nostr.dzo-hadar.ts.net" && item.source === "default")).toBe(true);
     expect(migrated.mediaServers.some(item => item.url === "https://blossom.lostr.space")).toBe(true);
     expect(migrated.mediaServers.some(item => item.url === "https://blossom-imgbed.noster.workers.dev")).toBe(true);
+  });
+
+  it("retires the replaced system Relay from persisted config without touching user-added Relay", () => {
+    const oldUrl = "wss://relay.gulugulu.moe";
+    const nextUrl = "wss://cloudflare-nostr-relay.noster.workers.dev";
+    const saved = migrateConnectionSettings({
+      relays: [
+        relay(oldUrl, "default", { updatedAt: NOW - 20, updatedBy: "builtin" }),
+        relay("wss://custom.example", "user"),
+      ]
+    }, { deviceId: "device-a", now: NOW });
+    expect(saved.relays.some(item => item.url === oldUrl)).toBe(false);
+    expect(saved.relays.find(item => item.url === nextUrl)).toMatchObject({
+      source: "default", enabled: true, read: true, write: true
+    });
+    expect(saved.relays.find(item => item.url === "wss://custom.example")?.source).toBe("user");
+    const reloaded = migrateConnectionSettings(saved, { deviceId: "device-a", now: NOW + 100 });
+    expect(reloaded.relays.some(item => item.url === oldUrl)).toBe(false);
+
+    const userAdded = migrateConnectionSettings({
+      relays: [relay(oldUrl, "user", { updatedAt: NOW, updatedBy: "device-user" })]
+    }, { deviceId: "device-a", now: NOW });
+    expect(userAdded.relays.find(item => item.url === oldUrl)).toMatchObject({
+      source: "user", enabled: true
+    });
+    expect(userAdded.relays.find(item => item.url === nextUrl)?.source).toBe("default");
+  });
+
+  it("prevents an older cloud default from resurrecting the retired Relay after sync", () => {
+    const oldUrl = "wss://relay.gulugulu.moe";
+    const current = migrateConnectionSettings({
+      relays: [relay("wss://custom.example", "user")]
+    }, { deviceId: "device-a", now: NOW });
+    const stale = [
+      relay(oldUrl, "default", { updatedBy: "builtin", updatedAt: NOW + 99 }),
+      relay("wss://peer.example", "user", { updatedBy: "device-b" })
+    ];
+    const merged = mergeRelayConfigs(current.relays, stale);
+    expect(merged.some(item => item.url === oldUrl)).toBe(false);
+    expect(merged.some(item => item.url === "wss://peer.example")).toBe(true);
+    expect(merged.some(item => item.url === "wss://custom.example")).toBe(true);
+    expect(merged.some(item => item.url === "wss://cloudflare-nostr-relay.noster.workers.dev")).toBe(true);
+    expect(selectRelayConfigs(merged, 5, NOW).map(item => item.url)).not.toContain(oldUrl);
+
+    // An explicitly configured NIP-65 Relay is not a retired built-in.
+    const explicit = mergeRelayConfigs(current.relays, [relay(oldUrl, "nip65")]);
+    expect(explicit.find(item => item.url === oldUrl)?.source).toBe("nip65");
   });
 
   it("restores every system Relay as enabled read/write during migration and selection", () => {
@@ -306,9 +353,9 @@ describe("per-item settings sync", () => {
     const local = relay("wss://local.example", "user", { updatedAt: 20 });
     const remote = relay("wss://remote.example", "user", { updatedAt: 20 });
     expect(mergeRelayConfigs([local], [remote]).map(item => item.url).sort()).toEqual([
+      "wss://cloudflare-nostr-relay.noster.workers.dev",
       "wss://local.example",
       "wss://nostr.dzo-hadar.ts.net",
-      "wss://relay.gulugulu.moe",
       "wss://remote.example"
     ]);
   });

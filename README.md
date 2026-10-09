@@ -73,7 +73,7 @@ Worker 对前端仅公开 `GET /api/relay/config` 中的 Relay URL；长期 cred
 
 ### Google 账号恢复（P0 + P1）
 
-Web/PWA 登录页支持可选的「使用 Google 继续」。它不会把 Google 设为 Nostr 登录方式：Google 只负责取得稳定账号标识与 `drive.appdata` 授权，恢复出的私钥最终仍进入现有 `loginWithNsec()` / `private-key` signer 路径。
+Web/PWA 登录页支持可选的「使用Google登录」。它不会把 Google 设为 Nostr 登录方式：Google 只负责取得稳定账号标识与 `drive.appdata` 授权，恢复出的私钥最终仍进入现有 `loginWithNsec()` / `private-key` signer 路径。
 
 配置步骤：
 
