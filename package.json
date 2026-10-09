@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.38",
-  "releaseSummary": "新增双设备扫码安全登入：ECDH 加密接力、验证码核对、一次性凭据",
+  "version": "0.1.39",
+  "releaseSummary": "修复扫码登入成功后未跳转首页、缺少成功提示及配对提前取消",
   "private": true,
   "scripts": {
     "dev": "vite",
