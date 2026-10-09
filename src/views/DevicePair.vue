@@ -1,7 +1,7 @@
 <template>
   <main class="pair-page">
     <header class="pair-header">
-      <button type="button" class="back" @click="router.push(keys.isLoggedIn ? '/settings/system' : '/login')">‹ 返回</button>
+      <button type="button" class="back" :disabled="busy" @click="router.push(keys.isLoggedIn ? '/settings/system' : '/login')">‹ 返回</button>
       <h1>扫描登录新设备</h1>
     </header>
     <p class="description">只在两台设备都由你本人操作时使用。私钥在设备之间端对端加密传送，不会以明文存放在服务器。</p>
@@ -21,7 +21,7 @@
           <label class="check"><input type="checkbox" v-model="receiverVerified" /> 两台设备显示的验证码相同，且确认为我的旧设备</label>
           <button type="button" class="primary" :disabled="busy || !receiverVerified || !snapshot?.ciphertext" @click="finishReceiving">{{ busy ? '正在安全登录…' : snapshot?.ciphertext ? '确认并在此设备登录' : '等待旧设备授权…' }}</button>
         </div>
-        <button type="button" class="secondary" @click="resetSession">取消此次配对</button>
+        <button type="button" class="secondary" :disabled="busy" @click="resetSession">取消此次配对</button>
       </template>
     </section>
 
@@ -52,6 +52,8 @@ import { getPublicKey, utils } from "nostr-tools";
 import qrcode from "qrcode-generator";
 import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
+import { useUIStore } from "@/stores/ui";
+import { completeDevicePairLogin } from "@/services/devicePairCompletion";
 import QrScannerSheet from "@/components/QrScannerSheet.vue";
 import {
   createPair, deliverPair, endPair, makePairKeys, offerPair, openKey, pairLink,
@@ -60,6 +62,7 @@ import {
 } from "@/services/devicePairing";
 
 const keys = useKeyStore();
+const ui = useUIStore();
 const route = useRoute();
 const router = useRouter();
 const busy = ref(false);
@@ -78,6 +81,8 @@ let senderKeys: PairKeys | null = null;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let generation = 0;
 let finished = false;
+let handoffInProgress = false;
+let disposed = false;
 const canSend = computed(() => keys.isLoggedIn && keys.loginMethod === "private-key" && keys.isUnlocked && /^[0-9a-f]{64}$/.test(keys.skHex));
 const identityLabel = computed(() => snapshot.value?.senderPubkey ? `${snapshot.value.senderPubkey.slice(0, 12)}…${snapshot.value.senderPubkey.slice(-8)}` : "");
 const qrMarkup = computed(() => {
@@ -150,20 +155,52 @@ async function pollUntilDone(run: number) {
 async function finishReceiving() {
   if (busy.value || !receiverVerified.value || !session.value || !receiverKeys || !snapshot.value?.ciphertext ||
       !snapshot.value.iv || !snapshot.value.senderKey || !snapshot.value.senderPubkey) return;
+
+  // Preserve a fixed handoff snapshot: signing in changes App.vue's account-scoped
+  // keep-alive key and unmounts this component before loginWithNsec resolves.
+  const pairing = session.value;
+  const ephemeral = receiverKeys;
+  const envelope = snapshot.value;
+  const expectedAccount = envelope.senderPubkey!.toLowerCase();
+  handoffInProgress = true;
   busy.value = true;
   errorMessage.value = "";
   try {
-    const skHex = await openKey(receiverKeys.privateKey, snapshot.value.senderKey, session.value.id,
-      snapshot.value.ciphertext, snapshot.value.iv, snapshot.value.senderPubkey);
-    await keys.loginWithNsec(skHex);
-    // Only acknowledge after credentials are successfully stored and account initialized.
-    await endPair(session.value);
-    finished = true;
-    stopPolling();
-    session.value = null; receiverKeys = null; snapshot.value = null;
-    await router.replace("/");
-  } catch (error) { errorMessage.value = message(error); }
-  finally { busy.value = false; }
+    await completeDevicePairLogin({
+      importAccount: async () => {
+        const skHex = await openKey(ephemeral.privateKey, envelope.senderKey!, pairing.id,
+          envelope.ciphertext!, envelope.iv!, expectedAccount);
+        await keys.loginWithNsec(skHex);
+      },
+      accountReady: () => keys.isLoggedIn && keys.isUnlocked && keys.pkHex.toLowerCase() === expectedAccount,
+      acknowledge: () => endPair(pairing),
+      onSuccess: () => {
+        finished = true;
+        stopPolling();
+        ui.addToast("新设备登录成功", 3_200, "success");
+      },
+      navigateHome: async () => {
+        await router.replace("/");
+        if (router.currentRoute.value.path !== "/") throw new Error("pair_home_navigation_failed");
+      },
+    });
+  } catch (error) {
+    const authenticated = keys.isLoggedIn && keys.isUnlocked && keys.pkHex.toLowerCase() === expectedAccount;
+    const notice = authenticated
+      ? "账号已登录，但自动跳转首页失败，请点击进入首页。"
+      : message(error);
+    if (!disposed) errorMessage.value = notice;
+    else ui.addToast(notice, 4_000, "error");
+    if (authenticated) void router.replace("/").catch(() => {});
+  } finally {
+    handoffInProgress = false;
+    busy.value = false;
+    if (disposed) {
+      session.value = null;
+      receiverKeys = null;
+      snapshot.value = null;
+    }
+  }
 }
 function clearSender() {
   senderTarget.value = null; senderKeys = null; senderVerified.value = false;
@@ -214,7 +251,11 @@ onMounted(() => {
   }
 });
 onBeforeUnmount(() => {
+  disposed = true;
   stopPolling();
+  // A successful account import remounts the route mid-await. Do not revoke
+  // the one-time handoff or destroy its saved state until the login flow settles.
+  if (handoffInProgress) return;
   const previous = session.value;
   if (previous && !finished) void endPair(previous, true).catch(() => {});
   session.value = null; receiverKeys = null; senderKeys = null;
