@@ -386,7 +386,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       onStatus: status => {
         if (!isCurrent()) return;
         setAccountMessageSyncStatus(account, status, {
-          live: status === "connecting" ? "subscribing" : "active",
+          live: status === "connecting" ? "subscribing" : status === "live" || status === "catching-up" ? "active" : "idle",
           catchup: status === "catching-up" ? "running" : status === "error" ? "error" : status === "live" ? "settled" : accountSyncSnapshot.catchup,
         });
         if (status === "live") {
