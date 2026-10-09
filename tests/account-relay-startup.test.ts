@@ -122,6 +122,7 @@ describe("account message sync generation", () => {
         "wss://relay.test": { ready: true, state: "connected" },
       })),
       onRelayConnectionState: vi.fn(() => () => undefined),
+      releaseUnusedRelayConnections: vi.fn(),
     }));
     vi.doMock("@/services/dmRelayDirectory", () => ({
       selectOwnDmRelays: (relays: string[]) => relays.slice(0, 2),
