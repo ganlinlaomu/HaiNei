@@ -1,4 +1,5 @@
 import type { NostrEvent } from "nostr-tools";
+import type { IncrementalCatchupCheckpoint, RelaySyncStateRecord } from "@/db/dexie";
 import { getRelaysFromStorage, inspectRelays, onRelayConnectionState, restoreRelayConnections, type RelayConnectionEvent } from "@/nostr/relays";
 import { nostrClient } from "@/services/nostrClient";
 import { buildMessageSubscriptions } from "@/nostr/messaging/subscriptions";
@@ -34,6 +35,28 @@ type ManagerDependencies = {
   catchupTimeoutMs?: number;
 };
 
+function validatedCheckpoint(
+  saved: IncrementalCatchupCheckpoint | undefined,
+  signature: string,
+  configured: string[]
+): IncrementalCatchupCheckpoint | null {
+  if (!saved || saved.relaySignature !== signature
+    || !Number.isSafeInteger(saved.since) || saved.since < 0
+    || !Number.isSafeInteger(saved.until) || saved.until < saved.since
+    || !Array.isArray(saved.requiredRelays) || !saved.requiredRelays.length
+    || !Array.isArray(saved.completedRelays)
+    || !saved.pendingUntilByRelay || typeof saved.pendingUntilByRelay !== "object") return null;
+  const required = new Set(saved.requiredRelays);
+  if (required.size !== saved.requiredRelays.length
+    || [...required].some(url => !configured.includes(url))
+    || saved.completedRelays.some(url => !required.has(url))
+    || Object.entries(saved.pendingUntilByRelay).some(([url, until]) =>
+      !required.has(url) || !Number.isSafeInteger(until) || until < 0 || until > saved.until
+    )
+  ) return null;
+  return saved;
+}
+
 export class MessageSyncManager {
   private readonly repository: SyncedMessageRepository;
   private readonly subscribeFn: SubscribeForCatchup;
@@ -58,8 +81,7 @@ export class MessageSyncManager {
   private abortController: AbortController | null = null;
   private catchupAbortController: AbortController | null = null;
   private removeBackgroundListener: (() => void) | null = null;
-  private incrementalContinuation: { sessionId: string; since: number; untilByRelay: Record<string, number> } | null = null;
-  private idleContinuationTimer: ReturnType<typeof setTimeout> | null = null;
+   private idleContinuationTimer: ReturnType<typeof setTimeout> | null = null;
   private cancelIdleContinuation: (() => void) | null = null;
 
   private clearIdleContinuation() {
@@ -287,35 +309,43 @@ export class MessageSyncManager {
             .reduce((max, message) => Math.max(max, message.createdAt || 0), 0)
           || undefined;
         if (catchupAbortController.signal.aborted || !this.isForeground()) return;
-        const freshHistoryRepair = !relayUrl
-          && !state.historyBackfillCompletedAt
+        const freshHistoryRepair = !state.historyBackfillCompletedAt
           && !!state.historyBackfillStartedAt;
-        const continuation = !freshHistoryRepair
-          && this.incrementalContinuation?.sessionId === sessionId
-          ? this.incrementalContinuation
-          : null;
-        const relays = relayUrl
-          ? [relayUrl]
-          : continuation && Object.keys(continuation.untilByRelay).length
-            ? Object.keys(continuation.untilByRelay).filter(url => options.relays.includes(url))
-            : state.historyBackfillCompletedAt && newlyAddedRelays.length
-              ? newlyAddedRelays
-              : options.relays;
-        // If an incremental page filled up, the high watermark may already
-        // have advanced. Anchor the next query to the last fully completed
-        // catch-up instead of silently losing the unprocessed older pages.
+        // A gift-wrap carries a randomized outer timestamp. The completed
+        // *scan time*, not the newest decrypted rumor's createdAt, anchors
+        // future REQs. buildMessageSubscriptions applies the NIP-17 48h skew.
         const highWatermarkSince = localHighWatermark
           ? calculateCatchupSince(localHighWatermark, nowSeconds)
           : nowSeconds;
         const lastCompleteSince = state.lastCatchupCompletedAt
           ? calculateCatchupSince(Math.floor(state.lastCatchupCompletedAt / 1000), nowSeconds)
           : highWatermarkSince;
-        const since = freshHistoryRepair
-          ? 0
-          : continuation?.since ?? Math.min(highWatermarkSince, lastCompleteSince);
+        const durable = !freshHistoryRepair
+          ? validatedCheckpoint(state.incrementalCatchup, currentRelaySignature, options.relays)
+          : null;
+        const baseRelays = state.historyBackfillCompletedAt && newlyAddedRelays.length
+          ? newlyAddedRelays
+          : options.relays;
+        const freshSince = Math.min(highWatermarkSince, lastCompleteSince);
+        const checkpoint: IncrementalCatchupCheckpoint | null = freshHistoryRepair ? null : durable || {
+          relaySignature: currentRelaySignature,
+          requiredRelays: [...baseRelays],
+          completedRelays: [],
+          since: freshSince,
+          until: nowSeconds,
+          pendingUntilByRelay: Object.fromEntries(baseRelays.map(url => [url, nowSeconds])),
+        };
+        const relays = freshHistoryRepair
+          ? relayUrl ? [relayUrl] : options.relays
+          : checkpoint
+            ? (relayUrl && relayUrl in checkpoint.pendingUntilByRelay
+              ? [relayUrl]
+              : Object.keys(checkpoint.pendingUntilByRelay))
+            : [];
+        const since = freshHistoryRepair ? 0 : checkpoint!.since;
         const until = freshHistoryRepair
           ? Math.min(state.historyBackfillUntil ?? nowSeconds, nowSeconds)
-          : nowSeconds;
+          : checkpoint!.until;
         const filters = buildMessageSubscriptions(options.accountPubkey, options.authors, since, until)
           .map(filter => ({ ...filter, limit: 500 }));
         logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} session=${sessionId} phase=${activeSource} since=${since} until=${until}`);
@@ -324,7 +354,7 @@ export class MessageSyncManager {
           filters,
           initialUntilByRelay: freshHistoryRepair
             ? Object.fromEntries(relays.map(url => [url, state.relayStates[url]?.historyBackfillUntil ?? until]))
-            : continuation?.untilByRelay,
+            : checkpoint?.pendingUntilByRelay,
           subscribeFn: this.subscribeFn,
           trackSubscription: subscription => {
             this.activeCatchupSubscriptions.add(subscription);
@@ -520,8 +550,7 @@ export class MessageSyncManager {
     this.catchupAbortController?.abort();
     this.catchupAbortController = null;
     this.clearIdleContinuation();
-    this.incrementalContinuation = null;
-    this.removeBackgroundListener?.();
+     this.removeBackgroundListener?.();
     this.removeBackgroundListener = null;
     closeSubscription(this.realtimeSubscription);
     this.realtimeSubscription = null;
