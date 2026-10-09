@@ -50,8 +50,9 @@ describe("relay reconnect", () => {
     expect(MockWebSocket.instances).toHaveLength(1);
   });
 
-  it("foreground immediately resets exhausted retries and preserves one subscription", async () => {
+  it("foreground restores a failed relay without duplicate sockets or losing subscriptions", async () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
     Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
@@ -59,17 +60,17 @@ describe("relay reconnect", () => {
     const subscription = subscribe(["wss://exhausted.test"], [{ kinds: [1059] }]);
     MockWebSocket.instances[0].emit("close", {});
     await vi.advanceTimersByTimeAsync(1_000);
+    expect(MockWebSocket.instances).toHaveLength(2);
     MockWebSocket.instances[1].emit("close", {});
-    await vi.advanceTimersByTimeAsync(2_000);
-    MockWebSocket.instances[2].emit("close", {});
-    await vi.advanceTimersByTimeAsync(2_000);
-    MockWebSocket.instances[3].emit("close", {});
-    expect(inspectRelays()["wss://exhausted.test"]).toMatchObject({ state: "disconnected", reconnectAttempts: 3, subs: 1 });
-
+    expect(inspectRelays()["wss://exhausted.test"]).toMatchObject({ state: "waiting-retry", reconnectAttempts: 2, subs: 1 });
     restoreRelayConnections(["wss://exhausted.test"]);
-    expect(MockWebSocket.instances).toHaveLength(5);
-    expect(inspectRelays()["wss://exhausted.test"]).toMatchObject({ state: "connecting", reconnectAttempts: 0, subs: 1 });
+    restoreRelayConnections(["wss://exhausted.test"]);
+    expect(MockWebSocket.instances).toHaveLength(3);
+    expect(inspectRelays()["wss://exhausted.test"]).toMatchObject({ state: "connecting", reconnectAttempts: 2, subs: 1 });
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(MockWebSocket.instances).toHaveLength(3);
     subscription.unsub();
+    vi.restoreAllMocks();
   });
 
   it("does not reconnect while navigator is offline", async () => {
@@ -199,6 +200,7 @@ describe("relay reconnect", () => {
 
   it("replays active REQ with the original subscription id", async () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -219,5 +221,6 @@ describe("relay reconnect", () => {
     expect(replay[1]).toBe(firstRequest[1]);
     expect(replay.slice(2)).toEqual(firstRequest.slice(2));
     subscription.unsub();
+    vi.restoreAllMocks();
   });
 });
