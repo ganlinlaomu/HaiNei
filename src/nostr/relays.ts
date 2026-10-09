@@ -695,99 +695,114 @@ export function subscribe(relays: string[], filtersArray: any[]) {
   };
 }
 
+/** A single wake-up signal and one bounded timeout replace 150 ms polling.
+ * The listener is always disposed when a socket opens, is discarded or times out. */
+function waitForRelayReady(conn: RelayConn, timeoutMs: number): Promise<boolean> {
+  if (relaysMap[conn.url] !== conn || !conn.shouldReconnect) return Promise.resolve(false);
+  if (conn.ready) return Promise.resolve(true);
+  return new Promise(resolve => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let unsubscribe: () => void = () => {};
+    const finish = (ready: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      unsubscribe();
+      resolve(ready);
+    };
+    unsubscribe = onRelayConnectionState(event => {
+      if (event.url !== conn.url) return;
+      if (relaysMap[conn.url] !== conn || !conn.shouldReconnect) finish(false);
+      else if (event.connected && conn.ready) finish(true);
+    });
+    timer = setTimeout(() => finish(false), timeoutMs);
+    // Recheck after subscribing; a socket may open in the same event loop turn.
+    if (conn.ready) finish(true);
+    else if (relaysMap[conn.url] !== conn || !conn.shouldReconnect) finish(false);
+  });
+}
+
 /**
  * publish(relays, event)
  * - returns Promise of array { relay, ok, reason?, ts }
+ * - pending publishes retain ownership of the socket until settled
  */
 export async function publish(relays: string[], event: any): Promise<Array<{ relay: string; ok: boolean; reason?: any; ts: number }>> {
   const promises = [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))].map(async (url) => {
     const conn = ensureRelayConn(url);
+    conn.activePublishes++;
+    updateRelayIdleLease(conn);
     const diagnostic = eventDiagnostic(conn, event);
-    debugLog("publish", "publish_start", diagnostic, "info");
-    debugLog("publish", "publish_waiting_connection", {
-      ...diagnostic,
-      ready: conn.ready,
-      queueLength: conn.queue.length,
-      wsReadyState: conn.ws?.readyState ?? null
-    });
-    const waited = await new Promise<boolean>((resolve) => {
-      const start = Date.now();
-      const check = () => {
-        if (conn.ready) return resolve(true);
-        if (Date.now() - start > CONNECT_TIMEOUT) return resolve(false);
-        setTimeout(check, 150);
-      };
-      check();
-    });
-    debugLog("publish", waited ? "publish_connection_ready" : "publish_connection_timeout", {
-      ...diagnostic,
-      waited,
-      ready: conn.ready,
-      queueLength: conn.queue.length,
-      wsReadyState: conn.ws?.readyState ?? null
-    }, waited ? "debug" : "warn");
-
-    const id = event.id || (Math.random().toString(36).slice(2, 10));
-    const okPromise = new Promise<{ ok: boolean; msg?: any }>((resolve) => {
-      const h = (res: any) => {
-        const ok = !!res.ok;
-        debugLog("publish", ok ? "publish_ok" : "publish_rejected", {
-          ...diagnostic,
-          reason: res.msg
-        }, ok ? "info" : "warn");
-        resolve({ ok, msg: res.msg });
-      };
-      conn.okHandlers.set(id, h);
-      setTimeout(() => {
-        if (conn.okHandlers.has(id)) {
+    const id = event.id || Math.random().toString(36).slice(2, 10);
+    let confirmationTimer: ReturnType<typeof setTimeout> | null = null;
+    let confirmHandler: ((res: any) => void) | null = null;
+    try {
+      debugLog("publish", "publish_start", diagnostic, "info");
+      debugLog("publish", "publish_waiting_connection", {
+        ...diagnostic, ready: conn.ready, queueLength: conn.queue.length,
+        wsReadyState: conn.ws?.readyState ?? null,
+      });
+      const waited = await waitForRelayReady(conn, CONNECT_TIMEOUT);
+      debugLog("publish", waited ? "publish_connection_ready" : "publish_connection_timeout", {
+        ...diagnostic, waited, ready: conn.ready, queueLength: conn.queue.length,
+        wsReadyState: conn.ws?.readyState ?? null,
+      }, waited ? "debug" : "warn");
+      if (relaysMap[url] !== conn || !conn.shouldReconnect) {
+        return { relay: url, ok: false, reason: "disconnected", ts: Date.now() };
+      }
+      const outcome = await new Promise<{ ok: boolean; msg?: any }>((resolve) => {
+        const handler = (res: any) => {
+          if (confirmationTimer !== null) clearTimeout(confirmationTimer);
+          confirmationTimer = null;
+          if (conn.okHandlers.get(id) === handler) conn.okHandlers.delete(id);
+          const ok = !!res.ok;
+          debugLog("publish", ok ? "publish_ok" : "publish_rejected", {
+            ...diagnostic, reason: res.msg,
+          }, ok ? "info" : "warn");
+          resolve({ ok, msg: res.msg });
+        };
+        confirmHandler = handler;
+        conn.okHandlers.set(id, handler);
+        try {
+          const delivery = sendRaw(conn, ["EVENT", event]);
+          if (delivery === "queued") {
+            debugLog("publish", "publish_send_queued", {
+              ...diagnostic, ready: conn.ready, queueLength: conn.queue.length,
+              wsReadyState: conn.ws?.readyState ?? null,
+            }, "warn");
+          }
+        } catch (error) {
+          handler({ ok: false, msg: error instanceof Error ? error.name : "send_failed" });
+          return;
+        }
+        confirmationTimer = setTimeout(() => {
+          if (conn.okHandlers.get(id) !== handler) return;
           conn.okHandlers.delete(id);
+          confirmationTimer = null;
           debugLog("publish", "publish_timeout", {
-            ...diagnostic,
-            ready: conn.ready,
-            queueLength: conn.queue.length,
-            wsReadyState: conn.ws?.readyState ?? null
+            ...diagnostic, ready: conn.ready, queueLength: conn.queue.length,
+            wsReadyState: conn.ws?.readyState ?? null,
           }, "warn");
           resolve({ ok: false, msg: "timeout" });
-        }
-      }, PUBLISH_TIMEOUT);
-    });
-
-    try {
-      const delivery = sendRaw(conn, ["EVENT", event]);
-      if (delivery === "queued") {
-        debugLog("publish", "publish_send_queued", {
-          ...diagnostic,
-          ready: conn.ready,
-          queueLength: conn.queue.length,
-          wsReadyState: conn.ws?.readyState ?? null
-        }, "warn");
-      }
-    } catch (e) {
-      conn.okHandlers.delete(id);
-      debugLog("publish", "publish_rejected", {
-        ...diagnostic,
-        reason: e instanceof Error ? e.name : "send_failed"
-      }, "error");
-      return { relay: url, ok: false, reason: e, ts: Date.now() };
+        }, PUBLISH_TIMEOUT);
+      });
+      return { relay: url, ok: outcome.ok, reason: outcome.msg, ts: Date.now() };
+    } finally {
+      if (confirmationTimer !== null) clearTimeout(confirmationTimer);
+      if (confirmHandler && conn.okHandlers.get(id) === confirmHandler) conn.okHandlers.delete(id);
+      // Cancel queued events on timeout/abort; otherwise an already-failed
+      // event could be silently transmitted by a later unrelated connection.
+      conn.queue = conn.queue.filter(frame => {
+        try {
+          const payload = JSON.parse(frame);
+          return !(payload?.[0] === "EVENT" && payload?.[1]?.id === id);
+        } catch { return true; }
+      });
+      conn.activePublishes = Math.max(0, conn.activePublishes - 1);
+      updateRelayIdleLease(conn);
     }
-
-    const r = await okPromise;
-    conn.queue = conn.queue.filter(message => {
-      try {
-        const payload = JSON.parse(message);
-        return !(payload?.[0] === "EVENT" && payload?.[1]?.id === id);
-      } catch { return true; }
-    });
-    if (conn.subs.size === 0 && conn.okHandlers.size === 0) {
-      conn.shouldReconnect = false;
-      if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
-      conn.reconnectTimer = null;
-      try { conn.ws?.close(); } catch {}
-      delete relaysMap[url];
-    }
-    return { relay: url, ok: !!r.ok, reason: r.msg, ts: Date.now() };
   });
-
   return Promise.all(promises);
 }
 
