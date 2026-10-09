@@ -443,6 +443,39 @@ describe("relay reconnect", () => {
     sub.unsub();
   });
 
+  it("renews a warm socket idle deadline when manual reconnect starts near expiry", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { warmRelays, reconnectRelay, inspectRelays, IDLE_RELAY_TTL_MS } = await import("@/nostr/relays");
+    warmRelays(["wss://renew.test"]);
+    MockWebSocket.instances[0].emit("open", {});
+    await vi.advanceTimersByTimeAsync(IDLE_RELAY_TTL_MS - 100);
+    reconnectRelay("wss://renew.test");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(inspectRelays()["wss://renew.test"].idleExpiresAt).toBe(Date.now() + IDLE_RELAY_TTL_MS);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(inspectRelays()["wss://renew.test"]).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(IDLE_RELAY_TTL_MS);
+    expect(inspectRelays()["wss://renew.test"]).toBeUndefined();
+  });
+
+  it("sends immediately after the socket opens without waiting for a 150ms readiness poll", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { publish, inspectRelays } = await import("@/nostr/relays");
+    const evt = { id: "c".repeat(64), kind: 1059, tags: [["p", "a".repeat(64)]], content: "encrypted" };
+    const sending = publish(["wss://instant.test"], evt);
+    const socket = MockWebSocket.instances[0];
+    socket.emit("open", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.sent.map(x => JSON.parse(x)[0])).toContain("EVENT");
+    expect(inspectRelays()["wss://instant.test"].pendingPublishes).toBe(1);
+    socket.emit("message", { data: JSON.stringify(["OK", evt.id, true, "saved"]) });
+    await expect(sending).resolves.toMatchObject([{ ok: true }]);
+  });
+
   it("account teardown reclaims only unowned sockets and leaves active publishers subscribed or pending", async () => {
     vi.useFakeTimers();
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
