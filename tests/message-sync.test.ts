@@ -524,6 +524,95 @@ describe("relay catch-up", () => {
   });
 });
 
+describe("PR3 interruptible history catch-up", () => {
+  it("runs just one catch-up relay at a time and one page per relay", async () => {
+    const opened: string[] = [];
+    const handlersByRelay = new Map<string, Record<string, Array<(...args: any[]) => void>>>();
+    const subscribeFake = (relays: string[]) => {
+      const relay = relays[0];
+      opened.push(relay);
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      handlersByRelay.set(relay, handlers);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+        },
+        unsub() {},
+      };
+    };
+    const resultPromise = runPagedCatchup({
+      relays: ["wss://a", "wss://b"],
+      filters: [{ until: 200, limit: 1 }],
+      maxBatches: 1,
+      subscribeFn: subscribeFake,
+      isCurrent: () => true,
+      onEvent: async () => {},
+    });
+    expect(opened).toEqual(["wss://a"]);
+    handlersByRelay.get("wss://a")?.event?.forEach(handler => handler({ id: "from-a", created_at: 150 }, "wss://a"));
+    handlersByRelay.get("wss://a")?.eose?.forEach(handler => handler("wss://a"));
+    for (let attempt = 0; attempt < 10 && opened.length < 2; attempt++) await new Promise(resolve => setTimeout(resolve, 0));
+    expect(opened).toEqual(["wss://a", "wss://b"]);
+    handlersByRelay.get("wss://b")?.event?.forEach(handler => handler({ id: "from-b", created_at: 140 }, "wss://b"));
+    handlersByRelay.get("wss://b")?.eose?.forEach(handler => handler("wss://b"));
+    const result = await resultPromise;
+    expect(opened).toEqual(["wss://a", "wss://b"]);
+    expect(result.nextUntilByRelay).toEqual({ "wss://a": 150, "wss://b": 140 });
+    expect(result.hitMaxBatches).toBe(true);
+  });
+
+  it("stops decrypting after abort and does not advance an incomplete page checkpoint", async () => {
+    const controller = new AbortController();
+    const unsub = vi.fn();
+    const processed: string[] = [];
+    const subscribeFake = () => {
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name === "eose") queueMicrotask(() => {
+            for (let index = 0; index < 40; index++) {
+              handlers.event?.forEach(handler => handler({ id: `wrap-${index}`, created_at: 199 - index }, "wss://a"));
+            }
+            callback("wss://a");
+          });
+        },
+        unsub,
+      };
+    };
+    const result = await runPagedCatchup({
+      relays: ["wss://a", "wss://b"],
+      filters: [{ until: 200, limit: 40 }],
+      maxBatches: 1,
+      signal: controller.signal,
+      subscribeFn: subscribeFake,
+      isCurrent: () => true,
+      onEvent: async event => {
+        processed.push(event.id);
+        if (processed.length === 2) controller.abort();
+      },
+    });
+    expect(processed).toEqual(["wrap-0", "wrap-1"]);
+    expect(unsub).toHaveBeenCalledTimes(1);
+    expect(result.aborted).toBe(true);
+    expect(result.incomplete).toBe(true);
+    expect(result.nextUntilByRelay["wss://a"]).toBe(200);
+    expect(result.nextUntilByRelay["wss://b"]).toBeUndefined();
+  });
+
+  it("does not subscribe when a history task has already been aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const subscribeFake = vi.fn();
+    const page = await fetchCatchupPage(
+      ["wss://a"], [{ until: 200 }], 100, subscribeFake, undefined, controller.signal
+    );
+    expect(subscribeFake).not.toHaveBeenCalled();
+    expect(page.aborted).toBe(true);
+    expect(page.allRelaysCompleted).toBe(false);
+  });
+});
+
 describe("message sync session", () => {
   it("does not complete fresh history after partial Relay EOSE and resumes repair later", async () => {
     const repo = new SyncedMessageRepository(database());
