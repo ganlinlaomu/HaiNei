@@ -32,4 +32,6 @@ export type MessageSyncOptions = {
   onMessage?: (message: CanonicalMessage, metadata: MessageIngestionMetadata) => MessageDeliveryResult | Promise<MessageDeliveryResult>;
   onPersistedMessage?: (message: CanonicalMessage, metadata: MessageIngestionMetadata, inserted: boolean) => void | Promise<void>;
   onStatus?: (status: SyncStatus) => void;
+  /** Distinct from a working realtime connection: history may be incomplete. */
+  onCatchupStatus?: (status: "settled" | "pending") => void;
 };
