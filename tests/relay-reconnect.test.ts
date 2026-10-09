@@ -201,6 +201,28 @@ describe("relay reconnect", () => {
     subscription.unsub();
   });
 
+  it("caps repeated retry delays at 60 seconds even with maximum jitter", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.999);
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { subscribe, inspectRelays } = await import("@/nostr/relays");
+    const subscription = subscribe(["wss://backoff-cap.test"], [{ kinds: [1059] }]);
+    // 0.999 yields a 1.2495 jitter multiplier. Later backoff must still
+    // never exceed the 60-second absolute cap.
+    const expectedDelays = [1_250, 2_499, 4_998, 9_995, 19_990, 39_984, 60_000, 60_000];
+    for (const [attempt, delay] of expectedDelays.entries()) {
+      MockWebSocket.instances[attempt].emit("close", {});
+      expect(inspectRelays()["wss://backoff-cap.test"].reconnectAttempts).toBe(attempt + 1);
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(MockWebSocket.instances).toHaveLength(attempt + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(attempt + 2);
+    }
+    subscription.unsub();
+  });
+
   it("does not reconnect while navigator is offline", async () => {
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
     const network = { onLine: true };
