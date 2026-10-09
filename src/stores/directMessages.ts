@@ -1065,7 +1065,12 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     },
     beginReadStateRestore(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
-      if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      // Startup must enter restoring *before* the first local refresh. The
+      // store is not loadedFor the account yet, so requiring that match here
+      // exposes provisional unread badges for a frame during cold login.
+      // Never let another account's asynchronous restore own this state.
+      if (!account || (this.loadedFor && this.loadedFor !== account)
+        || useKeyStore().pkHex.toLowerCase() !== account) return;
       this.readStateRestorePhase = "restoring";
     },
     finishReadStateRestore(accountPubkey: string) {
