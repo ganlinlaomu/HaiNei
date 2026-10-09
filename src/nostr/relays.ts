@@ -824,10 +824,16 @@ export function inspectRelays(): Record<string, RelayRuntimeStatus> {
       ready: r.ready,
       state,
       queueLength: r.queue.length,
-      subs: Array.from(r.subs.keys()).length,
-      okHandlers: Array.from(r.okHandlers.keys()).length,
+      subs: r.subs.size,
+      okHandlers: r.okHandlers.size,
       reconnectAttempts: r.reconnectAttempts,
-      connectStartedAt: r.connectStartedAt
+      connectStartedAt: r.connectStartedAt,
+      usage: r.subs.size ? "subscription" : hasRelayDemand(r) ? "publishing" : "idle",
+      pendingPublishes: r.activePublishes,
+      idleSince: r.idleSince,
+      idleExpiresAt: r.idleExpiresAt,
+      retryAt: r.retryAt,
+      lastDisconnectReason: r.lastDisconnectReason
     };
   }
   return out;
@@ -838,6 +844,9 @@ export function getRelayPerformanceDiagnostics() {
   return {
     activeRelayConnections: states.filter(state => state.ready || state.state === "connecting").length,
     subscriptionCount: states.reduce((sum, state) => sum + state.subs, 0),
+    pendingPublishes: states.reduce((sum, state) => sum + state.pendingPublishes, 0),
+    idleRelayConnections: states.filter(state => state.usage === "idle").length,
+    idleConnectionsReleased,
     reconnectCount: performanceCounters.relayReconnectCount,
     indexedDbQueueSize: performanceCounters.indexedDbQueueSize,
     duplicateEventsDropped: performanceCounters.duplicateEventsDropped,
