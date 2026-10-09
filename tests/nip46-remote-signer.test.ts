@@ -18,6 +18,9 @@ describe("NIP-46 remote signer beta contract", () => {
     expect(login).not.toContain("showRemoteSigner");
     expect(login).not.toContain("Bunker URL / NIP-05");
     expect(login).not.toContain("远程签名器（Beta）");
+    expect(login).toContain('>扫码登录</button>');
+    expect(login).not.toContain("扫描旧设备登录");
+    expect(login).toContain("@click=\"router.push('/device-pair')\"");
     expect(login).toContain("accountCredentialLabel(account.authType, account.credentialMode)");
     expect(runtime).toContain('import.meta.env.VITE_ENABLE_NIP46 === "true"');
     expect(env).toContain("VITE_ENABLE_NIP46?: string");
