@@ -39,6 +39,9 @@ export type AccountSyncKeys = {
 export type AccountMessageSyncSnapshot = {
   accountPubkey: string;
   status: SyncStatus;
+  relay: "idle" | "connecting" | "connected" | "offline";
+  live: "idle" | "subscribing" | "active";
+  catchup: "idle" | "running" | "settled" | "error";
 };
 
 // The account service is the sole owner of the MessageSyncManager lifecycle.
@@ -47,7 +50,8 @@ export type AccountMessageSyncSnapshot = {
 const accountMessageSyncManager = new MessageSyncManager();
 let activeKeys: AccountSyncKeys | null = null;
 let accountSyncGeneration = 0;
-let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle" };
+let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle", relay: "idle", live: "idle", catchup: "idle" };
+let removeAccountRelayObserver: (() => void) | null = null;
 const accountSyncStatusListeners = new Set<(snapshot: AccountMessageSyncSnapshot) => void>();
 let dmRelayHealthUnsubscribe: (() => void) | null = null;
 const DM_RELAY_FAILURE_THRESHOLD = 3;
@@ -165,8 +169,13 @@ onMessageAuthorizationChanged(accountPubkey => {
   });
 });
 
-function setAccountMessageSyncStatus(accountPubkey: string, status: SyncStatus) {
-  accountSyncSnapshot = { accountPubkey: accountPubkey.toLowerCase(), status };
+function setAccountMessageSyncStatus(accountPubkey: string, status: SyncStatus, patch: Partial<Omit<AccountMessageSyncSnapshot, "accountPubkey" | "status">> = {}) {
+  const sameAccount = accountSyncSnapshot.accountPubkey === accountPubkey.toLowerCase();
+  accountSyncSnapshot = {
+    ...(sameAccount ? accountSyncSnapshot : { relay: "idle" as const, live: "idle" as const, catchup: "idle" as const }),
+    ...patch,
+    accountPubkey: accountPubkey.toLowerCase(), status,
+  };
   for (const listener of accountSyncStatusListeners) {
     try {
       listener({ ...accountSyncSnapshot });
@@ -192,6 +201,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
 
   const generation = ++accountSyncGeneration;
   stopDmRelayHealthWatch();
+  removeAccountRelayObserver?.();
+  removeAccountRelayObserver = null;
   activeKeys = keys;
   const isCurrent = () =>
     generation === accountSyncGeneration
@@ -260,6 +271,21 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
     if (!isCurrent()) return false;
     const dmRelays = storedOwnDm.relays.length ? storedOwnDm.relays : selectOwnDmRelays(legacyReadRelays);
     const messageRelays = [...new Set([...dmRelays, ...legacyReadRelays])];
+    // Connectivity is independent of historical repair. Observe first, then
+    // inspect the current pool so already-open sockets are not reported offline.
+    const publishRelaySnapshot = () => {
+      if (!isCurrent()) return;
+      const runtime = inspectRelays();
+      const connected = messageRelays.some(url => runtime[url]?.ready || runtime[url]?.state === "connected");
+      const connecting = messageRelays.some(url => runtime[url]?.state === "connecting" || runtime[url]?.state === "waiting-retry");
+      const relay = connected ? "connected" : connecting ? "connecting" : "offline";
+      if (accountSyncSnapshot.accountPubkey === account && accountSyncSnapshot.relay === relay) return;
+      setAccountMessageSyncStatus(account, accountSyncSnapshot.accountPubkey === account ? accountSyncSnapshot.status : "connecting", { relay });
+    };
+    removeAccountRelayObserver = onRelayConnectionState(event => {
+      if (messageRelays.includes(event.url)) publishRelaySnapshot();
+    });
+    publishRelaySnapshot();
     // All configured read relays remain part of the normal message subscription.
     // The kind 10050 advertisement itself is refreshed only after runtime
     // connectivity is known, so failed read relays are never selected merely
@@ -359,7 +385,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       },
       onStatus: status => {
         if (!isCurrent()) return;
-        setAccountMessageSyncStatus(account, status);
+        setAccountMessageSyncStatus(account, status, {
+          live: status === "connecting" ? "subscribing" : "active",
+          catchup: status === "catching-up" ? "running" : status === "error" ? "error" : status === "live" ? "settled" : accountSyncSnapshot.catchup,
+        });
         if (status === "live") {
           void directMessages.finishHistoryHydration(account, "live").catch(error => {
             console.warn("[dm] startup unread reconciliation failed", error instanceof Error ? error.message : "unknown");
@@ -411,8 +440,10 @@ export function stopAccountMessageSync() {
   const account = activeKeys?.pkHex.toLowerCase() || accountSyncSnapshot.accountPubkey;
   accountSyncGeneration++;
   stopDmRelayHealthWatch();
+  removeAccountRelayObserver?.();
+  removeAccountRelayObserver = null;
   activeKeys = null;
   if (account) cancelDmRelayDirectoryWork(account);
   accountMessageSyncManager.stop();
-  setAccountMessageSyncStatus(account, "idle");
+  setAccountMessageSyncStatus(account, "idle", { relay: "idle", live: "idle", catchup: "idle" });
 }
