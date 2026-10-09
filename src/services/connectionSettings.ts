@@ -97,7 +97,7 @@ export const ACTIVE_RELAY_CONFIGS_KEY = "hainei_active_relay_configs";
 
 export const DEFAULT_RELAY_URLS = [
   "wss://nostr.dzo-hadar.ts.net",
-  "wss://relay.gulugulu.moe"
+  "wss://cloudflare-nostr-relay.noster.workers.dev"
 ] as const;
 
 export const DEFAULT_MEDIA_SERVERS: ReadonlyArray<Pick<MediaServer, "id" | "type" | "url">> = [
@@ -111,7 +111,8 @@ export const DEFAULT_MEDIA_SERVERS: ReadonlyArray<Pick<MediaServer, "id" | "type
 const RETIRED_DEFAULT_RELAY_URLS = new Set([
   "",
   "wss://relay.mostr.pub",
-  "wss://relay.damus.io"
+  "wss://relay.damus.io",
+  "wss://relay.gulugulu.moe"
 ]);
 const RETIRED_DEFAULT_MEDIA = new Set([
   "",
