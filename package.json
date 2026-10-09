@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.41",
-  "releaseSummary": "更新默认 Relay，并将 Google 登录入口改为「使用Google登录」",
+  "version": "0.1.42",
+  "releaseSummary": "私人空间笔记与待办列表支持左滑编辑和删除，删除前确认并可从最近删除恢复",
   "private": true,
   "scripts": {
     "dev": "vite",

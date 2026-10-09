@@ -20,6 +20,12 @@ export function useSwipeActions(options: SwipeActionsOptions = {}) {
     offsets[id] = 0;
   }
 
+  /** Open actions from an accessible button as well as a swipe gesture. */
+  function open(id: string) {
+    closeOthers(id);
+    offsets[id] = -actionWidth;
+  }
+
   function closeOthers(id = "") {
     for (const key of Object.keys(offsets)) {
       if (key !== id && offsets[key]) offsets[key] = 0;
@@ -78,5 +84,5 @@ export function useSwipeActions(options: SwipeActionsOptions = {}) {
     return Boolean(offsets[id]);
   }
 
-  return { close, closeOthers, isOpen, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle };
+  return { close, closeOthers, isOpen, open, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle };
 }

@@ -58,13 +58,35 @@
       <p v-if="loading" class="empty-state">正在读取本地笔记…</p>
       <div v-else-if="!filtered.length" class="empty-state">这里还没有内容。可以新建一条笔记或待办。</div>
       <ul v-else class="items">
-        <li v-for="note in filtered" :key="note.id">
-          <button type="button" class="item" :disabled="backupBusy || !!note.archivedAt || !!note.deletedAt" @click="open(note)">
-            <span class="item-top"><strong>{{ label(note) }}</strong><span v-if="note.pinned">📌</span></span>
-            <span class="preview">{{ note.kind === 'todo' ? progress(note) : privateSpaceDisplay(note).text || (privateSpaceDisplay(note).attachments.length ? '媒体摘录' : '空白笔记') }}</span>
-            <span class="date">{{ note.kind === 'todo' ? '待办' : '笔记' }} · {{ formatted(note.updatedAt) }}</span>
-          </button>
-          <button v-if="note.archivedAt || note.deletedAt" type="button" class="restore-button" @click="restoreNote(note)">恢复</button>
+        <li v-for="note in filtered" :key="note.id" class="private-space-row"
+          :class="{ 'swipe-enabled': canSwipeNote(note) }"
+          @touchstart="canSwipeNote(note) && onNoteTouchStart($event, note.id)"
+          @touchmove="canSwipeNote(note) && onNoteTouchMove($event, note.id)"
+          @touchend="canSwipeNote(note) && onNoteTouchEnd($event, note.id)"
+          @touchcancel="canSwipeNote(note) && onNoteTouchCancel(note.id)">
+          <div v-if="canSwipeNote(note)" class="swipe-actions" role="group"
+            :aria-label="'操作：' + label(note)" :aria-hidden="!isSwipeOpen(note.id)">
+            <button type="button" class="swipe-action edit"
+              :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
+              @click.stop="editFromSwipe(note)">编辑</button>
+            <button type="button" class="swipe-action delete"
+              :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
+              @click.stop="deleteFromSwipe(note)">删除</button>
+          </div>
+          <div class="item-foreground" :style="canSwipeNote(note) ? swipeStyle(note.id) : undefined">
+            <button type="button" class="item"
+              :disabled="backupBusy || editorTransitionBusy || !!rowActionBusyId || !!note.archivedAt || !!note.deletedAt"
+              @click="openFromList(note)">
+              <span class="item-top"><strong>{{ label(note) }}</strong><span v-if="note.pinned">📌</span></span>
+              <span class="preview">{{ note.kind === 'todo' ? progress(note) : privateSpaceDisplay(note).text || (privateSpaceDisplay(note).attachments.length ? '媒体摘录' : '空白笔记') }}</span>
+              <span class="date">{{ note.kind === 'todo' ? '待办' : '笔记' }} · {{ formatted(note.updatedAt) }}</span>
+            </button>
+            <button v-if="canSwipeNote(note)" type="button" class="row-actions-toggle"
+              :disabled="backupBusy || editorTransitionBusy || !!rowActionBusyId"
+              :aria-expanded="isSwipeOpen(note.id)" :aria-label="'显示' + label(note) + '操作'"
+              @click.stop="toggleNoteActions(note.id)">•••</button>
+          </div>
+          <button v-if="note.archivedAt || note.deletedAt" type="button" class="restore-button" :disabled="!!rowActionBusyId" @click="restoreNote(note)">恢复</button>
         </li>
       </ul>
     </template>
@@ -131,6 +153,7 @@ import {
 } from "@/services/privateSpaceBackup";
 import { privateNoteSource } from "@/services/privateSpaceSource";
 import { privateSpaceDisplay } from "@/services/privateSpaceContent";
+import { useSwipeActions } from "@/composables/useSwipeActions";
 import {
   syncPrivateSpace, notePrivateSpaceMutation, getPrivateSpaceSyncState,
   subscribePrivateSpaceSync, setPrivateSpaceEditing, type PrivateSpaceSyncState,
@@ -329,6 +352,12 @@ const notes = ref<PrivateSpaceRecord[]>([]);
 const editor = ref<PrivateSpaceRecord | null>(null);
 const isUnsavedDraft = ref(false);
 const editorTransitionBusy = ref(false);
+const rowActionBusyId = ref("");
+const blockedSwipeClickId = ref("");
+let unblockSwipeClickTimer: ReturnType<typeof setTimeout> | undefined;
+const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, open: openSwipe,
+  onTouchStart, onTouchMove, onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 140, openThreshold: 70 });
+let swipeStart: { id: string; x: number; y: number } | null = null;
 let handlingQuickCreate = false;
 const query = ref("");
 const filter = ref<"all" | "note" | "todo" | "archived" | "trash">("all");
@@ -376,6 +405,86 @@ async function consumeQuickCreate(requested: unknown, duringLoad = false) {
   }
 }
 
+function canSwipeNote(note: PrivateSpaceRecord) {
+  return !note.deletedAt && !note.archivedAt;
+}
+function blockPostSwipeClick(id: string) {
+  blockedSwipeClickId.value = id;
+  if (unblockSwipeClickTimer) clearTimeout(unblockSwipeClickTimer);
+  unblockSwipeClickTimer = setTimeout(() => {
+    blockedSwipeClickId.value = "";
+    unblockSwipeClickTimer = undefined;
+  }, 350);
+}
+function onNoteTouchStart(event: TouchEvent, id: string) {
+  if (backupBusy.value || loading.value || editorTransitionBusy.value || rowActionBusyId.value) return;
+  if (event.touches.length !== 1) return;
+  const touch = event.touches[0];
+  swipeStart = { id, x: touch.clientX, y: touch.clientY };
+  onTouchStart(event, id);
+}
+function onNoteTouchMove(event: TouchEvent, id: string) {
+  if (swipeStart?.id !== id || event.touches.length !== 1) return;
+  onTouchMove(event, id);
+}
+function onNoteTouchEnd(event: TouchEvent, id: string) {
+  if (swipeStart?.id !== id) return;
+  const touch = event.changedTouches[0];
+  if (touch) {
+    const dx = touch.clientX - swipeStart.x;
+    const dy = touch.clientY - swipeStart.y;
+    if (Math.abs(dx) >= 8 && Math.abs(dx) > Math.abs(dy) * 1.2) blockPostSwipeClick(id);
+  }
+  onTouchEnd(id);
+  swipeStart = null;
+}
+function onNoteTouchCancel(id: string) {
+  if (swipeStart?.id !== id) return;
+  onTouchCancel(id);
+  swipeStart = null;
+}
+function closeAllNoteSwipes() {
+  closeOtherSwipes();
+  swipeStart = null;
+}
+function toggleNoteActions(id: string) {
+  if (blockedSwipeClickId.value === id) return;
+  if (isSwipeOpen(id)) closeSwipe(id);
+  else openSwipe(id);
+}
+function openFromList(note: PrivateSpaceRecord) {
+  if (blockedSwipeClickId.value === note.id) return;
+  if (isSwipeOpen(note.id)) { closeSwipe(note.id); return; }
+  void open(note);
+}
+async function editFromSwipe(note: PrivateSpaceRecord) {
+  if (backupBusy.value || editorTransitionBusy.value || rowActionBusyId.value) return;
+  closeAllNoteSwipes();
+  await open(note);
+}
+async function deleteFromSwipe(note: PrivateSpaceRecord) {
+  if (backupBusy.value || loading.value || editorTransitionBusy.value || rowActionBusyId.value || !canSwipeNote(note)) return;
+  if (!window.confirm("将「" + label(note).slice(0, 60) + "」移到最近删除？可以从最近删除中恢复。")) {
+    closeSwipe(note.id);
+    return;
+  }
+  rowActionBusyId.value = note.id;
+  try {
+    const { account, isCurrent } = sessionSnapshot();
+    if (account !== note.accountPubkey || !isCurrent()) return;
+    const current = await privateSpaceRepository.get(account, note.id);
+    if (!isCurrent() || !current || !canSwipeNote(current)) return;
+    const deleted = await privateSpaceRepository.moveToTrash(account, note.id);
+    if (!isCurrent()) return;
+    updateInList(deleted);
+    closeSwipe(note.id);
+    notePrivateSpaceMutation(keys);
+    error.value = "";
+  } catch (cause) {
+    if (keys.isUnlocked && keys.pkHex === note.accountPubkey) handleError(cause);
+  } finally { rowActionBusyId.value = ""; }
+}
+watch([query, filter], closeAllNoteSwipes);
 const filtered = computed(() => {
   const term = query.value.trim().toLocaleLowerCase();
   return notes.value
@@ -406,6 +515,8 @@ function updateInList(record: PrivateSpaceRecord) {
 }
 async function loadForAccount(account: string) {
   const version = ++loadVersion;
+  closeAllNoteSwipes();
+  blockedSwipeClickId.value = "";
   notes.value = [];
   editor.value = null;
   isUnsavedDraft.value = false;
@@ -653,6 +764,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("hainei-private-space-synced", onCloudUpdate);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   if (timer) clearTimeout(timer);
+  if (unblockSwipeClickTimer) clearTimeout(unblockSwipeClickTimer);
+  closeAllNoteSwipes();
 });
 </script>
 
@@ -672,6 +785,17 @@ button{font:inherit;cursor:pointer}
 .tabs button.selected{color:#0f172a;background:#dfe8f4;font-weight:650}
 .items{list-style:none;margin:0;padding:0 14px}
 .items li{border-bottom:1px solid #edf0f2}
+.private-space-row{position:relative;overflow:hidden;background:#fff}
+.private-space-row.swipe-enabled{touch-action:pan-y}
+.swipe-actions{position:absolute;top:0;right:0;bottom:0;width:140px;display:flex}
+.swipe-action{flex:1;min-width:0;border:0;font-size:13px;font-weight:650;color:#fff}
+.swipe-action.edit{background:#536471}
+.swipe-action.delete{background:#dc2626}
+.item-foreground{position:relative;z-index:1;display:flex;align-items:stretch;width:100%;background:#fff;transition:transform .2s ease;will-change:transform}
+.item-foreground .item{flex:1;min-width:0}
+.row-actions-toggle{width:40px;flex:0 0 40px;border:0;background:#fff;color:#64748b;font-size:16px;letter-spacing:1px}
+.swipe-action:focus-visible,.row-actions-toggle:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}
+@media (prefers-reduced-motion:reduce){.item-foreground{transition:none}}
 .restore-button{border:0;background:#f1f5f9;color:#334155;border-radius:7px;padding:7px 12px;margin:0 0 12px 4px;font-size:12px}
 .item{width:100%;display:flex;flex-direction:column;gap:6px;border:0;background:#fff;text-align:left;padding:17px 4px}
 .item-top{display:flex;justify-content:space-between;gap:8px}
