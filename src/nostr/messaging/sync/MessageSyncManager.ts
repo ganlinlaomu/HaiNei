@@ -385,8 +385,13 @@ export class MessageSyncManager {
   private installForegroundHandlers() {
     this.removeForegroundResume?.();
     this.removeForegroundResume = onAppResume(() => {
-      this.resumeRelays(this.activeReadRelays());
-      if (this.options) void this.retryOutgoing(this.options.accountPubkey);
+      const options = this.options;
+      if (!options || !this.sessionId) return;
+      // DM inbox relays may not be part of the ordinary read-relay settings.
+      // Recover exactly the active account's subscriptions alongside read relays.
+      // restoreRelayConnections skips healthy/in-flight sockets itself.
+      this.resumeRelays([...new Set([...options.relays, ...this.activeReadRelays()])]);
+      void this.retryOutgoing(options.accountPubkey);
       void this.resume("resume");
     });
   }
