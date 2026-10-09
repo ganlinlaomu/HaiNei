@@ -276,6 +276,11 @@ export class MessageSyncManager {
   private async runCatchup(source: MessageSource, relayUrl: string | undefined, sessionId: string) {
     const options = this.options;
     if (!options || !this.isCurrent(sessionId, options.accountPubkey) || !this.isForeground()) return;
+    // No configured receiver is not a successful zero-Relay reconciliation.
+    if (!options.relays.length) {
+      await this.setStatus("offline", sessionId);
+      return;
+    }
     if (this.catchupRunning && this.catchupSessionId === sessionId) {
       // A foreground wake during a normally running catch-up needs no extra
       // pass. If background suspension aborted the old pass, queue one resume.
