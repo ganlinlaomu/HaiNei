@@ -245,7 +245,7 @@ function ensureRelayConn(url: string): RelayConn {
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     const attempt = conn.reconnectAttempts++;
     const delay = Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** Math.min(attempt, 6));
-    const jitteredDelay = Math.round(delay * (0.75 + Math.random() * 0.5));
+    const jitteredDelay = Math.min(RECONNECT_CAP_MS, Math.round(delay * (0.75 + Math.random() * 0.5)));
     debugLog("relay", "relay_reconnect_scheduled", {
       relay: url,
       reconnectAttempts: conn.reconnectAttempts,
