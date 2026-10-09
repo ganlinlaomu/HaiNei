@@ -714,6 +714,38 @@ describe("PR4 durable per-Relay reconciliation", () => {
     }
   });
 
+  it("does not claim completion with no configured receiving relays", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const old = 1_900_000_000_000;
+    await repo.updateSyncState(ACCOUNT_A, {
+      historyBackfillStartedAt: old - 1_000,
+      historyBackfillCompletedAt: old,
+      lastCatchupCompletedAt: old,
+    });
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: () => ({ on() {}, unsub() {} }),
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => old + 10_000,
+    });
+    try {
+      await manager.start({
+        accountPubkey: ACCOUNT_A,
+        relays: [],
+        authors: [PEER, ACCOUNT_A],
+        decodeContext: { accountPubkey: ACCOUNT_A },
+      });
+      const state = await repo.getSyncState(ACCOUNT_A);
+      expect(state.lastCatchupCompletedAt).toBe(old);
+      expect(state.incrementalCatchup).toBeUndefined();
+      expect(state.status).toBe("offline");
+    } finally {
+      manager.stop();
+    }
+  });
+
   it("never declares a 500-event identical-second NIP-17 bucket exhausted", async () => {
     let requests = 0;
     const subscribeFake = () => {
