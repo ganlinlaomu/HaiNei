@@ -144,6 +144,28 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it("masks provisional unread before the first local refresh resolves", async () => {
+    const context = seed([dm("first", 5)], relationship("accepted"));
+    expect(context.direct.loadedFor).toBe("");
+    context.direct.unreadByConversation = { [CONVERSATION]: 151 };
+
+    // Cold-start store has no loadedFor yet, but the key account is known.
+    context.direct.beginReadStateRestore(ACCOUNT);
+    expect(context.direct.readStateRestorePhase).toBe("restoring");
+    expect(context.direct.unreadCount).toBe(0);
+    expect(context.direct.visibleUnreadByConversation).toEqual({});
+
+    await context.direct.refresh(ACCOUNT);
+    expect(context.direct.loadedFor).toBe(ACCOUNT);
+    expect(context.direct.unreadCount).toBe(0);
+    expect(context.direct.visibleUnreadByConversation).toEqual({});
+
+    context.direct.finishReadStateRestore(ACCOUNT);
+    expect(context.direct.readStateRestorePhase).toBe("ready");
+    expect(context.direct.unreadCount).toBe(1);
+    expect(context.direct.visibleUnreadByConversation).toEqual({ [CONVERSATION]: 1 });
+  });
+
   it("hides provisional cross-device unread until authoritative account state is restored", async () => {
     const context = seed([dm("first", 5)], relationship("accepted"));
     await context.direct.refresh(ACCOUNT);

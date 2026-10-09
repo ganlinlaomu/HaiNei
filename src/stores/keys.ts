@@ -151,6 +151,9 @@ export const useKeyStore = defineStore("keys", {
       // an account switch can briefly reconnect using the previous account's Relay mirror.
       if (!isCurrent()) return;
       warmReadRelaysForSession(this);
+      // Hide provisional DM unread *before* the first local refresh can paint
+      // a badge. The authoritative read_state is still being restored below.
+      useDirectMessagesStore().beginReadStateRestore(pk);
       // DM read state, notification read state and friendship authorization are
       // startup-critical. Do not let Relay history race ahead of them: otherwise
       // old history is temporarily counted as unread during a new-device login.
@@ -220,11 +223,6 @@ export const useKeyStore = defineStore("keys", {
       const directMessages = useDirectMessagesStore();
       await directMessages.refresh(pk);
       if (!isCurrent()) return;
-      // A new device may have an old/empty local read cursor. Hide that
-      // provisional unread count until cross-device read_state + friendships
-      // have converged, rather than flashing a large false unread badge.
-      directMessages.beginReadStateRestore(pk);
-
       // Network phase: runs after local login has completed. Relay history must
       // still wait for this phase so historical events cannot race an older
       // read cursor or stale friendship authorization.

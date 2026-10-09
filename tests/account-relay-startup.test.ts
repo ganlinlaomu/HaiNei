@@ -16,7 +16,7 @@ describe("account relay startup ordering", () => {
     const criticalRequest = source.indexOf("fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false");
     const criticalNamespaces = source.indexOf('["read_state", "notification_state", "friendships"]');
     const localRefresh = source.indexOf("await directMessages.refresh(pk)");
-    const pendingUnread = source.indexOf("directMessages.beginReadStateRestore(pk)");
+    const pendingUnread = source.indexOf("useDirectMessagesStore().beginReadStateRestore(pk)");
     const remoteWait = source.indexOf("const criticalState = await criticalStateRestore");
     const authoritativeRefresh = source.indexOf("await directMessages.refresh(pk)", localRefresh + 1);
     const notificationRefresh = source.indexOf("await useNotificationsStore().refreshSyncedState(pk)");
@@ -26,8 +26,12 @@ describe("account relay startup ordering", () => {
     expect(criticalRequest).toBeGreaterThan(-1);
     expect(criticalNamespaces).toBeGreaterThan(-1);
     expect(localRefresh).toBeGreaterThan(criticalRequest);
-    expect(pendingUnread).toBeGreaterThan(localRefresh);
-    expect(remoteWait).toBeGreaterThan(pendingUnread);
+    // The first refresh calculates durable local unread asynchronously.
+    // The badge must be suppressed BEFORE that refresh can render.
+    expect(pendingUnread).toBeGreaterThan(source.indexOf("warmReadRelaysForSession(this)"));
+    expect(pendingUnread).toBeLessThan(criticalRequest);
+    expect(pendingUnread).toBeLessThan(localRefresh);
+    expect(remoteWait).toBeGreaterThan(localRefresh);
     expect(notificationRefresh).toBeGreaterThan(remoteWait);
     expect(notificationRefresh).toBeLessThan(authoritativeRefresh);
     expect(authoritativeRefresh).toBeGreaterThan(remoteWait);
