@@ -20,6 +20,8 @@ export type RelayCatchupProgress = {
   naturalEnd: boolean;
   hitMaxBatches: boolean;
   incomplete: boolean;
+  /** Full timestamp bucket cannot be paged safely with NIP-01 until alone. */
+  paginationStalled?: boolean;
 };
 
 export type SubscribeForCatchup = (relays: string[], filters: any[]) => SubscriptionLike;
@@ -153,6 +155,7 @@ export async function runPagedCatchup(options: {
   let allRelaysCompleted = true;
   let timedOut = false;
   let aborted = false;
+  let paginationStalled = false;
   const maxBatches = Math.max(1, options.maxBatches ?? 100);
   const canContinue = () => options.isCurrent() && !options.signal?.aborted;
   const relayProgress: Record<string, RelayCatchupProgress> = {};
@@ -163,6 +166,7 @@ export async function runPagedCatchup(options: {
     let naturalEnd = false;
     let batches = 0;
     let relayIncomplete = false;
+    let relayPaginationStalled = false;
 
     for (let batch = 0; batch < maxBatches && canContinue(); batch++) {
       batches++;
@@ -220,11 +224,26 @@ export async function runPagedCatchup(options: {
       }
 
       if (oldest === undefined) { naturalEnd = true; break; }
-      const didNotAdvance = currentUntil !== undefined && oldest === currentUntil;
-      if (didNotAdvance && newUnique === 0) { naturalEnd = true; break; }
-      currentUntil = oldest;
       const pageLimit = Math.max(...pageFilters.map(filter => Number(filter.limit || 0)));
-      if (!pageLimit || page.events.length < pageLimit) { naturalEnd = true; break; }
+      const fullPage = pageLimit > 0 && page.events.length >= pageLimit;
+      // NIP-01 until is inclusive and has no ID tie-breaker. When a full
+      // page's oldest timestamp equals the requested boundary, a second
+      // request can return the same IDs forever and still hide other events
+      // from that very second. Never interpret this as history completion or
+      // skip to until-1 (which would silently lose those events).
+      if (fullPage && currentUntil !== undefined && oldest >= currentUntil) {
+        relayIncomplete = true;
+        relayPaginationStalled = true;
+        paginationStalled = true;
+        logger.warn(`[message-sync] timestamp pagination stalled relay=${relay} until=${currentUntil}`);
+        break;
+      }
+      if (currentUntil !== undefined && oldest === currentUntil && newUnique === 0) {
+        naturalEnd = true;
+        break;
+      }
+      currentUntil = oldest;
+      if (!fullPage) { naturalEnd = true; break; }
     }
 
     const hitMaxBatches = !naturalEnd && batches >= maxBatches;
@@ -233,6 +252,7 @@ export async function runPagedCatchup(options: {
       naturalEnd,
       hitMaxBatches,
       incomplete: relayIncomplete || !canContinue(),
+      paginationStalled: relayPaginationStalled,
     };
   };
 
@@ -252,6 +272,7 @@ export async function runPagedCatchup(options: {
   const incomplete = aborted
     || !!options.signal?.aborted
     || timedOut
+    || paginationStalled
     || failedRelays.size > 0
     || !allRelaysCompleted
     || progress.some(item => item.incomplete)
@@ -275,6 +296,7 @@ export async function runPagedCatchup(options: {
     relayProgress,
     timedOut,
     aborted: aborted || !!options.signal?.aborted,
+    paginationStalled,
     incomplete,
   };
 }
