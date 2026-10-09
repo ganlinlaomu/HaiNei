@@ -1,5 +1,5 @@
 import type { NostrEvent } from "nostr-tools";
-import type { IncrementalCatchupCheckpoint, RelaySyncStateRecord } from "@/db/dexie";
+import type { IncrementalCatchupCheckpoint, MessageSyncStateRecord, RelaySyncStateRecord } from "@/db/dexie";
 import { getRelaysFromStorage, inspectRelays, onRelayConnectionState, restoreRelayConnections, type RelayConnectionEvent } from "@/nostr/relays";
 import { nostrClient } from "@/services/nostrClient";
 import { buildMessageSubscriptions } from "@/nostr/messaging/subscriptions";
@@ -384,37 +384,38 @@ export class MessageSyncManager {
         }
         const completedAt = this.now();
         const completedFreshHistory = freshHistoryRepair
+          && !relayUrl // One Relay's EOSE cannot finalize initial history for every Relay.
           && result.allRelaysCompleted
           && result.exhaustedHistory
           && !result.hitMaxBatches
           && !result.incomplete;
-        // Preserve one-page incremental cursors across idle slices. An EOSE
-        // on a full limited page is NOT completion of the full catch-up.
-        const remainingIncremental = { ...(continuation?.untilByRelay || {}) };
+
+        // A checkpoint describes a fixed, bounded reconciliation window.
+        // Every configured Relay has its own pending inclusive timestamp.
+        // A failed/stalled page stays pending; only a fully processed page may
+        // advance its cursor, and only natural end establishes coverage.
+        const pending = { ...(checkpoint?.pendingUntilByRelay || {}) };
+        const completed = new Set(checkpoint?.completedRelays || []);
         if (!freshHistoryRepair) {
           for (const [url, progress] of Object.entries(result.relayProgress)) {
-            if (progress.hitMaxBatches && !progress.incomplete && typeof progress.nextUntil === "number") {
-              remainingIncremental[url] = progress.nextUntil;
-            } else if (progress.naturalEnd && !progress.incomplete) {
-              delete remainingIncremental[url];
+            if (progress.naturalEnd && !progress.incomplete) {
+              delete pending[url];
+              completed.add(url);
+            } else if (!progress.incomplete && typeof progress.nextUntil === "number") {
+              pending[url] = progress.nextUntil;
             }
           }
-          this.incrementalContinuation = Object.keys(remainingIncremental).length
-            ? { sessionId, since, untilByRelay: remainingIncremental }
-            : null;
         }
-        const completedIncremental = !freshHistoryRepair
-          && result.allRelaysCompleted
+        const completedIncremental = !freshHistoryRepair && !!checkpoint
           && !result.incomplete
-          && !result.hitMaxBatches
-          && Object.keys(remainingIncremental).length === 0;
-        const completedRelaySetUpdate = completedIncremental;
-        const completedRelaySignature = relayUrl
-          ? [...new Set([...previousRelaySet, relayUrl])]
-              .filter(url => options.relays.includes(url))
-              .sort()
-              .join("|")
-          : currentRelaySignature;
+          && Object.keys(pending).length === 0
+          && checkpoint.requiredRelays.every(url => completed.has(url));
+        const fullAccountCoverage = completedIncremental && !!checkpoint
+          && checkpoint.requiredRelays.length === options.relays.length
+          && options.relays.every(url => completed.has(url));
+        const completedRelaySignature = [...new Set([...previousRelaySet, ...completed])]
+          .filter(url => options.relays.includes(url)).sort().join("|");
+
         const resumableHistoryCursor = freshHistoryRepair
           && !result.incomplete
           && result.hitMaxBatches
@@ -423,10 +424,14 @@ export class MessageSyncManager {
             ? result.nextUntil
             : undefined;
 
-        const syncStatePatch: Record<string, number | string | undefined> = {};
-        if (completedFreshHistory || completedIncremental) {
-          syncStatePatch.lastSuccessfulSyncAt = completedAt;
-          syncStatePatch.lastCatchupCompletedAt = completedAt;
+        const syncStatePatch: Partial<MessageSyncStateRecord> = {};
+        if (completedFreshHistory || fullAccountCoverage) {
+          // A continuation may finish much later than the initial query.
+          // The completed frontier is the ORIGINAL query's upper bound, not
+          // today's clock: the interval since then still needs checking.
+          const coveredAt = completedFreshHistory ? completedAt : checkpoint!.until * 1000;
+          syncStatePatch.lastSuccessfulSyncAt = Math.max(state.lastSuccessfulSyncAt || 0, coveredAt);
+          syncStatePatch.lastCatchupCompletedAt = Math.max(state.lastCatchupCompletedAt || 0, coveredAt);
         }
         if (completedFreshHistory) {
           syncStatePatch.historyBackfillCompletedAt = completedAt;
@@ -434,34 +439,53 @@ export class MessageSyncManager {
           syncStatePatch.historyBackfillRelaySignature = currentRelaySignature;
         } else if (resumableHistoryCursor !== undefined) {
           syncStatePatch.historyBackfillUntil = resumableHistoryCursor;
-        } else if (completedRelaySetUpdate) {
-          syncStatePatch.historyBackfillRelaySignature = completedRelaySignature;
         }
-        if (catchupAbortController.signal.aborted || !this.isForeground()) return;
-        if (Object.keys(syncStatePatch).length > 0) {
-          await this.repository.updateSyncState(options.accountPubkey, syncStatePatch);
+        if (!freshHistoryRepair && checkpoint) {
+          // Undefined clears stale checkpoint data in the same atomic commit
+          // that records the newly confirmed completion frontier.
+          syncStatePatch.incrementalCatchup = completedIncremental ? undefined : {
+            ...checkpoint,
+            pendingUntilByRelay: pending,
+            completedRelays: [...completed].sort(),
+          };
+          if (completedIncremental && state.historyBackfillCompletedAt) {
+            syncStatePatch.historyBackfillRelaySignature = completedRelaySignature;
+          }
         }
 
+        const relayPatches: Record<string, Partial<RelaySyncStateRecord>> = {};
         for (const completedRelay of result.completedRelays) {
-          if (catchupAbortController.signal.aborted || !this.isForeground()) return;
           const progress = result.relayProgress[completedRelay];
-          await this.repository.updateRelayState(options.accountPubkey, completedRelay, {
+          relayPatches[completedRelay] = {
             lastEOSEAt: completedAt,
             ...(freshHistoryRepair && progress?.naturalEnd && !progress.incomplete
               ? { historyBackfillCompletedAt: completedAt, historyBackfillUntil: undefined }
-              : freshHistoryRepair && typeof progress?.nextUntil === "number"
+              : freshHistoryRepair && typeof progress?.nextUntil === "number" && !progress.incomplete
                 ? { historyBackfillUntil: progress.nextUntil }
                 : {}),
-            ...((completedFreshHistory || completedIncremental)
-              ? { lastSuccessfulCatchupAt: completedAt }
-              : {})
-          });
+            ...(!freshHistoryRepair && progress?.naturalEnd && !progress.incomplete
+              ? { lastSuccessfulCatchupAt: Math.max(
+                  state.relayStates[completedRelay]?.lastSuccessfulCatchupAt || 0,
+                  checkpoint!.until * 1000,
+                ) }
+              : completedFreshHistory
+                ? { lastSuccessfulCatchupAt: completedAt }
+                : {}),
+          };
+        }
+        if (catchupAbortController.signal.aborted || !this.isForeground()) return;
+        // Persist both checkpoint and relay EOSE markers atomically, scoped to
+        // the active account. Reprocessing after a crash is harmless.
+        if (Object.keys(syncStatePatch).length || Object.keys(relayPatches).length) {
+          await this.repository.commitCatchupProgress(options.accountPubkey, syncStatePatch, relayPatches);
         }
         if (result.incomplete) {
-          logger.warn(`[message-sync] catch-up incomplete account=${options.accountPubkey.slice(0, 8)} phase=${activeSource} failed=${[...result.failedRelays.entries()].map(([url, reason]) => `${url}:${reason}`).join(",") || (result.timedOut ? "timeout" : result.aborted ? "aborted" : "partial")}`);
+          logger.warn(`[message-sync] catch-up incomplete account=${options.accountPubkey.slice(0, 8)} phase=${activeSource} failed=${[...result.failedRelays.entries()].map(([url, reason]) => `${url}:${reason}`).join(",") || (result.paginationStalled ? "timestamp-pagination-stalled" : result.timedOut ? "timeout" : result.aborted ? "aborted" : "partial")}`);
         }
         logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} phase=${activeSource} received=${result.received} unique=${result.unique}`);
-        if (!result.incomplete && (result.hitMaxBatches || Object.keys(remainingIncremental).length > 0)) {
+        // Continue only safe completed pages in the PR3 idle scheduler.
+        // Failed/stalled pages need a later recovery/manual attempt.
+        if (!result.incomplete && (freshHistoryRepair && result.hitMaxBatches || !freshHistoryRepair && Object.keys(pending).length > 0)) {
           this.scheduleIdleContinuation(sessionId, options.accountPubkey);
         } else if (completedIncremental || completedFreshHistory) {
           this.clearIdleContinuation();
