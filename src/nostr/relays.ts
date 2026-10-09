@@ -36,8 +36,10 @@ type RelayConn = {
   connectTimer?: number | null;
   sessionRefreshTimer?: number | null;
   connecting: boolean;
+  generation: number;
   reconnectAttempts: number;
   hasConnected: boolean;
+  connectedAt: number;
   shouldReconnect: boolean;
   connectStartedAt: number;
   connect: () => void;
@@ -46,8 +48,9 @@ type RelayConn = {
 const CONNECT_TIMEOUT = 4000;
 const CONNECTION_OPEN_TIMEOUT = 10_000;
 const PUBLISH_TIMEOUT = 5000;
-const RECONNECT_DELAYS = [1_000, 2_000];
-const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_CAP_MS = 60_000;
+const RECONNECT_STABLE_MS = 30_000;
 const EOSE_TIMEOUT = 8_000;
 
 const relaysMap: Record<string, RelayConn> = {};
@@ -224,8 +227,10 @@ function ensureRelayConn(url: string): RelayConn {
     connectTimer: null,
     sessionRefreshTimer: null,
     connecting: false,
+    generation: 0,
     reconnectAttempts: 0,
     hasConnected: false,
+    connectedAt: 0,
     shouldReconnect: true,
     connectStartedAt: Date.now(),
     connect: () => undefined
@@ -235,21 +240,22 @@ function ensureRelayConn(url: string): RelayConn {
   const scheduleReconnect = (create: () => void) => {
     if (!conn.shouldReconnect) return;
     const hasDemand = conn.subs.size > 0 || conn.okHandlers.size > 0 || conn.queue.length > 0;
-    if (!hasDemand || conn.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return;
+    if (!hasDemand) return;
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     const attempt = conn.reconnectAttempts++;
-    const delay = RECONNECT_DELAYS[Math.min(attempt, RECONNECT_DELAYS.length - 1)];
+    const delay = Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** Math.min(attempt, 6));
+    const jitteredDelay = Math.min(RECONNECT_CAP_MS, Math.round(delay * (0.75 + Math.random() * 0.5)));
     debugLog("relay", "relay_reconnect_scheduled", {
       relay: url,
       reconnectAttempts: conn.reconnectAttempts,
-      delayMs: delay
+      delayMs: jitteredDelay
     }, "warn");
     conn.reconnectTimer = window.setTimeout(() => {
       conn.reconnectTimer = null;
       performanceCounters.relayReconnectCount++;
       create();
-    }, delay);
+    }, jitteredDelay);
   };
 
   const create = async () => {
@@ -257,13 +263,14 @@ function ensureRelayConn(url: string): RelayConn {
     if (conn.connecting || conn.ws?.readyState === 0 || conn.ws?.readyState === 1) return;
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     conn.connecting = true;
+    const generation = ++conn.generation;
     debugLog("relay", "relay_connecting", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "info");
     try {
       const managedSession = managedRelayUrlFromCache() === url
         ? await getManagedRelaySessionForUrl(url)
         : null;
-      if (!conn.shouldReconnect || conn.ws?.readyState === 0 || conn.ws?.readyState === 1) {
-        conn.connecting = false;
+      if (generation !== conn.generation || !conn.shouldReconnect || conn.ws?.readyState === 0 || conn.ws?.readyState === 1) {
+        if (generation === conn.generation) conn.connecting = false;
         return;
       }
       const ws = managedSession
@@ -285,13 +292,14 @@ function ensureRelayConn(url: string): RelayConn {
       }, CONNECTION_OPEN_TIMEOUT);
 
       const onOpen = () => {
+        if (conn.ws !== ws || generation !== conn.generation) return;
         if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
         conn.connectTimer = null;
         const reconnected = conn.hasConnected;
         const reconnectAttempts = conn.reconnectAttempts;
         conn.ready = true;
         conn.hasConnected = true;
-        conn.reconnectAttempts = 0;
+        conn.connectedAt = Date.now();
         if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
         conn.sessionRefreshTimer = null;
         if (managedSession) {
@@ -336,6 +344,7 @@ function ensureRelayConn(url: string): RelayConn {
       };
 
       const onMessage = (ev: MessageEvent) => {
+        if (conn.ws !== ws || generation !== conn.generation) return;
         let data: any;
         try { data = JSON.parse(ev.data); } catch { return; }
         if (!Array.isArray(data) || data.length === 0) return;
@@ -391,12 +400,18 @@ function ensureRelayConn(url: string): RelayConn {
       };
 
       const onClose = () => {
-        if (conn.ws !== ws) return;
+        if (conn.ws !== ws || generation !== conn.generation) return;
         if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
         conn.connectTimer = null;
         conn.ready = false;
         conn.ws = null;
         conn.connecting = false;
+        // A socket that flaps immediately after OPEN must not reset backoff.
+        // Reset only after a stable connection, limiting rapid battery-draining loops.
+        if (conn.connectedAt && Date.now() - conn.connectedAt >= RECONNECT_STABLE_MS) {
+          conn.reconnectAttempts = 0;
+        }
+        conn.connectedAt = 0;
         if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
         conn.sessionRefreshTimer = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
@@ -416,6 +431,7 @@ function ensureRelayConn(url: string): RelayConn {
       };
 
       const onError = () => {
+        if (conn.ws !== ws || generation !== conn.generation) return;
         debugLog("relay", "relay_error", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "error");
       };
 
@@ -424,6 +440,7 @@ function ensureRelayConn(url: string): RelayConn {
       ws.addEventListener("close", onClose);
       ws.addEventListener("error", onError);
     } catch (e) {
+      if (generation !== conn.generation) return;
       conn.connecting = false;
       debugLog("relay", "relay_error", {
         relay: url,
@@ -456,7 +473,6 @@ export function warmRelays(relays: string[]) {
     if (!existing || conn.ready || conn.connecting || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
-    conn.reconnectAttempts = 0;
     conn.shouldReconnect = true;
     conn.connect();
   }
@@ -531,18 +547,43 @@ export function subscribe(relays: string[], filtersArray: any[]) {
         clearTimeout(timer);
         const conn = relaysMap[url];
         if (!conn) continue;
-        try { sendRaw(conn, ["CLOSE", subId]); } catch {}
+        if (!conn.subs.has(subId)) continue;
+        // A disconnected relay has never seen pending REQs on its next socket.
+        // Remove only this subscription's queued frames; do not carry orphan
+        // REQs/CLOSEs into a newly opened connection.
+        conn.queue = conn.queue.filter(message => {
+          try {
+            const frame = JSON.parse(message);
+            return !(Array.isArray(frame) && frame[1] === subId && (frame[0] === "REQ" || frame[0] === "CLOSE"));
+          } catch { return true; }
+        });
+        if (conn.ready && conn.ws?.readyState === 1) {
+          try { conn.ws.send(JSON.stringify(["CLOSE", subId])); } catch {
+            // The socket is closing; its subscriptions disappear with it.
+          }
+        }
         debugLog("subscription", "subscription_closed", subscriptionDiagnostic(conn, subId), "info");
         conn.subs.delete(subId);
         if (conn.subs.size === 0 && conn.okHandlers.size === 0) {
           conn.shouldReconnect = false;
+          conn.generation++;
           if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+          if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
+          if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
           conn.reconnectTimer = null;
+          conn.connectTimer = null;
+          conn.sessionRefreshTimer = null;
+          conn.connecting = false;
+          const wasReady = conn.ready;
+          const socket = conn.ws;
+          conn.ws = null;
+          conn.ready = false;
           conn.queue = conn.queue.filter(message => {
             try { return JSON.parse(message)?.[0] !== "REQ"; } catch { return true; }
           });
-          try { conn.ws?.close(); } catch {}
+          try { socket?.close(); } catch {}
           delete relaysMap[url];
+          if (wasReady) emitConnectionState({ url, connected: false, reconnected: conn.hasConnected, failed: false, at: Date.now() });
         }
       }
     }
@@ -702,6 +743,7 @@ export function reconnectRelay(url: string) {
   try {
     const subscriptions = r.subs;
     r.shouldReconnect = false;
+    r.generation++;
     if (r.reconnectTimer) window.clearTimeout(r.reconnectTimer);
     if (r.connectTimer) window.clearTimeout(r.connectTimer);
     if (r.sessionRefreshTimer) window.clearTimeout(r.sessionRefreshTimer);
@@ -732,6 +774,7 @@ export function disconnectRelay(url: string) {
   const conn = relaysMap[url];
   if (!conn) return;
   conn.shouldReconnect = false;
+  conn.generation++;
   if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
   if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
   if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
@@ -786,7 +829,6 @@ export function restoreRelayConnections(relays = getRelaysFromStorage("read")) {
     if (conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
-    conn.reconnectAttempts = 0;
     conn.shouldReconnect = true;
     conn.connect();
   }

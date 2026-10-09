@@ -233,14 +233,22 @@ it("coalesces an iOS foreground event burst into one shared resume dispatch", as
     win.dispatchEvent(new Event("focus"));
     win.dispatchEvent(new Event("pageshow"));
     doc.dispatchEvent(new Event("visibilitychange"));
-    win.dispatchEvent(new Event("online"));
     await Promise.resolve();
     expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith("focus");
+
+    // Online means the network recovered after the foreground probe; it
+    // must not be swallowed by the iOS event-burst coalescing window.
+    win.dispatchEvent(new Event("online"));
+    win.dispatchEvent(new Event("online"));
+    await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenLastCalledWith("online");
 
     await vi.advanceTimersByTimeAsync(1_001);
     win.dispatchEvent(new Event("online"));
     await Promise.resolve();
-    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenCalledTimes(3);
   } finally {
     stop();
     resetAppResumeCoordinatorForTests();

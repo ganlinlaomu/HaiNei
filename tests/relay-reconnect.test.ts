@@ -25,6 +25,7 @@ class MockWebSocket {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.resetModules();
   MockWebSocket.instances = [];
@@ -50,8 +51,9 @@ describe("relay reconnect", () => {
     expect(MockWebSocket.instances).toHaveLength(1);
   });
 
-  it("foreground immediately resets exhausted retries and preserves one subscription", async () => {
+  it("foreground restores a failed relay without duplicate sockets or losing subscriptions", async () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
     Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
@@ -59,16 +61,165 @@ describe("relay reconnect", () => {
     const subscription = subscribe(["wss://exhausted.test"], [{ kinds: [1059] }]);
     MockWebSocket.instances[0].emit("close", {});
     await vi.advanceTimersByTimeAsync(1_000);
+    expect(MockWebSocket.instances).toHaveLength(2);
     MockWebSocket.instances[1].emit("close", {});
-    await vi.advanceTimersByTimeAsync(2_000);
-    MockWebSocket.instances[2].emit("close", {});
-    await vi.advanceTimersByTimeAsync(2_000);
-    MockWebSocket.instances[3].emit("close", {});
-    expect(inspectRelays()["wss://exhausted.test"]).toMatchObject({ state: "disconnected", reconnectAttempts: 3, subs: 1 });
-
+    expect(inspectRelays()["wss://exhausted.test"]).toMatchObject({ state: "waiting-retry", reconnectAttempts: 2, subs: 1 });
     restoreRelayConnections(["wss://exhausted.test"]);
-    expect(MockWebSocket.instances).toHaveLength(5);
-    expect(inspectRelays()["wss://exhausted.test"]).toMatchObject({ state: "connecting", reconnectAttempts: 0, subs: 1 });
+    restoreRelayConnections(["wss://exhausted.test"]);
+    expect(MockWebSocket.instances).toHaveLength(3);
+    expect(inspectRelays()["wss://exhausted.test"]).toMatchObject({ state: "connecting", reconnectAttempts: 2, subs: 1 });
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(MockWebSocket.instances).toHaveLength(3);
+    subscription.unsub();
+    vi.restoreAllMocks();
+  });
+
+  it("does not flush an unsubscribed REQ when another subscription remains", async () => {
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { subscribe, inspectRelays } = await import("@/nostr/relays");
+    const removed = subscribe(["wss://queued.test"], [{ kinds: [1] }]);
+    const retained = subscribe(["wss://queued.test"], [{ kinds: [1059] }]);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    removed.unsub();
+    const socket = MockWebSocket.instances[0];
+    socket.emit("open", {});
+    const requests = socket.sent.map(item => JSON.parse(item)).filter(item => item[0] === "REQ");
+    expect(requests).toHaveLength(1);
+    expect(requests[0][2]).toMatchObject({ kinds: [1059] });
+    expect(inspectRelays()["wss://queued.test"].subs).toBe(1);
+    retained.unsub();
+  });
+
+  it("ignores late open and message events from a disposed socket", async () => {
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { subscribe, inspectRelays } = await import("@/nostr/relays");
+    const oldSubscription = subscribe(["wss://replace.test"], [{ kinds: [1] }]);
+    const staleSocket = MockWebSocket.instances[0];
+    oldSubscription.unsub();
+    const eventReceived = vi.fn();
+    const currentSubscription = subscribe(["wss://replace.test"], [{ kinds: [1059] }]);
+    currentSubscription.on("event", eventReceived);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    staleSocket.emit("open", {});
+    staleSocket.emit("message", { data: JSON.stringify(["EVENT", "obsolete", { id: "x" }]) });
+    expect(inspectRelays()["wss://replace.test"].state).toBe("connecting");
+    expect(staleSocket.sent).toHaveLength(0);
+    expect(eventReceived).not.toHaveBeenCalled();
+    const activeSocket = MockWebSocket.instances[1];
+    activeSocket.emit("open", {});
+    expect(inspectRelays()["wss://replace.test"].state).toBe("connected");
+    expect(activeSocket.sent.map(item => JSON.parse(item)).filter(item => item[0] === "REQ")).toHaveLength(1);
+    currentSubscription.unsub();
+  });
+
+  it("rejects a late open after connection timeout then replays the active REQ on a fresh socket", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { subscribe, inspectRelays } = await import("@/nostr/relays");
+    const subscription = subscribe(["wss://timeout.test"], [{ kinds: [1059] }]);
+    const first = MockWebSocket.instances[0];
+    first.emit("open", {});
+    const firstReq = first.sent.map(item => JSON.parse(item)).find(item => item[0] === "REQ");
+    first.emit("close", {});
+    await vi.advanceTimersByTimeAsync(1_000);
+    const timedOut = MockWebSocket.instances[1];
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(inspectRelays()["wss://timeout.test"].state).toBe("waiting-retry");
+    timedOut.emit("open", {});
+    expect(inspectRelays()["wss://timeout.test"].state).toBe("waiting-retry");
+    expect(timedOut.sent.filter(item => JSON.parse(item)[0] === "REQ")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const third = MockWebSocket.instances[2];
+    expect(third).toBeTruthy();
+    third.emit("open", {});
+    const replay = third.sent.map(item => JSON.parse(item)).filter(item => item[0] === "REQ");
+    expect(replay).toHaveLength(1);
+    expect(replay[0][1]).toBe(firstReq[1]);
+    expect(inspectRelays()["wss://timeout.test"].state).toBe("connected");
+    subscription.unsub();
+  });
+
+  it("preserves the REQ id across forced reconnect without accepting events from the replaced socket", async () => {
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { subscribe, reconnectRelay, inspectRelays } = await import("@/nostr/relays");
+    const onEvent = vi.fn();
+    const subscription = subscribe(["wss://forced.test"], [{ kinds: [1059] }]);
+    subscription.on("event", onEvent);
+    const old = MockWebSocket.instances[0];
+    old.emit("open", {});
+    const initial = old.sent.map(item => JSON.parse(item)).find(item => item[0] === "REQ");
+    reconnectRelay("wss://forced.test");
+    expect(MockWebSocket.instances).toHaveLength(2);
+    old.emit("open", {});
+    expect(inspectRelays()["wss://forced.test"].state).toBe("connecting");
+    const current = MockWebSocket.instances[1];
+    current.emit("open", {});
+    const frames = current.sent.map(item => JSON.parse(item)).filter(item => item[0] === "REQ");
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toEqual(initial);
+    old.emit("message", { data: JSON.stringify(["EVENT", initial[1], { id: "stale" }]) });
+    expect(onEvent).not.toHaveBeenCalled();
+    current.emit("message", { data: JSON.stringify(["EVENT", initial[1], { id: "current" }]) });
+    expect(onEvent).toHaveBeenCalledOnce();
+    subscription.unsub();
+  });
+
+  it("backs off progressively on flapping sockets and resets after a stable connection", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { subscribe, inspectRelays } = await import("@/nostr/relays");
+    const subscription = subscribe(["wss://flap.test"], [{ kinds: [1059] }]);
+    const first = MockWebSocket.instances[0];
+    first.emit("open", {});
+    first.emit("close", {});
+    expect(inspectRelays()["wss://flap.test"].reconnectAttempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const second = MockWebSocket.instances[1];
+    second.emit("open", {});
+    second.emit("close", {});
+    expect(inspectRelays()["wss://flap.test"].reconnectAttempts).toBe(2);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    const third = MockWebSocket.instances[2];
+    third.emit("open", {});
+    await vi.advanceTimersByTimeAsync(30_001);
+    third.emit("close", {});
+    expect(inspectRelays()["wss://flap.test"].reconnectAttempts).toBe(1);
+    subscription.unsub();
+  });
+
+  it("caps repeated retry delays at 60 seconds even with maximum jitter", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.999);
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { subscribe, inspectRelays } = await import("@/nostr/relays");
+    const subscription = subscribe(["wss://backoff-cap.test"], [{ kinds: [1059] }]);
+    // 0.999 yields a 1.2495 jitter multiplier. Later backoff must still
+    // never exceed the 60-second absolute cap.
+    const expectedDelays = [1_250, 2_499, 4_998, 9_996, 19_992, 39_984, 60_000, 60_000];
+    for (const [attempt, delay] of expectedDelays.entries()) {
+      MockWebSocket.instances[attempt].emit("close", {});
+      expect(inspectRelays()["wss://backoff-cap.test"].reconnectAttempts).toBe(attempt + 1);
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(MockWebSocket.instances).toHaveLength(attempt + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(attempt + 2);
+    }
     subscription.unsub();
   });
 
@@ -199,6 +350,7 @@ describe("relay reconnect", () => {
 
   it("replays active REQ with the original subscription id", async () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -211,13 +363,22 @@ describe("relay reconnect", () => {
     const firstRequest = JSON.parse(first.sent.find(payload => JSON.parse(payload)[0] === "REQ")!);
 
     first.emit("close", {});
-    await vi.advanceTimersByTimeAsync(30_100);
+    // Reconnect uses a 1-second first retry with deterministic jitter.
+    // Do not advance past the 10-second connection-open deadline before opening it.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(MockWebSocket.instances).toHaveLength(2);
     const second = MockWebSocket.instances[1];
-    expect(second).toBeTruthy();
     second.emit("open", {});
-    const replay = JSON.parse(second.sent.find(payload => JSON.parse(payload)[0] === "REQ")!);
+    const replayPayload = second.sent.find(payload => JSON.parse(payload)[0] === "REQ");
+    expect(replayPayload).toBeDefined();
+    const replay = JSON.parse(replayPayload!);
     expect(replay[1]).toBe(firstRequest[1]);
     expect(replay.slice(2)).toEqual(firstRequest.slice(2));
+    expect(second.sent.filter(payload => JSON.parse(payload)[0] === "REQ")).toHaveLength(1);
+    // A late event from the closed socket must never revive the old generation.
+    first.emit("open", {});
+    expect(second.sent.filter(payload => JSON.parse(payload)[0] === "REQ")).toHaveLength(1);
     subscription.unsub();
+    vi.restoreAllMocks();
   });
 });
