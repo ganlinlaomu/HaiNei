@@ -613,6 +613,125 @@ describe("PR3 interruptible history catch-up", () => {
   });
 });
 
+describe("PR3 background catch-up lifecycle", () => {
+  it("aborts optional history on hide, preserves an in-flight durable write and realtime DM, then repairs on resume", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const documentHandlers = new Map<string, Set<() => void>>();
+    const windowHandlers = new Map<string, Set<() => void>>();
+    const doc = {
+      visibilityState: "visible",
+      addEventListener(name: string, cb: () => void) {
+        if (!documentHandlers.has(name)) documentHandlers.set(name, new Set());
+        documentHandlers.get(name)!.add(cb);
+      },
+      removeEventListener(name: string, cb: () => void) { documentHandlers.get(name)?.delete(cb); },
+    };
+    const win = {
+      addEventListener(name: string, cb: () => void) {
+        if (!windowHandlers.has(name)) windowHandlers.set(name, new Set());
+        windowHandlers.get(name)!.add(cb);
+      },
+      removeEventListener(name: string, cb: () => void) { windowHandlers.get(name)?.delete(cb); },
+    };
+    vi.stubGlobal("document", doc);
+    vi.stubGlobal("window", win);
+
+    let releaseDecode!: () => void;
+    let startedDecode!: () => void;
+    const decodeGate = new Promise<void>(resolve => { releaseDecode = resolve; });
+    const decodeStarted = new Promise<void>(resolve => { startedDecode = resolve; });
+    const subscriptions: Array<{
+      historical: boolean;
+      handlers: Record<string, Array<(...args: any[]) => void>>;
+      unsub: ReturnType<typeof vi.fn>;
+    }> = [];
+    let historyRequests = 0;
+    const subscribeFake = (_relays: string[], filters: any[]) => {
+      const historical = filters.some(filter => filter.until !== undefined);
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      const entry = { historical, handlers, unsub: vi.fn() };
+      subscriptions.push(entry);
+      if (historical) historyRequests++;
+      const requestNumber = historyRequests;
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name !== "eose" || !historical) return;
+          queueMicrotask(() => {
+            if (requestNumber === 1) {
+              handlers.event?.forEach(handler => handler({
+                id: "wrap-background",
+                created_at: 500,
+                canonical: message("inflight-background", 500),
+              }, "wss://a"));
+            }
+            callback("wss://a");
+          });
+        },
+        unsub: entry.unsub,
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => 2_000_000,
+      decode: async (event: any) => {
+        if (event.id === "wrap-background") {
+          startedDecode();
+          await decodeGate;
+        }
+        return event.canonical;
+      },
+    });
+    try {
+      const startup = manager.start({
+        accountPubkey: ACCOUNT_A,
+        relays: ["wss://a"],
+        authors: [PEER, ACCOUNT_A],
+        decodeContext: { accountPubkey: ACCOUNT_A },
+      });
+      await decodeStarted;
+      doc.visibilityState = "hidden";
+      documentHandlers.get("visibilitychange")?.forEach(handler => handler());
+      releaseDecode();
+      await startup;
+      expect(historyRequests).toBe(1);
+      expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillCompletedAt).toBeUndefined();
+      expect(await repo.get(ACCOUNT_A, "inflight-background")).toBeTruthy();
+
+      // Realtime never uses the historical AbortSignal and must still persist
+      // incoming messages while optional catch-up is suspended.
+      const realtime = subscriptions.find(item => !item.historical);
+      expect(realtime).toBeTruthy();
+      realtime!.handlers.event?.forEach(handler => handler({
+        id: "wrap-realtime",
+        created_at: 501,
+        canonical: message("realtime-background", 501),
+      }, "wss://a"));
+      await vi.waitFor(async () => {
+        expect(await repo.get(ACCOUNT_A, "realtime-background")).toBeTruthy();
+      });
+      expect(realtime!.unsub).not.toHaveBeenCalled();
+
+      doc.visibilityState = "visible";
+      documentHandlers.get("visibilitychange")?.forEach(handler => handler());
+      await vi.waitFor(async () => {
+        expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillCompletedAt).toBeTruthy();
+      });
+      expect(historyRequests).toBe(2);
+      expect(subscriptions.filter(item => !item.historical)).toHaveLength(1);
+      expect(await repo.get(ACCOUNT_A, "realtime-background")).toBeTruthy();
+    } finally {
+      releaseDecode();
+      manager.stop();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("message sync session", () => {
   it("does not complete fresh history after partial Relay EOSE and resumes repair later", async () => {
     const repo = new SyncedMessageRepository(database());
