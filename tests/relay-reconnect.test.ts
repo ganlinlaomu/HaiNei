@@ -146,6 +146,34 @@ describe("relay reconnect", () => {
     subscription.unsub();
   });
 
+  it("backs off progressively on flapping sockets and resets after a stable connection", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { subscribe, inspectRelays } = await import("@/nostr/relays");
+    const subscription = subscribe(["wss://flap.test"], [{ kinds: [1059] }]);
+    const first = MockWebSocket.instances[0];
+    first.emit("open", {});
+    first.emit("close", {});
+    expect(inspectRelays()["wss://flap.test"].reconnectAttempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const second = MockWebSocket.instances[1];
+    second.emit("open", {});
+    second.emit("close", {});
+    expect(inspectRelays()["wss://flap.test"].reconnectAttempts).toBe(2);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    const third = MockWebSocket.instances[2];
+    third.emit("open", {});
+    await vi.advanceTimersByTimeAsync(30_001);
+    third.emit("close", {});
+    expect(inspectRelays()["wss://flap.test"].reconnectAttempts).toBe(1);
+    subscription.unsub();
+  });
+
   it("does not reconnect while navigator is offline", async () => {
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
     const network = { onLine: true };
