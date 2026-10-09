@@ -394,7 +394,16 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
           catchup: status === "catching-up" ? "running" : status === "error" ? "error" : accountSyncSnapshot.catchup,
         });
         if (status === "live") {
-          void directMessages.finishHistoryHydration(account, "live").catch(error => {
+          void directMessages.finishHistoryHydration(account, "live").then(() => {
+            // Last startup gate: only show unread after both the cloud cursor
+            // and the first durable history/authorization reconciliation.
+            // Old manager callbacks must not unmask a newer account session.
+            if (isCurrent() && directMessages.historyHydrationPhase === "live") {
+              directMessages.finishReadStateRestore(account);
+            }
+          }).catch(error => {
+            // Do not expose the provisional hundreds-of-unread projection on
+            // an incomplete reconciliation; retry on the next live transition.
             console.warn("[dm] startup unread reconciliation failed", error instanceof Error ? error.message : "unknown");
           });
         }
