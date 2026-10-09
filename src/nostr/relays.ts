@@ -39,6 +39,7 @@ type RelayConn = {
   generation: number;
   reconnectAttempts: number;
   hasConnected: boolean;
+  connectedAt: number;
   shouldReconnect: boolean;
   connectStartedAt: number;
   connect: () => void;
@@ -49,6 +50,7 @@ const CONNECTION_OPEN_TIMEOUT = 10_000;
 const PUBLISH_TIMEOUT = 5000;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_CAP_MS = 60_000;
+const RECONNECT_STABLE_MS = 30_000;
 const EOSE_TIMEOUT = 8_000;
 
 const relaysMap: Record<string, RelayConn> = {};
@@ -228,6 +230,7 @@ function ensureRelayConn(url: string): RelayConn {
     generation: 0,
     reconnectAttempts: 0,
     hasConnected: false,
+    connectedAt: 0,
     shouldReconnect: true,
     connectStartedAt: Date.now(),
     connect: () => undefined
@@ -296,7 +299,7 @@ function ensureRelayConn(url: string): RelayConn {
         const reconnectAttempts = conn.reconnectAttempts;
         conn.ready = true;
         conn.hasConnected = true;
-        conn.reconnectAttempts = 0;
+        conn.connectedAt = Date.now();
         if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
         conn.sessionRefreshTimer = null;
         if (managedSession) {
@@ -403,6 +406,12 @@ function ensureRelayConn(url: string): RelayConn {
         conn.ready = false;
         conn.ws = null;
         conn.connecting = false;
+        // A socket that flaps immediately after OPEN must not reset backoff.
+        // Reset only after a stable connection, limiting rapid battery-draining loops.
+        if (conn.connectedAt && Date.now() - conn.connectedAt >= RECONNECT_STABLE_MS) {
+          conn.reconnectAttempts = 0;
+        }
+        conn.connectedAt = 0;
         if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
         conn.sessionRefreshTimer = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
