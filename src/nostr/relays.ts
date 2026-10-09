@@ -708,6 +708,7 @@ export function reconnectRelay(url: string) {
   try {
     const subscriptions = r.subs;
     r.shouldReconnect = false;
+    r.generation++;
     if (r.reconnectTimer) window.clearTimeout(r.reconnectTimer);
     if (r.connectTimer) window.clearTimeout(r.connectTimer);
     if (r.sessionRefreshTimer) window.clearTimeout(r.sessionRefreshTimer);
@@ -738,6 +739,7 @@ export function disconnectRelay(url: string) {
   const conn = relaysMap[url];
   if (!conn) return;
   conn.shouldReconnect = false;
+  conn.generation++;
   if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
   if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
   if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
@@ -792,7 +794,6 @@ export function restoreRelayConnections(relays = getRelaysFromStorage("read")) {
     if (conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
-    conn.reconnectAttempts = 0;
     conn.shouldReconnect = true;
     conn.connect();
   }
