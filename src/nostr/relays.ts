@@ -41,6 +41,7 @@ type RelayConn = {
   hasConnected: boolean;
   connectedAt: number;
   shouldReconnect: boolean;
+  disposing: boolean;
   connectStartedAt: number;
   activePublishes: number;
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -129,8 +130,11 @@ function failRelayAcknowledgements(conn: RelayConn, reason: string) {
 }
 
 function releaseRelayConnection(conn: RelayConn, reason: "idle-ttl" | "settings" | "manual") {
-  if (relaysMap[conn.url] !== conn) return false;
+  if (relaysMap[conn.url] !== conn || conn.disposing) return false;
   if (reason === "idle-ttl" && hasRelayDemand(conn)) return false;
+  // A failure callback can synchronously unsubscribe its own REQ. Prevent
+  // nested release from disposing this socket twice or emitting stale state.
+  conn.disposing = true;
   conn.lastDisconnectReason = reason;
   conn.shouldReconnect = false;
   conn.generation++;
@@ -164,7 +168,7 @@ function releaseRelayConnection(conn: RelayConn, reason: "idle-ttl" | "settings"
 }
 
 function updateRelayIdleLease(conn: RelayConn) {
-  if (relaysMap[conn.url] !== conn) return;
+  if (relaysMap[conn.url] !== conn || conn.disposing) return;
   if (hasRelayDemand(conn)) {
     cancelRelayIdleTimer(conn);
     return;
@@ -340,6 +344,7 @@ function ensureRelayConn(url: string): RelayConn {
     hasConnected: false,
     connectedAt: 0,
     shouldReconnect: true,
+    disposing: false,
     connectStartedAt: Date.now(),
     connect: () => undefined
   };
