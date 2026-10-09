@@ -12,6 +12,7 @@ import { MessageIngestionPipeline, type DecodeMessage } from "./ingestion";
 import { calculateCatchupSince } from "./sorting";
 import { retryOutgoingQueue } from "@/nostr/messaging/service";
 import { onAppResume } from "@/services/appResumeCoordinator";
+import { scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
 import { normalizeRelayUrl } from "@/services/connectionSettings";
 import {
   INITIAL_HISTORY_MAX_BATCHES,
@@ -57,6 +58,34 @@ export class MessageSyncManager {
   private abortController: AbortController | null = null;
   private catchupAbortController: AbortController | null = null;
   private removeBackgroundListener: (() => void) | null = null;
+  private incrementalContinuation: { sessionId: string; since: number; untilByRelay: Record<string, number> } | null = null;
+  private idleContinuationTimer: ReturnType<typeof setTimeout> | null = null;
+  private cancelIdleContinuation: (() => void) | null = null;
+
+  private clearIdleContinuation() {
+    if (this.idleContinuationTimer !== null) clearTimeout(this.idleContinuationTimer);
+    this.idleContinuationTimer = null;
+    this.cancelIdleContinuation?.();
+    this.cancelIdleContinuation = null;
+  }
+
+  private scheduleIdleContinuation(sessionId: string, accountPubkey: string) {
+    this.clearIdleContinuation();
+    if (!this.isCurrent(sessionId, accountPubkey) || !this.isForeground()) return;
+    // Never chain pages immediately on wake. Only one small follow-up pass
+    // runs after a cooldown and the shared scheduler sees foreground idle time.
+    this.idleContinuationTimer = setTimeout(() => {
+      this.idleContinuationTimer = null;
+      if (!this.isCurrent(sessionId, accountPubkey) || !this.isForeground()) return;
+      this.cancelIdleContinuation = scheduleBackgroundTask(`dm-history:${sessionId}`, () => {
+        this.cancelIdleContinuation = null;
+        if (this.isCurrent(sessionId, accountPubkey) && this.isForeground()) {
+          void this.resume("resume");
+        }
+      }, { priority: "idle", timeoutMs: 60_000 });
+    }, 30_000);
+    (this.idleContinuationTimer as any).unref?.();
+  }
 
   private isForeground() {
     return typeof document === "undefined" || document.visibilityState !== "hidden";
@@ -261,16 +290,29 @@ export class MessageSyncManager {
         const freshHistoryRepair = !relayUrl
           && !state.historyBackfillCompletedAt
           && !!state.historyBackfillStartedAt;
+        const continuation = !freshHistoryRepair
+          && this.incrementalContinuation?.sessionId === sessionId
+          ? this.incrementalContinuation
+          : null;
         const relays = relayUrl
           ? [relayUrl]
-          : state.historyBackfillCompletedAt && newlyAddedRelays.length
-            ? newlyAddedRelays
-            : options.relays;
+          : continuation && Object.keys(continuation.untilByRelay).length
+            ? Object.keys(continuation.untilByRelay).filter(url => options.relays.includes(url))
+            : state.historyBackfillCompletedAt && newlyAddedRelays.length
+              ? newlyAddedRelays
+              : options.relays;
+        // If an incremental page filled up, the high watermark may already
+        // have advanced. Anchor the next query to the last fully completed
+        // catch-up instead of silently losing the unprocessed older pages.
+        const highWatermarkSince = localHighWatermark
+          ? calculateCatchupSince(localHighWatermark, nowSeconds)
+          : nowSeconds;
+        const lastCompleteSince = state.lastCatchupCompletedAt
+          ? calculateCatchupSince(Math.floor(state.lastCatchupCompletedAt / 1000), nowSeconds)
+          : highWatermarkSince;
         const since = freshHistoryRepair
           ? 0
-          : localHighWatermark
-            ? calculateCatchupSince(localHighWatermark, nowSeconds)
-            : nowSeconds;
+          : continuation?.since ?? Math.min(highWatermarkSince, lastCompleteSince);
         const until = freshHistoryRepair
           ? Math.min(state.historyBackfillUntil ?? nowSeconds, nowSeconds)
           : nowSeconds;
@@ -282,7 +324,7 @@ export class MessageSyncManager {
           filters,
           initialUntilByRelay: freshHistoryRepair
             ? Object.fromEntries(relays.map(url => [url, state.relayStates[url]?.historyBackfillUntil ?? until]))
-            : undefined,
+            : continuation?.untilByRelay,
           subscribeFn: this.subscribeFn,
           trackSubscription: subscription => {
             this.activeCatchupSubscriptions.add(subscription);
@@ -316,9 +358,26 @@ export class MessageSyncManager {
           && result.exhaustedHistory
           && !result.hitMaxBatches
           && !result.incomplete;
+        // Preserve one-page incremental cursors across idle slices. An EOSE
+        // on a full limited page is NOT completion of the full catch-up.
+        const remainingIncremental = { ...(continuation?.untilByRelay || {}) };
+        if (!freshHistoryRepair) {
+          for (const [url, progress] of Object.entries(result.relayProgress)) {
+            if (progress.hitMaxBatches && !progress.incomplete && typeof progress.nextUntil === "number") {
+              remainingIncremental[url] = progress.nextUntil;
+            } else if (progress.naturalEnd && !progress.incomplete) {
+              delete remainingIncremental[url];
+            }
+          }
+          this.incrementalContinuation = Object.keys(remainingIncremental).length
+            ? { sessionId, since, untilByRelay: remainingIncremental }
+            : null;
+        }
         const completedIncremental = !freshHistoryRepair
           && result.allRelaysCompleted
-          && !result.incomplete;
+          && !result.incomplete
+          && !result.hitMaxBatches
+          && Object.keys(remainingIncremental).length === 0;
         const completedRelaySetUpdate = completedIncremental;
         const completedRelaySignature = relayUrl
           ? [...new Set([...previousRelaySet, relayUrl])]
@@ -372,6 +431,11 @@ export class MessageSyncManager {
           logger.warn(`[message-sync] catch-up incomplete account=${options.accountPubkey.slice(0, 8)} phase=${activeSource} failed=${[...result.failedRelays.entries()].map(([url, reason]) => `${url}:${reason}`).join(",") || (result.timedOut ? "timeout" : result.aborted ? "aborted" : "partial")}`);
         }
         logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} phase=${activeSource} received=${result.received} unique=${result.unique}`);
+        if (!result.incomplete && (result.hitMaxBatches || Object.keys(remainingIncremental).length > 0)) {
+          this.scheduleIdleContinuation(sessionId, options.accountPubkey);
+        } else if (completedIncremental || completedFreshHistory) {
+          this.clearIdleContinuation();
+        }
         nextSource = this.catchupPending;
       } while (nextSource && this.isCurrent(sessionId, options.accountPubkey) && this.isForeground());
       if (!this.catchupAbortController?.signal.aborted && this.isForeground()) {
@@ -429,7 +493,10 @@ export class MessageSyncManager {
     // the account's realtime subscription or any message persistence flight.
     if (typeof document !== "undefined") {
       const onVisibilityChange = () => {
-        if (document.visibilityState === "hidden") this.catchupAbortController?.abort();
+        if (document.visibilityState === "hidden") {
+          this.catchupAbortController?.abort();
+          this.clearIdleContinuation();
+        }
       };
       document.addEventListener("visibilitychange", onVisibilityChange);
       this.removeBackgroundListener = () => document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -452,6 +519,8 @@ export class MessageSyncManager {
     this.abortController = null;
     this.catchupAbortController?.abort();
     this.catchupAbortController = null;
+    this.clearIdleContinuation();
+    this.incrementalContinuation = null;
     this.removeBackgroundListener?.();
     this.removeBackgroundListener = null;
     closeSubscription(this.realtimeSubscription);
