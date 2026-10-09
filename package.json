@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.39",
-  "releaseSummary": "修复扫码登入成功后未跳转首页、缺少成功提示及配对提前取消",
+  "version": "0.1.40",
+  "releaseSummary": "精简登录页：移除远程签名器新登录入口，将扫描旧设备登录改为扫码登录",
   "private": true,
   "scripts": {
     "dev": "vite",
