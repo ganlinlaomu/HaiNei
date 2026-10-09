@@ -334,7 +334,7 @@ export class MessageSyncManager {
           timeoutMs: this.catchupTimeoutMs,
           // Initial onboarding can resume a bounded history page sequence.
           // Normal resume/reconnect runs just one page per relay per wake.
-          maxBatches: activeSource === "history" ? INITIAL_HISTORY_MAX_BATCHES : 1,
+          maxBatches: freshHistoryRepair && activeSource === "history" ? INITIAL_HISTORY_MAX_BATCHES : 1,
           relayConcurrency: 1,
           isCurrent: () => this.isCurrent(sessionId, options.accountPubkey),
           onEvent: async (event, eventRelay) => {
