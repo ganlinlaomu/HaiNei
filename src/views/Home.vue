@@ -324,16 +324,36 @@ export default defineComponent({
     const isInitialLoad = ref(true); // Track if this is the first load
     const startupSyncing = ref(false);
     const homeSyncStatus = ref<SyncStatus>("idle");
-    const connectionNotice = computed(() => {
-      if (homeSyncStatus.value === "offline") return "暂时离线，正在显示已缓存内容";
-      if (homeSyncStatus.value === "error") return "正在重新连接…";
-      return "";
-    });
+    const homeRelayState = ref<"idle" | "connecting" | "connected" | "offline">("idle");
+    const showRelayDisconnect = ref(false);
+    let relayDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    function clearRelayDisconnectTimer() {
+      if (relayDisconnectTimer !== null) clearTimeout(relayDisconnectTimer);
+      relayDisconnectTimer = null;
+    }
+    function updateRelayNotice(relay: typeof homeRelayState.value) {
+      homeRelayState.value = relay;
+      clearRelayDisconnectTimer();
+      if (relay !== "offline") {
+        showRelayDisconnect.value = false;
+      } else if (!showRelayDisconnect.value) {
+        relayDisconnectTimer = setTimeout(() => {
+          relayDisconnectTimer = null;
+          if (homeRelayState.value === "offline") showRelayDisconnect.value = true;
+        }, 2000);
+      }
+    }
+    const connectionNotice = computed(() =>
+      showRelayDisconnect.value && homeRelayState.value === "offline"
+        ? "正在重新连接…已缓存内容仍可查看"
+        : ""
+    );
 
     function applyAccountSyncStatus(snapshot = getAccountMessageSyncStatus()) {
       if (!keys.pkHex || snapshot.accountPubkey !== keys.pkHex.toLowerCase()) return;
       const wasStartupSyncing = startupSyncing.value;
       homeSyncStatus.value = snapshot.status;
+      updateRelayNotice(snapshot.relay);
       if (snapshot.status === "connecting" || snapshot.status === "catching-up") {
         startupSyncing.value = true;
         return;
@@ -367,6 +387,7 @@ export default defineComponent({
       notificationJumpDone.value = false;
       startupSyncing.value = false;
       homeSyncStatus.value = "idle";
+      updateRelayNotice("idle");
       homeAccountPk = "";
       visibleInboxMessageRevision = -1;
       visibleInboxPreferenceRevision = -1;
