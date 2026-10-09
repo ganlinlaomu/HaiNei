@@ -48,6 +48,7 @@ type RelayConn = {
   idleSince: number | null;
   idleExpiresAt: number | null;
   retryAt: number | null;
+  pendingCloseReason: "timeout" | "session-refresh" | null;
   lastDisconnectReason: "closed" | "timeout" | "session-refresh" | "manual" | "settings" | "idle-ttl" | null;
   connect: () => void;
 };
@@ -182,6 +183,11 @@ function updateRelayIdleLease(conn: RelayConn) {
     else cancelRelayIdleTimer(conn);
   }, IDLE_RELAY_TTL_MS);
   (conn.idleTimer as any).unref?.();
+}
+
+function renewRelayIdleLease(conn: RelayConn) {
+  if (!hasRelayDemand(conn)) cancelRelayIdleTimer(conn);
+  updateRelayIdleLease(conn);
 }
 
 /** Release account-independent warm/discovery sockets after session teardown.
@@ -340,6 +346,7 @@ function ensureRelayConn(url: string): RelayConn {
     idleSince: null,
     idleExpiresAt: null,
     retryAt: null,
+    pendingCloseReason: null,
     lastDisconnectReason: null,
     hasConnected: false,
     connectedAt: 0,
@@ -402,7 +409,7 @@ function ensureRelayConn(url: string): RelayConn {
           reconnectAttempts: conn.reconnectAttempts,
           timeoutMs: CONNECTION_OPEN_TIMEOUT
         }, "warn");
-        conn.lastDisconnectReason = "timeout";
+        conn.pendingCloseReason = "timeout";
         try { ws.close(); } catch {}
       }, CONNECTION_OPEN_TIMEOUT);
 
@@ -411,6 +418,7 @@ function ensureRelayConn(url: string): RelayConn {
         if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
         conn.connectTimer = null;
         const reconnected = conn.hasConnected;
+        conn.pendingCloseReason = null;
         const reconnectAttempts = conn.reconnectAttempts;
         conn.ready = true;
         conn.hasConnected = true;
@@ -422,7 +430,7 @@ function ensureRelayConn(url: string): RelayConn {
           conn.sessionRefreshTimer = window.setTimeout(() => {
             if (conn.ws !== ws || !conn.shouldReconnect) return;
             debugLog("relay", "relay_session_refresh", { relay: url }, "info");
-            conn.lastDisconnectReason = "session-refresh";
+            conn.pendingCloseReason = "session-refresh";
             try { ws.close(4001, "relay session refresh"); } catch {}
           }, refreshIn);
         }
@@ -532,9 +540,8 @@ function ensureRelayConn(url: string): RelayConn {
         conn.sessionRefreshTimer = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
         conn.retryAt = null;
-        if (conn.lastDisconnectReason !== "timeout" && conn.lastDisconnectReason !== "session-refresh") {
-          conn.lastDisconnectReason = "closed";
-        }
+        conn.lastDisconnectReason = conn.pendingCloseReason || "closed";
+        conn.pendingCloseReason = null;
         emitConnectionState({
           url,
           connected: false,
@@ -591,7 +598,7 @@ export function warmRelays(relays: string[]) {
   for (const url of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
     const existing = relaysMap[url];
     const conn = existing || ensureRelayConn(url);
-    updateRelayIdleLease(conn);
+    renewRelayIdleLease(conn);
     if (!existing || conn.ready || conn.connecting || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
@@ -897,7 +904,7 @@ export function reconnectRelay(url: string) {
     failRelayAcknowledgements(conn, "relay_reconnected");
     try { socket?.close(); } catch {}
     if (wasReady) emitConnectionState({ url, connected: false, reconnected: conn.hasConnected, failed: false, at: Date.now() });
-    updateRelayIdleLease(conn);
+    renewRelayIdleLease(conn);
     conn.connect();
   } catch (error) {
     debugLog("relay", "relay_error", {
@@ -952,7 +959,7 @@ export function restoreRelayConnections(relays = getRelaysFromStorage("read")) {
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
   for (const url of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
     const conn = relaysMap[url] || ensureRelayConn(url);
-    updateRelayIdleLease(conn);
+    renewRelayIdleLease(conn);
     if (conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
