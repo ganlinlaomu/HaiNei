@@ -163,7 +163,11 @@ function releaseRelayConnection(conn: RelayConn, reason: "idle-ttl" | "settings"
   delete relaysMap[conn.url];
   try { socket?.close(); } catch {}
   if (reason === "idle-ttl") idleConnectionsReleased++;
-  if (wasReady) emitConnectionState({ url: conn.url, connected: false, reconnected: conn.hasConnected, failed: false, at: Date.now() });
+  // Explicit teardown must also wake publishers waiting on a socket that
+  // never reached OPEN; do not make account switches wait for the 4s timeout.
+  if (wasReady || reason !== "idle-ttl") {
+    emitConnectionState({ url: conn.url, connected: false, reconnected: conn.hasConnected, failed: false, at: Date.now() });
+  }
   debugLog("relay", "relay_released", { relay: conn.url, reason }, "info");
   return true;
 }
