@@ -1075,7 +1075,11 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     },
     finishReadStateRestore(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
-      if (account && this.loadedFor === account && useKeyStore().pkHex.toLowerCase() === account) this.readStateRestorePhase = "ready";
+      // A cloud cursor alone is not the final unread projection: the NIP-17
+      // initial history and friendship-authorization pass may still revise it.
+      // Guard against other callers lifting the badge barrier mid-hydration.
+      if (account && this.loadedFor === account && useKeyStore().pkHex.toLowerCase() === account
+        && this.historyHydrationPhase !== "hydrating") this.readStateRestorePhase = "ready";
     },
     beginHistoryHydration(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
