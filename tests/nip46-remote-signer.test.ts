@@ -7,14 +7,18 @@ function source(path: string) {
 }
 
 describe("NIP-46 remote signer beta contract", () => {
-  it("keeps the beta hidden unless explicitly enabled", () => {
+  it("removes new remote signer login UI without disabling existing signer sessions", () => {
     const login = source("src/views/Login.vue");
     const runtime = source("src/services/nip46RemoteSigner.ts");
     const env = source("src/env.d.ts");
 
-    expect(login).toContain('const nip46Enabled = import.meta.env.VITE_ENABLE_NIP46 === "true"');
-    expect(login).toContain('v-if="nip46Enabled"');
-    expect(login).toContain("远程签名器（Beta）");
+    expect(login).not.toContain('v-if="nip46Enabled"');
+    expect(login).not.toContain("openRemoteSignerLogin");
+    expect(login).not.toContain("doLoginNip46");
+    expect(login).not.toContain("showRemoteSigner");
+    expect(login).not.toContain("Bunker URL / NIP-05");
+    expect(login).not.toContain("远程签名器（Beta）");
+    expect(login).toContain("accountCredentialLabel(account.authType, account.credentialMode)");
     expect(runtime).toContain('import.meta.env.VITE_ENABLE_NIP46 === "true"');
     expect(env).toContain("VITE_ENABLE_NIP46?: string");
   });
