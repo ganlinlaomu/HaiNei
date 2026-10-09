@@ -490,6 +490,19 @@ describe("relay reconnect", () => {
     expect(inspectRelays()["wss://retained.test"]).toBeUndefined();
   });
 
+  it("aborts a pre-OPEN publisher immediately when settings remove its Relay", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { publish, disconnectRelay, inspectRelays } = await import("@/nostr/relays");
+    const evt = { id: "e".repeat(64), kind: 1059, tags: [["p", "b".repeat(64)]], content: "encrypted" };
+    const pending = publish(["wss://removed-before-open.test"], evt);
+    expect(inspectRelays()["wss://removed-before-open.test"].pendingPublishes).toBe(1);
+    disconnectRelay("wss://removed-before-open.test");
+    await expect(pending).resolves.toMatchObject([{ ok: false, reason: "disconnected" }]);
+    expect(inspectRelays()["wss://removed-before-open.test"]).toBeUndefined();
+  });
+
   it("explicit disconnect settles a pending encrypted publication instead of silently discarding it", async () => {
     vi.useFakeTimers();
     Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
