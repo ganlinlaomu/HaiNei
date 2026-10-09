@@ -382,9 +382,22 @@ export class MessageSyncManager {
       await this.setStatus("error", sessionId);
     } finally {
       if (this.catchupSessionId === sessionId) {
+        // A quick background -> foreground transition can happen while an
+        // aborted page is still completing an in-flight durable write.
+        // Preserve the queued wake across that final await.
+        const pendingResume = this.catchupPending;
+        const interrupted = this.catchupAbortController?.signal.aborted;
         this.catchupRunning = false;
         this.catchupSessionId = "";
         this.catchupAbortController = null;
+        this.catchupPending = null;
+        if (this.isForeground() && this.isCurrent(sessionId, options.accountPubkey) && (pendingResume || interrupted)) {
+          queueMicrotask(() => {
+            if (this.isCurrent(sessionId, options.accountPubkey) && this.isForeground()) {
+              void this.resume(pendingResume || "resume");
+            }
+          });
+        }
       }
     }
   }
