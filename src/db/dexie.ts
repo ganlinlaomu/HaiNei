@@ -109,8 +109,21 @@ export type RelaySyncStateRecord = {
   historyBackfillCompletedAt?: number;
 };
 
+/** Durable per-relay incremental reconciliation. A partially fetched REQ does
+ * not make the account caught up. The same bounded query can resume safely
+ * after PWA termination without expanding the IndexedDB schema. */
+export type IncrementalCatchupCheckpoint = {
+  relaySignature: string;
+  requiredRelays: string[];
+  completedRelays: string[];
+  since: number;
+  until: number;
+  pendingUntilByRelay: Record<string, number>;
+};
+
 export type MessageSyncStateRecord = {
   accountPubkey: string;
+  incrementalCatchup?: IncrementalCatchupCheckpoint;
   lastSuccessfulSyncAt?: number;
   /** Marks that this device has started its one-time initial history repair. */
   historyBackfillStartedAt?: number;
