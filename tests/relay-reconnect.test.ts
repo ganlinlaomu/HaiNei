@@ -211,7 +211,7 @@ describe("relay reconnect", () => {
     const subscription = subscribe(["wss://backoff-cap.test"], [{ kinds: [1059] }]);
     // 0.999 yields a 1.2495 jitter multiplier. Later backoff must still
     // never exceed the 60-second absolute cap.
-    const expectedDelays = [1_250, 2_499, 4_998, 9_995, 19_990, 39_984, 60_000, 60_000];
+    const expectedDelays = [1_250, 2_499, 4_998, 9_996, 19_992, 39_984, 60_000, 60_000];
     for (const [attempt, delay] of expectedDelays.entries()) {
       MockWebSocket.instances[attempt].emit("close", {});
       expect(inspectRelays()["wss://backoff-cap.test"].reconnectAttempts).toBe(attempt + 1);
