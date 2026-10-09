@@ -87,15 +87,12 @@
           @complete="finishGoogleRecovery"
         />
         <div v-if="googleRecoveryEnabled" class="login-divider"><span>或</span></div>
-        <button class="btn btn-secondary" type="button" :disabled="loading" @click="router.push('/device-pair')">扫描旧设备登录</button>
+        <button class="btn btn-secondary" type="button" :disabled="loading" @click="router.push('/device-pair')">扫码登录</button>
         <button class="btn btn-primary" type="button" :disabled="loading" @click="openPrivateLogin">
           使用私钥登录
         </button>
         <button class="btn btn-secondary" type="button" :disabled="loading" @click="startRegistration">
           {{ addingAccount ? "创建新账号" : "还没有账号？注册" }}
-        </button>
-        <button v-if="nip46Enabled" class="btn btn-secondary" type="button" :disabled="loading" @click="openRemoteSignerLogin">
-          远程签名器（Beta）
         </button>
 
         <section v-if="showRegister" class="private-login registration-panel">
@@ -118,29 +115,6 @@
           </button>
           <button class="btn btn-text" type="button" :disabled="loading" @click="cancelRegistration">取消</button>
         </section>
-
-        <form v-if="showRemoteSigner && !showRegister" class="private-login" @submit.prevent="doLoginNip46">
-          <div class="field-group">
-            <label class="field-label" for="remote-signer">Bunker URL / NIP-05</label>
-            <input
-              id="remote-signer"
-              v-model="bunkerInput"
-              class="input"
-              type="text"
-              placeholder="bunker://... 或 name@domain"
-              autocapitalize="none"
-              autocomplete="off"
-              autocorrect="off"
-              spellcheck="false"
-              :disabled="loading"
-            />
-          </div>
-          <p class="password-note">私钥始终保留在远程签名器。海内只保存本机加密的连接凭据；签名器离线时仍可浏览已缓存内容。</p>
-          <button class="btn btn-primary login-button" type="submit" :disabled="loading">
-            {{ loading ? "正在连接…" : "连接远程签名器" }}
-          </button>
-          <button class="btn btn-text" type="button" :disabled="loading" @click="showRemoteSigner = false">取消</button>
-        </form>
 
         <form v-if="showPrivateLogin && !showRegister" class="private-login" @submit.prevent="doLoginNsec">
           <div class="field-group">
@@ -209,7 +183,7 @@ import { useKeyStore } from "@/stores/keys";
 import GoogleRecoveryPanel from "@/components/GoogleRecoveryPanel.vue";
 import { logger } from "@/utils/logger";
 
-type LoginMethod = "private-key" | "nip46" | "unlock" | "switch" | "register" | "google";
+type LoginMethod = "private-key" | "unlock" | "switch" | "register" | "google";
 
 const ks = useKeyStore();
 const route = useRoute();
@@ -228,10 +202,7 @@ const unlockInProgress = ref(false);
 const passwordFallbackVisible = ref(false);
 const autoBiometricAccount = ref("");
 const showPrivateLogin = ref(false);
-const showRemoteSigner = ref(false);
-const bunkerInput = ref("");
 const showRegister = ref(false);
-const nip46Enabled = import.meta.env.VITE_ENABLE_NIP46 === "true";
 const googleClientId = (import.meta.env.VITE_GOOGLE_WEB_CLIENT_ID || "").trim();
 const googleRecoveryEnabled = !!googleClientId;
 const generatedNsec = ref("");
@@ -338,8 +309,6 @@ function clearSensitiveInputs() {
   registrationConfirmed.value = false;
   copiedNsec.value = false;
   showPrivateKey.value = false;
-  bunkerInput.value = "";
-  showRemoteSigner.value = false;
   loginStorageMode.value = "device";
   showRegister.value = false;
 }
@@ -578,50 +547,13 @@ async function doUnlock() {
 
 function openPrivateLogin() {
   showRegister.value = false;
-  showRemoteSigner.value = false;
   showPrivateLogin.value = !showPrivateLogin.value;
-}
-
-function openRemoteSignerLogin() {
-  if (loading.value || !nip46Enabled) return;
-  errorMessage.value = "";
-  showRegister.value = false;
-  showPrivateLogin.value = false;
-  showRemoteSigner.value = !showRemoteSigner.value;
-}
-
-async function doLoginNip46() {
-  if (loading.value || !nip46Enabled) return;
-  const input = bunkerInput.value.trim();
-  if (!input) {
-    errorMessage.value = "请输入 Bunker URL 或 NIP-05 地址";
-    return;
-  }
-  loading.value = true;
-  errorMessage.value = "";
-  loginStatus.value = "正在连接远程签名器…";
-  try {
-    await ks.loginWithNip46(input);
-    await finishLogin();
-  } catch (error) {
-    logLoginFailure("nip46", "connect", error);
-    const reason = error instanceof Error ? error.message : "";
-    errorMessage.value = reason === "remote_signer_feature_disabled"
-      ? "远程签名器 Beta 当前未启用"
-      : reason === "invalid_remote_signer_input" || reason === "invalid_remote_signer_relays"
-        ? "Bunker 地址无效或没有可用的安全 Relay"
-        : "远程签名器连接失败，请检查签名器与 Relay 后重试。";
-  } finally {
-    loading.value = false;
-    loginStatus.value = "";
-  }
 }
 
 function startRegistration() {
   if (loading.value) return;
   errorMessage.value = "";
   showPrivateLogin.value = false;
-  showRemoteSigner.value = false;
   showRegister.value = true;
   registrationConfirmed.value = false;
   copiedNsec.value = false;
