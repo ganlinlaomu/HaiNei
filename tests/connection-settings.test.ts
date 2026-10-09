@@ -353,9 +353,9 @@ describe("per-item settings sync", () => {
     const local = relay("wss://local.example", "user", { updatedAt: 20 });
     const remote = relay("wss://remote.example", "user", { updatedAt: 20 });
     expect(mergeRelayConfigs([local], [remote]).map(item => item.url).sort()).toEqual([
+      "wss://cloudflare-nostr-relay.noster.workers.dev",
       "wss://local.example",
       "wss://nostr.dzo-hadar.ts.net",
-      "wss://cloudflare-nostr-relay.noster.workers.dev",
       "wss://remote.example"
     ]);
   });
