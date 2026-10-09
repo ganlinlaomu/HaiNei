@@ -479,6 +479,7 @@ export class MessageSyncManager {
         if (Object.keys(syncStatePatch).length || Object.keys(relayPatches).length) {
           await this.repository.commitCatchupProgress(options.accountPubkey, syncStatePatch, relayPatches);
         }
+        options.onCatchupStatus?.(completedFreshHistory || fullAccountCoverage ? "settled" : "pending");
         if (result.incomplete) {
           logger.warn(`[message-sync] catch-up incomplete account=${options.accountPubkey.slice(0, 8)} phase=${activeSource} failed=${[...result.failedRelays.entries()].map(([url, reason]) => `${url}:${reason}`).join(",") || (result.paginationStalled ? "timestamp-pagination-stalled" : result.timedOut ? "timeout" : result.aborted ? "aborted" : "partial")}`);
         }
