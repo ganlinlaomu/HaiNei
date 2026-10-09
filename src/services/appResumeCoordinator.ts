@@ -6,6 +6,7 @@ const COALESCE_MS = 1_000;
 let installed = false;
 let lastDispatchAt = 0;
 let lastDispatchReason: AppResumeReason | null = null;
+let hiddenSinceLastDispatch = false;
 
 function canDispatch() {
   return typeof document === "undefined" || document.visibilityState !== "hidden";
@@ -17,7 +18,9 @@ function dispatch(reason: AppResumeReason) {
   // A network-online transition is meaningful even if an earlier focus/pageshow
   // callback fired while navigator.onLine was false. Do not drop that recovery.
   const networkRecovered = reason === "online" && lastDispatchReason !== "online";
-  if (lastDispatchAt && now - lastDispatchAt < COALESCE_MS && !networkRecovered) return;
+  // A genuine hidden -> visible transition is not a redundant iOS focus burst.
+  if (lastDispatchAt && now - lastDispatchAt < COALESCE_MS && !networkRecovered && !hiddenSinceLastDispatch) return;
+  hiddenSinceLastDispatch = false;
   lastDispatchAt = now;
   lastDispatchReason = reason;
   for (const handler of [...handlers]) {
@@ -32,7 +35,8 @@ function dispatch(reason: AppResumeReason) {
 }
 
 function visibilityHandler() {
-  if (document.visibilityState === "visible") dispatch("visibilitychange");
+  if (document.visibilityState === "hidden") hiddenSinceLastDispatch = true;
+  else if (document.visibilityState === "visible") dispatch("visibilitychange");
 }
 function focusHandler() { dispatch("focus"); }
 function pageShowHandler() { dispatch("pageshow"); }
@@ -43,6 +47,7 @@ function install() {
   installed = true;
   lastDispatchAt = 0;
   lastDispatchReason = null;
+  hiddenSinceLastDispatch = false;
   document.addEventListener("visibilitychange", visibilityHandler);
   window.addEventListener("focus", focusHandler);
   window.addEventListener("pageshow", pageShowHandler);
@@ -54,6 +59,7 @@ function uninstall() {
     installed = false;
     lastDispatchAt = 0;
     lastDispatchReason = null;
+    hiddenSinceLastDispatch = false;
     return;
   }
   document.removeEventListener("visibilitychange", visibilityHandler);
@@ -63,6 +69,7 @@ function uninstall() {
   installed = false;
   lastDispatchAt = 0;
   lastDispatchReason = null;
+  hiddenSinceLastDispatch = false;
 }
 
 export function onAppResume(handler: AppResumeHandler) {
