@@ -512,7 +512,7 @@ describe("relay catch-up", () => {
       };
     };
     const ingested: string[] = [];
-    await runPagedCatchup({
+    const result = await runPagedCatchup({
       relays: ["wss://a"],
       filters: [{ until: 200, limit: 2 }],
       subscribeFn: subscribeFake,
@@ -520,7 +520,11 @@ describe("relay catch-up", () => {
       onEvent: async event => { ingested.push(event.id); }
     });
     expect(ingested).toEqual(["a", "b", "c"]);
-    expect(calls).toBe(3);
+    expect(calls).toBe(2);
+    expect(result.incomplete).toBe(true);
+    expect(result.paginationStalled).toBe(true);
+    expect(result.exhaustedHistory).toBe(false);
+    expect(result.nextUntilByRelay["wss://a"]).toBe(100);
   });
 });
 
@@ -672,7 +676,9 @@ describe("PR3 incremental idle continuation", () => {
       await manager.resume("manual");
       expect(pages).toHaveLength(3);
       expect(pages[2]).toBe(firstUntil - 500);
-      expect((await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt).toBe(nowMs);
+      // Resume finished the window started on the previous run, not the
+      // newer clock. The newer interval still needs reconciliation.
+      expect((await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt).toBe(nowMs - 1_000);
     } finally {
       manager.stop();
     }
