@@ -5,6 +5,7 @@ const handlers = new Set<AppResumeHandler>();
 const COALESCE_MS = 1_000;
 let installed = false;
 let lastDispatchAt = 0;
+let lastDispatchReason: AppResumeReason | null = null;
 
 function canDispatch() {
   return typeof document === "undefined" || document.visibilityState !== "hidden";
@@ -13,8 +14,12 @@ function canDispatch() {
 function dispatch(reason: AppResumeReason) {
   if (!canDispatch()) return;
   const now = Date.now();
-  if (lastDispatchAt && now - lastDispatchAt < COALESCE_MS) return;
+  // A network-online transition is meaningful even if an earlier focus/pageshow
+  // callback fired while navigator.onLine was false. Do not drop that recovery.
+  const networkRecovered = reason === "online" && lastDispatchReason !== "online";
+  if (lastDispatchAt && now - lastDispatchAt < COALESCE_MS && !networkRecovered) return;
   lastDispatchAt = now;
+  lastDispatchReason = reason;
   for (const handler of [...handlers]) {
     try {
       void Promise.resolve(handler(reason)).catch(error => {
@@ -37,6 +42,7 @@ function install() {
   if (installed || typeof window === "undefined" || typeof document === "undefined") return;
   installed = true;
   lastDispatchAt = 0;
+  lastDispatchReason = null;
   document.addEventListener("visibilitychange", visibilityHandler);
   window.addEventListener("focus", focusHandler);
   window.addEventListener("pageshow", pageShowHandler);
@@ -47,6 +53,7 @@ function uninstall() {
   if (!installed || typeof window === "undefined" || typeof document === "undefined") {
     installed = false;
     lastDispatchAt = 0;
+  lastDispatchReason = null;
     return;
   }
   document.removeEventListener("visibilitychange", visibilityHandler);
@@ -55,6 +62,7 @@ function uninstall() {
   window.removeEventListener("online", onlineHandler);
   installed = false;
   lastDispatchAt = 0;
+  lastDispatchReason = null;
 }
 
 export function onAppResume(handler: AppResumeHandler) {
