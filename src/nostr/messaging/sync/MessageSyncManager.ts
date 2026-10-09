@@ -1,5 +1,5 @@
 import type { NostrEvent } from "nostr-tools";
-import { getRelaysFromStorage, onRelayConnectionState, restoreRelayConnections, type RelayConnectionEvent } from "@/nostr/relays";
+import { getRelaysFromStorage, inspectRelays, onRelayConnectionState, restoreRelayConnections, type RelayConnectionEvent } from "@/nostr/relays";
 import { nostrClient } from "@/services/nostrClient";
 import { buildMessageSubscriptions } from "@/nostr/messaging/subscriptions";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
@@ -184,6 +184,8 @@ export class MessageSyncManager {
       void this.repository.updateRelayState(accountPubkey, relayUrl, { lastEOSEAt: this.now() });
     });
 
+    // A listener alone misses sockets that opened before this manager started.
+    // Subscribe first, then snapshot to close the observe/snapshot race.
     this.removeRelayObserver = this.observeRelays(event => {
       if (!isCurrent() || !options.relays.includes(event.url)) return;
       void this.repository.updateRelayState(accountPubkey, event.url, event.connected
@@ -202,6 +204,9 @@ export class MessageSyncManager {
         void this.resume(event.reconnected ? "reconnect" : "resume", event.url);
       }
     });
+    if (!isCurrent()) return;
+    const relaySnapshot = inspectRelays();
+    this.connectedRelays = new Set(options.relays.filter(url => relaySnapshot[url]?.ready));
     this.installForegroundHandlers();
     await this.runCatchup("history", undefined, sessionId);
   }
