@@ -41,7 +41,7 @@ export type AccountMessageSyncSnapshot = {
   status: SyncStatus;
   relay: "idle" | "connecting" | "connected" | "offline";
   live: "idle" | "subscribing" | "active";
-  catchup: "idle" | "running" | "settled" | "error";
+  catchup: "idle" | "running" | "pending" | "settled" | "error";
 };
 
 // The account service is the sole owner of the MessageSyncManager lifecycle.
@@ -383,11 +383,15 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
           await directMessages.acknowledgePersistedIncoming(account, message);
         }
       },
+      onCatchupStatus: catchup => {
+        if (!isCurrent()) return;
+        setAccountMessageSyncStatus(account, accountSyncSnapshot.status, { catchup });
+      },
       onStatus: status => {
         if (!isCurrent()) return;
         setAccountMessageSyncStatus(account, status, {
           live: status === "connecting" ? "subscribing" : status === "live" || status === "catching-up" ? "active" : "idle",
-          catchup: status === "catching-up" ? "running" : status === "error" ? "error" : status === "live" ? "settled" : accountSyncSnapshot.catchup,
+          catchup: status === "catching-up" ? "running" : status === "error" ? "error" : accountSyncSnapshot.catchup,
         });
         if (status === "live") {
           void directMessages.finishHistoryHydration(account, "live").catch(error => {
