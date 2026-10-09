@@ -53,7 +53,7 @@ function uninstall() {
   if (!installed || typeof window === "undefined" || typeof document === "undefined") {
     installed = false;
     lastDispatchAt = 0;
-  lastDispatchReason = null;
+    lastDispatchReason = null;
     return;
   }
   document.removeEventListener("visibilitychange", visibilityHandler);
