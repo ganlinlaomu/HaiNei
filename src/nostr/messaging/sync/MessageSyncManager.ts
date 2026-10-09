@@ -434,7 +434,7 @@ export class MessageSyncManager {
           // A continuation may finish much later than the initial query.
           // The completed frontier is the ORIGINAL query's upper bound, not
           // today's clock: the interval since then still needs checking.
-          const coveredAt = completedFreshHistory ? completedAt : checkpoint!.until * 1000;
+          const coveredAt = completedFreshHistory ? until * 1000 : checkpoint!.until * 1000;
           syncStatePatch.lastSuccessfulSyncAt = Math.max(state.lastSuccessfulSyncAt || 0, coveredAt);
           syncStatePatch.lastCatchupCompletedAt = Math.max(state.lastCatchupCompletedAt || 0, coveredAt);
         }
@@ -474,7 +474,7 @@ export class MessageSyncManager {
                   checkpoint!.until * 1000,
                 ) }
               : completedFreshHistory
-                ? { lastSuccessfulCatchupAt: completedAt }
+                ? { lastSuccessfulCatchupAt: until * 1000 }
                 : {}),
           };
         }
