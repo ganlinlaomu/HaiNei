@@ -772,6 +772,7 @@ async function safeUpdateLocalRefs() {
      detachVirtualScroll();
      stopSyncStatusListener?.();
      stopSyncStatusListener = null;
+     clearRelayDisconnectTimer();
      clearHomeRuntimeState();
    });
    onActivated(() => {
