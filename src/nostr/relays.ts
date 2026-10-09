@@ -422,6 +422,7 @@ function ensureRelayConn(url: string): RelayConn {
       };
 
       const onError = () => {
+        if (conn.ws !== ws || generation !== conn.generation) return;
         debugLog("relay", "relay_error", { relay: url, reconnectAttempts: conn.reconnectAttempts }, "error");
       };
 
@@ -537,18 +538,43 @@ export function subscribe(relays: string[], filtersArray: any[]) {
         clearTimeout(timer);
         const conn = relaysMap[url];
         if (!conn) continue;
-        try { sendRaw(conn, ["CLOSE", subId]); } catch {}
+        if (!conn.subs.has(subId)) continue;
+        // A disconnected relay has never seen pending REQs on its next socket.
+        // Remove only this subscription's queued frames; do not carry orphan
+        // REQs/CLOSEs into a newly opened connection.
+        conn.queue = conn.queue.filter(message => {
+          try {
+            const frame = JSON.parse(message);
+            return !(Array.isArray(frame) && frame[1] === subId && (frame[0] === "REQ" || frame[0] === "CLOSE"));
+          } catch { return true; }
+        });
+        if (conn.ready && conn.ws?.readyState === 1) {
+          try { conn.ws.send(JSON.stringify(["CLOSE", subId])); } catch {
+            // The socket is closing; its subscriptions disappear with it.
+          }
+        }
         debugLog("subscription", "subscription_closed", subscriptionDiagnostic(conn, subId), "info");
         conn.subs.delete(subId);
         if (conn.subs.size === 0 && conn.okHandlers.size === 0) {
           conn.shouldReconnect = false;
+          conn.generation++;
           if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+          if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
+          if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
           conn.reconnectTimer = null;
+          conn.connectTimer = null;
+          conn.sessionRefreshTimer = null;
+          conn.connecting = false;
+          const wasReady = conn.ready;
+          const socket = conn.ws;
+          conn.ws = null;
+          conn.ready = false;
           conn.queue = conn.queue.filter(message => {
             try { return JSON.parse(message)?.[0] !== "REQ"; } catch { return true; }
           });
-          try { conn.ws?.close(); } catch {}
+          try { socket?.close(); } catch {}
           delete relaysMap[url];
+          if (wasReady) emitConnectionState({ url, connected: false, reconnected: conn.hasConnected, failed: false, at: Date.now() });
         }
       }
     }
