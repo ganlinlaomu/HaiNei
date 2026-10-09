@@ -394,7 +394,7 @@ export class MessageSyncManager {
         if (this.isForeground() && this.isCurrent(sessionId, options.accountPubkey) && (pendingResume || interrupted)) {
           queueMicrotask(() => {
             if (this.isCurrent(sessionId, options.accountPubkey) && this.isForeground()) {
-              void this.resume(pendingResume || "resume");
+              void this.resume(pendingResume === "reconnect" || pendingResume === "manual" ? pendingResume : "resume");
             }
           });
         }
