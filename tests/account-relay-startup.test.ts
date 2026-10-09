@@ -16,7 +16,7 @@ describe("account relay startup ordering", () => {
     const criticalRequest = source.indexOf("fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false");
     const criticalNamespaces = source.indexOf('["read_state", "notification_state", "friendships"]');
     const localRefresh = source.indexOf("await directMessages.refresh(pk)");
-    const pendingUnread = source.indexOf("directMessages.beginReadStateRestore(pk)");
+    const pendingUnread = source.indexOf("useDirectMessagesStore().beginReadStateRestore(pk)");
     const remoteWait = source.indexOf("const criticalState = await criticalStateRestore");
     const authoritativeRefresh = source.indexOf("await directMessages.refresh(pk)", localRefresh + 1);
     const notificationRefresh = source.indexOf("await useNotificationsStore().refreshSyncedState(pk)");
