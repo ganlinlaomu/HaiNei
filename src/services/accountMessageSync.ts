@@ -1,6 +1,6 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { getActivePinia } from "pinia";
-import { getRelaysFromStorage, inspectRelays, onRelayConnectionState } from "@/nostr/relays";
+import { getRelaysFromStorage, inspectRelays, onRelayConnectionState, releaseUnusedRelayConnections } from "@/nostr/relays";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
@@ -449,5 +449,8 @@ export function stopAccountMessageSync() {
   activeKeys = null;
   if (account) cancelDmRelayDirectoryWork(account);
   accountMessageSyncManager.stop();
+  // Reclaim only unowned warm/discovery sockets on account switch or lock.
+  // Active publish confirmation leases remain protected until settled.
+  releaseUnusedRelayConnections();
   setAccountMessageSyncStatus(account, "idle", { relay: "idle", live: "idle", catchup: "idle" });
 }
