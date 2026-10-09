@@ -524,6 +524,280 @@ describe("relay catch-up", () => {
   });
 });
 
+describe("PR3 interruptible history catch-up", () => {
+  it("runs just one catch-up relay at a time and one page per relay", async () => {
+    const opened: string[] = [];
+    const handlersByRelay = new Map<string, Record<string, Array<(...args: any[]) => void>>>();
+    const subscribeFake = (relays: string[]) => {
+      const relay = relays[0];
+      opened.push(relay);
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      handlersByRelay.set(relay, handlers);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+        },
+        unsub() {},
+      };
+    };
+    const resultPromise = runPagedCatchup({
+      relays: ["wss://a", "wss://b"],
+      filters: [{ until: 200, limit: 1 }],
+      maxBatches: 1,
+      subscribeFn: subscribeFake,
+      isCurrent: () => true,
+      onEvent: async () => {},
+    });
+    expect(opened).toEqual(["wss://a"]);
+    handlersByRelay.get("wss://a")?.event?.forEach(handler => handler({ id: "from-a", created_at: 150 }, "wss://a"));
+    handlersByRelay.get("wss://a")?.eose?.forEach(handler => handler("wss://a"));
+    for (let attempt = 0; attempt < 10 && opened.length < 2; attempt++) await new Promise(resolve => setTimeout(resolve, 0));
+    expect(opened).toEqual(["wss://a", "wss://b"]);
+    handlersByRelay.get("wss://b")?.event?.forEach(handler => handler({ id: "from-b", created_at: 140 }, "wss://b"));
+    handlersByRelay.get("wss://b")?.eose?.forEach(handler => handler("wss://b"));
+    const result = await resultPromise;
+    expect(opened).toEqual(["wss://a", "wss://b"]);
+    expect(result.nextUntilByRelay).toEqual({ "wss://a": 150, "wss://b": 140 });
+    expect(result.hitMaxBatches).toBe(true);
+  });
+
+  it("stops decrypting after abort and does not advance an incomplete page checkpoint", async () => {
+    const controller = new AbortController();
+    const unsub = vi.fn();
+    const processed: string[] = [];
+    const subscribeFake = () => {
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name === "eose") queueMicrotask(() => {
+            for (let index = 0; index < 40; index++) {
+              handlers.event?.forEach(handler => handler({ id: `wrap-${index}`, created_at: 199 - index }, "wss://a"));
+            }
+            callback("wss://a");
+          });
+        },
+        unsub,
+      };
+    };
+    const result = await runPagedCatchup({
+      relays: ["wss://a", "wss://b"],
+      filters: [{ until: 200, limit: 40 }],
+      maxBatches: 1,
+      signal: controller.signal,
+      subscribeFn: subscribeFake,
+      isCurrent: () => true,
+      onEvent: async event => {
+        processed.push(event.id);
+        if (processed.length === 2) controller.abort();
+      },
+    });
+    expect(processed).toEqual(["wrap-0", "wrap-1"]);
+    expect(unsub).toHaveBeenCalledTimes(1);
+    expect(result.aborted).toBe(true);
+    expect(result.incomplete).toBe(true);
+    expect(result.nextUntilByRelay["wss://a"]).toBe(200);
+    expect(result.nextUntilByRelay["wss://b"]).toBeUndefined();
+  });
+
+  it("does not subscribe when a history task has already been aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const subscribeFake = vi.fn();
+    const page = await fetchCatchupPage(
+      ["wss://a"], [{ until: 200 }], 100, subscribeFake, undefined, controller.signal
+    );
+    expect(subscribeFake).not.toHaveBeenCalled();
+    expect(page.aborted).toBe(true);
+    expect(page.allRelaysCompleted).toBe(false);
+  });
+});
+
+describe("PR3 incremental idle continuation", () => {
+  it("retains an unprocessed page boundary and does not mark a limited catch-up complete", async () => {
+    const repo = new SyncedMessageRepository(database());
+    let nowMs = 1_900_000_000_000;
+    let backlog = false;
+    let incrementalPages = 0;
+    const pages: number[] = [];
+    const subscribeFake = (_relays: string[], filters: any[]) => {
+      const historical = filters.some(filter => filter.until !== undefined);
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      if (historical) pages.push(filters[0].until);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name !== "eose" || !historical) return;
+          queueMicrotask(() => {
+            if (backlog && incrementalPages++ === 0) {
+              const until = Number(filters[0].until);
+              for (let i = 0; i < 500; i++) {
+                handlers.event?.forEach(handler => handler({
+                  id: `incremental-wrap-${i}`,
+                  created_at: until - i - 1,
+                }, "wss://a"));
+              }
+            }
+            callback("wss://a");
+          });
+        },
+        unsub() {},
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => nowMs,
+      decode: async () => null,
+    });
+    try {
+      await manager.start({
+        accountPubkey: ACCOUNT_A,
+        relays: ["wss://a"],
+        authors: [PEER, ACCOUNT_A],
+        decodeContext: { accountPubkey: ACCOUNT_A },
+      });
+      const priorCompletion = (await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt;
+      expect(priorCompletion).toBe(nowMs);
+      backlog = true;
+      nowMs += 1_000;
+      await manager.resume("manual");
+      expect(pages).toHaveLength(2);
+      const firstUntil = pages[1];
+      expect((await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt).toBe(priorCompletion);
+      nowMs += 1_000;
+      await manager.resume("manual");
+      expect(pages).toHaveLength(3);
+      expect(pages[2]).toBe(firstUntil - 500);
+      expect((await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt).toBe(nowMs);
+    } finally {
+      manager.stop();
+    }
+  });
+});
+
+describe("PR3 background catch-up lifecycle", () => {
+  it("aborts optional history on hide, preserves an in-flight durable write and realtime DM, then repairs on resume", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const documentHandlers = new Map<string, Set<() => void>>();
+    const windowHandlers = new Map<string, Set<() => void>>();
+    const doc = {
+      visibilityState: "visible",
+      addEventListener(name: string, cb: () => void) {
+        if (!documentHandlers.has(name)) documentHandlers.set(name, new Set());
+        documentHandlers.get(name)!.add(cb);
+      },
+      removeEventListener(name: string, cb: () => void) { documentHandlers.get(name)?.delete(cb); },
+    };
+    const win = {
+      addEventListener(name: string, cb: () => void) {
+        if (!windowHandlers.has(name)) windowHandlers.set(name, new Set());
+        windowHandlers.get(name)!.add(cb);
+      },
+      removeEventListener(name: string, cb: () => void) { windowHandlers.get(name)?.delete(cb); },
+    };
+    vi.stubGlobal("document", doc);
+    vi.stubGlobal("window", win);
+
+    let releaseDecode!: () => void;
+    let startedDecode!: () => void;
+    const decodeGate = new Promise<void>(resolve => { releaseDecode = resolve; });
+    const decodeStarted = new Promise<void>(resolve => { startedDecode = resolve; });
+    const subscriptions: Array<{
+      historical: boolean;
+      handlers: Record<string, Array<(...args: any[]) => void>>;
+      unsub: ReturnType<typeof vi.fn>;
+    }> = [];
+    let historyRequests = 0;
+    const subscribeFake = (_relays: string[], filters: any[]) => {
+      const historical = filters.some(filter => filter.until !== undefined);
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      const entry = { historical, handlers, unsub: vi.fn() };
+      subscriptions.push(entry);
+      if (historical) historyRequests++;
+      const requestNumber = historyRequests;
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name !== "eose" || !historical) return;
+          queueMicrotask(() => {
+            if (requestNumber === 1) {
+              handlers.event?.forEach(handler => handler({
+                id: "wrap-background",
+                created_at: 500,
+                canonical: message("inflight-background", 500),
+              }, "wss://a"));
+            }
+            callback("wss://a");
+          });
+        },
+        unsub: entry.unsub,
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => 2_000_000,
+      decode: async (event: any) => {
+        if (event.id === "wrap-background") {
+          startedDecode();
+          await decodeGate;
+        }
+        return event.canonical;
+      },
+    });
+    try {
+      const startup = manager.start({
+        accountPubkey: ACCOUNT_A,
+        relays: ["wss://a"],
+        authors: [PEER, ACCOUNT_A],
+        decodeContext: { accountPubkey: ACCOUNT_A },
+      });
+      await decodeStarted;
+      doc.visibilityState = "hidden";
+      documentHandlers.get("visibilitychange")?.forEach(handler => handler());
+      releaseDecode();
+      await startup;
+      expect(historyRequests).toBe(1);
+      expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillCompletedAt).toBeUndefined();
+      expect(await repo.get(ACCOUNT_A, "inflight-background")).toBeTruthy();
+
+      // Realtime never uses the historical AbortSignal and must still persist
+      // incoming messages while optional catch-up is suspended.
+      const realtime = subscriptions.find(item => !item.historical);
+      expect(realtime).toBeTruthy();
+      realtime!.handlers.event?.forEach(handler => handler({
+        id: "wrap-realtime",
+        created_at: 501,
+        canonical: message("realtime-background", 501),
+      }, "wss://a"));
+      await vi.waitFor(async () => {
+        expect(await repo.get(ACCOUNT_A, "realtime-background")).toBeTruthy();
+      });
+      expect(realtime!.unsub).not.toHaveBeenCalled();
+
+      doc.visibilityState = "visible";
+      documentHandlers.get("visibilitychange")?.forEach(handler => handler());
+      await vi.waitFor(async () => {
+        expect((await repo.getSyncState(ACCOUNT_A)).historyBackfillCompletedAt).toBeTruthy();
+      });
+      expect(historyRequests).toBe(2);
+      expect(subscriptions.filter(item => !item.historical)).toHaveLength(1);
+      expect(await repo.get(ACCOUNT_A, "realtime-background")).toBeTruthy();
+    } finally {
+      releaseDecode();
+      manager.stop();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("message sync session", () => {
   it("does not complete fresh history after partial Relay EOSE and resumes repair later", async () => {
     const repo = new SyncedMessageRepository(database());
