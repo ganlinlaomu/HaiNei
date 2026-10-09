@@ -195,5 +195,8 @@ describe("account message sync generation", () => {
     stopAccountMessageSync();
     expect(managerStop).toHaveBeenCalled();
     expect(cancelDmRelayDirectoryWork).toHaveBeenCalledWith(accountB);
+    // Dispose temporary Relay sockets after active subscriptions have stopped.
+    const { releaseUnusedRelayConnections } = await import("@/nostr/relays");
+    expect(releaseUnusedRelayConnections).toHaveBeenCalledOnce();
   });
 });
