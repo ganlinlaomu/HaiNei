@@ -528,6 +528,172 @@ describe("relay catch-up", () => {
   });
 });
 
+describe("PR4 durable per-Relay reconciliation", () => {
+  it("keeps global completion behind a failed Relay, then finishes only that Relay", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const oldCompletedAt = 1_900_000_000_000;
+    const nowMs = oldCompletedAt + 60_000;
+    await repo.updateSyncState(ACCOUNT_A, {
+      historyBackfillStartedAt: oldCompletedAt - 1_000,
+      historyBackfillCompletedAt: oldCompletedAt - 1_000,
+      historyBackfillRelaySignature: "wss://a|wss://b",
+      lastCatchupCompletedAt: oldCompletedAt,
+      lastSuccessfulSyncAt: oldCompletedAt,
+    });
+    let failB = true;
+    const scanned: string[] = [];
+    const subscribeFake = (relays: string[], filters: any[]) => {
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      const historical = filters.some(f => f.until !== undefined);
+      if (historical) scanned.push(relays[0]);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (!historical) return;
+          if (name === "eose" && relays[0] === "wss://a") queueMicrotask(() => callback("wss://a"));
+          if (name === "failure" && relays[0] === "wss://b" && failB) queueMicrotask(() => callback("wss://b", "closed"));
+          if (name === "eose" && relays[0] === "wss://b" && !failB) queueMicrotask(() => callback("wss://b"));
+        },
+        unsub() {},
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => nowMs,
+    });
+    try {
+      await manager.start({
+        accountPubkey: ACCOUNT_A,
+        relays: ["wss://a", "wss://b"],
+        authors: [PEER, ACCOUNT_A],
+        decodeContext: { accountPubkey: ACCOUNT_A },
+      });
+      let state = await repo.getSyncState(ACCOUNT_A);
+      expect(scanned).toEqual(["wss://a", "wss://b"]);
+      expect(state.lastCatchupCompletedAt).toBe(oldCompletedAt);
+      expect(state.relayStates["wss://a"].lastSuccessfulCatchupAt).toBe(nowMs);
+      expect(state.relayStates["wss://b"]?.lastSuccessfulCatchupAt).toBeUndefined();
+      expect(state.incrementalCatchup?.pendingUntilByRelay).toEqual({ "wss://b": Math.floor(nowMs / 1000) });
+      expect(state.incrementalCatchup?.completedRelays).toEqual(["wss://a"]);
+
+      failB = false;
+      await manager.resume("manual");
+      state = await repo.getSyncState(ACCOUNT_A);
+      expect(scanned).toEqual(["wss://a", "wss://b", "wss://b"]);
+      expect(state.lastCatchupCompletedAt).toBe(nowMs);
+      expect(state.incrementalCatchup).toBeUndefined();
+      expect(state.relayStates["wss://b"].lastSuccessfulCatchupAt).toBe(nowMs);
+    } finally {
+      manager.stop();
+    }
+  });
+
+  it("restores the saved per-Relay cursor after app restart without claiming newer time was scanned", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const oldAt = 1_900_000_000_000;
+    const firstNow = oldAt + 30_000;
+    const restartedNow = firstNow + 3_600_000;
+    await repo.updateSyncState(ACCOUNT_A, {
+      historyBackfillStartedAt: oldAt - 1000,
+      historyBackfillCompletedAt: oldAt - 1000,
+      historyBackfillRelaySignature: "wss://a|wss://b",
+      lastCatchupCompletedAt: oldAt,
+    });
+    let failB = true;
+    const queries: Array<{ relay: string; until: number }> = [];
+    const subscribeFake = (relays: string[], filters: any[]) => {
+      const historical = filters.some(f => f.until !== undefined);
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      if (historical) queries.push({ relay: relays[0], until: filters[0].until });
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (!historical) return;
+          if (name === "eose" && (relays[0] === "wss://a" || !failB)) queueMicrotask(() => callback(relays[0]));
+          if (name === "failure" && relays[0] === "wss://b" && failB) queueMicrotask(() => callback("wss://b", "closed"));
+        },
+        unsub() {},
+      };
+    };
+    const buildManager = (nowMs: number) => new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => nowMs,
+    });
+    const options = {
+      accountPubkey: ACCOUNT_A,
+      relays: ["wss://a", "wss://b"],
+      authors: [PEER, ACCOUNT_A],
+      decodeContext: { accountPubkey: ACCOUNT_A },
+    };
+    const first = buildManager(firstNow);
+    try {
+      await first.start(options);
+      expect((await repo.getSyncState(ACCOUNT_A)).incrementalCatchup?.completedRelays).toEqual(["wss://a"]);
+    } finally {
+      first.stop();
+    }
+    failB = false;
+    const second = buildManager(restartedNow);
+    try {
+      await second.start(options);
+      expect(queries.map(x => x.relay)).toEqual(["wss://a", "wss://b", "wss://b"]);
+      expect(queries[2].until).toBe(Math.floor(firstNow / 1000));
+      const state = await repo.getSyncState(ACCOUNT_A);
+      expect(state.incrementalCatchup).toBeUndefined();
+      expect(state.lastCatchupCompletedAt).toBe(firstNow);
+      // The hour elapsed while the app was closed is still unscanned.
+      await second.resume("manual");
+      expect(queries.slice(-2).map(x => x.relay)).toEqual(["wss://a", "wss://b"]);
+      expect((await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt).toBe(restartedNow);
+    } finally {
+      second.stop();
+    }
+  });
+
+  it("never declares a 500-event identical-second NIP-17 bucket exhausted", async () => {
+    let requests = 0;
+    const subscribeFake = () => {
+      requests++;
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name === "eose") queueMicrotask(() => {
+            for (let i = 0; i < 500; i++) {
+              handlers.event?.forEach(handler => handler({ id: `gift-wrap-${i}`, created_at: 100 }, "wss://a"));
+            }
+            callback("wss://a");
+          });
+        },
+        unsub() {},
+      };
+    };
+    const seen = new Set<string>();
+    const result = await runPagedCatchup({
+      relays: ["wss://a"],
+      filters: [{ since: 0, until: 200, limit: 500 }],
+      maxBatches: 4,
+      subscribeFn: subscribeFake,
+      isCurrent: () => true,
+      onEvent: async event => { seen.add(event.id); },
+    });
+    expect(seen.size).toBe(500);
+    expect(requests).toBe(2);
+    expect(result.paginationStalled).toBe(true);
+    expect(result.incomplete).toBe(true);
+    expect(result.exhaustedHistory).toBe(false);
+    expect(result.nextUntilByRelay["wss://a"]).toBe(100);
+  });
+});
+
 describe("PR3 interruptible history catch-up", () => {
   it("runs just one catch-up relay at a time and one page per relay", async () => {
     const opened: string[] = [];
