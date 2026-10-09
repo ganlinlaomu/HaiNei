@@ -28,7 +28,8 @@ describe("account relay startup ordering", () => {
     expect(localRefresh).toBeGreaterThan(criticalRequest);
     // The first refresh calculates durable local unread asynchronously.
     // The badge must be suppressed BEFORE that refresh can render.
-    expect(pendingUnread).toBeGreaterThan(criticalRequest);
+    expect(pendingUnread).toBeGreaterThan(settingsLoad);
+    expect(pendingUnread).toBeLessThan(criticalRequest);
     expect(pendingUnread).toBeLessThan(localRefresh);
     expect(remoteWait).toBeGreaterThan(localRefresh);
     expect(notificationRefresh).toBeGreaterThan(remoteWait);
