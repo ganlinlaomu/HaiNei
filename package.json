@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.37",
-  "releaseSummary": "私人空间修复备份恢复重复冲突、长笔记阻断同步和历史私信误标已读",
+  "version": "0.1.38",
+  "releaseSummary": "新增双设备扫码安全登入：ECDH 加密接力、验证码核对、一次性凭据",
   "private": true,
   "scripts": {
     "dev": "vite",
