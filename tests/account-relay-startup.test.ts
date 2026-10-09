@@ -122,6 +122,7 @@ describe("account message sync generation", () => {
         "wss://relay.test": { ready: true, state: "connected" },
       })),
       onRelayConnectionState: vi.fn(() => () => undefined),
+      releaseUnusedRelayConnections: vi.fn(),
     }));
     vi.doMock("@/services/dmRelayDirectory", () => ({
       selectOwnDmRelays: (relays: string[]) => relays.slice(0, 2),
@@ -194,5 +195,8 @@ describe("account message sync generation", () => {
     stopAccountMessageSync();
     expect(managerStop).toHaveBeenCalled();
     expect(cancelDmRelayDirectoryWork).toHaveBeenCalledWith(accountB);
+    // Dispose temporary Relay sockets after active subscriptions have stopped.
+    const { releaseUnusedRelayConnections } = await import("@/nostr/relays");
+    expect(releaseUnusedRelayConnections).toHaveBeenCalledOnce();
   });
 });

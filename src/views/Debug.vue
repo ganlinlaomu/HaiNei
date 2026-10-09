@@ -22,7 +22,7 @@
     </section>
 
     <section class="summary-grid">
-      <article class="summary-card"><span>Relay Connected</span><strong>{{ summary.connected }}/{{ summary.relays }}</strong></article>
+      <article class="summary-card"><span>Relay Connected</span><strong>{{ summary.connected }}/{{ summary.relays }}</strong><small>空闲 {{ summary.idle }} · 已释放 {{ summary.released }}</small></article>
       <article class="summary-card"><span>Publish</span><small>success {{ summary.publishOk }} · failed {{ summary.publishFailed }} · timeout {{ summary.publishTimeout }}</small></article>
       <article class="summary-card"><span>NIP-17</span><small>received {{ summary.nipReceived }} · decoded {{ summary.nipDecoded }} · failed {{ summary.nipFailed }}</small></article>
       <article class="summary-card"><span>Storage</span><small>inserted {{ summary.inserted }} · duplicates {{ summary.duplicates }}</small></article>
@@ -36,6 +36,10 @@
           <div class="relay-metrics">
             <span>ready {{ status.ready }}</span><span>queue {{ status.queueLength }}</span><span>subs {{ status.subs }}</span>
             <span>OK {{ status.okHandlers }}</span><span>retry {{ status.reconnectAttempts }}</span>
+            <span>用途 {{ relayUsage(status) }}</span><span v-if="status.pendingPublishes">发送中 {{ status.pendingPublishes }}</span>
+            <span v-if="status.idleExpiresAt">空闲回收 {{ remainingSeconds(status.idleExpiresAt) }}s</span>
+            <span v-if="status.retryAt">下次重连 {{ remainingSeconds(status.retryAt) }}s</span>
+            <span v-if="status.lastDisconnectReason">上次断开 {{ status.lastDisconnectReason }}</span>
           </div>
           <button class="compact-button" @click="reconnect(String(relay))">重新连接</button>
         </div>
@@ -92,16 +96,17 @@
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { APP_VERSION, DB_VERSION } from "@/db/dexie";
-import { inspectRelays, reconnectRelay } from "@/nostr/relays";
+import { getRelayPerformanceDiagnostics, inspectRelays, reconnectRelay, type RelayRuntimeStatus } from "@/nostr/relays";
 import { useDebugLogsStore, type DebugLogCategory, type DebugLogEntry, type DebugLogLevel } from "@/stores/debugLogs";
 import { useKeyStore } from "@/stores/keys";
 
-type RelayStatus = { ready: boolean; queueLength: number; subs: number; okHandlers: number; reconnectAttempts: number };
+type RelayStatus = RelayRuntimeStatus;
 type LastSend = { ts: number; logicalMessageId: string; recipients: number; giftWraps: number; copies: Array<{ eventId: string; target: string; role: string; relays: Array<{ relay: string; status: string; reason?: string }> }> };
 
 const logs = useDebugLogsStore();
 const keys = useKeyStore();
 const relayStatus = ref<Record<string, RelayStatus>>({});
+const relayStats = ref({ idleRelayConnections: 0, idleConnectionsReleased: 0 });
 const now = ref(Date.now());
 const categoryFilter = ref<DebugLogCategory | "all">("all");
 const levelFilter = ref<DebugLogLevel | "all">("all");
@@ -111,7 +116,18 @@ let timer: ReturnType<typeof setInterval> | undefined;
 const accountPrefix = computed(() => keys.pkHex.slice(0, 12));
 const currentTime = computed(() => new Date(now.value).toLocaleString());
 
-function refreshRelayStatus() { relayStatus.value = inspectRelays(); }
+function refreshRelayStatus() {
+  relayStatus.value = inspectRelays();
+  const stats = getRelayPerformanceDiagnostics();
+  relayStats.value = {
+    idleRelayConnections: stats.idleRelayConnections,
+    idleConnectionsReleased: stats.idleConnectionsReleased,
+  };
+}
+function remainingSeconds(deadline: number) { return Math.max(0, Math.ceil((deadline - now.value) / 1000)); }
+function relayUsage(status: RelayStatus) {
+  return status.usage === "subscription" ? "订阅中" : status.usage === "publishing" ? "发布中" : "空闲";
+}
 function reconnect(relay: string) { reconnectRelay(relay); window.setTimeout(refreshRelayStatus, 500); }
 function formatTime(ts: number) { return new Date(ts).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 }); }
 function formatData(data: Record<string, unknown>) { return Object.entries(data).map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`).join("  "); }
@@ -131,6 +147,8 @@ function count(event: string, category?: DebugLogCategory) {
 const summary = computed(() => ({
   connected: Object.values(relayStatus.value).filter((status) => status.ready).length,
   relays: Object.keys(relayStatus.value).length,
+  idle: relayStats.value.idleRelayConnections,
+  released: relayStats.value.idleConnectionsReleased,
   publishOk: count("publish_ok", "publish"), publishFailed: count("publish_rejected", "publish"), publishTimeout: count("publish_timeout", "publish"),
   nipReceived: count("wrap_received", "nip17"), nipDecoded: count("decode_success", "nip17"), nipFailed: count("decode_failed", "nip17"),
   inserted: count("storage_inserted", "storage"), duplicates: count("storage_duplicate", "storage")

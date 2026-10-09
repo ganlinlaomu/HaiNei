@@ -41,7 +41,15 @@ type RelayConn = {
   hasConnected: boolean;
   connectedAt: number;
   shouldReconnect: boolean;
+  disposing: boolean;
   connectStartedAt: number;
+  activePublishes: number;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  idleSince: number | null;
+  idleExpiresAt: number | null;
+  retryAt: number | null;
+  pendingCloseReason: "timeout" | "session-refresh" | null;
+  lastDisconnectReason: "closed" | "timeout" | "session-refresh" | "manual" | "settings" | "idle-ttl" | null;
   connect: () => void;
 };
 
@@ -52,8 +60,12 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_CAP_MS = 60_000;
 const RECONNECT_STABLE_MS = 30_000;
 const EOSE_TIMEOUT = 8_000;
+// Only preconnected/temporary sockets without subscribers or pending sends
+// expire. Active NIP-17 receive points have no TTL and remain connected.
+export const IDLE_RELAY_TTL_MS = 20_000;
 
 const relaysMap: Record<string, RelayConn> = {};
+let idleConnectionsReleased = 0;
 export type RelaySubscriptionFailureReason = "timeout" | "closed" | "disconnected";
 
 export type RelayConnectionEvent = {
@@ -73,6 +85,12 @@ export type RelayRuntimeStatus = {
   okHandlers: number;
   reconnectAttempts: number;
   connectStartedAt: number;
+  usage: "subscription" | "publishing" | "idle";
+  pendingPublishes: number;
+  idleSince: number | null;
+  idleExpiresAt: number | null;
+  retryAt: number | null;
+  lastDisconnectReason: RelayConn["lastDisconnectReason"];
 };
 const connectionListeners = new Set<(event: RelayConnectionEvent) => void>();
 
@@ -86,6 +104,104 @@ function emitConnectionState(event: RelayConnectionEvent) {
     try { listener(event); } catch (e) { logger.warn("[relay] connection listener failed", e); }
   }
 }
+
+/** A connection may only be reclaimed after EVERY consumer has released it. */
+function hasRelayDemand(conn: RelayConn) {
+  return conn.subs.size > 0 || conn.activePublishes > 0 || conn.okHandlers.size > 0;
+}
+
+function cancelRelayIdleTimer(conn: RelayConn) {
+  if (conn.idleTimer !== null) clearTimeout(conn.idleTimer);
+  conn.idleTimer = null;
+  conn.idleSince = null;
+  conn.idleExpiresAt = null;
+}
+
+function failRelayAcknowledgements(conn: RelayConn, reason: string) {
+  // Never discard an OK callback without resolving the associated publisher.
+  // The outgoing outbox may safely retry after an explicit negative outcome.
+  const pending = [...conn.okHandlers.values()];
+  conn.okHandlers.clear();
+  conn.queue = conn.queue.filter(frame => {
+    try { return JSON.parse(frame)?.[0] !== "EVENT"; } catch { return true; }
+  });
+  for (const confirm of pending) {
+    try { confirm({ ok: false, msg: reason }); } catch (error) { logger.warn("[relay] publish failure handler failed", error); }
+  }
+}
+
+function releaseRelayConnection(conn: RelayConn, reason: "idle-ttl" | "settings" | "manual") {
+  if (relaysMap[conn.url] !== conn || conn.disposing) return false;
+  if (reason === "idle-ttl" && hasRelayDemand(conn)) return false;
+  // A failure callback can synchronously unsubscribe its own REQ. Prevent
+  // nested release from disposing this socket twice or emitting stale state.
+  conn.disposing = true;
+  conn.lastDisconnectReason = reason;
+  conn.shouldReconnect = false;
+  conn.generation++;
+  cancelRelayIdleTimer(conn);
+  if (conn.reconnectTimer !== null) clearTimeout(conn.reconnectTimer);
+  if (conn.connectTimer !== null) clearTimeout(conn.connectTimer);
+  if (conn.sessionRefreshTimer !== null) clearTimeout(conn.sessionRefreshTimer);
+  conn.reconnectTimer = null;
+  conn.retryAt = null;
+  conn.connectTimer = null;
+  conn.sessionRefreshTimer = null;
+  conn.connecting = false;
+  for (const subId of conn.subs.keys()) {
+    settleSubscription(conn, subId, "failure", "disconnected");
+    const timer = conn.subs.get(subId)?.eoseTimer;
+    if (timer) clearTimeout(timer);
+  }
+  conn.subs.clear();
+  failRelayAcknowledgements(conn, reason);
+  const wasReady = conn.ready;
+  const socket = conn.ws;
+  conn.ws = null;
+  conn.ready = false;
+  conn.queue = [];
+  delete relaysMap[conn.url];
+  try { socket?.close(); } catch {}
+  if (reason === "idle-ttl") idleConnectionsReleased++;
+  // Explicit teardown must also wake publishers waiting on a socket that
+  // never reached OPEN; do not make account switches wait for the 4s timeout.
+  if (wasReady || reason !== "idle-ttl") {
+    emitConnectionState({ url: conn.url, connected: false, reconnected: conn.hasConnected, failed: false, at: Date.now() });
+  }
+  debugLog("relay", "relay_released", { relay: conn.url, reason }, "info");
+  return true;
+}
+
+function updateRelayIdleLease(conn: RelayConn) {
+  if (relaysMap[conn.url] !== conn || conn.disposing) return;
+  if (hasRelayDemand(conn)) {
+    cancelRelayIdleTimer(conn);
+    return;
+  }
+  if (conn.idleTimer !== null) return;
+  conn.idleSince = Date.now();
+  conn.idleExpiresAt = conn.idleSince + IDLE_RELAY_TTL_MS;
+  conn.idleTimer = setTimeout(() => {
+    conn.idleTimer = null;
+    if (!hasRelayDemand(conn)) releaseRelayConnection(conn, "idle-ttl");
+    else cancelRelayIdleTimer(conn);
+  }, IDLE_RELAY_TTL_MS);
+  (conn.idleTimer as any).unref?.();
+}
+
+function renewRelayIdleLease(conn: RelayConn) {
+  if (!hasRelayDemand(conn)) cancelRelayIdleTimer(conn);
+  updateRelayIdleLease(conn);
+}
+
+/** Release account-independent warm/discovery sockets after session teardown.
+ * A retained realtime subscription or in-flight publish always wins. */
+export function releaseUnusedRelayConnections() {
+  for (const conn of Object.values(relaysMap)) {
+    if (!hasRelayDemand(conn)) releaseRelayConnection(conn, "manual");
+  }
+}
+
 
 function settleSubscription(
   conn: RelayConn,
@@ -229,23 +345,30 @@ function ensureRelayConn(url: string): RelayConn {
     connecting: false,
     generation: 0,
     reconnectAttempts: 0,
+    activePublishes: 0,
+    idleTimer: null,
+    idleSince: null,
+    idleExpiresAt: null,
+    retryAt: null,
+    pendingCloseReason: null,
+    lastDisconnectReason: null,
     hasConnected: false,
     connectedAt: 0,
     shouldReconnect: true,
+    disposing: false,
     connectStartedAt: Date.now(),
     connect: () => undefined
   };
   relaysMap[url] = conn;
 
   const scheduleReconnect = (create: () => void) => {
-    if (!conn.shouldReconnect) return;
-    const hasDemand = conn.subs.size > 0 || conn.okHandlers.size > 0 || conn.queue.length > 0;
-    if (!hasDemand) return;
+    if (!conn.shouldReconnect || !hasRelayDemand(conn)) return;
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     const attempt = conn.reconnectAttempts++;
     const delay = Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** Math.min(attempt, 6));
     const jitteredDelay = Math.min(RECONNECT_CAP_MS, Math.round(delay * (0.75 + Math.random() * 0.5)));
+    conn.retryAt = Date.now() + jitteredDelay;
     debugLog("relay", "relay_reconnect_scheduled", {
       relay: url,
       reconnectAttempts: conn.reconnectAttempts,
@@ -253,6 +376,8 @@ function ensureRelayConn(url: string): RelayConn {
     }, "warn");
     conn.reconnectTimer = window.setTimeout(() => {
       conn.reconnectTimer = null;
+      conn.retryAt = null;
+      if (!hasRelayDemand(conn) || relaysMap[url] !== conn) return;
       performanceCounters.relayReconnectCount++;
       create();
     }, jitteredDelay);
@@ -288,6 +413,7 @@ function ensureRelayConn(url: string): RelayConn {
           reconnectAttempts: conn.reconnectAttempts,
           timeoutMs: CONNECTION_OPEN_TIMEOUT
         }, "warn");
+        conn.pendingCloseReason = "timeout";
         try { ws.close(); } catch {}
       }, CONNECTION_OPEN_TIMEOUT);
 
@@ -296,6 +422,7 @@ function ensureRelayConn(url: string): RelayConn {
         if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
         conn.connectTimer = null;
         const reconnected = conn.hasConnected;
+        conn.pendingCloseReason = null;
         const reconnectAttempts = conn.reconnectAttempts;
         conn.ready = true;
         conn.hasConnected = true;
@@ -307,6 +434,7 @@ function ensureRelayConn(url: string): RelayConn {
           conn.sessionRefreshTimer = window.setTimeout(() => {
             if (conn.ws !== ws || !conn.shouldReconnect) return;
             debugLog("relay", "relay_session_refresh", { relay: url }, "info");
+            conn.pendingCloseReason = "session-refresh";
             try { ws.close(4001, "relay session refresh"); } catch {}
           }, refreshIn);
         }
@@ -415,6 +543,9 @@ function ensureRelayConn(url: string): RelayConn {
         if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
         conn.sessionRefreshTimer = null;
         if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
+        conn.retryAt = null;
+        conn.lastDisconnectReason = conn.pendingCloseReason || "closed";
+        conn.pendingCloseReason = null;
         emitConnectionState({
           url,
           connected: false,
@@ -460,6 +591,7 @@ function ensureRelayConn(url: string): RelayConn {
   };
 
   conn.connect = () => { void create(); };
+  updateRelayIdleLease(conn);
   void create();
   return conn;
 }
@@ -470,9 +602,11 @@ export function warmRelays(relays: string[]) {
   for (const url of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
     const existing = relaysMap[url];
     const conn = existing || ensureRelayConn(url);
+    renewRelayIdleLease(conn);
     if (!existing || conn.ready || conn.connecting || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
+    conn.retryAt = null;
     conn.shouldReconnect = true;
     conn.connect();
   }
@@ -508,6 +642,7 @@ export function subscribe(relays: string[], filtersArray: any[]) {
     const conn = ensureRelayConn(url);
     const subId = "sub_" + Math.random().toString(36).slice(2, 10);
     conn.subs.set(subId, { filters, handlers: new Set(), eoseHandlers: new Set(), failureHandlers: new Set(), settled: false });
+    updateRelayIdleLease(conn);
     debugLog("subscription", "subscription_created", subscriptionDiagnostic(conn, subId, filters), "info");
     sendRaw(conn, ["REQ", subId, ...filters]);
     const timer = setTimeout(() => {
@@ -564,125 +699,126 @@ export function subscribe(relays: string[], filtersArray: any[]) {
         }
         debugLog("subscription", "subscription_closed", subscriptionDiagnostic(conn, subId), "info");
         conn.subs.delete(subId);
-        if (conn.subs.size === 0 && conn.okHandlers.size === 0) {
-          conn.shouldReconnect = false;
-          conn.generation++;
-          if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
-          if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
-          if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
-          conn.reconnectTimer = null;
-          conn.connectTimer = null;
-          conn.sessionRefreshTimer = null;
-          conn.connecting = false;
-          const wasReady = conn.ready;
-          const socket = conn.ws;
-          conn.ws = null;
-          conn.ready = false;
-          conn.queue = conn.queue.filter(message => {
-            try { return JSON.parse(message)?.[0] !== "REQ"; } catch { return true; }
-          });
-          try { socket?.close(); } catch {}
-          delete relaysMap[url];
-          if (wasReady) emitConnectionState({ url, connected: false, reconnected: conn.hasConnected, failed: false, at: Date.now() });
+        if (!hasRelayDemand(conn)) {
+          // Directory queries and completed one-off subscriptions close
+          // immediately. The next lookup creates a fresh temporary socket.
+          releaseRelayConnection(conn, "manual");
+        } else {
+          updateRelayIdleLease(conn);
         }
       }
     }
   };
 }
 
+/** A single wake-up signal and one bounded timeout replace 150 ms polling.
+ * The listener is always disposed when a socket opens, is discarded or times out. */
+function waitForRelayReady(conn: RelayConn, timeoutMs: number): Promise<boolean> {
+  if (relaysMap[conn.url] !== conn || !conn.shouldReconnect) return Promise.resolve(false);
+  if (conn.ready) return Promise.resolve(true);
+  return new Promise(resolve => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let unsubscribe: () => void = () => {};
+    const finish = (ready: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      unsubscribe();
+      resolve(ready);
+    };
+    unsubscribe = onRelayConnectionState(event => {
+      if (event.url !== conn.url) return;
+      if (relaysMap[conn.url] !== conn || !conn.shouldReconnect) finish(false);
+      else if (event.connected && conn.ready) finish(true);
+    });
+    timer = setTimeout(() => finish(false), timeoutMs);
+    // Recheck after subscribing; a socket may open in the same event loop turn.
+    if (conn.ready) finish(true);
+    else if (relaysMap[conn.url] !== conn || !conn.shouldReconnect) finish(false);
+  });
+}
+
 /**
  * publish(relays, event)
  * - returns Promise of array { relay, ok, reason?, ts }
+ * - pending publishes retain ownership of the socket until settled
  */
 export async function publish(relays: string[], event: any): Promise<Array<{ relay: string; ok: boolean; reason?: any; ts: number }>> {
   const promises = [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))].map(async (url) => {
     const conn = ensureRelayConn(url);
+    conn.activePublishes++;
+    updateRelayIdleLease(conn);
     const diagnostic = eventDiagnostic(conn, event);
-    debugLog("publish", "publish_start", diagnostic, "info");
-    debugLog("publish", "publish_waiting_connection", {
-      ...diagnostic,
-      ready: conn.ready,
-      queueLength: conn.queue.length,
-      wsReadyState: conn.ws?.readyState ?? null
-    });
-    const waited = await new Promise<boolean>((resolve) => {
-      const start = Date.now();
-      const check = () => {
-        if (conn.ready) return resolve(true);
-        if (Date.now() - start > CONNECT_TIMEOUT) return resolve(false);
-        setTimeout(check, 150);
-      };
-      check();
-    });
-    debugLog("publish", waited ? "publish_connection_ready" : "publish_connection_timeout", {
-      ...diagnostic,
-      waited,
-      ready: conn.ready,
-      queueLength: conn.queue.length,
-      wsReadyState: conn.ws?.readyState ?? null
-    }, waited ? "debug" : "warn");
-
-    const id = event.id || (Math.random().toString(36).slice(2, 10));
-    const okPromise = new Promise<{ ok: boolean; msg?: any }>((resolve) => {
-      const h = (res: any) => {
-        const ok = !!res.ok;
-        debugLog("publish", ok ? "publish_ok" : "publish_rejected", {
-          ...diagnostic,
-          reason: res.msg
-        }, ok ? "info" : "warn");
-        resolve({ ok, msg: res.msg });
-      };
-      conn.okHandlers.set(id, h);
-      setTimeout(() => {
-        if (conn.okHandlers.has(id)) {
+    const id = event.id || Math.random().toString(36).slice(2, 10);
+    let confirmationTimer: ReturnType<typeof setTimeout> | null = null;
+    let confirmHandler: ((res: any) => void) | null = null;
+    try {
+      debugLog("publish", "publish_start", diagnostic, "info");
+      debugLog("publish", "publish_waiting_connection", {
+        ...diagnostic, ready: conn.ready, queueLength: conn.queue.length,
+        wsReadyState: conn.ws?.readyState ?? null,
+      });
+      const waited = await waitForRelayReady(conn, CONNECT_TIMEOUT);
+      debugLog("publish", waited ? "publish_connection_ready" : "publish_connection_timeout", {
+        ...diagnostic, waited, ready: conn.ready, queueLength: conn.queue.length,
+        wsReadyState: conn.ws?.readyState ?? null,
+      }, waited ? "debug" : "warn");
+      if (relaysMap[url] !== conn || !conn.shouldReconnect) {
+        return { relay: url, ok: false, reason: "disconnected", ts: Date.now() };
+      }
+      const outcome = await new Promise<{ ok: boolean; msg?: any }>((resolve) => {
+        const handler = (res: any) => {
+          if (confirmationTimer !== null) clearTimeout(confirmationTimer);
+          confirmationTimer = null;
+          if (conn.okHandlers.get(id) === handler) conn.okHandlers.delete(id);
+          const ok = !!res.ok;
+          debugLog("publish", ok ? "publish_ok" : "publish_rejected", {
+            ...diagnostic, reason: res.msg,
+          }, ok ? "info" : "warn");
+          resolve({ ok, msg: res.msg });
+        };
+        confirmHandler = handler;
+        conn.okHandlers.set(id, handler);
+        try {
+          const delivery = sendRaw(conn, ["EVENT", event]);
+          if (delivery === "queued") {
+            debugLog("publish", "publish_send_queued", {
+              ...diagnostic, ready: conn.ready, queueLength: conn.queue.length,
+              wsReadyState: conn.ws?.readyState ?? null,
+            }, "warn");
+          }
+        } catch (error) {
+          handler({ ok: false, msg: error instanceof Error ? error.name : "send_failed" });
+          return;
+        }
+        confirmationTimer = setTimeout(() => {
+          if (conn.okHandlers.get(id) !== handler) return;
           conn.okHandlers.delete(id);
+          confirmationTimer = null;
           debugLog("publish", "publish_timeout", {
-            ...diagnostic,
-            ready: conn.ready,
-            queueLength: conn.queue.length,
-            wsReadyState: conn.ws?.readyState ?? null
+            ...diagnostic, ready: conn.ready, queueLength: conn.queue.length,
+            wsReadyState: conn.ws?.readyState ?? null,
           }, "warn");
           resolve({ ok: false, msg: "timeout" });
-        }
-      }, PUBLISH_TIMEOUT);
-    });
-
-    try {
-      const delivery = sendRaw(conn, ["EVENT", event]);
-      if (delivery === "queued") {
-        debugLog("publish", "publish_send_queued", {
-          ...diagnostic,
-          ready: conn.ready,
-          queueLength: conn.queue.length,
-          wsReadyState: conn.ws?.readyState ?? null
-        }, "warn");
-      }
-    } catch (e) {
-      conn.okHandlers.delete(id);
-      debugLog("publish", "publish_rejected", {
-        ...diagnostic,
-        reason: e instanceof Error ? e.name : "send_failed"
-      }, "error");
-      return { relay: url, ok: false, reason: e, ts: Date.now() };
+        }, PUBLISH_TIMEOUT);
+      });
+      return { relay: url, ok: outcome.ok, reason: outcome.msg, ts: Date.now() };
+    } finally {
+      if (confirmationTimer !== null) clearTimeout(confirmationTimer);
+      if (confirmHandler && conn.okHandlers.get(id) === confirmHandler) conn.okHandlers.delete(id);
+      // Cancel queued events on timeout/abort; otherwise an already-failed
+      // event could be silently transmitted by a later unrelated connection.
+      conn.queue = conn.queue.filter(frame => {
+        try {
+          const payload = JSON.parse(frame);
+          return !(payload?.[0] === "EVENT" && payload?.[1]?.id === id);
+        } catch { return true; }
+      });
+      conn.activePublishes = Math.max(0, conn.activePublishes - 1);
+      updateRelayIdleLease(conn);
     }
-
-    const r = await okPromise;
-    conn.queue = conn.queue.filter(message => {
-      try {
-        const payload = JSON.parse(message);
-        return !(payload?.[0] === "EVENT" && payload?.[1]?.id === id);
-      } catch { return true; }
-    });
-    if (conn.subs.size === 0 && conn.okHandlers.size === 0) {
-      conn.shouldReconnect = false;
-      if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
-      conn.reconnectTimer = null;
-      try { conn.ws?.close(); } catch {}
-      delete relaysMap[url];
-    }
-    return { relay: url, ok: !!r.ok, reason: r.msg, ts: Date.now() };
   });
-
   return Promise.all(promises);
 }
 
@@ -704,10 +840,16 @@ export function inspectRelays(): Record<string, RelayRuntimeStatus> {
       ready: r.ready,
       state,
       queueLength: r.queue.length,
-      subs: Array.from(r.subs.keys()).length,
-      okHandlers: Array.from(r.okHandlers.keys()).length,
+      subs: r.subs.size,
+      okHandlers: r.okHandlers.size,
       reconnectAttempts: r.reconnectAttempts,
-      connectStartedAt: r.connectStartedAt
+      connectStartedAt: r.connectStartedAt,
+      usage: r.subs.size ? "subscription" : hasRelayDemand(r) ? "publishing" : "idle",
+      pendingPublishes: r.activePublishes,
+      idleSince: r.idleSince,
+      idleExpiresAt: r.idleExpiresAt,
+      retryAt: r.retryAt,
+      lastDisconnectReason: r.lastDisconnectReason
     };
   }
   return out;
@@ -718,6 +860,9 @@ export function getRelayPerformanceDiagnostics() {
   return {
     activeRelayConnections: states.filter(state => state.ready || state.state === "connecting").length,
     subscriptionCount: states.reduce((sum, state) => sum + state.subs, 0),
+    pendingPublishes: states.reduce((sum, state) => sum + state.pendingPublishes, 0),
+    idleRelayConnections: states.filter(state => state.usage === "idle").length,
+    idleConnectionsReleased,
     reconnectCount: performanceCounters.relayReconnectCount,
     indexedDbQueueSize: performanceCounters.indexedDbQueueSize,
     duplicateEventsDropped: performanceCounters.duplicateEventsDropped,
@@ -729,66 +874,58 @@ export function getRelayPerformanceDiagnostics() {
 }
 
 /**
- * reconnectRelay(url): force reconnect by closing and recreating connection
+ * Force a single Relay to reconnect without replacing its connection object.
+ * Retaining its subscription map also retains REQ identity. An in-flight
+ * publication is explicitly rejected for outbox retry, never orphaned.
  */
 export function reconnectRelay(url: string) {
   url = normalizeRelayUrl(url);
   if (!url) return;
-  const r = relaysMap[url];
-  if (!r) {
-    // create a new connection proactively
-    ensureRelayConn(url);
+  const conn = relaysMap[url];
+  if (!conn) {
+    ensureRelayConn(url); // manual warm connection, covered by idle TTL
     return;
   }
   try {
-    const subscriptions = r.subs;
-    r.shouldReconnect = false;
-    r.generation++;
-    if (r.reconnectTimer) window.clearTimeout(r.reconnectTimer);
-    if (r.connectTimer) window.clearTimeout(r.connectTimer);
-    if (r.sessionRefreshTimer) window.clearTimeout(r.sessionRefreshTimer);
-    r.reconnectTimer = null;
-    r.connectTimer = null;
-    r.sessionRefreshTimer = null;
-    r.connecting = false;
-    try { r.ws?.close(); } catch {}
-    r.ready = false;
-    r.okHandlers.clear();
-    delete relaysMap[url];
-    const replacement = ensureRelayConn(url);
-    replacement.subs = subscriptions;
-  } catch (e) {
+    conn.lastDisconnectReason = "manual";
+    conn.shouldReconnect = true;
+    conn.generation++;
+    if (conn.reconnectTimer !== null) clearTimeout(conn.reconnectTimer);
+    if (conn.connectTimer !== null) clearTimeout(conn.connectTimer);
+    if (conn.sessionRefreshTimer !== null) clearTimeout(conn.sessionRefreshTimer);
+    conn.reconnectTimer = null;
+    conn.retryAt = null;
+    conn.connectTimer = null;
+    conn.sessionRefreshTimer = null;
+    conn.connecting = false;
+    const socket = conn.ws;
+    const wasReady = conn.ready;
+    conn.ws = null;
+    conn.ready = false;
+    // The previous socket's OK response is now unknowable. Explicitly fail
+    // its pending confirmations; do not discard callbacks or replay a possibly
+    // accepted encrypted event behind the publisher's back.
+    failRelayAcknowledgements(conn, "relay_reconnected");
+    try { socket?.close(); } catch {}
+    if (wasReady) emitConnectionState({ url, connected: false, reconnected: conn.hasConnected, failed: false, at: Date.now() });
+    renewRelayIdleLease(conn);
+    conn.connect();
+  } catch (error) {
     debugLog("relay", "relay_error", {
       relay: url,
-      reconnectAttempts: r.reconnectAttempts,
-      reason: e instanceof Error ? e.name : "reconnect_failed"
+      reconnectAttempts: conn.reconnectAttempts,
+      reason: error instanceof Error ? error.name : "reconnect_failed",
     }, "error");
-    logger.warn("reconnectRelay error", e);
+    logger.warn("reconnectRelay error", error);
   }
 }
 
-/** Permanently stop and forget a relay that was removed from settings. */
+/** Permanently stop and forget a Relay removed from settings or locked out. */
 export function disconnectRelay(url: string) {
   url = normalizeRelayUrl(url);
   if (!url) return;
   const conn = relaysMap[url];
-  if (!conn) return;
-  conn.shouldReconnect = false;
-  conn.generation++;
-  if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
-  if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
-  if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
-  conn.reconnectTimer = null;
-  conn.connectTimer = null;
-  conn.sessionRefreshTimer = null;
-  conn.connecting = false;
-  conn.queue = [];
-  conn.subs.clear();
-  conn.okHandlers.clear();
-  try { conn.ws?.close(); } catch {}
-  conn.ws = null;
-  conn.ready = false;
-  delete relaysMap[url];
+  if (conn) releaseRelayConnection(conn, "settings");
 }
 
 /**
@@ -826,9 +963,11 @@ export function restoreRelayConnections(relays = getRelaysFromStorage("read")) {
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
   for (const url of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
     const conn = relaysMap[url] || ensureRelayConn(url);
+    renewRelayIdleLease(conn);
     if (conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
+    conn.retryAt = null;
     conn.shouldReconnect = true;
     conn.connect();
   }

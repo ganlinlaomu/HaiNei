@@ -348,6 +348,179 @@ describe("relay reconnect", () => {
     subscription.unsub();
   });
 
+  it("reclaims a warmed idle socket at 20s with no subscribers or publishing work", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { warmRelays, inspectRelays, IDLE_RELAY_TTL_MS, getRelayPerformanceDiagnostics } = await import("@/nostr/relays");
+    warmRelays(["wss://warm-ttl.test"]);
+    const socket = MockWebSocket.instances[0];
+    socket.emit("open", {});
+    expect(inspectRelays()["wss://warm-ttl.test"]).toMatchObject({
+      usage: "idle", subs: 0, pendingPublishes: 0,
+      idleExpiresAt: Date.now() + IDLE_RELAY_TTL_MS,
+    });
+    await vi.advanceTimersByTimeAsync(IDLE_RELAY_TTL_MS - 1);
+    expect(inspectRelays()["wss://warm-ttl.test"]).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(inspectRelays()["wss://warm-ttl.test"]).toBeUndefined();
+    expect(socket.readyState).toBe(3);
+    expect(getRelayPerformanceDiagnostics().idleConnectionsReleased).toBe(1);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it("never expires a subscribed realtime inbox, even if its EOSE timeout elapsed", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { warmRelays, subscribe, inspectRelays, IDLE_RELAY_TTL_MS } = await import("@/nostr/relays");
+    warmRelays(["wss://receive.test"]);
+    const socket = MockWebSocket.instances[0];
+    socket.emit("open", {});
+    const first = subscribe(["wss://receive.test"], [{ kinds: [1059] }]);
+    const second = subscribe(["wss://receive.test"], [{ kinds: [1] }]);
+    expect(inspectRelays()["wss://receive.test"]).toMatchObject({ subs: 2, idleExpiresAt: null, usage: "subscription" });
+    await vi.advanceTimersByTimeAsync(IDLE_RELAY_TTL_MS * 3);
+    expect(inspectRelays()["wss://receive.test"].subs).toBe(2);
+    expect(socket.readyState).toBe(1);
+    first.unsub();
+    expect(inspectRelays()["wss://receive.test"].subs).toBe(1);
+    second.unsub();
+    expect(inspectRelays()["wss://receive.test"]).toBeUndefined();
+  });
+
+  it("cancels the warm TTL while publishing, and starts a new idle lease after OK", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { warmRelays, publish, inspectRelays, IDLE_RELAY_TTL_MS } = await import("@/nostr/relays");
+    warmRelays(["wss://warm-publish.test"]);
+    const socket = MockWebSocket.instances[0];
+    socket.emit("open", {});
+    await vi.advanceTimersByTimeAsync(IDLE_RELAY_TTL_MS - 1_000);
+    const evt = { id: "e".repeat(64), kind: 1059, tags: [["p", "b".repeat(64)]], content: "ciphertext" };
+    const sending = publish(["wss://warm-publish.test"], evt);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(inspectRelays()["wss://warm-publish.test"]).toMatchObject({
+      pendingPublishes: 1, idleExpiresAt: null, usage: "publishing",
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(inspectRelays()["wss://warm-publish.test"].ready).toBe(true);
+    socket.emit("message", { data: JSON.stringify(["OK", evt.id, true, "saved"]) });
+    await expect(sending).resolves.toMatchObject([{ ok: true }]);
+    expect(inspectRelays()["wss://warm-publish.test"]).toMatchObject({
+      pendingPublishes: 0, usage: "idle", idleExpiresAt: Date.now() + IDLE_RELAY_TTL_MS,
+    });
+    await vi.advanceTimersByTimeAsync(IDLE_RELAY_TTL_MS);
+    expect(inspectRelays()["wss://warm-publish.test"]).toBeUndefined();
+  });
+
+  it("makes manual reconnect fail only ambiguous in-flight OKs and preserve active REQ identity", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { publish, subscribe, reconnectRelay, inspectRelays } = await import("@/nostr/relays");
+    const sub = subscribe(["wss://manual-publish.test"], [{ kinds: [1059] }]);
+    const first = MockWebSocket.instances[0];
+    first.emit("open", {});
+    const oldReq = first.sent.map(x => JSON.parse(x)).find(x => x[0] === "REQ");
+    const evt = { id: "f".repeat(64), kind: 1059, tags: [["p", "a".repeat(64)]], content: "encrypted" };
+    const sending = publish(["wss://manual-publish.test"], evt);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(inspectRelays()["wss://manual-publish.test"].okHandlers).toBe(1);
+    reconnectRelay("wss://manual-publish.test");
+    await expect(sending).resolves.toMatchObject([{ ok: false, reason: "relay_reconnected" }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(inspectRelays()["wss://manual-publish.test"]).toMatchObject({ subs: 1, pendingPublishes: 0, okHandlers: 0 });
+    const current = MockWebSocket.instances[1];
+    current.emit("open", {});
+    const newReq = current.sent.map(x => JSON.parse(x)).find(x => x[0] === "REQ");
+    expect(newReq).toEqual(oldReq);
+    first.emit("message", { data: JSON.stringify(["OK", evt.id, true, "late"]) });
+    expect(inspectRelays()["wss://manual-publish.test"].okHandlers).toBe(0);
+    sub.unsub();
+  });
+
+  it("renews a warm socket idle deadline when manual reconnect starts near expiry", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { warmRelays, reconnectRelay, inspectRelays, IDLE_RELAY_TTL_MS } = await import("@/nostr/relays");
+    warmRelays(["wss://renew.test"]);
+    MockWebSocket.instances[0].emit("open", {});
+    await vi.advanceTimersByTimeAsync(IDLE_RELAY_TTL_MS - 100);
+    reconnectRelay("wss://renew.test");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(inspectRelays()["wss://renew.test"].idleExpiresAt).toBe(Date.now() + IDLE_RELAY_TTL_MS);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(inspectRelays()["wss://renew.test"]).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(IDLE_RELAY_TTL_MS);
+    expect(inspectRelays()["wss://renew.test"]).toBeUndefined();
+  });
+
+  it("sends immediately after the socket opens without waiting for a 150ms readiness poll", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { publish, inspectRelays } = await import("@/nostr/relays");
+    const evt = { id: "c".repeat(64), kind: 1059, tags: [["p", "a".repeat(64)]], content: "encrypted" };
+    const sending = publish(["wss://instant.test"], evt);
+    const socket = MockWebSocket.instances[0];
+    socket.emit("open", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.sent.map(x => JSON.parse(x)[0])).toContain("EVENT");
+    expect(inspectRelays()["wss://instant.test"].pendingPublishes).toBe(1);
+    socket.emit("message", { data: JSON.stringify(["OK", evt.id, true, "saved"]) });
+    await expect(sending).resolves.toMatchObject([{ ok: true }]);
+  });
+
+  it("account teardown reclaims only unowned sockets and leaves active publishers subscribed or pending", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { warmRelays, subscribe, inspectRelays, releaseUnusedRelayConnections } = await import("@/nostr/relays");
+    warmRelays(["wss://former-account.test", "wss://retained.test"]);
+    const sub = subscribe(["wss://retained.test"], [{ kinds: [1059] }]);
+    releaseUnusedRelayConnections();
+    expect(inspectRelays()["wss://former-account.test"]).toBeUndefined();
+    expect(inspectRelays()["wss://retained.test"].subs).toBe(1);
+    sub.unsub();
+    expect(inspectRelays()["wss://retained.test"]).toBeUndefined();
+  });
+
+  it("aborts a pre-OPEN publisher immediately when settings remove its Relay", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { publish, disconnectRelay, inspectRelays } = await import("@/nostr/relays");
+    const evt = { id: "e".repeat(64), kind: 1059, tags: [["p", "b".repeat(64)]], content: "encrypted" };
+    const pending = publish(["wss://removed-before-open.test"], evt);
+    expect(inspectRelays()["wss://removed-before-open.test"].pendingPublishes).toBe(1);
+    disconnectRelay("wss://removed-before-open.test");
+    await expect(pending).resolves.toMatchObject([{ ok: false, reason: "disconnected" }]);
+    expect(inspectRelays()["wss://removed-before-open.test"]).toBeUndefined();
+  });
+
+  it("explicit disconnect settles a pending encrypted publication instead of silently discarding it", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { publish, disconnectRelay, inspectRelays } = await import("@/nostr/relays");
+    const evt = { id: "d".repeat(64), kind: 1059, tags: [["p", "a".repeat(64)]], content: "encrypted" };
+    const sending = publish(["wss://abandon.test"], evt);
+    const ws = MockWebSocket.instances[0];
+    ws.emit("open", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(inspectRelays()["wss://abandon.test"].okHandlers).toBe(1);
+    disconnectRelay("wss://abandon.test");
+    await expect(sending).resolves.toMatchObject([{ ok: false, reason: "settings" }]);
+    expect(inspectRelays()["wss://abandon.test"]).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
   it("replays active REQ with the original subscription id", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0.5);
