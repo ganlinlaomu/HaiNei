@@ -592,6 +592,62 @@ describe("PR4 durable per-Relay reconciliation", () => {
     }
   });
 
+  it("does not advance an account checkpoint from one Relay reconnect alone", async () => {
+    const repo = new SyncedMessageRepository(database());
+    let clockMs = 1_900_000_000_000;
+    const status = vi.fn();
+    const scanned: string[] = [];
+    const subscribeFake = (relays: string[], filters: any[]) => {
+      const historical = filters.some(f => f.until !== undefined);
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      if (historical) scanned.push(relays[0]);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name === "eose" && historical) queueMicrotask(() => callback(relays[0]));
+        },
+        unsub() {},
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => clockMs,
+    });
+    try {
+      const options = {
+        accountPubkey: ACCOUNT_A,
+        relays: ["wss://a", "wss://b"],
+        authors: [PEER, ACCOUNT_A],
+        decodeContext: { accountPubkey: ACCOUNT_A },
+        onCatchupStatus: status,
+      };
+      await manager.start(options);
+      expect(status).toHaveBeenLastCalledWith("settled");
+      const lastFull = (await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt;
+      clockMs += 60_000;
+      scanned.length = 0;
+      await manager.resume("reconnect", "wss://a");
+      let state = await repo.getSyncState(ACCOUNT_A);
+      expect(scanned).toEqual(["wss://a"]);
+      expect(state.lastCatchupCompletedAt).toBe(lastFull);
+      expect(state.incrementalCatchup?.completedRelays).toEqual(["wss://a"]);
+      expect(status).toHaveBeenLastCalledWith("pending");
+      scanned.length = 0;
+      await manager.resume("manual");
+      state = await repo.getSyncState(ACCOUNT_A);
+      expect(scanned).toEqual(["wss://b"]);
+      expect(state.incrementalCatchup).toBeUndefined();
+      expect(state.lastCatchupCompletedAt).toBe(clockMs);
+      expect(status).toHaveBeenLastCalledWith("settled");
+    } finally {
+      manager.stop();
+    }
+  });
+
   it("restores the saved per-Relay cursor after app restart without claiming newer time was scanned", async () => {
     const repo = new SyncedMessageRepository(database());
     const oldAt = 1_900_000_000_000;
