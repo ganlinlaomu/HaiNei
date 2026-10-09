@@ -19,6 +19,9 @@ describe("Google recovery foundation", () => {
     const panel = source("src/components/GoogleRecoveryPanel.vue");
 
     expect(login).toContain("<GoogleRecoveryPanel");
+    expect(panel).toContain("<span>使用Google登录</span>");
+    expect(panel).toContain('<h2 id="google-recovery-title">使用Google登录</h2>');
+    expect(panel).not.toContain("使用 Google 继续");
     expect(login).toContain("VITE_GOOGLE_WEB_CLIENT_ID");
     expect(login).toContain("await ks.loginWithNsec(payload.skHex)");
     expect(panel).toContain('beginRecovery("google"');
