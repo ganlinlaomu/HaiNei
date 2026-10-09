@@ -577,6 +577,26 @@ export class SyncedMessageRepository {
     });
   }
 
+  /** Commit the global completion marker and all per-relay progress in one
+   * IndexedDB transaction. A crash cannot make an incomplete Relay look done. */
+  async commitCatchupProgress(
+    accountPubkey: string,
+    patch: Partial<MessageSyncStateRecord>,
+    relayPatches: Record<string, Partial<RelaySyncStateRecord>>
+  ) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    return this.database.transaction("rw", this.database.messageSyncStates, async () => {
+      const current = await this.getSyncState(account);
+      const relayStates = { ...current.relayStates };
+      for (const [url, relayPatch] of Object.entries(relayPatches)) {
+        relayStates[url] = { ...(relayStates[url] || { url, connected: false }), ...relayPatch, url };
+      }
+      const next: MessageSyncStateRecord = { ...current, ...patch, accountPubkey: account, relayStates };
+      await this.database.messageSyncStates.put(next);
+      return next;
+    });
+  }
+
   async advanceHighWatermark(accountPubkey: string, createdAt: number, nowMs = Date.now()) {
     const nowSeconds = Math.floor(nowMs / 1000);
     if (createdAt > nowSeconds + MAX_FUTURE_SKEW_SECONDS) return;
