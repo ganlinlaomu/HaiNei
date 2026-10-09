@@ -42,6 +42,12 @@ type RelayConn = {
   connectedAt: number;
   shouldReconnect: boolean;
   connectStartedAt: number;
+  activePublishes: number;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  idleSince: number | null;
+  idleExpiresAt: number | null;
+  retryAt: number | null;
+  lastDisconnectReason: "closed" | "timeout" | "session-refresh" | "manual" | "settings" | "idle-ttl" | null;
   connect: () => void;
 };
 
@@ -52,8 +58,12 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_CAP_MS = 60_000;
 const RECONNECT_STABLE_MS = 30_000;
 const EOSE_TIMEOUT = 8_000;
+// Only preconnected/temporary sockets without subscribers or pending sends
+// expire. Active NIP-17 receive points have no TTL and remain connected.
+export const IDLE_RELAY_TTL_MS = 20_000;
 
 const relaysMap: Record<string, RelayConn> = {};
+let idleConnectionsReleased = 0;
 export type RelaySubscriptionFailureReason = "timeout" | "closed" | "disconnected";
 
 export type RelayConnectionEvent = {
@@ -73,6 +83,12 @@ export type RelayRuntimeStatus = {
   okHandlers: number;
   reconnectAttempts: number;
   connectStartedAt: number;
+  usage: "subscription" | "publishing" | "idle";
+  pendingPublishes: number;
+  idleSince: number | null;
+  idleExpiresAt: number | null;
+  retryAt: number | null;
+  lastDisconnectReason: RelayConn["lastDisconnectReason"];
 };
 const connectionListeners = new Set<(event: RelayConnectionEvent) => void>();
 
@@ -86,6 +102,92 @@ function emitConnectionState(event: RelayConnectionEvent) {
     try { listener(event); } catch (e) { logger.warn("[relay] connection listener failed", e); }
   }
 }
+
+/** A connection may only be reclaimed after EVERY consumer has released it. */
+function hasRelayDemand(conn: RelayConn) {
+  return conn.subs.size > 0 || conn.activePublishes > 0 || conn.okHandlers.size > 0;
+}
+
+function cancelRelayIdleTimer(conn: RelayConn) {
+  if (conn.idleTimer !== null) clearTimeout(conn.idleTimer);
+  conn.idleTimer = null;
+  conn.idleSince = null;
+  conn.idleExpiresAt = null;
+}
+
+function failRelayAcknowledgements(conn: RelayConn, reason: string) {
+  // Never discard an OK callback without resolving the associated publisher.
+  // The outgoing outbox may safely retry after an explicit negative outcome.
+  const pending = [...conn.okHandlers.values()];
+  conn.okHandlers.clear();
+  conn.queue = conn.queue.filter(frame => {
+    try { return JSON.parse(frame)?.[0] !== "EVENT"; } catch { return true; }
+  });
+  for (const confirm of pending) {
+    try { confirm({ ok: false, msg: reason }); } catch (error) { logger.warn("[relay] publish failure handler failed", error); }
+  }
+}
+
+function releaseRelayConnection(conn: RelayConn, reason: "idle-ttl" | "settings" | "manual") {
+  if (relaysMap[conn.url] !== conn) return false;
+  if (reason === "idle-ttl" && hasRelayDemand(conn)) return false;
+  conn.lastDisconnectReason = reason;
+  conn.shouldReconnect = false;
+  conn.generation++;
+  cancelRelayIdleTimer(conn);
+  if (conn.reconnectTimer !== null) clearTimeout(conn.reconnectTimer);
+  if (conn.connectTimer !== null) clearTimeout(conn.connectTimer);
+  if (conn.sessionRefreshTimer !== null) clearTimeout(conn.sessionRefreshTimer);
+  conn.reconnectTimer = null;
+  conn.retryAt = null;
+  conn.connectTimer = null;
+  conn.sessionRefreshTimer = null;
+  conn.connecting = false;
+  for (const subId of conn.subs.keys()) {
+    settleSubscription(conn, subId, "failure", "disconnected");
+    const timer = conn.subs.get(subId)?.eoseTimer;
+    if (timer) clearTimeout(timer);
+  }
+  conn.subs.clear();
+  failRelayAcknowledgements(conn, reason);
+  const wasReady = conn.ready;
+  const socket = conn.ws;
+  conn.ws = null;
+  conn.ready = false;
+  conn.queue = [];
+  delete relaysMap[conn.url];
+  try { socket?.close(); } catch {}
+  if (reason === "idle-ttl") idleConnectionsReleased++;
+  if (wasReady) emitConnectionState({ url: conn.url, connected: false, reconnected: conn.hasConnected, failed: false, at: Date.now() });
+  debugLog("relay", "relay_released", { relay: conn.url, reason }, "info");
+  return true;
+}
+
+function updateRelayIdleLease(conn: RelayConn) {
+  if (relaysMap[conn.url] !== conn) return;
+  if (hasRelayDemand(conn)) {
+    cancelRelayIdleTimer(conn);
+    return;
+  }
+  if (conn.idleTimer !== null) return;
+  conn.idleSince = Date.now();
+  conn.idleExpiresAt = conn.idleSince + IDLE_RELAY_TTL_MS;
+  conn.idleTimer = setTimeout(() => {
+    conn.idleTimer = null;
+    if (!hasRelayDemand(conn)) releaseRelayConnection(conn, "idle-ttl");
+    else cancelRelayIdleTimer(conn);
+  }, IDLE_RELAY_TTL_MS);
+  (conn.idleTimer as any).unref?.();
+}
+
+/** Release account-independent warm/discovery sockets after session teardown.
+ * A retained realtime subscription or in-flight publish always wins. */
+export function releaseUnusedRelayConnections() {
+  for (const conn of Object.values(relaysMap)) {
+    if (!hasRelayDemand(conn)) releaseRelayConnection(conn, "manual");
+  }
+}
+
 
 function settleSubscription(
   conn: RelayConn,
@@ -229,6 +331,12 @@ function ensureRelayConn(url: string): RelayConn {
     connecting: false,
     generation: 0,
     reconnectAttempts: 0,
+    activePublishes: 0,
+    idleTimer: null,
+    idleSince: null,
+    idleExpiresAt: null,
+    retryAt: null,
+    lastDisconnectReason: null,
     hasConnected: false,
     connectedAt: 0,
     shouldReconnect: true,
@@ -460,6 +568,7 @@ function ensureRelayConn(url: string): RelayConn {
   };
 
   conn.connect = () => { void create(); };
+  updateRelayIdleLease(conn);
   void create();
   return conn;
 }
