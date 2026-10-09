@@ -849,66 +849,58 @@ export function getRelayPerformanceDiagnostics() {
 }
 
 /**
- * reconnectRelay(url): force reconnect by closing and recreating connection
+ * Force a single Relay to reconnect without replacing its connection object.
+ * Retaining its subscription map also retains REQ identity. An in-flight
+ * publication is explicitly rejected for outbox retry, never orphaned.
  */
 export function reconnectRelay(url: string) {
   url = normalizeRelayUrl(url);
   if (!url) return;
-  const r = relaysMap[url];
-  if (!r) {
-    // create a new connection proactively
-    ensureRelayConn(url);
+  const conn = relaysMap[url];
+  if (!conn) {
+    ensureRelayConn(url); // manual warm connection, covered by idle TTL
     return;
   }
   try {
-    const subscriptions = r.subs;
-    r.shouldReconnect = false;
-    r.generation++;
-    if (r.reconnectTimer) window.clearTimeout(r.reconnectTimer);
-    if (r.connectTimer) window.clearTimeout(r.connectTimer);
-    if (r.sessionRefreshTimer) window.clearTimeout(r.sessionRefreshTimer);
-    r.reconnectTimer = null;
-    r.connectTimer = null;
-    r.sessionRefreshTimer = null;
-    r.connecting = false;
-    try { r.ws?.close(); } catch {}
-    r.ready = false;
-    r.okHandlers.clear();
-    delete relaysMap[url];
-    const replacement = ensureRelayConn(url);
-    replacement.subs = subscriptions;
-  } catch (e) {
+    conn.lastDisconnectReason = "manual";
+    conn.shouldReconnect = true;
+    conn.generation++;
+    if (conn.reconnectTimer !== null) clearTimeout(conn.reconnectTimer);
+    if (conn.connectTimer !== null) clearTimeout(conn.connectTimer);
+    if (conn.sessionRefreshTimer !== null) clearTimeout(conn.sessionRefreshTimer);
+    conn.reconnectTimer = null;
+    conn.retryAt = null;
+    conn.connectTimer = null;
+    conn.sessionRefreshTimer = null;
+    conn.connecting = false;
+    const socket = conn.ws;
+    const wasReady = conn.ready;
+    conn.ws = null;
+    conn.ready = false;
+    // The previous socket's OK response is now unknowable. Explicitly fail
+    // its pending confirmations; do not discard callbacks or replay a possibly
+    // accepted encrypted event behind the publisher's back.
+    failRelayAcknowledgements(conn, "relay_reconnected");
+    try { socket?.close(); } catch {}
+    if (wasReady) emitConnectionState({ url, connected: false, reconnected: conn.hasConnected, failed: false, at: Date.now() });
+    updateRelayIdleLease(conn);
+    conn.connect();
+  } catch (error) {
     debugLog("relay", "relay_error", {
       relay: url,
-      reconnectAttempts: r.reconnectAttempts,
-      reason: e instanceof Error ? e.name : "reconnect_failed"
+      reconnectAttempts: conn.reconnectAttempts,
+      reason: error instanceof Error ? error.name : "reconnect_failed",
     }, "error");
-    logger.warn("reconnectRelay error", e);
+    logger.warn("reconnectRelay error", error);
   }
 }
 
-/** Permanently stop and forget a relay that was removed from settings. */
+/** Permanently stop and forget a Relay removed from settings or locked out. */
 export function disconnectRelay(url: string) {
   url = normalizeRelayUrl(url);
   if (!url) return;
   const conn = relaysMap[url];
-  if (!conn) return;
-  conn.shouldReconnect = false;
-  conn.generation++;
-  if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
-  if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
-  if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
-  conn.reconnectTimer = null;
-  conn.connectTimer = null;
-  conn.sessionRefreshTimer = null;
-  conn.connecting = false;
-  conn.queue = [];
-  conn.subs.clear();
-  conn.okHandlers.clear();
-  try { conn.ws?.close(); } catch {}
-  conn.ws = null;
-  conn.ready = false;
-  delete relaysMap[url];
+  if (conn) releaseRelayConnection(conn, "settings");
 }
 
 /**
