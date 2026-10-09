@@ -967,6 +967,7 @@ export function restoreRelayConnections(relays = getRelaysFromStorage("read")) {
     if (conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
+    conn.retryAt = null;
     conn.shouldReconnect = true;
     conn.connect();
   }
