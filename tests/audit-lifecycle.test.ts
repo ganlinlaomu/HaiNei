@@ -256,3 +256,33 @@ it("coalesces an iOS foreground event burst into one shared resume dispatch", as
     vi.useRealTimers();
   }
 });
+
+it("dispatches a rapid hidden-to-visible recovery even inside the iOS coalescing window", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-09T00:00:00Z"));
+  const win = new EventTarget();
+  const doc = new EventTarget() as Document;
+  Object.defineProperty(doc, "visibilityState", { configurable: true, value: "visible", writable: true });
+  vi.stubGlobal("window", win);
+  vi.stubGlobal("document", doc);
+  resetAppResumeCoordinatorForTests();
+  const handler = vi.fn();
+  const stop = onAppResume(handler);
+  try {
+    win.dispatchEvent(new Event("focus"));
+    expect(handler).toHaveBeenCalledTimes(1);
+    (doc as any).visibilityState = "hidden";
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(100);
+    (doc as any).visibilityState = "visible";
+    doc.dispatchEvent(new Event("visibilitychange"));
+    win.dispatchEvent(new Event("pageshow"));
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenLastCalledWith("visibilitychange");
+  } finally {
+    stop();
+    resetAppResumeCoordinatorForTests();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
+});
