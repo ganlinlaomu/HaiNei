@@ -439,8 +439,10 @@ describe("direct-message navigation and UI contract", () => {
     expect(home).toContain("|| homeAccountPk !== keys.pkHex");
     expect(home).toContain("if (!readyForPending.value || homeAccountPk !== keys.pkHex) return");
     expect(home).toContain("if (initialized) await nextTick(attachLoadMoreObserver)");
-    expect(home).toContain('homeSyncStatus.value === "offline"');
-    expect(home).toContain("暂时离线，正在显示已缓存内容");
+    expect(home).toContain('homeRelayState.value === "offline"');
+    expect(home).toContain('if (homeRelayState.value === relay) return;');
+    expect(home).toContain("}, 2000);");
+    expect(home).toContain("已缓存内容仍可查看");
     expect(home).toContain("正在重新连接…");
     expect(home).not.toContain("setTimeout(() => {\n        const startIndex = displayedMessages.value.length");
   });
