@@ -87,6 +87,7 @@
           @complete="finishGoogleRecovery"
         />
         <div v-if="googleRecoveryEnabled" class="login-divider"><span>或</span></div>
+        <button class="btn btn-secondary" type="button" :disabled="loading" @click="router.push('/device-pair')">扫描旧设备登录</button>
         <button class="btn btn-primary" type="button" :disabled="loading" @click="openPrivateLogin">
           使用私钥登录
         </button>

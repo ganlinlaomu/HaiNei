@@ -1,8 +1,8 @@
 <template>
   <div v-if="open" class="scanner-overlay" role="presentation" @click.self="close">
-    <section class="scanner-sheet" role="dialog" aria-modal="true" aria-label="扫描好友二维码">
+    <section class="scanner-sheet" role="dialog" aria-modal="true"  :aria-label="title || '扫描好友二维码'">
       <div class="scanner-header">
-        <strong>扫描好友二维码</strong>
+        <strong>{{ title || "扫描好友二维码" }}</strong>
         <button type="button" aria-label="关闭" @click="close">×</button>
       </div>
       <div class="camera-frame">
@@ -24,7 +24,7 @@
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useUIStore } from "@/stores/ui";
 
-const props = defineProps<{ open: boolean }>();
+const props = defineProps<{ open: boolean; title?: string }>();
 const emit = defineEmits<{
   (event: "close"): void;
   (event: "scanned", value: string): void;

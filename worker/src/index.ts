@@ -1,4 +1,5 @@
 import { createChallenge, verifyAndConsumeChallenge } from "./auth";
+import { createDevicePair, pollDevicePair, offerDevicePair, deliverDevicePair, finishDevicePair } from "./devicePair";
 import { createMediaSession } from "./media";
 import { createRelaySession, relayPublicConfig } from "./relay";
 import {
@@ -52,6 +53,24 @@ export async function handleRequest(request: Request, env: Env) {
       return json(relayPublicConfig(env));
     }
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+    if (path.startsWith("/api/device-pair/")) {
+      const payload = await body(request, env, 12 * 1024);
+      if (path === "/api/device-pair/create") return json(await createDevicePair(env, request, payload.receiverKey), 201);
+      if (path === "/api/device-pair/poll") return json(await pollDevicePair(env, request, payload.id, payload.pollToken));
+      if (path === "/api/device-pair/ack" || path === "/api/device-pair/cancel") {
+        return json(await finishDevicePair(env, request, payload.id, payload.pollToken, path.endsWith("/cancel")));
+      }
+      if (path === "/api/device-pair/offer" || path === "/api/device-pair/deliver") {
+        const account = await verifyAndConsumeChallenge(
+          env, payload.challenge, payload.event, undefined, "hainei_device_pair", authBinding(request, payload),
+        );
+        if (path.endsWith("/offer")) {
+          return json(await offerDevicePair(env, account, payload.id, payload.senderKey, payload.receiverKey));
+        }
+        return json(await deliverDevicePair(env, account, payload.id, payload.ciphertext, payload.iv));
+      }
+      return json({ error: "not_found" }, 404);
+    }
     if (path === "/api/auth/challenge") {
       await enforceChallengeRateLimit(env, request);
       return json(await createChallenge(env), 201);

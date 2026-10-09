@@ -306,6 +306,14 @@
               </button>
             </div>
 
+            <div v-if="keyStore.loginMethod === 'private-key' && keyStore.isUnlocked" class="account-setting-row biometric-row">
+              <div class="privacy-copy">
+                <strong>扫描登录新设备</strong>
+                <span class="small">扫描新设备二维码，核对验证码后安全交接账号</span>
+              </div>
+              <button type="button" class="account-inline-action" @click="router.push('/device-pair')">开始扫码</button>
+            </div>
+
             <div class="account-actions-row">
               <button class="account-action-button account-action-secondary" type="button" @click="switchAccount">
                 切换账号
