@@ -332,6 +332,8 @@ export default defineComponent({
       relayDisconnectTimer = null;
     }
     function updateRelayNotice(relay: typeof homeRelayState.value) {
+      // Ignore repeated sync notifications while the connection state is unchanged.
+      if (homeRelayState.value === relay) return;
       homeRelayState.value = relay;
       clearRelayDisconnectTimer();
       if (relay !== "offline") {
