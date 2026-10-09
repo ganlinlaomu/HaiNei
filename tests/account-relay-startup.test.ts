@@ -20,23 +20,30 @@ describe("account relay startup ordering", () => {
     const remoteWait = source.indexOf("const criticalState = await criticalStateRestore");
     const authoritativeRefresh = source.indexOf("await directMessages.refresh(pk)", localRefresh + 1);
     const notificationRefresh = source.indexOf("await useNotificationsStore().refreshSyncedState(pk)");
-    const finishUnread = source.indexOf("directMessages.finishReadStateRestore(pk)");
     const relayStart = source.indexOf("await startAccountMessageSync(this)");
+    const vaultUnlock = source.indexOf("await unlockLocalVault(pk, vaultSecretHex, isCurrent)");
+    const service = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
+    const historyReconcile = service.indexOf('directMessages.finishHistoryHydration(account, "live").then(');
+    const finishUnread = service.indexOf("directMessages.finishReadStateRestore(account)", historyReconcile);
 
     expect(criticalRequest).toBeGreaterThan(-1);
     expect(criticalNamespaces).toBeGreaterThan(-1);
     expect(localRefresh).toBeGreaterThan(criticalRequest);
     // The first refresh calculates durable local unread asynchronously.
     // The badge must be suppressed BEFORE that refresh can render.
-    expect(pendingUnread).toBeGreaterThan(source.indexOf("warmReadRelaysForSession(this)"));
+    expect(pendingUnread).toBeGreaterThan(-1);
+    expect(pendingUnread).toBeLessThan(vaultUnlock);
     expect(pendingUnread).toBeLessThan(criticalRequest);
     expect(pendingUnread).toBeLessThan(localRefresh);
     expect(remoteWait).toBeGreaterThan(localRefresh);
     expect(notificationRefresh).toBeGreaterThan(remoteWait);
     expect(notificationRefresh).toBeLessThan(authoritativeRefresh);
     expect(authoritativeRefresh).toBeGreaterThan(remoteWait);
-    expect(finishUnread).toBeGreaterThan(authoritativeRefresh);
-    expect(relayStart).toBeGreaterThan(finishUnread);
+    // Critical cloud state completion does NOT authorize showing the badge.
+    expect(source).not.toContain("directMessages.finishReadStateRestore(pk)");
+    expect(relayStart).toBeGreaterThan(authoritativeRefresh);
+    expect(historyReconcile).toBeGreaterThan(-1);
+    expect(finishUnread).toBeGreaterThan(historyReconcile);
 
     const beforeNetworkPhase = source.slice(source.indexOf("// Local-first phase:"), source.indexOf("// Network phase:"));
     expect(beforeNetworkPhase).not.toContain("await criticalStateRestore");
