@@ -613,6 +613,72 @@ describe("PR3 interruptible history catch-up", () => {
   });
 });
 
+describe("PR3 incremental idle continuation", () => {
+  it("retains an unprocessed page boundary and does not mark a limited catch-up complete", async () => {
+    const repo = new SyncedMessageRepository(database());
+    let nowMs = 1_900_000_000_000;
+    let backlog = false;
+    let incrementalPages = 0;
+    const pages: number[] = [];
+    const subscribeFake = (_relays: string[], filters: any[]) => {
+      const historical = filters.some(filter => filter.until !== undefined);
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      if (historical) pages.push(filters[0].until);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name !== "eose" || !historical) return;
+          queueMicrotask(() => {
+            if (backlog && incrementalPages++ === 0) {
+              const until = Number(filters[0].until);
+              for (let i = 0; i < 500; i++) {
+                handlers.event?.forEach(handler => handler({
+                  id: `incremental-wrap-${i}`,
+                  created_at: until - i - 1,
+                }, "wss://a"));
+              }
+            }
+            callback("wss://a");
+          });
+        },
+        unsub() {},
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => nowMs,
+      decode: async () => null,
+    });
+    try {
+      await manager.start({
+        accountPubkey: ACCOUNT_A,
+        relays: ["wss://a"],
+        authors: [PEER, ACCOUNT_A],
+        decodeContext: { accountPubkey: ACCOUNT_A },
+      });
+      const priorCompletion = (await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt;
+      expect(priorCompletion).toBe(nowMs);
+      backlog = true;
+      nowMs += 1_000;
+      await manager.resume("manual");
+      expect(pages).toHaveLength(2);
+      const firstUntil = pages[1];
+      expect((await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt).toBe(priorCompletion);
+      nowMs += 1_000;
+      await manager.resume("manual");
+      expect(pages).toHaveLength(3);
+      expect(pages[2]).toBe(firstUntil - 500);
+      expect((await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt).toBe(nowMs);
+    } finally {
+      manager.stop();
+    }
+  });
+});
+
 describe("PR3 background catch-up lifecycle", () => {
   it("aborts optional history on hide, preserves an in-flight durable write and realtime DM, then repairs on resume", async () => {
     const repo = new SyncedMessageRepository(database());
