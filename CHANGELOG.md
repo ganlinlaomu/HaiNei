@@ -1,3 +1,10 @@
+## 0.1.41 — 2026-10-09
+
+- 默认 Relay 将 `wss://relay.gulugulu.moe` 替换为 `wss://cloudflare-nostr-relay.noster.workers.dev`；保留 `wss://nostr.dzo-hadar.ts.net`。
+- 自动从旧本机设置和加密云同步设置移除仅标记为系统默认的旧 Relay，防止它在重新登录或换设备后再次出现。
+- 用户手动加入或 NIP-65 明确设置的旧地址保留，不覆盖其他自定义 Relay、已读/未读、DM Relay 自动选择和加密同步逻辑。
+- 补充升级、持久化、旧云端配置合并与用户自定义保护回归测试；不新增 D1/Worker 变更。
+
 ## 0.1.40 — 2026-10-09
 
 - 登录页面移除「远程签名器（Beta）」入口、Bunker 表单及关联登录页面状态和操作。
