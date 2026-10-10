@@ -130,7 +130,7 @@
                 <span>仅自己</span><small v-if="audienceChosen && !allFriends && selectedGroups.length === 0">✓</small>
               </button>
               <button type="button" class="audience-card"
-                :class="{ selected: visibilityOpen || (audienceChosen && !allFriends && selectedGroups.length > 0) }"
+                :class="{ selected: audienceChosen && !allFriends && selectedGroups.length > 0, expanded: visibilityOpen }"
                 :aria-pressed="audienceChosen && !allFriends && selectedGroups.length > 0"
                 :aria-expanded="visibilityOpen" :disabled="!!pendingPostRetry" @click="chooseGroups">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M2 20v-2a7 7 0 0 1 14 0v2"/><path d="M17 6a3 3 0 0 1 0 6"/><path d="M18 15a5 5 0 0 1 4 5"/></svg>
@@ -155,7 +155,7 @@
               <p v-if="groups.length === 0" class="group-picker-empty">暂无好友分组，可以选择仅自己或全部好友。</p>
             </div>
             <div v-if="visibilityError" id="visibility-error" class="visibility-error" role="alert">请先选择可见范围，再发布动态。</div>
-            <p v-if="audienceChosen" class="audience-summary">{{ visibilitySummary }} · {{ recipientsCount }} 位接收者</p>
+            <p v-if="audienceChosen" class="audience-summary">{{ visibilitySummary }}<template v-if="allFriends || selectedGroups.length"> · {{ recipients.length }} 位好友</template></p>
             <p v-else class="audience-summary muted">发布前请明确选择接收范围。</p>
             <p v-if="botMentioned" class="audience-bot-hint">已 @Hainei Bot：将额外向 Bot 发送这条加密动态。</p>
             <p v-else-if="acceptedFriends.length > postAudienceFriends.length" class="audience-bot-hint">Hainei Bot 默认不接收动态，主动 @ 才会收到。</p>
@@ -1869,4 +1869,252 @@ export default defineComponent({
 }
 .error { margin-top:8px; color:#d00; font-size:13px; }
 .small { color:#64748b; font-size:12px; }
+
+/* Redesigned dynamic composer: readable, privacy-first, and narrow-screen safe. */
+.editor-card {
+  display: flex;
+  flex-direction: column;
+  height: min(86dvh, 800px);
+  max-height: calc(100dvh - var(--bottom-nav-height, 64px) - 12px);
+  overflow: hidden;
+}
+.editor-header {
+  display: block;
+  flex: 0 0 auto;
+  padding: 10px 20px 12px;
+  background: #fff;
+}
+.editor-header .drag-handle { margin: 0 auto 12px; }
+.editor-header-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 64px;
+  align-items: center;
+  min-height: 36px;
+}
+.header-cancel {
+  justify-self: start;
+  border: 0;
+  background: transparent;
+  padding: 8px 2px;
+  color: #475569;
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+.header-cancel:disabled { opacity: .45; }
+.editor-header .title { text-align: center; font-size: 16px; font-weight: 700; color: #0f172a; }
+.editor-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  max-height: none;
+  padding: 18px 20px calc(14px + env(safe-area-inset-bottom, 0px));
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.editor-author { display: flex; gap: 12px; align-items: center; min-width: 0; margin-bottom: 12px; }
+.editor-author-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.editor-author-copy strong {
+  color: #0f172a; font-size: 16px; font-weight: 700;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.editor-author-copy span { color: #64748b; font-size: 13px; }
+.editor-textarea-wrap { flex: 1 0 145px; min-height: 145px; min-width: 0; }
+.editor-textarea {
+  display: block;
+  height: 100%;
+  min-height: 145px;
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  border-radius: 0;
+  padding: 12px 0;
+  color: #0f172a;
+  background: transparent;
+  font-size: 17px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.editor-textarea::placeholder { color: #94a3b8; }
+.editor-textarea:focus-visible { outline: none; }
+.upload-panel { margin: 0; }
+.upload-panel:has(.previews:empty), .previews:empty { display: none; }
+.previews { margin: 0 0 8px; }
+.video-preview-item { margin: 0 0 10px; }
+.audience-section {
+  margin-top: 4px;
+  padding-top: 18px;
+  border-top: 1px solid #e9edf1;
+}
+.audience-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.audience-heading h3 { margin: 0; color: #0f172a; font-size: 15px; font-weight: 700; }
+.audience-required { color: #b91c1c; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.audience-required.chosen { color: #64748b; }
+.audience-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.audience-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 102px;
+  padding: 10px 3px;
+  border: 1px solid #dce2e8;
+  border-radius: 15px;
+  background: #fff;
+  color: #334155;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.audience-card svg {
+  width: 22px; height: 22px; fill: none;
+  stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.audience-card span { max-width: 100%; white-space: nowrap; }
+.audience-card small {
+  position: absolute; top: 6px; right: 8px; color: #2563eb; font-size: 12px;
+}
+.audience-card.selected { border: 2px solid #2563eb; background: #f1f7ff; color: #1d4ed8; }
+.audience-card.expanded:not(.selected) { border-color: #94a3b8; }
+.audience-card:disabled { opacity: .4; cursor: not-allowed; }
+.group-picker { padding: 12px 0 0; }
+.group-picker-title { margin: 0 0 10px; color: #475569; font-size: 12px; }
+.group-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.group-option {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%; padding: 8px 10px; border: 1px solid #dce2e8;
+  border-radius: 999px; background: #fff; color: #475569; font-size: 12px;
+  cursor: pointer;
+}
+.group-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-option small { white-space: nowrap; color: inherit; opacity: .7; }
+.group-option.selected { color: #1d4ed8; border-color: #2563eb; background: #f1f7ff; }
+.group-picker-empty, .audience-summary, .audience-bot-hint {
+  margin: 9px 0 0; color: #64748b; font-size: 12px; line-height: 1.5;
+}
+.audience-summary.muted { color: #94a3b8; }
+.audience-bot-hint { font-size: 11px; }
+.audience-section-error .audience-heading h3 { color: #991b1b; }
+.composer-toolbar {
+  position: sticky;
+  z-index: 2;
+  bottom: -1px;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 58px;
+  margin-top: 16px;
+  padding: 10px 0 0;
+  border-top: 1px solid #eef2f6;
+  background: #fff;
+}
+.composer-tools { display: flex; align-items: center; gap: 5px; }
+.composer-tool {
+  position: relative;
+  display: grid;
+  width: 42px; height: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #2563eb;
+  font: inherit;
+  font-size: 26px;
+  cursor: pointer;
+}
+.composer-tool:focus-visible, .audience-card:focus-visible, .group-option:focus-visible, .send-btn:focus-visible {
+  outline: 2px solid #2563eb; outline-offset: 2px;
+}
+.composer-tool svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.composer-tool input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.composer-tool.disabled, .composer-tool:disabled { opacity: .35; pointer-events: none; }
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.composer-toolbar .send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 9px 17px;
+  border: 1px solid #0f172a;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.composer-toolbar .send-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.composer-toolbar .send-btn:hover { background: #1e293b; border-color: #1e293b; }
+.composer-toolbar .send-btn:disabled { opacity: .42; background: #0f172a; color: #fff; border-color: #0f172a; }
+.cancel-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 14px;
+  background: rgba(15, 23, 42, .42);
+}
+.cancel-sheet {
+  width: min(100%, 460px);
+  padding: 20px 18px 18px;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 16px 48px rgba(15,23,42,.22);
+  text-align: center;
+}
+.cancel-sheet h3 { margin: 0; color: #0f172a; font-size: 17px; }
+.cancel-sheet p { margin: 8px 0 16px; color: #64748b; font-size: 13px; }
+.cancel-sheet button {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  margin-top: 9px;
+  border: 0;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #0f172a;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.cancel-sheet .cancel-sheet-save { background: #2563eb; color: #fff; }
+.cancel-sheet .cancel-sheet-discard { color: #dc2626; }
+.cancel-sheet button:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+@media (min-width: 768px) {
+  .editor-card { height: min(82dvh, 800px); max-height: calc(100dvh - 48px); }
+}
+@media (max-width: 360px) {
+  .editor-body { padding-right: 14px; padding-left: 14px; }
+  .audience-cards { gap: 6px; }
+  .audience-card { font-size: 12px; min-height: 96px; }
+  .composer-toolbar .send-btn { padding: 9px 14px; }
+}
+
 </style>
