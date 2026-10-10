@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.43",
-  "releaseSummary": "加密动态与私信准确分流，兼容其他 NIP-17 客户端私信",
+  "version": "0.1.44",
+  "releaseSummary": "修复私信引用文字过长导致气泡及输入框布局变形",
   "private": true,
   "scripts": {
     "dev": "vite",
