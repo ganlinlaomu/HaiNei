@@ -433,6 +433,7 @@ import { createVoiceRecordingSession, type VoiceRecordingResult, type VoiceRecor
 import { openProfile } from "@/utils/profileNavigation";
 import { useMentionComposer } from "@/composables/useMentionComposer";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
+import { quotedMessageExcerpt } from "@/utils/quotedMessageExcerpt";
 import { canMarkConversationTailRead } from "@/utils/messageReadVisibility";
 import type { MentionCandidate } from "@/utils/mentions";
 import { loadAccountStoresOnce, waitForFirstPaint } from "@/utils/bottomTabActivation";
@@ -818,7 +819,7 @@ function quotePreview(message?: InboxItem) {
   if (!message) return "引用的消息暂不可用";
   if (isDisappearing(message)) return "阅后即焚消息";
   const preview = directMessagePreview(message.content);
-  return preview || (hasAudio(message) ? "[语音]" : hasMessageImage(message) ? "[图片]" : "消息");
+  return quotedMessageExcerpt(preview || (hasAudio(message) ? "[语音]" : hasMessageImage(message) ? "[图片]" : "消息"));
 }
 function quotedMessage(replyTo?: string) {
   return lookupMessage(replyTo);
