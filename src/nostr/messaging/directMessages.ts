@@ -2,7 +2,7 @@ import type { CanonicalMessage } from "./protocol";
 import { parsePrivateAudioMessage } from "./privateMedia";
 import { parseFriendRecommendation } from "./friendRecommendation";
 
-import { DIRECT_MESSAGE_TYPE, isDirectMessageTags } from "./messageRouting";
+import { isDirectMessageTags } from "./messageRouting";
 export { DIRECT_MESSAGE_TYPE, isDirectMessageTags } from "./messageRouting";
 
 export function canStartDirectMessage(
