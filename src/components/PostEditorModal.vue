@@ -150,7 +150,7 @@
                 :aria-pressed="String(allFriends)"
               >
                 全部好友
-                <span class="chip-count">{{ acceptedFriends.length }}</span>
+                <span class="chip-count">{{ postAudienceFriends.length }}</span>
               </button>
               <div class="divider"></div>
               <div class="chips-scroll" role="list">
@@ -172,7 +172,10 @@
             <div class="recips-info">
               目标人数：<strong>{{ recipientsCount }}</strong>
             </div>
-            <div v-if="acceptedFriends.length === 0" class="small recips-empty-hint">
+            <div v-if="acceptedFriends.length > postAudienceFriends.length" class="small recips-empty-hint">
+              HaiNei AI Bot 不会收到动态，仍可正常私信。
+            </div>
+            <div v-if="postAudienceFriends.length === 0" class="small recips-empty-hint">
               暂无可发送的好友，当前仅会发送给自己。请先添加并完成好友确认。
             </div>
           </div>
@@ -237,6 +240,7 @@ import {
   audienceGroupCounts,
   audienceGroupsMeta,
   audienceRecipients,
+  isExcludedPostRecipient,
   normalizeSelectedAudienceGroups,
 } from "@/utils/friendAudience";
 import {
@@ -325,13 +329,16 @@ export default defineComponent({
     });
 
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
+    const postAudienceFriends = computed(() => acceptedFriends.value.filter(
+      friend => !isExcludedPostRecipient(friend.pubkey)
+    ));
 
-    const groupSummary = computed(() => audienceGroupCounts(acceptedFriends.value));
+    const groupSummary = computed(() => audienceGroupCounts(postAudienceFriends.value));
     const groups = computed(() => groupSummary.value.order);
     const countByGroup = computed(() => groupSummary.value.counts);
     const selectedSet = computed(() => new Set(selectedGroups.value || []));
     const recipients = computed(() => audienceRecipients(
-      acceptedFriends.value,
+      postAudienceFriends.value,
       allFriends.value,
       selectedGroups.value
     ));
@@ -1019,7 +1026,7 @@ export default defineComponent({
       if (recips.length === 0) { error.value = "未指定收件人"; sending.value = false; return; }
 
       const groupsMeta = audienceGroupsMeta(
-        acceptedFriends.value,
+        postAudienceFriends.value,
         allFriends.value,
         selectedGroups.value
       );
