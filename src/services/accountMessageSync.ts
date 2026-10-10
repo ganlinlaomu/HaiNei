@@ -19,6 +19,7 @@ import { useProfilesStore } from "@/stores/profiles";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { onMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 import { pushEnabledForAccount, syncPushAuthorizationPolicy } from "@/services/pushNotifications";
+import { resumeAndroidNativePush, nativePushEnabled } from "@/services/nativePushNotifications";
 import { mentionedPubkeysFromTags } from "@/utils/mentions";
 import {
   cancelDmRelayDirectoryWork,
@@ -258,7 +259,11 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
 
   if (!isCurrent()) return false;
   registerOutgoingPushSigner(account, assertCurrentSigner);
-  if (pushEnabledForAccount(account)) {
+  if (nativePushEnabled(account)) {
+    void resumeAndroidNativePush(account, assertCurrentSigner, accepted).catch(() => {
+      console.warn("[push] Android native token registration unavailable");
+    });
+  } else if (pushEnabledForAccount(account)) {
     void syncPushAuthorizationPolicy(account, accepted, assertCurrentSigner).catch(error => {
       console.warn("[push] authorization policy refresh failed", error instanceof Error ? error.message : "unknown");
     });
