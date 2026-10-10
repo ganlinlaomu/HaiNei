@@ -198,6 +198,7 @@ describe("direct-message navigation and UI contract", () => {
     const replyingCopy = css(".replying-copy");
     const replyingAuthor = css(".replying-copy strong");
     const replyingBody = css(".replying-copy span");
+    const replyingBase = css(".replying-copy strong,.replying-copy span");
 
     expect(page).toContain("grid-template-columns:minmax(0,1fr)");
     expect(stack).toContain("min-width:0");
@@ -218,13 +219,15 @@ describe("direct-message navigation and UI contract", () => {
       expect(body).toContain("overflow-wrap:anywhere");
       expect(body).toContain("word-break:break-word");
       expect(body).toContain("white-space:normal");
-      expect(body).toContain("max-width:100%");
     }
+    expect(quoteBody).toContain("max-width:100%");
+    expect(replyingBase).toContain("max-width:100%");
+    expect(replyingBase).toContain("text-overflow:ellipsis");
     for (const title of [quoteAuthor, replyingAuthor]) {
       expect(title).toContain("white-space:nowrap");
-      expect(title).toContain("max-width:100%");
-      expect(title).toContain("text-overflow:ellipsis");
     }
+    expect(quoteAuthor).toContain("max-width:100%");
+    expect(quoteAuthor).toContain("text-overflow:ellipsis");
     expect(chat).toContain('@click.stop="jumpToQuotedMessage(message.replyTo)"');
     expect(chat).toContain('@click="cancelReply"');
     expect(chat).toContain('class="composer-normal"');
