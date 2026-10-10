@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  HAINEI_BOT_PUBKEY_HEX,
   audienceGroupCounts,
   audienceGroupsMeta,
   audienceRecipients,
   friendGroupTags,
+  isExcludedPostRecipient,
   normalizeSelectedAudienceGroups,
 } from "@/utils/friendAudience";
 
@@ -37,6 +39,36 @@ describe("friend audience selection", () => {
       counts: { 家人: 2, 同学: 1 },
     });
     expect(audienceRecipients(friends, true, [])).toEqual([A, C]);
+  });
+
+  it("excludes the HaiNei AI bot from all-friends, selected groups, and audience metadata", () => {
+    const bot = HAINEI_BOT_PUBKEY_HEX;
+    const friends = [
+      { pubkey: A, groups: ["家人"] },
+      { pubkey: bot.toUpperCase(), groups: ["家人", "机器人"] },
+      { pubkey: B, groups: ["同学"] },
+    ];
+    expect(isExcludedPostRecipient(bot.toUpperCase())).toBe(true);
+    expect(isExcludedPostRecipient(A)).toBe(false);
+    expect(audienceRecipients(friends, true, [])).toEqual([A, B]);
+    expect(audienceRecipients(friends, false, ["家人", "机器人"])).toEqual([A]);
+    expect(audienceRecipients(friends, false, ["机器人"])).toEqual([]);
+    expect(audienceGroupCounts(friends)).toEqual({
+      order: ["家人", "同学"],
+      counts: { 家人: 1, 同学: 1 },
+    });
+    expect(audienceGroupsMeta(friends, true, [])).toEqual([{ name: "全部好友", count: 2 }]);
+    expect(audienceGroupsMeta(friends, false, ["家人", "机器人"])).toEqual([
+      { name: "家人", count: 1 },
+    ]);
+  });
+
+  it("treats a bot-only accepted friend list as self-only for posting", () => {
+    const friends = [{ pubkey: HAINEI_BOT_PUBKEY_HEX, groups: ["未分组"] }];
+    expect(audienceRecipients(friends, true, [])).toEqual([]);
+    expect(audienceRecipients(friends, false, ["未分组"])).toEqual([]);
+    expect(audienceGroupsMeta(friends, true, [])).toEqual([]);
+    expect(audienceGroupCounts(friends)).toEqual({ order: [], counts: {} });
   });
 
   it("drops stale selected groups when the live accepted audience changes", () => {

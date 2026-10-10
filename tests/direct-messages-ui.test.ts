@@ -289,7 +289,9 @@ describe("direct-message navigation and UI contract", () => {
     expect(editor).toContain("audienceGroupsMeta(");
     expect(editor).toContain("normalizeSelectedAudienceGroups(");
     expect(editor).toContain("watch(groups, availableGroups =>");
-    expect(editor).toContain("const recipientsCount = computed(() => recipients.value.length)");
+    expect(editor).toContain("const recipientsCount = computed(() => recipients.value.length + Number(botMentioned.value))");
+    expect(editor).toContain("postAudienceFriends, uploads"); // Vue setup() must expose template values.
+    expect(editor).toContain("{{ postAudienceFriends.length }}");
     expect(friends).toContain('record.state === "accepted" || record.state === "outgoing_pending"');
     expect(friends).toContain("friendGroupTags(friend)");
   });

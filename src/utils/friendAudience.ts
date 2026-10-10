@@ -1,3 +1,5 @@
+import { HAINEI_BOT_PUBKEY, isHaiNeiBot } from "@/utils/haineiBot";
+
 export type AudienceFriend = {
   pubkey: string;
   groups?: string[];
@@ -5,6 +7,13 @@ export type AudienceFriend = {
 };
 
 export const UNGROUPED_FRIEND_LABEL = "未分组";
+
+// Re-export for existing post-audience call sites and tests.
+export const HAINEI_BOT_PUBKEY_HEX = HAINEI_BOT_PUBKEY;
+
+export function isExcludedPostRecipient(pubkey: string): boolean {
+  return isHaiNeiBot(pubkey);
+}
 
 export function friendGroupTags(friend: Pick<AudienceFriend, "groups" | "group">): string[] {
   const raw = Array.isArray(friend.groups) && friend.groups.length > 0
@@ -18,6 +27,7 @@ export function audienceGroupCounts(friends: AudienceFriend[]) {
   const counts: Record<string, number> = {};
   const order: string[] = [];
   for (const friend of friends) {
+    if (isExcludedPostRecipient(friend.pubkey)) continue;
     for (const group of friendGroupTags(friend)) {
       if (!(group in counts)) order.push(group);
       counts[group] = (counts[group] || 0) + 1;
@@ -36,7 +46,7 @@ export function audienceRecipients(friends: AudienceFriend[], allFriends: boolea
   const recipients = new Set<string>();
   for (const friend of friends) {
     const pubkey = String(friend.pubkey || "").trim().toLowerCase();
-    if (!pubkey) continue;
+    if (!pubkey || isExcludedPostRecipient(pubkey)) continue;
     if (allFriends || friendGroupTags(friend).some(group => selected.has(group))) recipients.add(pubkey);
   }
   return [...recipients];

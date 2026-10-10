@@ -9,11 +9,29 @@ import {
 } from "@/nostr/messaging/service";
 import { useKeyStore } from "@/stores/keys";
 import { logger } from "@/utils/logger";
+import { isExcludedPostRecipient } from "@/utils/friendAudience";
+import { HAINEI_BOT_PUBKEY } from "@/utils/haineiBot";
+import { mentionedPubkeysFromTags } from "@/utils/mentions";
 import { useMessagesStore } from "@/stores/messages";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 
 type PostPublishError = Error & { outgoingId?: string };
+
+// Enforce the feed audience policy at the NIP-17 queue boundary as well as
+// in the editor. This does not affect directMessages.ts or Bot private chats.
+function permittedPostRecipients(
+  recipients: string[], accountPubkey: string, plaintext: string, tags?: string[][]
+): string[] {
+  // The mention tag and visible @Bot token must agree before the Bot can
+  // receive a complete encrypted post. A plain audience selection is not consent.
+  const explicitBotMention = mentionedPubkeysFromTags(tags).includes(HAINEI_BOT_PUBKEY)
+    && plaintext.includes("@Hainei Bot");
+  return [...new Set(recipients
+    .map(pubkey => String(pubkey || "").trim().toLowerCase())
+    .filter(pubkey => pubkey
+      && (pubkey === accountPubkey || !isExcludedPostRecipient(pubkey) || explicitBotMention)))];
+}
 
 let postDeliveryObserverInstalled = false;
 
@@ -76,7 +94,7 @@ export const usePostsStore = defineStore("posts", {
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
       const accountAtStart = key.pkHex;
-      const requestedRecipients = [...new Set(recipients.filter(Boolean))];
+      const requestedRecipients = permittedPostRecipients(recipients, accountAtStart, plaintext, tags);
       if (requestedRecipients.length === 0) throw new Error("recipients 不能为空");
       const otherRecipients = requestedRecipients.filter(pubkey => pubkey !== accountAtStart);
       const recipientPubkeys = otherRecipients.length > 0 ? otherRecipients : [accountAtStart];
@@ -121,7 +139,8 @@ export const usePostsStore = defineStore("posts", {
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
       const accountAtStart = key.pkHex;
-      const requestedRecipients = [...new Set(recipients.filter(Boolean))];
+      // Explicit direct messages remain available for the Bot and every accepted friend.
+      const requestedRecipients = [...new Set(recipients.map(pubkey => String(pubkey || "").trim().toLowerCase()).filter(Boolean))];
       if (requestedRecipients.length === 0) throw new Error("recipients 不能为空");
       const otherRecipients = requestedRecipients.filter(pubkey => pubkey !== accountAtStart);
       const recipientPubkeys = otherRecipients.length > 0 ? otherRecipients : [accountAtStart];

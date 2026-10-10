@@ -12,6 +12,7 @@ import { isEncryptedImageRef } from "@/utils/encryptedImageRef";
 import { cancelBackgroundTask, scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { mentionTags } from "@/utils/mentions";
+import { HAINEI_BOT_PUBKEY } from "@/utils/haineiBot";
 
 export const INTERACTION_LABEL = "hainei-interaction";
 
@@ -200,7 +201,9 @@ export const useInteractionsStore = defineStore("interactions", {
       if (!text.trim() && !normalizedMedia?.length) throw new Error("评论不能为空");
       const normalizedMentions = [...new Set(mentionedPubkeys
         .map(pubkey => pubkey.trim().toLowerCase())
-        .filter(pubkey => /^[0-9a-f]{64}$/.test(pubkey) && pubkey !== key.pkHex.toLowerCase()))];
+        .filter(pubkey => /^[0-9a-f]{64}$/.test(pubkey) && pubkey !== key.pkHex.toLowerCase())
+        // The Bot may get an out-of-audience comment only when explicitly @-mentioned.
+        .filter(pubkey => pubkey !== HAINEI_BOT_PUBKEY || text.includes("@Hainei Bot")))];
       const interaction: Comment = {
         id: newInteractionId(), messageId, author: key.pkHex, text: text.trim(),
         timestamp: Math.floor(Date.now() / 1000), type: "comment", parentCommentId,

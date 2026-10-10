@@ -13,6 +13,7 @@ import {
 import { getRelaysFromStorage } from "@/nostr/relays";
 import { profileRepository } from "@/repositories/profileRepository";
 import { useKeyStore } from "@/stores/keys";
+import { HAINEI_BOT_NAME, isHaiNeiBot } from "@/utils/haineiBot";
 import type { FriendshipRecord } from "@/db/dexie";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
 
@@ -149,6 +150,9 @@ export function shouldRespondToProfileRequest(
 export function privateProfileDisplayName(profileNickname: string | undefined, pubkey: string, localName?: string) {
   const local = (localName || "").trim();
   if (local && local !== `${pubkey.slice(0, 8)}…` && local !== `${pubkey.slice(0, 8)}...`) return local;
+  // The official Bot has a recognizable default name without overwriting
+  // a user's explicit local contact remark.
+  if (isHaiNeiBot(pubkey)) return HAINEI_BOT_NAME;
   return profileNickname?.trim() || `${pubkey.slice(0, 8)}…`;
 }
 

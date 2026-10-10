@@ -142,6 +142,7 @@ import type { InboxItem } from "@/stores/messages";
 import type { Comment, CommentMedia } from "@/stores/interactions";
 import { useInteractionsStore } from "@/stores/interactions";
 import { useFriendsStore } from "@/stores/friends";
+import { HAINEI_BOT_NAME, isHaiNeiBot } from "@/utils/haineiBot";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
@@ -211,10 +212,14 @@ const mentionCandidates = computed<MentionCandidate[]>(() => {
     if (!priorities.has(comment.author.toLowerCase())) priorities.set(comment.author.toLowerCase(), 1);
   }
   return friends.getAcceptedList(friendships.isAccepted)
-    .filter(friend => allowed.has(friend.pubkey.toLowerCase()))
+    // Permit an explicit Bot mention even if it never received the parent post.
+    // Do not broaden regular comment mentions beyond the post's audience.
+    .filter(friend => allowed.has(friend.pubkey.toLowerCase()) || isHaiNeiBot(friend.pubkey))
     .map(friend => {
       const profileName = profiles.getProfile(friend.pubkey)?.nickname?.trim();
-      const label = profileName || friend.name?.trim() || `${friend.pubkey.slice(0, 8)}…`;
+      const label = isHaiNeiBot(friend.pubkey)
+        ? HAINEI_BOT_NAME
+        : profileName || friend.name?.trim() || `${friend.pubkey.slice(0, 8)}…`;
       return {
         pubkey: friend.pubkey,
         label,

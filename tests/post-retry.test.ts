@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { HAINEI_BOT_PUBKEY } from "@/utils/haineiBot";
+import { mentionTags } from "@/utils/mentions";
 
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
@@ -89,6 +91,72 @@ describe("post publish retry identity", () => {
     mocks.publishQueued.mockResolvedValueOnce(published("post-1"));
     store.startQueuedPostDelivery("post-1");
     await vi.waitFor(() => expect(mocks.publishQueued).toHaveBeenCalledWith(ACCOUNT, "post-1"));
+  });
+
+  it("never encrypts posts to the Bot, including uppercase and mixed recipient lists", async () => {
+    const store = usePostsStore();
+    await store.queuePost([PEER, HAINEI_BOT_PUBKEY.toUpperCase(), ACCOUNT], "hello");
+    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
+      recipientPubkeys: [PEER],
+    }));
+    expect(mocks.queue.mock.calls[0][0].recipientPubkeys).not.toContain(HAINEI_BOT_PUBKEY);
+
+    mocks.queue.mockClear();
+    await store.queuePost([ACCOUNT, HAINEI_BOT_PUBKEY], "self-only");
+    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
+      recipientPubkeys: [ACCOUNT],
+    }));
+    await expect(store.queuePost([HAINEI_BOT_PUBKEY], "not allowed")).rejects.toThrow("recipients 不能为空");
+  });
+
+  it("delivers a complete post to the Bot only with its explicit @ token and private mention tag", async () => {
+    const store = usePostsStore();
+    const text = "请 @Hainei Bot 回答这个问题";
+    await store.queuePost([PEER, HAINEI_BOT_PUBKEY.toUpperCase(), ACCOUNT], text, undefined,
+      mentionTags([HAINEI_BOT_PUBKEY]));
+    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
+      recipientPubkeys: [PEER, HAINEI_BOT_PUBKEY],
+      content: text,
+      tags: mentionTags([HAINEI_BOT_PUBKEY]),
+    }));
+    mocks.queue.mockClear();
+    await store.queuePost([HAINEI_BOT_PUBKEY], text, undefined, mentionTags([HAINEI_BOT_PUBKEY]));
+    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
+      recipientPubkeys: [HAINEI_BOT_PUBKEY],
+    }));
+  });
+
+  it("does not leak to Bot after removing @ or when a tag is missing or mismatched", async () => {
+    const store = usePostsStore();
+    const tag = mentionTags([HAINEI_BOT_PUBKEY]);
+    const cases = [
+      { text: "不再提及", tags: tag },
+      { text: "请 @Hainei Bot 回答", tags: undefined },
+      { text: "请 @Hainei Bot 回答", tags: [["hainei-mention", PEER]] },
+    ];
+    for (const candidate of cases) {
+      mocks.queue.mockClear();
+      await store.queuePost([PEER, HAINEI_BOT_PUBKEY], candidate.text, undefined, candidate.tags);
+      expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
+        recipientPubkeys: [PEER],
+      }));
+    }
+  });
+
+  it("requires an accepted Bot friendship for a deliberate Bot mention", async () => {
+    const store = usePostsStore();
+    mocks.friendships.isAccepted.mockImplementation(pubkey => pubkey !== HAINEI_BOT_PUBKEY);
+    await expect(store.queuePost([PEER, HAINEI_BOT_PUBKEY], "@Hainei Bot",
+      undefined, mentionTags([HAINEI_BOT_PUBKEY]))).rejects.toThrow("已互相确认");
+    expect(mocks.queue).not.toHaveBeenCalled();
+  });
+
+  it("keeps direct messages to the Bot permitted", async () => {
+    mocks.send.mockResolvedValueOnce(published("dm-bot"));
+    await usePostsStore().sendDirectMessage([HAINEI_BOT_PUBKEY], "hi");
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({
+      recipientPubkeys: [HAINEI_BOT_PUBKEY],
+    }));
   });
 
   it("freezes a queued post after a visible publish failure and exposes the same outgoing id", async () => {

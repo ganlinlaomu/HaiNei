@@ -61,7 +61,8 @@ import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
-import { useProfilesStore } from "@/stores/profiles";
+import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
+import { isHaiNeiBot } from "@/utils/haineiBot";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { useUIStore } from "@/stores/ui";
 import {
@@ -97,7 +98,12 @@ const canView = computed(() => canViewPrivateProfile(
 const profile = computed(() => canView.value && profiles.loadedFor === keys.pkHex
   ? profiles.getProfile(ownerPubkey.value)
   : undefined);
-const ownerName = computed(() => profile.value?.nickname?.trim() || `${ownerPubkey.value.slice(0, 8)}…`);
+const ownerName = computed(() => isHaiNeiBot(ownerPubkey.value)
+  ? privateProfileDisplayName(
+      profile.value?.nickname, ownerPubkey.value,
+      friends.list.find(friend => friend.pubkey === ownerPubkey.value)?.name,
+    )
+  : profile.value?.nickname?.trim() || `${ownerPubkey.value.slice(0, 8)}…`);
 const localNote = computed(() => {
   if (!canView.value || isSelf.value) return "";
   const value = friends.list.find(friend => friend.pubkey === ownerPubkey.value)?.name?.trim() || "";

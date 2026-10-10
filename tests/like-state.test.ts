@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
+import { HAINEI_BOT_PUBKEY } from "@/utils/haineiBot";
 
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
@@ -68,6 +69,37 @@ beforeEach(async () => {
   mocks.send.mockResolvedValue({ message: {}, events: [], relayResults: [] });
   await useNotificationsStore().load(ACCOUNT);
   useInteractionsStore().loadedFor = ACCOUNT;
+});
+
+describe("explicit Bot mentions in comments", () => {
+  it("sends only the encrypted comment payload to the Bot, not the parent post", async () => {
+    const text = "请 @Hainei Bot 回答";
+    await useInteractionsStore().sendComment(POST, PEER, text, undefined, undefined, [HAINEI_BOT_PUBKEY]);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    const options = mocks.send.mock.calls[0][0];
+    expect(options.recipientPubkeys).toEqual([PEER, HAINEI_BOT_PUBKEY]);
+    expect(options.tags).toContainEqual(["hainei-mention", HAINEI_BOT_PUBKEY]);
+    const payload = JSON.parse(options.content);
+    expect(payload).toMatchObject({
+      type: "comment", messageId: POST, author: ACCOUNT,
+      text, mentionedPubkeys: [HAINEI_BOT_PUBKEY],
+    });
+    expect(payload).not.toHaveProperty("postContent");
+  });
+
+  it("drops a stale Bot mention if the visible @ was removed", async () => {
+    await useInteractionsStore().sendComment(POST, PEER, "普通评论", undefined, undefined,
+      [HAINEI_BOT_PUBKEY]);
+    const options = mocks.send.mock.calls[0][0];
+    expect(options.recipientPubkeys).toEqual([PEER]);
+    expect(options.tags).not.toContainEqual(["hainei-mention", HAINEI_BOT_PUBKEY]);
+    expect(JSON.parse(options.content).mentionedPubkeys).toBeUndefined();
+  });
+
+  it("keeps ordinary comments to the Bot author working without an @", async () => {
+    await useInteractionsStore().sendComment(POST, HAINEI_BOT_PUBKEY, "普通回复");
+    expect(mocks.send.mock.calls[0][0].recipientPubkeys).toEqual([HAINEI_BOT_PUBKEY]);
+  });
 });
 
 describe("stateful likes", () => {

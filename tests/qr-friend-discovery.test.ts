@@ -77,6 +77,6 @@ describe("Nostr QR friend discovery", () => {
     expect(friends).toContain("await friendships.sendRequest(hexKey)");
     expect(friends).toContain("不能添加自己为好友");
     expect(friends).toContain("（可选）");
-    expect(friends).toContain('|| `${hexKey.slice(0, 8)}…`');
+    expect(friends).toContain("privateProfileDisplayName(profiles.getProfile(hexKey)?.nickname, hexKey)");
   });
 });

@@ -140,6 +140,10 @@
             <span class="visibility-value">{{ visibilitySummary }} <span aria-hidden="true">›</span></span>
           </button>
 
+          <div v-if="botMentioned" class="small recips-empty-hint">
+            已 @Hainei Bot：将向 Bot 发送这条完整的加密动态。
+          </div>
+
           <div v-if="visibilityOpen" class="groups">
             <div class="chips-row">
               <button
@@ -150,7 +154,7 @@
                 :aria-pressed="String(allFriends)"
               >
                 全部好友
-                <span class="chip-count">{{ acceptedFriends.length }}</span>
+                <span class="chip-count">{{ postAudienceFriends.length }}</span>
               </button>
               <div class="divider"></div>
               <div class="chips-scroll" role="list">
@@ -172,8 +176,11 @@
             <div class="recips-info">
               目标人数：<strong>{{ recipientsCount }}</strong>
             </div>
-            <div v-if="acceptedFriends.length === 0" class="small recips-empty-hint">
-              暂无可发送的好友，当前仅会发送给自己。请先添加并完成好友确认。
+            <div v-if="acceptedFriends.length > postAudienceFriends.length && !botMentioned" class="small recips-empty-hint">
+              HaiNei Bot 默认不接收动态；主动 @ 才会收到。
+            </div>
+            <div v-if="postAudienceFriends.length === 0 && !botMentioned" class="small recips-empty-hint">
+              无其他可发送好友，此帖仅会保留给自己。若需分享，请先添加并确认好友。
             </div>
           </div>
 
@@ -210,6 +217,7 @@ import { useProfilesStore } from "@/stores/profiles";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import { mentionTags, type MentionCandidate } from "@/utils/mentions";
+import { HAINEI_BOT_NAME, HAINEI_BOT_PUBKEY, isHaiNeiBot } from "@/utils/haineiBot";
 import { uploadImageToBlossomWithFallback, getBlossomConfig } from "@/utils/blossom";
 import { resizeImageFile } from "@/utils/imageResize";
 import { compressImageToTargetSize } from "@/utils/imageCompression";
@@ -237,6 +245,7 @@ import {
   audienceGroupCounts,
   audienceGroupsMeta,
   audienceRecipients,
+  isExcludedPostRecipient,
   normalizeSelectedAudienceGroups,
 } from "@/utils/friendAudience";
 import {
@@ -325,24 +334,29 @@ export default defineComponent({
     });
 
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
+    const postAudienceFriends = computed(() => acceptedFriends.value.filter(
+      friend => !isExcludedPostRecipient(friend.pubkey)
+    ));
 
-    const groupSummary = computed(() => audienceGroupCounts(acceptedFriends.value));
+    const groupSummary = computed(() => audienceGroupCounts(postAudienceFriends.value));
     const groups = computed(() => groupSummary.value.order);
     const countByGroup = computed(() => groupSummary.value.counts);
     const selectedSet = computed(() => new Set(selectedGroups.value || []));
     const recipients = computed(() => audienceRecipients(
-      acceptedFriends.value,
+      postAudienceFriends.value,
       allFriends.value,
       selectedGroups.value
     ));
-    const recipientsCount = computed(() => recipients.value.length);
     const mentionCandidates = computed<MentionCandidate[]>(() => {
       const allowed = new Set(recipients.value.map(pubkey => pubkey.toLowerCase()));
       return acceptedFriends.value
-        .filter(friend => allowed.has(friend.pubkey.toLowerCase()))
+        // Only the Bot may be mentioned outside the selected post audience.
+        .filter(friend => allowed.has(friend.pubkey.toLowerCase()) || isHaiNeiBot(friend.pubkey))
         .map(friend => {
           const profileName = profiles.getProfile(friend.pubkey)?.nickname?.trim();
-          const label = profileName || friend.name?.trim() || `${friend.pubkey.slice(0, 8)}…`;
+          const label = isHaiNeiBot(friend.pubkey)
+            ? HAINEI_BOT_NAME
+            : profileName || friend.name?.trim() || `${friend.pubkey.slice(0, 8)}…`;
           return {
             pubkey: friend.pubkey,
             label,
@@ -364,10 +378,20 @@ export default defineComponent({
       mentionedPubkeys,
       closeMention,
     } = useMentionComposer(content, textarea, mentionCandidates);
+    // A deliberate @Hainei Bot adds exactly one Bot copy; ordinary audiences
+    // and group counts keep excluding it. Removing the mention removes consent.
+    const botMentioned = computed(() =>
+      acceptedFriends.value.some(friend => isHaiNeiBot(friend.pubkey))
+      && mentionedPubkeys().some(isHaiNeiBot));
+    const recipientsCount = computed(() => recipients.value.length + Number(botMentioned.value));
 
-    const visibilitySummary = computed(() => allFriends.value
-      ? "全部好友"
-      : selectedGroups.value.length > 0 ? `${selectedGroups.value.length} 个分组` : "仅自己可见");
+    const visibilitySummary = computed(() => {
+      const base = allFriends.value
+        ? "全部好友"
+        : selectedGroups.value.length > 0 ? `${selectedGroups.value.length} 个分组` : "仅自己可见";
+      if (!botMentioned.value) return base;
+      return base === "仅自己可见" ? "仅自己和 Hainei Bot" : `${base} + Hainei Bot`;
+    });
 
     function gLabel(g: string) {
       return g === "未分组" ? "未分组" : g;
@@ -1013,13 +1037,14 @@ export default defineComponent({
       }
 
       let recips = recipients.value.slice();
+      if (botMentioned.value) recips.push(HAINEI_BOT_PUBKEY);
       if (keys.pkHex && !recips.includes(keys.pkHex)) recips.push(keys.pkHex);
       recips = Array.from(new Set(recips.filter(Boolean)));
 
       if (recips.length === 0) { error.value = "未指定收件人"; sending.value = false; return; }
 
       const groupsMeta = audienceGroupsMeta(
-        acceptedFriends.value,
+        postAudienceFriends.value,
         allFriends.value,
         selectedGroups.value
       );
@@ -1140,7 +1165,7 @@ export default defineComponent({
     return {
       visible, content, sending, pendingPostRetry, allFriends, selectedGroups, groups, countByGroup,
       canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, discardDraft, toggleAll, toggleGroup,
-      recipientsCount, selectedSet, gLabel, acceptedFriends, uploads, uploadEnabled, uploadingAny,
+      recipientsCount, botMentioned, selectedSet, gLabel, acceptedFriends, postAudienceFriends, uploads, uploadEnabled, uploadingAny,
       visibilityOpen, visibilitySummary,
       onFilesSelected, insertImageUrl, removeUpload, checkBlossom,
       sheetDragging, sheetStyle, onSheetPointerDown, onSheetPointerMove, onSheetPointerEnd,
