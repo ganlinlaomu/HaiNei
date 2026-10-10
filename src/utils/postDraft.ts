@@ -21,12 +21,15 @@ export interface PostDraft {
   content: string;
   allFriends: boolean;
   selectedGroups: string[];
+  /** True only after the user explicitly chose an audience for this draft. */
+  audienceChosen: boolean;
   images: PostDraftImage[];
   video: PostDraftVideo | null;
   updatedAt: number;
 }
 
-export type PostDraftInput = Omit<PostDraft, "updatedAt" | "images" | "video"> & {
+export type PostDraftInput = Omit<PostDraft, "updatedAt" | "images" | "video" | "audienceChosen"> & {
+  audienceChosen?: boolean;
   images?: PostDraftImage[];
   video?: PostDraftVideo | null;
 };
@@ -81,10 +84,15 @@ export function loadPostDraft(account?: string | null): PostDraft | null {
       ? value.images.map(serializableImage).filter((image): image is PostDraftImage => !!image)
       : [];
     const video = serializableVideo(value.video);
+    // Drafts saved by older releases did not record explicit consent.
+    // Restore their content/media, but require a fresh audience choice.
+    const audienceChosen = value.audienceChosen === true;
+    const allFriends = audienceChosen && value.allFriends === true;
     return {
       content: value.content,
-      allFriends: value.allFriends !== false,
-      selectedGroups: Array.isArray(value.selectedGroups)
+      audienceChosen,
+      allFriends,
+      selectedGroups: audienceChosen && !allFriends && Array.isArray(value.selectedGroups)
         ? value.selectedGroups.filter(group => typeof group === "string")
         : [],
       images,
@@ -102,8 +110,9 @@ export function savePostDraft(account: string | null | undefined, draft: PostDra
   try {
     deviceStorage.setItem(key, JSON.stringify({
       content: draft.content,
-      allFriends: draft.allFriends,
-      selectedGroups: [...draft.selectedGroups],
+      audienceChosen: draft.audienceChosen === true,
+      allFriends: draft.audienceChosen === true && draft.allFriends,
+      selectedGroups: draft.audienceChosen === true && !draft.allFriends ? [...draft.selectedGroups] : [],
       images: (draft.images || []).map(serializableImage).filter((image): image is PostDraftImage => !!image),
       video: serializableVideo(draft.video),
       updatedAt: Date.now(),
@@ -116,7 +125,8 @@ export function mergeCompletedPostDraftImage(account: string, image: PostDraftIm
   const images = [...(current?.images || []).filter(item => item.id !== image.id && item.encryptedRef !== image.encryptedRef), image];
   savePostDraft(account, {
     content: current?.content || "",
-    allFriends: current?.allFriends ?? true,
+    audienceChosen: current?.audienceChosen ?? false,
+    allFriends: current?.allFriends ?? false,
     selectedGroups: current?.selectedGroups || [],
     images,
     video: current?.video || null,
@@ -127,7 +137,8 @@ export function mergeCompletedPostDraftVideo(account: string, video: PostDraftVi
   const current = loadPostDraft(account);
   savePostDraft(account, {
     content: current?.content || "",
-    allFriends: current?.allFriends ?? true,
+    audienceChosen: current?.audienceChosen ?? false,
+    allFriends: current?.allFriends ?? false,
     selectedGroups: current?.selectedGroups || [],
     images: current?.images || [],
     video,

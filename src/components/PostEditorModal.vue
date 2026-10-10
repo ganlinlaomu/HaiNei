@@ -135,10 +135,22 @@
             </div>
           </div>
 
-          <button class="visibility-row" type="button" :aria-expanded="visibilityOpen" :disabled="!!pendingPostRetry" @click="visibilityOpen = !visibilityOpen">
+          <button
+            ref="visibilityRow"
+            class="visibility-row"
+            :class="{ 'visibility-row-error': visibilityError }"
+            type="button"
+            :aria-expanded="visibilityOpen"
+            :aria-describedby="visibilityError ? 'visibility-error' : undefined"
+            :disabled="!!pendingPostRetry"
+            @click="visibilityOpen = !visibilityOpen"
+          >
             <span>可见范围</span>
-            <span class="visibility-value">{{ visibilitySummary }} <span aria-hidden="true">›</span></span>
+            <span class="visibility-value" :class="{ 'visibility-required': !audienceChosen }">{{ visibilitySummary }} <span aria-hidden="true">›</span></span>
           </button>
+          <div v-if="visibilityError" id="visibility-error" class="visibility-error" role="alert">
+            请先选择可见范围，再发布动态。
+          </div>
 
           <div v-if="botMentioned" class="small recips-empty-hint">
             已 @Hainei Bot：将向 Bot 发送这条完整的加密动态。
@@ -148,10 +160,19 @@
             <div class="chips-row">
               <button
                 class="chip"
-                :class="{ 'chip-selected': allFriends }"
+                :class="{ 'chip-selected': audienceChosen && !allFriends && selectedGroups.length === 0 }"
+                :disabled="!!pendingPostRetry"
+                @click="chooseSelf()"
+                type="button"
+                :aria-pressed="String(audienceChosen && !allFriends && selectedGroups.length === 0)"
+              >仅自己</button>
+              <button
+                class="chip"
+                :class="{ 'chip-selected': audienceChosen && allFriends }"
+                :disabled="!!pendingPostRetry || postAudienceFriends.length === 0"
                 @click="toggleAll()"
                 type="button"
-                :aria-pressed="String(allFriends)"
+                :aria-pressed="String(audienceChosen && allFriends)"
               >
                 全部好友
                 <span class="chip-count">{{ postAudienceFriends.length }}</span>
@@ -162,7 +183,9 @@
                   v-for="g in groups"
                   :key="g"
                   class="chip"
-                  :class="{ 'chip-selected': selectedSet.has(g) }"
+                  :class="{ 'chip-selected': audienceChosen && selectedSet.has(g) }"
+                  :disabled="!!pendingPostRetry"
+                  :aria-pressed="String(audienceChosen && selectedSet.has(g))"
                   @click="toggleGroup(g)"
                   role="listitem"
                   type="button"
@@ -173,9 +196,10 @@
               </div>
             </div>
 
-            <div class="recips-info">
+            <div class="recips-info" v-if="audienceChosen">
               目标人数：<strong>{{ recipientsCount }}</strong>
             </div>
+            <div class="recips-info" v-else>请选择要分享给谁（必选）</div>
             <div v-if="acceptedFriends.length > postAudienceFriends.length && !botMentioned" class="small recips-empty-hint">
               HaiNei Bot 默认不接收动态；主动 @ 才会收到。
             </div>
@@ -188,14 +212,23 @@
           <div class="action-buttons">
             <button class="discard-btn" type="button" @click="discardDraft">丢弃草稿</button>
             <button class="save-draft-btn" type="button" @click="onClose">保存草稿</button>
-            <button class="send-btn" :disabled="sending || uploadingAny || (!canSend && !pendingPostRetry)" @click="onSend">
+            <button class="send-btn" :disabled="sending || uploadingAny || (!canSend && !pendingPostRetry)" @click="onSend()">
               {{ sending ? "发送中..." : pendingPostRetry ? "重新发送" : "发送" }}
             </button>
           </div>
 
           <div v-if="error" class="error">{{ error }}</div>
         </main>
-
+        <div v-if="confirmAllFriends" class="audience-confirm-backdrop" @pointerdown.stop @pointermove.stop @pointerup.stop>
+          <div class="audience-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="audience-confirm-title" aria-describedby="audience-confirm-description">
+            <h3 id="audience-confirm-title">发送给全部好友？</h3>
+            <p id="audience-confirm-description">这条动态将发送给 {{ recipients.length }} 位好友。确认可见范围无误后再发布。</p>
+            <div class="audience-confirm-actions">
+              <button type="button" class="save-draft-btn" @click="cancelAllFriendsConfirmation">返回检查</button>
+              <button type="button" class="send-btn" :disabled="sending" @click="onSend(true)">确认发布</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </transition>
@@ -302,9 +335,14 @@ export default defineComponent({
     let dismissTimer: number | null = null;
 
     // recipients selection state
-    const allFriends = ref(true);
+    const allFriends = ref(false);
     const selectedGroups = ref<Array<string>>([]);
-    const visibilityOpen = ref(false);
+    const audienceChosen = ref(false);
+    const visibilityError = ref(false);
+    const visibilityOpen = ref(true);
+    const visibilityRow = ref<HTMLButtonElement | null>(null);
+    const confirmAllFriends = ref(false);
+    const confirmationRecipients = ref("");
     let draftPersistenceEnabled = false;
     let draftAccount = "";
 
@@ -314,6 +352,7 @@ export default defineComponent({
         content: content.value,
         allFriends: allFriends.value,
         selectedGroups: [...selectedGroups.value],
+        audienceChosen: audienceChosen.value,
         images: serializeCompletedDraftImages(uploads.value),
         video: videoPreview.value,
       });
@@ -386,10 +425,10 @@ export default defineComponent({
     const recipientsCount = computed(() => recipients.value.length + Number(botMentioned.value));
 
     const visibilitySummary = computed(() => {
-      const base = allFriends.value
+      const base = !audienceChosen.value ? "请选择 · 必选" : allFriends.value
         ? "全部好友"
         : selectedGroups.value.length > 0 ? `${selectedGroups.value.length} 个分组` : "仅自己可见";
-      if (!botMentioned.value) return base;
+      if (!audienceChosen.value || !botMentioned.value) return base;
       return base === "仅自己可见" ? "仅自己和 Hainei Bot" : `${base} + Hainei Bot`;
     });
 
@@ -397,22 +436,44 @@ export default defineComponent({
       return g === "未分组" ? "未分组" : g;
     }
 
+    function dismissAudienceConfirmation() {
+      confirmAllFriends.value = false;
+      confirmationRecipients.value = "";
+    }
+    function cancelAllFriendsConfirmation() {
+      dismissAudienceConfirmation();
+      visibilityOpen.value = true;
+    }
+    function chooseSelf() {
+      closeMention();
+      dismissAudienceConfirmation();
+      allFriends.value = false;
+      selectedGroups.value = [];
+      audienceChosen.value = true;
+      visibilityError.value = false;
+    }
     function toggleAll() {
       closeMention();
-      allFriends.value = !allFriends.value;
+      dismissAudienceConfirmation();
+      allFriends.value = true;
       selectedGroups.value = [];
+      audienceChosen.value = true;
+      visibilityError.value = false;
     }
-
     function toggleGroup(g: string) {
       closeMention();
-      if (allFriends.value) {
+      dismissAudienceConfirmation();
+      if (allFriends.value || !audienceChosen.value || selectedGroups.value.length === 0) {
         allFriends.value = false;
         selectedGroups.value = [g];
-        return;
+      } else {
+        const idx = selectedGroups.value.indexOf(g);
+        if (idx === -1) selectedGroups.value.push(g);
+        else selectedGroups.value.splice(idx, 1);
       }
-      const idx = selectedGroups.value.indexOf(g);
-      if (idx === -1) selectedGroups.value.push(g);
-      else selectedGroups.value.splice(idx, 1);
+      // Deselecting the final group must not silently become a self-only post.
+      audienceChosen.value = selectedGroups.value.length > 0;
+      visibilityError.value = false;
     }
 
     const uploads = ref<PostEditorUploadItem[]>([]);
@@ -797,9 +858,12 @@ export default defineComponent({
       content.value = "";
       error.value = null;
       pendingPostRetry.value = null;
-      allFriends.value = true;
+      allFriends.value = false;
       selectedGroups.value = [];
-      visibilityOpen.value = false;
+      audienceChosen.value = false;
+      visibilityError.value = false;
+      visibilityOpen.value = true;
+      dismissAudienceConfirmation();
       uploads.value = [];
       videoPreview.value = null;
       sheetDragging.value = false;
@@ -914,8 +978,14 @@ export default defineComponent({
         draftAccount = accountAtOpen;
         const draft = loadPostDraft(accountAtOpen);
         content.value = draft?.content || "";
-        allFriends.value = draft?.allFriends ?? true;
-        selectedGroups.value = normalizeSelectedAudienceGroups(draft?.selectedGroups || [], groups.value);
+        const restoredGroups = normalizeSelectedAudienceGroups(draft?.selectedGroups || [], groups.value);
+        allFriends.value = !!draft?.audienceChosen && !!draft.allFriends && postAudienceFriends.value.length > 0;
+        selectedGroups.value = allFriends.value ? [] : restoredGroups;
+        // Deleted groups must never silently turn a targeted draft into a self-only post.
+        audienceChosen.value = !!draft?.audienceChosen && (
+          allFriends.value || (draft.selectedGroups.length === 0 && !draft.allFriends) || restoredGroups.length > 0
+        );
+        visibilityOpen.value = !audienceChosen.value;
         uploads.value = restoreDraftImageUploads(draft?.images || []);
         videoPreview.value = draft?.video || null;
         draftPersistenceEnabled = true;
@@ -944,19 +1014,27 @@ export default defineComponent({
     }, { immediate: true });
 
     watch(groups, availableGroups => {
-      if (allFriends.value) return;
+      if (allFriends.value || selectedGroups.value.length === 0) return;
       const normalizedGroups = normalizeSelectedAudienceGroups(selectedGroups.value, availableGroups);
       if (normalizedGroups.length !== selectedGroups.value.length
         || normalizedGroups.some((group, index) => group !== selectedGroups.value[index])) {
         selectedGroups.value = normalizedGroups;
+        if (!normalizedGroups.length) audienceChosen.value = false;
       }
     });
 
+    watch(postAudienceFriends, list => {
+      if (allFriends.value && list.length === 0) {
+        allFriends.value = false;
+        audienceChosen.value = false;
+      }
+    });
     watch(
       [
         content,
         allFriends,
         selectedGroups,
+        audienceChosen,
         () => uploads.value.map(item => item.encryptedRef || "").join("|"),
         videoPreview,
       ],
@@ -992,11 +1070,36 @@ export default defineComponent({
       releasePostEditorMediaUrls(uploads.value, videoPreview.value);
     });
 
-    async function onSend() {
+    async function onSend(confirmedAllFriends = false) {
+      if (sending.value) return;
       // Use pkHex check for consistency with onMounted and reliability
       if (!keys.pkHex) { error.value = "请先登录"; return; }
       if (!pendingPostRetry.value && !canSend.value) { error.value = "请输入内容"; return; }
       if (uploadingAny.value) { error.value = "请等待媒体上传完成"; return; }
+      if (!pendingPostRetry.value) {
+        const validAudience = audienceChosen.value && (
+          (!allFriends.value && selectedGroups.value.length === 0)
+          || recipients.value.length > 0
+        );
+        if (!validAudience) {
+          dismissAudienceConfirmation();
+          visibilityError.value = true;
+          visibilityOpen.value = true;
+          error.value = "请先选择可见范围";
+          await nextTick();
+          visibilityRow.value?.scrollIntoView({ block: "center", behavior: "smooth" });
+          return;
+        }
+        if (allFriends.value) {
+          const signature = recipients.value.slice().sort().join(",");
+          if (!confirmedAllFriends || confirmationRecipients.value !== signature) {
+            confirmationRecipients.value = signature;
+            confirmAllFriends.value = true;
+            return;
+          }
+        }
+      }
+      dismissAudienceConfirmation();
       const accountAtSend = keys.pkHex;
       sending.value = true;
       error.value = null;
@@ -1165,7 +1268,8 @@ export default defineComponent({
     }
 
     return {
-      visible, content, sending, pendingPostRetry, allFriends, selectedGroups, groups, countByGroup,
+      visible, content, sending, pendingPostRetry, allFriends, selectedGroups, audienceChosen, visibilityError,
+      visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseSelf, recipients, groups, countByGroup,
       canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, discardDraft, toggleAll, toggleGroup,
       recipientsCount, botMentioned, selectedSet, gLabel, acceptedFriends, postAudienceFriends, uploads, uploadEnabled, uploadingAny,
       visibilityOpen, visibilitySummary,
@@ -1204,6 +1308,7 @@ export default defineComponent({
 }
 
 .editor-card {
+  position: relative;
   width: 100%;
   max-width: 720px;
   background: #fff;
@@ -1560,6 +1665,8 @@ export default defineComponent({
   cursor: pointer;
 }
 .visibility-value { color: #64748b; }
+.visibility-required, .visibility-row-error .visibility-value { color: #b91c1c; }
+.visibility-error { margin-top: 6px; font-size: 13px; color: #b91c1c; }
 .chips-row { 
   display:flex; 
   align-items:center; 
@@ -1594,6 +1701,27 @@ export default defineComponent({
 .divider { width:1px; height:28px; background: rgba(0,0,0,0.06); margin:0 6px; flex-shrink: 0; }
 .recips-info { margin-top:8px; color:#374151; font-size:13px; }
 .recips-empty-hint { margin-top: 6px; }
+.audience-confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background: rgba(15, 23, 42, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.audience-confirm-dialog {
+  width: min(100%, 360px);
+  border-radius: 16px;
+  background: white;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+  padding: 20px;
+  color: #1f2937;
+}
+.audience-confirm-dialog h3 { font-size: 17px; margin: 0 0 10px; }
+.audience-confirm-dialog p { font-size: 14px; line-height: 1.6; margin: 0 0 16px; }
+.audience-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 
 /* action buttons */
 .action-buttons {
