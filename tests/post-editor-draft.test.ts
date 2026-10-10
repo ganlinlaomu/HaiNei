@@ -146,7 +146,7 @@ describe("post editor close and media UX", () => {
     expect(source).toContain("const allFriends = ref(false)");
     expect(source).toContain("const audienceChosen = ref(false)");
     expect(source).toContain("audienceChosen: audienceChosen.value");
-    expect(source).toContain("visibilityOpen.value = !audienceChosen.value");
+    expect(source).toContain("visibilityOpen.value = !!audienceChosen.value && !allFriends.value && selectedGroups.value.length > 0");
     expect(source).toContain("function chooseSelf()");
     expect(source).toContain("audienceChosen.value = selectedGroups.value.length > 0");
     expect(source).toContain("if (!validAudience)");
@@ -157,10 +157,37 @@ describe("post editor close and media UX", () => {
     expect(source.indexOf("if (!validAudience)")).toBeLessThan(source.indexOf("const { message } = await posts.queuePost("));
   });
 
-  it("distinguishes draft-saving close from explicit discard", () => {
-    expect(source).toContain('@click="discardDraft">丢弃草稿</button>');
-    expect(source).toContain('@click="onClose">保存草稿</button>');
-    expect(source).not.toContain('@click="onClose">取消</button>');
+  it("redesigns the publisher into content, audience cards, and a compact toolbar", () => {
+    expect(source).toContain('class="editor-header-row"');
+    expect(source).toContain('class="editor-author"');
+    expect(source).toContain('placeholder="这一刻，你想分享什么？"');
+    expect(source).toContain('class="audience-cards"');
+    expect(source).toContain('aria-label="可见范围"');
+    expect(source).toContain("仅自己");
+    expect(source).toContain("指定分组");
+    expect(source).toContain("全部好友");
+    expect(source).toContain('class="group-picker"');
+    expect(source).toContain('class="composer-toolbar"');
+    expect(source).toContain('@click="insertMentionTrigger"');
+    expect(source).toContain("@click=\"onSend()\"");
+    expect(source).toContain(".audience-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));");
+    expect(source).toContain(".editor-textarea::placeholder { color: #94a3b8; }");
+  });
+
+  it("shows Save, Discard and Continue only after cancelling a nonempty post", () => {
+    expect(source).toContain('@click="requestCancel">取消</button>');
+    expect(source).toContain('@click.self="requestCancel"');
+    expect(source).toContain("useDialogFocus(editorCard, () => ui.showPostEditor, requestCancel)");
+    expect(source).toContain('v-if="cancelSheetOpen"');
+    expect(source).toContain('@click="saveAndClose">保存草稿</button>');
+    expect(source).toContain('@click="discardDraft">放弃</button>');
+    expect(source).toContain('@click="continueEditing">继续编辑</button>');
+    expect(source).not.toContain('@click="onClose">保存草稿</button>');
+    expect(source).toContain("function requestCancel()");
+    expect(source).toContain("if (!draftPersistenceEnabled)");
+    expect(source).toContain("if (!hasDraftContent)");
+    expect(source).toContain("function saveAndClose()");
+    expect(source).toContain("persistDraft();\n      onClose();");
     expect(source).toContain("function clearPersistentDraft(account: string)");
     expect(source).toContain("function resetRuntimeEditor()");
   });
