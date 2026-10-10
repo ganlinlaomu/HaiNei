@@ -545,8 +545,7 @@ export default defineComponent({
           const groupInput = formData.value.groupsInput.trim();
           const group = groupInput.length > 0 ? groupInput : undefined;
           const savedName = nameVal
-            || profiles.getProfile(hexKey)?.nickname?.trim()
-            || `${hexKey.slice(0, 8)}…`;
+            || privateProfileDisplayName(profiles.getProfile(hexKey)?.nickname, hexKey);
 
           await friendships.sendRequest(hexKey);
           const metadataSaved = await friends.upsertMetadata(hexKey, {
