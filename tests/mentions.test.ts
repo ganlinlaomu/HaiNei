@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { HAINEI_BOT_NAME, HAINEI_BOT_PUBKEY } from "@/utils/haineiBot";
 import {
   filterMentionCandidates,
   insertMention,
@@ -28,6 +29,20 @@ describe("user mentions", () => {
     ];
     expect(filterMentionCandidates(candidates, "咖啡").map(item => item.pubkey)).toEqual([ALICE]);
     expect(filterMentionCandidates(candidates, "小博").map(item => item.pubkey)).toEqual([BOB]);
+  });
+
+  it("offers a canonical Bot mention and renders it as one clickable token", () => {
+    const bot = { pubkey: HAINEI_BOT_PUBKEY, label: HAINEI_BOT_NAME, searchText: "AI Bot" };
+    expect(filterMentionCandidates([bot], "bot")).toEqual([bot]);
+    expect(insertMention("@hai", { start: 0, end: 4, query: "hai" }, bot).text)
+      .toBe("@Hainei Bot ");
+    expect(splitKnownMentions("请 @Hainei Bot 帮忙", [
+      { pubkey: HAINEI_BOT_PUBKEY, labels: [HAINEI_BOT_NAME] },
+    ])).toEqual([
+      { type: "text", text: "请 " },
+      { type: "mention", text: "@Hainei Bot", label: HAINEI_BOT_NAME, pubkey: HAINEI_BOT_PUBKEY },
+      { type: "text", text: " 帮忙" },
+    ]);
   });
 
   it("inserts a selected mention and keeps the cursor after the trailing space", () => {
@@ -71,7 +86,12 @@ describe("user mentions", () => {
     expect(post).toContain("const allowed = new Set(recipients.value");
     expect(post).toContain("inline");
     expect(comment).toContain("...(props.message.recipientPubkeys || [])");
-    expect(comment).toContain(".filter(friend => allowed.has(friend.pubkey.toLowerCase()))");
+    expect(comment).toContain(".filter(friend => allowed.has(friend.pubkey.toLowerCase()) || isHaiNeiBot(friend.pubkey))");
+    expect(post).toContain(".filter(friend => allowed.has(friend.pubkey.toLowerCase()) || isHaiNeiBot(friend.pubkey))");
+    expect(post).toContain("if (botMentioned.value) recips.push(HAINEI_BOT_PUBKEY)");
+    expect(post).toContain('base === "仅自己可见" ? "仅自己和 Hainei Bot"');
+    const mentionView = readFileSync(join(process.cwd(), "src/components/MentionText.vue"), "utf8");
+    expect(mentionView).toContain("isHaiNeiBot(friend.pubkey) ? HAINEI_BOT_NAME : undefined");
     expect(postCard).toContain('<MentionText :text="displayedText" />');
     expect(comment).toContain('h(MentionText, { text: rowProps.comment.text })');
     expect(dm).toContain('<MentionText class="bubble-text"');
