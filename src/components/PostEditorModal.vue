@@ -33,7 +33,7 @@
           </div>
           <div class="editor-textarea-wrap">
             <textarea v-model="content" ref="textarea" class="editor-textarea"
-              placeholder="这一刻，你想分享什么？" rows="6" :disabled="!!pendingPostRetry"
+              placeholder="这一刻，你想分享什么？" rows="6" :disabled="!draftReady || !!pendingPostRetry"
               @paste="onPaste" @input="onMentionInput" @focus="onMentionFocus"
               @blur="onMentionBlur" @click="onMentionClick" @keydown="onMentionKeydown"></textarea>
             <MentionSuggestions v-if="mentionOpen" :items="mentionMatches" :active-index="mentionActiveIndex"
@@ -125,20 +125,20 @@
               <button type="button" class="audience-card"
                 :class="{ selected: audienceChosen && !allFriends && selectedGroups.length === 0 }"
                 :aria-pressed="audienceChosen && !allFriends && selectedGroups.length === 0"
-                :disabled="!!pendingPostRetry" @click="chooseSelf">
+                :disabled="!draftReady || !!pendingPostRetry" @click="chooseSelf">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg>
                 <span>仅自己</span><small v-if="audienceChosen && !allFriends && selectedGroups.length === 0">✓</small>
               </button>
               <button type="button" class="audience-card"
                 :class="{ selected: audienceChosen && !allFriends && selectedGroups.length > 0, expanded: visibilityOpen }"
                 :aria-pressed="audienceChosen && !allFriends && selectedGroups.length > 0"
-                :aria-expanded="visibilityOpen" :disabled="!!pendingPostRetry" @click="chooseGroups">
+                :aria-expanded="visibilityOpen" :disabled="!draftReady || !!pendingPostRetry" @click="chooseGroups">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M2 20v-2a7 7 0 0 1 14 0v2"/><path d="M17 6a3 3 0 0 1 0 6"/><path d="M18 15a5 5 0 0 1 4 5"/></svg>
                 <span>指定分组</span><small v-if="audienceChosen && !allFriends && selectedGroups.length > 0">✓</small>
               </button>
               <button type="button" class="audience-card"
                 :class="{ selected: audienceChosen && allFriends }" :aria-pressed="audienceChosen && allFriends"
-                :disabled="!!pendingPostRetry || postAudienceFriends.length === 0" @click="toggleAll">
+                :disabled="!draftReady || !!pendingPostRetry || postAudienceFriends.length === 0" @click="toggleAll">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-5 5-5 13 0 18M12 3c5 5 5 13 0 18"/></svg>
                 <span>全部好友</span><small v-if="audienceChosen && allFriends">✓</small>
               </button>
@@ -148,7 +148,7 @@
               <div class="group-options">
                 <button v-for="g in groups" :key="g" type="button" class="group-option"
                   :class="{ selected: selectedSet.has(g) }" :aria-pressed="selectedSet.has(g)"
-                  :disabled="!!pendingPostRetry" @click="toggleGroup(g)">
+                  :disabled="!draftReady || !!pendingPostRetry" @click="toggleGroup(g)">
                   <span>{{ gLabel(g) }}</span><small>{{ countByGroup[g] || 0 }} 人</small>
                 </button>
               </div>
@@ -163,18 +163,18 @@
 
           <div class="composer-toolbar">
             <div class="composer-tools">
-              <label class="composer-tool" :class="{ disabled: !uploadEnabled || uploadingAny || !!pendingPostRetry }"
+              <label class="composer-tool" :class="{ disabled: !draftReady || !uploadEnabled || uploadingAny || !!pendingPostRetry }"
                 :title="pendingPostRetry ? '当前贴文待重试' : (uploadEnabled ? '添加照片或视频' : '请先在设置中配置媒体服务')">
                 <input type="file" accept="image/*,video/*" multiple @change="onFilesSelected"
-                  :disabled="!uploadEnabled || uploadingAny || !!pendingPostRetry" />
+                  :disabled="!draftReady || !uploadEnabled || uploadingAny || !!pendingPostRetry" />
                 <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 5-5 4 3 3-4 5 6"/></svg>
                 <span class="sr-only">添加照片或视频</span>
               </label>
               <button type="button" class="composer-tool" aria-label="提及好友"
-                :disabled="!!pendingPostRetry" @click="insertMentionTrigger">@</button>
+                :disabled="!draftReady || !!pendingPostRetry" @click="insertMentionTrigger">@</button>
             </div>
             <button type="button" class="send-btn"
-              :disabled="sending || uploadingAny || (!canSend && !pendingPostRetry)" @click="onSend()">
+              :disabled="!draftReady || sending || uploadingAny || (!canSend && !pendingPostRetry)" @click="onSend()">
               {{ sending ? "发送中…" : pendingPostRetry ? "重新发送" : "发布动态" }}
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
             </button>
@@ -317,6 +317,7 @@ export default defineComponent({
     const visibilityOpen = ref(false);
     const visibilityRow = ref<HTMLElement | null>(null);
     const cancelSheetOpen = ref(false);
+    const draftReady = ref(false);
     const cancelContinueButton = ref<HTMLButtonElement | null>(null);
     const ownName = computed(() => profiles.getProfile(keys.pkHex)?.nickname?.trim() || "我");
     const confirmAllFriends = ref(false);
@@ -880,7 +881,7 @@ export default defineComponent({
       sheetOffset.value = 0;
       // Opening is async. Do not delete an existing saved draft before it has
       // been restored and its content is visible to this editor.
-      if (!draftPersistenceEnabled) {
+      if (!draftReady.value || !draftPersistenceEnabled) {
         onClose();
         return;
       }
@@ -905,7 +906,7 @@ export default defineComponent({
     }
     async function insertMentionTrigger() {
       const field = textarea.value;
-      if (!field || pendingPostRetry.value) return;
+      if (!field || !draftReady.value || pendingPostRetry.value) return;
       const start = field.selectionStart ?? content.value.length;
       const end = field.selectionEnd ?? start;
       const prefix = start > 0 && !/\s/.test(content.value[start - 1]) ? " " : "";
@@ -1006,6 +1007,7 @@ export default defineComponent({
         // Store currently focused element to return focus later
         triggerElement = document.activeElement as HTMLElement;
         
+        draftReady.value = false;
         const accountAtOpen = keys.pkHex;
         await checkBlossom();
         if (!accountAtOpen) {
@@ -1031,6 +1033,7 @@ export default defineComponent({
         uploads.value = restoreDraftImageUploads(draft?.images || []);
         videoPreview.value = draft?.video || null;
         draftPersistenceEnabled = true;
+        draftReady.value = true;
         await nextTick();
         // Focus overlay to enable keyboard events (ESC key)
         if (overlay.value) {
@@ -1044,6 +1047,7 @@ export default defineComponent({
         // programmatic route change, so cleanup cannot live only in onClose().
         persistDraft();
         draftPersistenceEnabled = false;
+        draftReady.value = false;
         draftAccount = "";
         resetRuntimeEditor();
         // Return focus to trigger element when modal closes
@@ -1311,7 +1315,7 @@ export default defineComponent({
     return {
       visible, content, sending, pendingPostRetry, allFriends, selectedGroups, audienceChosen, visibilityError,
       visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseSelf, chooseGroups, recipients, groups, countByGroup,
-      keys, ownName, cancelSheetOpen, cancelContinueButton, requestCancel, saveAndClose, continueEditing, insertMentionTrigger,
+      keys, ownName, cancelSheetOpen, cancelContinueButton, draftReady, requestCancel, saveAndClose, continueEditing, insertMentionTrigger,
       canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, discardDraft, toggleAll, toggleGroup,
       recipientsCount, botMentioned, selectedSet, gLabel, acceptedFriends, postAudienceFriends, uploads, uploadEnabled, uploadingAny,
       visibilityOpen, visibilitySummary,
