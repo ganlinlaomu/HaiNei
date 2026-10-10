@@ -297,7 +297,7 @@ export default defineComponent({
     const textarea = ref<HTMLTextAreaElement | null>(null);
     const overlay = ref<HTMLElement | null>(null);
     const editorCard = ref<HTMLElement | null>(null);
-    useDialogFocus(editorCard, () => ui.showPostEditor, onClose);
+    useDialogFocus(editorCard, () => ui.showPostEditor, requestCancel);
     const editorBody = ref<HTMLElement | null>(null);
     const sheetDragging = ref(false);
     const sheetOffset = ref(0);
@@ -307,7 +307,7 @@ export default defineComponent({
     let dragStartAt = 0;
     let dragPointerId: number | null = null;
     let suppressSheetClick = false;
-    let dismissTimer: number | null = null;
+
 
     // recipients selection state
     const allFriends = ref(false);
@@ -315,7 +315,10 @@ export default defineComponent({
     const audienceChosen = ref(false);
     const visibilityError = ref(false);
     const visibilityOpen = ref(true);
-    const visibilityRow = ref<HTMLButtonElement | null>(null);
+    const visibilityRow = ref<HTMLElement | null>(null);
+    const cancelSheetOpen = ref(false);
+    const cancelContinueButton = ref<HTMLButtonElement | null>(null);
+    const ownName = computed(() => profiles.getProfile(keys.pkHex)?.nickname?.trim() || "我");
     const confirmAllFriends = ref(false);
     const confirmationRecipients = ref("");
     let draftPersistenceEnabled = false;
@@ -425,6 +428,16 @@ export default defineComponent({
       allFriends.value = false;
       selectedGroups.value = [];
       audienceChosen.value = true;
+      visibilityOpen.value = false;
+      visibilityError.value = false;
+    }
+    function chooseGroups() {
+      closeMention();
+      dismissAudienceConfirmation();
+      allFriends.value = false;
+      // Expanding groups is not itself a visibility choice.
+      audienceChosen.value = selectedGroups.value.length > 0;
+      visibilityOpen.value = !visibilityOpen.value || !selectedGroups.value.length;
       visibilityError.value = false;
     }
     function toggleAll() {
@@ -433,11 +446,13 @@ export default defineComponent({
       allFriends.value = true;
       selectedGroups.value = [];
       audienceChosen.value = true;
+      visibilityOpen.value = false;
       visibilityError.value = false;
     }
     function toggleGroup(g: string) {
       closeMention();
       dismissAudienceConfirmation();
+      visibilityOpen.value = true;
       if (allFriends.value || !audienceChosen.value || selectedGroups.value.length === 0) {
         allFriends.value = false;
         selectedGroups.value = [g];
@@ -839,15 +854,67 @@ export default defineComponent({
       visibilityError.value = false;
       visibilityOpen.value = true;
       dismissAudienceConfirmation();
+      cancelSheetOpen.value = false;
       uploads.value = [];
       videoPreview.value = null;
       sheetDragging.value = false;
       sheetOffset.value = 0;
     }
 
+    // Internal navigation/locking/send close. The explicit cancel control uses
+    // requestCancel instead, so draft decisions never appear on normal posting.
     function onClose() {
       ui.closePostEditor();
     }
+
+    function continueEditing() {
+      cancelSheetOpen.value = false;
+    }
+    function saveAndClose() {
+      cancelSheetOpen.value = false;
+      persistDraft();
+      onClose();
+    }
+    function requestCancel() {
+      if (sending.value) return;
+      sheetOffset.value = 0;
+      if (confirmAllFriends.value) {
+        cancelAllFriendsConfirmation();
+        return;
+      }
+      if (cancelSheetOpen.value) {
+        continueEditing();
+        return;
+      }
+      // Do not create an empty draft when the user cancels an untouched editor.
+      const hasDraftContent = content.value.length > 0
+        || uploads.value.length > 0
+        || videoPreview.value !== null
+        || !!pendingPostRetry.value;
+      if (!hasDraftContent) {
+        discardDraft();
+        return;
+      }
+      cancelSheetOpen.value = true;
+    }
+    async function insertMentionTrigger() {
+      const field = textarea.value;
+      if (!field || pendingPostRetry.value) return;
+      const start = field.selectionStart ?? content.value.length;
+      const end = field.selectionEnd ?? start;
+      const prefix = start > 0 && !/\\s/.test(content.value[start - 1]) ? " " : "";
+      content.value = content.value.slice(0, start) + prefix + "@" + content.value.slice(end);
+      const cursor = start + prefix.length + 1;
+      await nextTick();
+      field.focus();
+      field.setSelectionRange(cursor, cursor);
+      onMentionInput();
+    }
+    watch(cancelSheetOpen, async open => {
+      if (!open) return;
+      await nextTick();
+      cancelContinueButton.value?.focus();
+    });
 
     function clearPersistentDraft(account: string) {
       for (const item of uploads.value) discardedUploadIds.add(item.id);
@@ -901,15 +968,9 @@ export default defineComponent({
 
       suppressSheetClick = true;
       window.setTimeout(() => { suppressSheetClick = false; }, 0);
+      sheetOffset.value = 0;
       if (!cancelled && shouldDismissPostEditor(distance, velocity, editorCard.value?.offsetHeight || 0)) {
-        sheetOffset.value = editorCard.value?.offsetHeight || window.innerHeight;
-        if (dismissTimer !== null) window.clearTimeout(dismissTimer);
-        dismissTimer = window.setTimeout(() => {
-          dismissTimer = null;
-          onClose();
-        }, 220);
-      } else {
-        sheetOffset.value = 0;
+        requestCancel();
       }
     }
 
@@ -960,7 +1021,7 @@ export default defineComponent({
         audienceChosen.value = !!draft?.audienceChosen && (
           allFriends.value || (draft.selectedGroups.length === 0 && !draft.allFriends) || restoredGroups.length > 0
         );
-        visibilityOpen.value = !audienceChosen.value;
+        visibilityOpen.value = !!audienceChosen.value && !allFriends.value && selectedGroups.value.length > 0;
         uploads.value = restoreDraftImageUploads(draft?.images || []);
         videoPreview.value = draft?.video || null;
         draftPersistenceEnabled = true;
@@ -1038,7 +1099,6 @@ export default defineComponent({
       openGeneration += 1;
       cancelAllUploads();
       persistDraft();
-      if (dismissTimer !== null) window.clearTimeout(dismissTimer);
       window.removeEventListener("pagehide", persistOnPageHide);
       document.removeEventListener("visibilitychange", persistOnVisibilityChange);
       document.body.classList.remove("post-editor-open");
@@ -1244,7 +1304,8 @@ export default defineComponent({
 
     return {
       visible, content, sending, pendingPostRetry, allFriends, selectedGroups, audienceChosen, visibilityError,
-      visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseSelf, recipients, groups, countByGroup,
+      visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseSelf, chooseGroups, recipients, groups, countByGroup,
+      keys, ownName, cancelSheetOpen, cancelContinueButton, requestCancel, saveAndClose, continueEditing, insertMentionTrigger,
       canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, discardDraft, toggleAll, toggleGroup,
       recipientsCount, botMentioned, selectedSet, gLabel, acceptedFriends, postAudienceFriends, uploads, uploadEnabled, uploadingAny,
       visibilityOpen, visibilitySummary,
