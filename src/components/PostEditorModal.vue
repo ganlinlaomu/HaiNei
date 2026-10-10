@@ -1147,7 +1147,7 @@ export default defineComponent({
     return {
       visible, content, sending, pendingPostRetry, allFriends, selectedGroups, groups, countByGroup,
       canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, discardDraft, toggleAll, toggleGroup,
-      recipientsCount, selectedSet, gLabel, acceptedFriends, uploads, uploadEnabled, uploadingAny,
+      recipientsCount, selectedSet, gLabel, acceptedFriends, postAudienceFriends, uploads, uploadEnabled, uploadingAny,
       visibilityOpen, visibilitySummary,
       onFilesSelected, insertImageUrl, removeUpload, checkBlossom,
       sheetDragging, sheetStyle, onSheetPointerDown, onSheetPointerMove, onSheetPointerEnd,
