@@ -184,7 +184,9 @@ describe("post editor close and media UX", () => {
     expect(source).toContain('@click="continueEditing">继续编辑</button>');
     expect(source).not.toContain('@click="onClose">保存草稿</button>');
     expect(source).toContain("function requestCancel()");
-    expect(source).toContain("if (!draftPersistenceEnabled)");
+    expect(source).toContain("if (!draftReady.value || !draftPersistenceEnabled)");
+    expect(source).toContain('rows="6" :disabled="!draftReady || !!pendingPostRetry"');
+    expect(source).toContain("draftReady.value = true;");
     expect(source).toContain("if (!hasDraftContent)");
     expect(source).toContain("function saveAndClose()");
     expect(source).toContain("persistDraft();\n      onClose();");
