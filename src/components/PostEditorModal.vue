@@ -1016,6 +1016,7 @@ export default defineComponent({
             rumorId: message.rumorId,
             recipientPubkeys: message.recipientPubkeys,
             conversationId: message.conversationId,
+            tags: message.tags,
             _localMeta: {
               groupCount: retry.groupsMeta.length,
               groups: retry.groupsMeta
@@ -1133,6 +1134,7 @@ export default defineComponent({
           rumorId: message.rumorId,
           recipientPubkeys: message.recipientPubkeys,
           conversationId: message.conversationId,
+          tags: message.tags,
           outgoing: {
             localId: message.id,
             state: "sending",

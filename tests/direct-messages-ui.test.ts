@@ -65,10 +65,11 @@ describe("direct-message navigation and UI contract", () => {
     const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
     const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
     const viewModel = readFileSync(join(process.cwd(), "src/nostr/messaging/messageViewModel.ts"), "utf8");
+    const routing = readFileSync(join(process.cwd(), "src/nostr/messaging/messageRouting.ts"), "utf8");
     expect(home).toContain("const isHomeRenderable = isFeedRenderableMessage");
     expect(profile).toContain("isFeedRenderableMessage(message)");
-    expect(viewModel).toContain('values.has(`t:${DM_RECEIPT_TYPE}`)');
-    expect(viewModel).toContain("isDmReceiptPayload(content)");
+    expect(routing).toContain('values.has(`t:${DM_RECEIPT_TYPE}`)');
+    expect(routing).toContain("isDmReceiptPayload(content)");
     expect(viewModel).toContain("isDmReceiptMessage({ tags: message.tags || [] })");
   });
 

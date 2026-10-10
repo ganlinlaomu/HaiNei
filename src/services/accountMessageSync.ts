@@ -6,7 +6,7 @@ import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/n
 import { MessageSyncManager } from "@/nostr/messaging/sync";
 import type { SyncStatus } from "@/nostr/messaging/sync/types";
 import { registerOutgoingPushSigner } from "@/nostr/messaging/service";
-import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { isConversationMessage } from "@/nostr/messaging/messageRouting";
 import { isDmReceiptMessage } from "@/nostr/messaging/dmReceipts";
 import { isAuthorizedCanonicalDirectMessage, useDirectMessagesStore } from "@/stores/directMessages";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
@@ -305,7 +305,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         isAuthorizationReady: () => friendships.loadedFor === account && friendships.authorizationReady && !friendships.loading,
         isAcceptedMessage: message => {
           if (friendships.loadedFor !== account || friendships.loading || !friendships.authorizationReady) return "unresolved";
-          if (isDirectMessageTags(message.tags)) {
+          if (isConversationMessage(message)) {
             const peer = message.senderPubkey === account
               ? message.recipientPubkeys.find(pubkey => pubkey !== account) || ""
               : message.senderPubkey;
@@ -345,7 +345,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         mirrorMessage: message => {
           if (
             message.senderPubkey.toLowerCase() !== account
-            && !isDirectMessageTags(message.tags)
+            && !isConversationMessage(message)
             && mentionedPubkeysFromTags(message.tags).includes(account)
           ) {
             notifications.addNotification({

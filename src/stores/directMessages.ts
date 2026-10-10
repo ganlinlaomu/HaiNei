@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import type { FriendshipRecord, OutgoingDmTaskRecord } from "@/db/dexie";
 import { getRelaysFromStorage } from "@/nostr/relays";
 import { DIRECT_MESSAGE_TYPE, canStartDirectMessage, directMessagePeer, directMessagePreview, isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { isConversationMessage } from "@/nostr/messaging/messageRouting";
 import { deriveConversationId } from "@/nostr/messaging/protocol/common";
 import {
   cursorAfter as receiptCursorAfter,
@@ -293,7 +294,7 @@ export function directMessagesForPeer(
   options: { friendship?: FriendshipRecord; preference?: ConversationPreference; enforceAuthorization?: boolean } = {},
 ) {
   const peer = peerPubkey.toLowerCase();
-  return items.filter(item => isDirectMessageTags(item.tags)
+  return items.filter(item => isConversationMessage(item)
     && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, accountPubkey) === peer
     && (!options.enforceAuthorization || isAuthorizedDirectMessage(item, accountPubkey, options.friendship))
     && afterDeletion(item, options.preference))
@@ -311,7 +312,7 @@ export function buildDirectConversationSummaries(
     ? new Map(options.friendshipRecords.map(record => [record.peerPubkey.toLowerCase(), record]))
     : undefined;
   for (const item of items) {
-    if (!isDirectMessageTags(item.tags)) continue;
+    if (!isConversationMessage(item)) continue;
     const peer = directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, accountPubkey);
     if (!peer || options.preferencesByPeer?.[peer]?.hidden) continue;
     const friendship = friendshipByPeer?.get(peer);
@@ -480,7 +481,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           if (seen.has(item.id)) continue;
           seen.add(item.id);
           // Temporary plaintext must never be exposed by history search, even before first view.
-          if (hasDisappearingMarker(item.tags) || !isDirectMessageTags(item.tags)
+          if (hasDisappearingMarker(item.tags) || !isConversationMessage(item)
             || directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) !== peer
             || !isAuthorizedDirectMessage(item, account, friendship)
             || !afterDeletion(item, preference)) continue;
@@ -525,7 +526,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         const conversation = await deriveConversationId([account, peer]);
         const records = await syncedMessageRepository.listConversationPage(account, conversation, undefined, 50);
         if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], exhausted: true };
-        const items = records.map(syncedMessageRecordToInboxItem).filter(item => isDirectMessageTags(item.tags)
+        const items = records.map(syncedMessageRecordToInboxItem).filter(item => isConversationMessage(item)
           && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
           && afterDeletion(item, this.preferencesByPeer[peer]));
         const last = records[0];
@@ -552,7 +553,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const records = await syncedMessageRepository.listConversationPage(account, conversation, before, 50);
       if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], cursor: before, exhausted: true };
       const friendships = useFriendshipsStore();
-      const items = records.map(syncedMessageRecordToInboxItem).filter(item => isDirectMessageTags(item.tags)
+      const items = records.map(syncedMessageRecordToInboxItem).filter(item => isConversationMessage(item)
         && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
         && afterDeletion(item, this.preferencesByPeer[peer]));
       const last = records[0];
@@ -568,7 +569,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const records = await syncedMessageRepository.listConversationAround(account, conversationId, messageId, radius);
       return records
         .map(syncedMessageRecordToInboxItem)
-        .filter(item => isDirectMessageTags(item.tags)
+        .filter(item => isConversationMessage(item)
           && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) === peer
           && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
           && afterDeletion(item, this.preferencesByPeer[peer]))
@@ -903,7 +904,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!account) return;
       const friendships = useFriendshipsStore();
       const visible = useMessagesStore().inbox.filter(item => {
-        if (!isDirectMessageTags(item.tags)) return false;
+        if (!isConversationMessage(item)) return false;
         const peer = directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account);
         return !!peer && !this.preferencesByPeer[peer]?.hidden
           && afterDeletion(item, this.preferencesByPeer[peer])
@@ -1038,7 +1039,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     },
     async applyCanonicalMessage(accountPubkey: string, item: InboxItem) {
       const account = accountPubkey.toLowerCase();
-      if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account || !isDirectMessageTags(item.tags)) return;
+      if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account || !isConversationMessage(item)) return;
       const peer = directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account);
       if (!peer) return;
       invalidatePeerHistoryWarmup(account, peer);
@@ -1167,7 +1168,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           taskPreviewUrls.set(key, URL.createObjectURL(new Blob([previewBytes], { type: task.imageType || task.preparedImage?.mime || "image/jpeg" })));
         }
       }
-      const direct = messages.inbox.filter(item => isDirectMessageTags(item.tags));
+      const direct = messages.inbox.filter(item => isConversationMessage(item));
       const peers = [...new Set([
         ...direct.map(item => directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account)).filter(Boolean),
         ...outgoingTasks.map(task => task.peerPubkey),

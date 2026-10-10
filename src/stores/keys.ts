@@ -140,6 +140,9 @@ export const useKeyStore = defineStore("keys", {
       if (!isCurrent()) return;
       await migrateLocalVault(db, pk);
       if (!isCurrent()) return;
+      // Vault keys are required to examine encrypted NIP-17 routing tags.
+      await syncedMessageRepository.migrateMessageRoutingAfterUnlock(pk);
+      if (!isCurrent()) return;
       await hydratePrivateDeviceValues(pk);
       if (!isCurrent()) return;
       const account = pk.slice(0, 8);

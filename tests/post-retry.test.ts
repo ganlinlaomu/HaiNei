@@ -117,7 +117,7 @@ describe("post publish retry identity", () => {
     expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
       recipientPubkeys: [PEER, HAINEI_BOT_PUBKEY],
       content: text,
-      tags: mentionTags([HAINEI_BOT_PUBKEY]),
+      tags: [...mentionTags([HAINEI_BOT_PUBKEY]), ["t", "hainei-post"]],
     }));
     mocks.queue.mockClear();
     await store.queuePost([HAINEI_BOT_PUBKEY], text, undefined, mentionTags([HAINEI_BOT_PUBKEY]));

@@ -1,7 +1,8 @@
 import type { SyncedMessageRecord } from "@/db/dexie";
-import { DM_RECEIPT_TYPE, isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
-import { DM_BURN_CONTROL_TYPE, isBurnControlPayload } from "@/nostr/messaging/dmBurnControl";
-import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
+import { classifyPrivateMessage, isHomeControl } from "@/nostr/messaging/messageRouting";
+
+export { isHomeControl };
 
 export type InboxItem = {
   id: string;
@@ -53,22 +54,8 @@ export function syncedMessageRecordToInboxItem(record: SyncedMessageRecord): Inb
   };
 }
 
-export function isHomeControl(tags: string[][] | undefined, content?: string) {
-  const values = new Set((tags || []).map(tag => `${tag[0]}:${tag[1]}`));
-  return values.has("l:hainei-friendship")
-    || values.has("l:hainei-interaction")
-    || values.has("t:hainei-profile")
-    || values.has("t:hainei-profile-request")
-    || values.has("t:hainei-tombstone")
-    || values.has(`t:${DM_RECEIPT_TYPE}`)
-    || values.has(`t:${DM_BURN_CONTROL_TYPE}`)
-    || isDmReceiptPayload(content)
-    || isBurnControlPayload(content);
-}
-
-export function isFeedRenderableMessage(message: Pick<InboxItem, "tags" | "content">) {
-  return !isHomeControl(message.tags, message.content)
-    && !isDirectMessageTags(message.tags)
+export function isFeedRenderableMessage(message: Pick<InboxItem, "tags" | "content"> & Partial<Pick<InboxItem, "created_at" | "protocol" | "transportKind">>) {
+  return classifyPrivateMessage(message) === "feed"
     && !isDmReceiptMessage({ tags: message.tags || [] })
     && !isDmReceiptPayload(message.content);
 }
