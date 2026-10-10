@@ -1,6 +1,6 @@
 <template>
   <transition name="slide-up">
-    <div class="editor-overlay" v-if="visible" @keydown.esc="onClose" @click.self="onClose" tabindex="-1" ref="overlay">
+    <div class="editor-overlay" v-if="visible" @click.self="requestCancel" tabindex="-1" ref="overlay">
       <div
         ref="editorCard"
         class="editor-card"
@@ -19,48 +19,29 @@
       >
         <header class="editor-header">
           <div class="drag-handle" aria-hidden="true"></div>
-          <div class="title">发帖</div>
+          <div class="editor-header-row">
+            <button class="header-cancel" type="button" :disabled="sending" @click="requestCancel">取消</button>
+            <strong class="title">新建动态</strong>
+            <span class="header-balance" aria-hidden="true"></span>
+          </div>
         </header>
 
         <main ref="editorBody" class="editor-body">
+          <div class="editor-author">
+            <ProfileAvatar :pubkey="keys.pkHex" :size="42" />
+            <div class="editor-author-copy"><strong>{{ ownName }}</strong><span>分享此刻的想法</span></div>
+          </div>
           <div class="editor-textarea-wrap">
-            <textarea
-              v-model="content"
-              ref="textarea"
-              class="editor-textarea"
-              placeholder="分享此刻…"
-              rows="8"
-              :disabled="!!pendingPostRetry"
-              @paste="onPaste"
-              @input="onMentionInput"
-              @focus="onMentionFocus"
-              @blur="onMentionBlur"
-              @click="onMentionClick"
-              @keydown="onMentionKeydown"
-            ></textarea>
-            <MentionSuggestions
-              v-if="mentionOpen"
-              :items="mentionMatches"
-              :active-index="mentionActiveIndex"
-              inline
-              @select="selectMention"
-            />
+            <textarea v-model="content" ref="textarea" class="editor-textarea"
+              placeholder="这一刻，你想分享什么？" rows="6" :disabled="!draftReady || !!pendingPostRetry"
+              @paste="onPaste" @input="onMentionInput" @focus="onMentionFocus"
+              @blur="onMentionBlur" @click="onMentionClick" @keydown="onMentionKeydown"></textarea>
+            <MentionSuggestions v-if="mentionOpen" :items="mentionMatches" :active-index="mentionActiveIndex"
+              inline @select="selectMention" />
           </div>
 
           <!-- 图片/视频上传区域 -->
           <div class="upload-panel">
-            <div class="upload-controls">
-              <label
-                class="upload-btn"
-                :class="{ disabled: !uploadEnabled || uploadingAny || !!pendingPostRetry }"
-                :title="pendingPostRetry ? '当前有待重试贴文，请先重试或关闭后重新编辑' : (uploadEnabled ? (uploadingAny ? '上传中…' : '添加照片或视频') : '请先在设置中配置媒体服务')"
-              >
-                <input type="file" accept="image/*,video/*" multiple @change="onFilesSelected" :disabled="!uploadEnabled || uploadingAny || !!pendingPostRetry" />
-                添加照片或视频
-              </label>
-              <div v-if="!uploadEnabled" class="upload-config-hint small">请先在设置中配置图片与视频服务</div>
-            </div>
-
             <div class="previews">
               <div v-for="(item, idx) in uploads" :key="item.id" class="preview-item">
                 <div class="thumb-container">
@@ -135,87 +116,70 @@
             </div>
           </div>
 
-          <button
-            ref="visibilityRow"
-            class="visibility-row"
-            :class="{ 'visibility-row-error': visibilityError }"
-            type="button"
-            :aria-expanded="visibilityOpen"
-            :aria-describedby="visibilityError ? 'visibility-error' : undefined"
-            :disabled="!!pendingPostRetry"
-            @click="visibilityOpen = !visibilityOpen"
-          >
-            <span>可见范围</span>
-            <span class="visibility-value" :class="{ 'visibility-required': !audienceChosen }">{{ visibilitySummary }} <span aria-hidden="true">›</span></span>
-          </button>
-          <div v-if="visibilityError" id="visibility-error" class="visibility-error" role="alert">
-            请先选择可见范围，再发布动态。
-          </div>
-
-          <div v-if="botMentioned" class="small recips-empty-hint">
-            已 @Hainei Bot：将向 Bot 发送这条完整的加密动态。
-          </div>
-
-          <div v-if="visibilityOpen" class="groups">
-            <div class="chips-row">
-              <button
-                class="chip"
-                :class="{ 'chip-selected': audienceChosen && !allFriends && selectedGroups.length === 0 }"
-                :disabled="!!pendingPostRetry"
-                @click="chooseSelf()"
-                type="button"
-                :aria-pressed="String(audienceChosen && !allFriends && selectedGroups.length === 0)"
-              >仅自己</button>
-              <button
-                class="chip"
-                :class="{ 'chip-selected': audienceChosen && allFriends }"
-                :disabled="!!pendingPostRetry || postAudienceFriends.length === 0"
-                @click="toggleAll()"
-                type="button"
-                :aria-pressed="String(audienceChosen && allFriends)"
-              >
-                全部好友
-                <span class="chip-count">{{ postAudienceFriends.length }}</span>
+          <section ref="visibilityRow" class="audience-section" :class="{ 'audience-section-error': visibilityError }" aria-labelledby="audience-title">
+            <div class="audience-heading">
+              <h3 id="audience-title">谁可以看到这条动态？</h3>
+              <span class="audience-required" :class="{ chosen: audienceChosen }">{{ audienceChosen ? "已选择" : "必选" }}</span>
+            </div>
+            <div class="audience-cards" role="group" aria-label="可见范围">
+              <button type="button" class="audience-card"
+                :class="{ selected: audienceChosen && !allFriends && selectedGroups.length === 0 }"
+                :aria-pressed="audienceChosen && !allFriends && selectedGroups.length === 0"
+                :disabled="!draftReady || !!pendingPostRetry" @click="chooseSelf">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg>
+                <span>仅自己</span><small v-if="audienceChosen && !allFriends && selectedGroups.length === 0">✓</small>
               </button>
-              <div class="divider"></div>
-              <div class="chips-scroll" role="list">
-                <button
-                  v-for="g in groups"
-                  :key="g"
-                  class="chip"
-                  :class="{ 'chip-selected': audienceChosen && selectedSet.has(g) }"
-                  :disabled="!!pendingPostRetry"
-                  :aria-pressed="String(audienceChosen && selectedSet.has(g))"
-                  @click="toggleGroup(g)"
-                  role="listitem"
-                  type="button"
-                >
-                  <span class="group-name">{{ gLabel(g) }}</span>
-                  <span class="chip-count">{{ countByGroup[g] || 0 }}</span>
+              <button type="button" class="audience-card"
+                :class="{ selected: audienceChosen && !allFriends && selectedGroups.length > 0, expanded: visibilityOpen }"
+                :aria-pressed="audienceChosen && !allFriends && selectedGroups.length > 0"
+                :aria-expanded="visibilityOpen" :disabled="!draftReady || !!pendingPostRetry" @click="chooseGroups">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M2 20v-2a7 7 0 0 1 14 0v2"/><path d="M17 6a3 3 0 0 1 0 6"/><path d="M18 15a5 5 0 0 1 4 5"/></svg>
+                <span>指定分组</span><small v-if="audienceChosen && !allFriends && selectedGroups.length > 0">✓</small>
+              </button>
+              <button type="button" class="audience-card"
+                :class="{ selected: audienceChosen && allFriends }" :aria-pressed="audienceChosen && allFriends"
+                :disabled="!draftReady || !!pendingPostRetry || postAudienceFriends.length === 0" @click="toggleAll">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-5 5-5 13 0 18M12 3c5 5 5 13 0 18"/></svg>
+                <span>全部好友</span><small v-if="audienceChosen && allFriends">✓</small>
+              </button>
+            </div>
+            <div v-if="visibilityOpen" class="group-picker">
+              <p class="group-picker-title">选择可以看到动态的好友分组</p>
+              <div class="group-options">
+                <button v-for="g in groups" :key="g" type="button" class="group-option"
+                  :class="{ selected: selectedSet.has(g) }" :aria-pressed="selectedSet.has(g)"
+                  :disabled="!draftReady || !!pendingPostRetry" @click="toggleGroup(g)">
+                  <span>{{ gLabel(g) }}</span><small>{{ countByGroup[g] || 0 }} 人</small>
                 </button>
               </div>
+              <p v-if="groups.length === 0" class="group-picker-empty">暂无好友分组，可以选择仅自己或全部好友。</p>
             </div>
+            <div v-if="visibilityError" id="visibility-error" class="visibility-error" role="alert">请先选择可见范围，再发布动态。</div>
+            <p v-if="audienceChosen" class="audience-summary">{{ visibilitySummary }}<template v-if="allFriends || selectedGroups.length"> · {{ recipients.length }} 位好友</template></p>
+            <p v-else class="audience-summary muted">发布前请明确选择接收范围。</p>
+            <p v-if="botMentioned" class="audience-bot-hint">已 @Hainei Bot：将额外向 Bot 发送这条加密动态。</p>
+            <p v-else-if="acceptedFriends.length > postAudienceFriends.length" class="audience-bot-hint">Hainei Bot 默认不接收动态，主动 @ 才会收到。</p>
+          </section>
 
-            <div class="recips-info" v-if="audienceChosen">
-              目标人数：<strong>{{ recipientsCount }}</strong>
+          <div class="composer-toolbar">
+            <div class="composer-tools">
+              <label class="composer-tool" :class="{ disabled: !draftReady || !uploadEnabled || uploadingAny || !!pendingPostRetry }"
+                :title="pendingPostRetry ? '当前贴文待重试' : (uploadEnabled ? '添加照片或视频' : '请先在设置中配置媒体服务')">
+                <input type="file" accept="image/*,video/*" multiple @change="onFilesSelected"
+                  :disabled="!draftReady || !uploadEnabled || uploadingAny || !!pendingPostRetry" />
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 5-5 4 3 3-4 5 6"/></svg>
+                <span class="sr-only">添加照片或视频</span>
+              </label>
+              <button type="button" class="composer-tool" aria-label="提及好友"
+                :disabled="!draftReady || !!pendingPostRetry" @click="insertMentionTrigger">@</button>
             </div>
-            <div class="recips-info" v-else>请选择要分享给谁（必选）</div>
-            <div v-if="acceptedFriends.length > postAudienceFriends.length && !botMentioned" class="small recips-empty-hint">
-              HaiNei Bot 默认不接收动态；主动 @ 才会收到。
-            </div>
-            <div v-if="postAudienceFriends.length === 0 && !botMentioned" class="small recips-empty-hint">
-              无其他可发送好友，此帖仅会保留给自己。若需分享，请先添加并确认好友。
-            </div>
-          </div>
-
-          <!-- 草稿和发送操作 -->
-          <div class="action-buttons">
-            <button class="discard-btn" type="button" @click="discardDraft">丢弃草稿</button>
-            <button class="save-draft-btn" type="button" @click="onClose">保存草稿</button>
-            <button class="send-btn" :disabled="sending || uploadingAny || (!canSend && !pendingPostRetry)" @click="onSend()">
-              {{ sending ? "发送中..." : pendingPostRetry ? "重新发送" : "发送" }}
+            <button type="button" class="send-btn"
+              :disabled="!draftReady || sending || uploadingAny || (!canSend && !pendingPostRetry)" @click="onSend()">
+              {{ sending ? "发送中…" : pendingPostRetry ? "重新发送" : "发布动态" }}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
             </button>
           </div>
+          <p v-if="!uploadEnabled" class="upload-config-hint small">请先在设置中配置图片与视频服务</p>
 
           <div v-if="error" class="error">{{ error }}</div>
         </main>
@@ -228,6 +192,16 @@
               <button type="button" class="send-btn" :disabled="sending" @click="onSend(true)">确认发布</button>
             </div>
           </div>
+        </div>
+        <div v-if="cancelSheetOpen" class="cancel-sheet-backdrop" @pointerdown.stop @pointermove.stop @pointerup.stop @click.self="continueEditing">
+          <section class="cancel-sheet" role="alertdialog" aria-modal="true"
+            aria-labelledby="cancel-sheet-title" aria-describedby="cancel-sheet-description">
+            <h3 id="cancel-sheet-title">退出编辑？</h3>
+            <p id="cancel-sheet-description">可以保存草稿，之后继续编辑。</p>
+            <button class="cancel-sheet-save" type="button" @click="saveAndClose">保存草稿</button>
+            <button class="cancel-sheet-discard" type="button" @click="discardDraft">放弃</button>
+            <button ref="cancelContinueButton" class="cancel-sheet-continue" type="button" @click="continueEditing">继续编辑</button>
+          </section>
         </div>
       </div>
     </div>
@@ -248,6 +222,7 @@ import { useMessagesStore } from "@/stores/messages";
 import { useUIStore } from "@/stores/ui";
 import { useProfilesStore } from "@/stores/profiles";
 import PostImagePreview from "@/components/PostImagePreview.vue";
+import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import { mentionTags, type MentionCandidate } from "@/utils/mentions";
 import { HAINEI_BOT_NAME, HAINEI_BOT_PUBKEY, isHaiNeiBot } from "@/utils/haineiBot";
@@ -302,7 +277,7 @@ const VIDEO_METADATA_SUFFIX = ']';
 
 export default defineComponent({
   name: "PostEditorModal",
-  components: { PostImagePreview, MentionSuggestions },
+  components: { PostImagePreview, ProfileAvatar, MentionSuggestions },
   setup() {
     const router = useRouter();
     const route = useRoute();
@@ -322,7 +297,7 @@ export default defineComponent({
     const textarea = ref<HTMLTextAreaElement | null>(null);
     const overlay = ref<HTMLElement | null>(null);
     const editorCard = ref<HTMLElement | null>(null);
-    useDialogFocus(editorCard, () => ui.showPostEditor, onClose);
+    useDialogFocus(editorCard, () => ui.showPostEditor, requestCancel);
     const editorBody = ref<HTMLElement | null>(null);
     const sheetDragging = ref(false);
     const sheetOffset = ref(0);
@@ -332,15 +307,19 @@ export default defineComponent({
     let dragStartAt = 0;
     let dragPointerId: number | null = null;
     let suppressSheetClick = false;
-    let dismissTimer: number | null = null;
+
 
     // recipients selection state
     const allFriends = ref(false);
     const selectedGroups = ref<Array<string>>([]);
     const audienceChosen = ref(false);
     const visibilityError = ref(false);
-    const visibilityOpen = ref(true);
-    const visibilityRow = ref<HTMLButtonElement | null>(null);
+    const visibilityOpen = ref(false);
+    const visibilityRow = ref<HTMLElement | null>(null);
+    const cancelSheetOpen = ref(false);
+    const draftReady = ref(false);
+    const cancelContinueButton = ref<HTMLButtonElement | null>(null);
+    const ownName = computed(() => profiles.getProfile(keys.pkHex)?.nickname?.trim() || "我");
     const confirmAllFriends = ref(false);
     const confirmationRecipients = ref("");
     let draftPersistenceEnabled = false;
@@ -442,7 +421,7 @@ export default defineComponent({
     }
     function cancelAllFriendsConfirmation() {
       dismissAudienceConfirmation();
-      visibilityOpen.value = true;
+      visibilityOpen.value = false;
     }
     function chooseSelf() {
       closeMention();
@@ -450,6 +429,16 @@ export default defineComponent({
       allFriends.value = false;
       selectedGroups.value = [];
       audienceChosen.value = true;
+      visibilityOpen.value = false;
+      visibilityError.value = false;
+    }
+    function chooseGroups() {
+      closeMention();
+      dismissAudienceConfirmation();
+      allFriends.value = false;
+      // Expanding groups is not itself a visibility choice.
+      audienceChosen.value = selectedGroups.value.length > 0;
+      visibilityOpen.value = !visibilityOpen.value || !selectedGroups.value.length;
       visibilityError.value = false;
     }
     function toggleAll() {
@@ -458,11 +447,13 @@ export default defineComponent({
       allFriends.value = true;
       selectedGroups.value = [];
       audienceChosen.value = true;
+      visibilityOpen.value = false;
       visibilityError.value = false;
     }
     function toggleGroup(g: string) {
       closeMention();
       dismissAudienceConfirmation();
+      visibilityOpen.value = true;
       if (allFriends.value || !audienceChosen.value || selectedGroups.value.length === 0) {
         allFriends.value = false;
         selectedGroups.value = [g];
@@ -862,17 +853,75 @@ export default defineComponent({
       selectedGroups.value = [];
       audienceChosen.value = false;
       visibilityError.value = false;
-      visibilityOpen.value = true;
+      visibilityOpen.value = false;
       dismissAudienceConfirmation();
+      cancelSheetOpen.value = false;
       uploads.value = [];
       videoPreview.value = null;
       sheetDragging.value = false;
       sheetOffset.value = 0;
     }
 
+    // Internal navigation/locking/send close. The explicit cancel control uses
+    // requestCancel instead, so draft decisions never appear on normal posting.
     function onClose() {
       ui.closePostEditor();
     }
+
+    function continueEditing() {
+      cancelSheetOpen.value = false;
+    }
+    function saveAndClose() {
+      cancelSheetOpen.value = false;
+      persistDraft();
+      onClose();
+    }
+    function requestCancel() {
+      if (sending.value) return;
+      sheetOffset.value = 0;
+      // Opening is async. Do not delete an existing saved draft before it has
+      // been restored and its content is visible to this editor.
+      if (!draftReady.value || !draftPersistenceEnabled) {
+        onClose();
+        return;
+      }
+      if (confirmAllFriends.value) {
+        cancelAllFriendsConfirmation();
+        return;
+      }
+      if (cancelSheetOpen.value) {
+        continueEditing();
+        return;
+      }
+      // Do not create an empty draft when the user cancels an untouched editor.
+      const hasDraftContent = content.value.length > 0
+        || uploads.value.length > 0
+        || videoPreview.value !== null
+        || !!pendingPostRetry.value;
+      if (!hasDraftContent) {
+        discardDraft();
+        return;
+      }
+      cancelSheetOpen.value = true;
+    }
+    async function insertMentionTrigger() {
+      const field = textarea.value;
+      if (!field || !draftReady.value || pendingPostRetry.value) return;
+      const start = field.selectionStart ?? content.value.length;
+      const end = field.selectionEnd ?? start;
+      const prefix = start > 0 && !/\s/.test(content.value[start - 1]) ? " " : "";
+      content.value = content.value.slice(0, start) + prefix + "@" + content.value.slice(end);
+      const cursor = start + prefix.length + 1;
+      await nextTick();
+      field.focus();
+      field.setSelectionRange(cursor, cursor);
+      onMentionInput();
+    }
+    watch(cancelSheetOpen, async open => {
+      if (!open) return;
+      await nextTick();
+      cancelContinueButton.value?.focus();
+    });
 
     function clearPersistentDraft(account: string) {
       for (const item of uploads.value) discardedUploadIds.add(item.id);
@@ -926,15 +975,9 @@ export default defineComponent({
 
       suppressSheetClick = true;
       window.setTimeout(() => { suppressSheetClick = false; }, 0);
+      sheetOffset.value = 0;
       if (!cancelled && shouldDismissPostEditor(distance, velocity, editorCard.value?.offsetHeight || 0)) {
-        sheetOffset.value = editorCard.value?.offsetHeight || window.innerHeight;
-        if (dismissTimer !== null) window.clearTimeout(dismissTimer);
-        dismissTimer = window.setTimeout(() => {
-          dismissTimer = null;
-          onClose();
-        }, 220);
-      } else {
-        sheetOffset.value = 0;
+        requestCancel();
       }
     }
 
@@ -964,6 +1007,7 @@ export default defineComponent({
         // Store currently focused element to return focus later
         triggerElement = document.activeElement as HTMLElement;
         
+        draftReady.value = false;
         const accountAtOpen = keys.pkHex;
         await checkBlossom();
         if (!accountAtOpen) {
@@ -985,10 +1029,11 @@ export default defineComponent({
         audienceChosen.value = !!draft?.audienceChosen && (
           allFriends.value || (draft.selectedGroups.length === 0 && !draft.allFriends) || restoredGroups.length > 0
         );
-        visibilityOpen.value = !audienceChosen.value;
+        visibilityOpen.value = !!audienceChosen.value && !allFriends.value && selectedGroups.value.length > 0;
         uploads.value = restoreDraftImageUploads(draft?.images || []);
         videoPreview.value = draft?.video || null;
         draftPersistenceEnabled = true;
+        draftReady.value = true;
         await nextTick();
         // Focus overlay to enable keyboard events (ESC key)
         if (overlay.value) {
@@ -1002,6 +1047,7 @@ export default defineComponent({
         // programmatic route change, so cleanup cannot live only in onClose().
         persistDraft();
         draftPersistenceEnabled = false;
+        draftReady.value = false;
         draftAccount = "";
         resetRuntimeEditor();
         // Return focus to trigger element when modal closes
@@ -1063,7 +1109,6 @@ export default defineComponent({
       openGeneration += 1;
       cancelAllUploads();
       persistDraft();
-      if (dismissTimer !== null) window.clearTimeout(dismissTimer);
       window.removeEventListener("pagehide", persistOnPageHide);
       document.removeEventListener("visibilitychange", persistOnVisibilityChange);
       document.body.classList.remove("post-editor-open");
@@ -1269,7 +1314,8 @@ export default defineComponent({
 
     return {
       visible, content, sending, pendingPostRetry, allFriends, selectedGroups, audienceChosen, visibilityError,
-      visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseSelf, recipients, groups, countByGroup,
+      visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseSelf, chooseGroups, recipients, groups, countByGroup,
+      keys, ownName, cancelSheetOpen, cancelContinueButton, draftReady, requestCancel, saveAndClose, continueEditing, insertMentionTrigger,
       canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, discardDraft, toggleAll, toggleGroup,
       recipientsCount, botMentioned, selectedSet, gLabel, acceptedFriends, postAudienceFriends, uploads, uploadEnabled, uploadingAny,
       visibilityOpen, visibilitySummary,
@@ -1833,4 +1879,252 @@ export default defineComponent({
 }
 .error { margin-top:8px; color:#d00; font-size:13px; }
 .small { color:#64748b; font-size:12px; }
+
+/* Redesigned dynamic composer: readable, privacy-first, and narrow-screen safe. */
+.editor-card {
+  display: flex;
+  flex-direction: column;
+  height: min(86dvh, 800px);
+  max-height: calc(100dvh - var(--bottom-nav-height, 64px) - 12px);
+  overflow: hidden;
+}
+.editor-header {
+  display: block;
+  flex: 0 0 auto;
+  padding: 10px 20px 12px;
+  background: #fff;
+}
+.editor-header .drag-handle { margin: 0 auto 12px; }
+.editor-header-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 64px;
+  align-items: center;
+  min-height: 36px;
+}
+.header-cancel {
+  justify-self: start;
+  border: 0;
+  background: transparent;
+  padding: 8px 2px;
+  color: #475569;
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+.header-cancel:disabled { opacity: .45; }
+.editor-header .title { text-align: center; font-size: 16px; font-weight: 700; color: #0f172a; }
+.editor-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  max-height: none;
+  padding: 18px 20px calc(14px + env(safe-area-inset-bottom, 0px));
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.editor-author { display: flex; gap: 12px; align-items: center; min-width: 0; margin-bottom: 12px; }
+.editor-author-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.editor-author-copy strong {
+  color: #0f172a; font-size: 16px; font-weight: 700;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.editor-author-copy span { color: #64748b; font-size: 13px; }
+.editor-textarea-wrap { flex: 1 0 145px; min-height: 145px; min-width: 0; }
+.editor-textarea {
+  display: block;
+  height: 100%;
+  min-height: 145px;
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  border-radius: 0;
+  padding: 12px 0;
+  color: #0f172a;
+  background: transparent;
+  font-size: 17px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.editor-textarea::placeholder { color: #94a3b8; }
+.editor-textarea:focus-visible { outline: none; }
+.upload-panel { margin: 0; }
+.upload-panel:has(.previews:empty), .previews:empty { display: none; }
+.previews { margin: 0 0 8px; }
+.video-preview-item { margin: 0 0 10px; }
+.audience-section {
+  margin-top: 4px;
+  padding-top: 18px;
+  border-top: 1px solid #e9edf1;
+}
+.audience-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.audience-heading h3 { margin: 0; color: #0f172a; font-size: 15px; font-weight: 700; }
+.audience-required { color: #b91c1c; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.audience-required.chosen { color: #64748b; }
+.audience-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.audience-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 102px;
+  padding: 10px 3px;
+  border: 1px solid #dce2e8;
+  border-radius: 15px;
+  background: #fff;
+  color: #334155;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.audience-card svg {
+  width: 22px; height: 22px; fill: none;
+  stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.audience-card span { max-width: 100%; white-space: nowrap; }
+.audience-card small {
+  position: absolute; top: 6px; right: 8px; color: #2563eb; font-size: 12px;
+}
+.audience-card.selected { border: 2px solid #2563eb; background: #f1f7ff; color: #1d4ed8; }
+.audience-card.expanded:not(.selected) { border-color: #94a3b8; }
+.audience-card:disabled { opacity: .4; cursor: not-allowed; }
+.group-picker { padding: 12px 0 0; }
+.group-picker-title { margin: 0 0 10px; color: #475569; font-size: 12px; }
+.group-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.group-option {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%; padding: 8px 10px; border: 1px solid #dce2e8;
+  border-radius: 999px; background: #fff; color: #475569; font-size: 12px;
+  cursor: pointer;
+}
+.group-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-option small { white-space: nowrap; color: inherit; opacity: .7; }
+.group-option.selected { color: #1d4ed8; border-color: #2563eb; background: #f1f7ff; }
+.group-picker-empty, .audience-summary, .audience-bot-hint {
+  margin: 9px 0 0; color: #64748b; font-size: 12px; line-height: 1.5;
+}
+.audience-summary.muted { color: #94a3b8; }
+.audience-bot-hint { font-size: 11px; }
+.audience-section-error .audience-heading h3 { color: #991b1b; }
+.composer-toolbar {
+  position: sticky;
+  z-index: 2;
+  bottom: -1px;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 58px;
+  margin-top: 16px;
+  padding: 10px 0 0;
+  border-top: 1px solid #eef2f6;
+  background: #fff;
+}
+.composer-tools { display: flex; align-items: center; gap: 5px; }
+.composer-tool {
+  position: relative;
+  display: grid;
+  width: 42px; height: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #2563eb;
+  font: inherit;
+  font-size: 26px;
+  cursor: pointer;
+}
+.composer-tool:focus-visible, .audience-card:focus-visible, .group-option:focus-visible, .send-btn:focus-visible {
+  outline: 2px solid #2563eb; outline-offset: 2px;
+}
+.composer-tool svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.composer-tool input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.composer-tool.disabled, .composer-tool:disabled { opacity: .35; pointer-events: none; }
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.composer-toolbar .send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 9px 17px;
+  border: 1px solid #0f172a;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.composer-toolbar .send-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.composer-toolbar .send-btn:hover { background: #1e293b; border-color: #1e293b; }
+.composer-toolbar .send-btn:disabled { opacity: .42; background: #0f172a; color: #fff; border-color: #0f172a; }
+.cancel-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 14px;
+  background: rgba(15, 23, 42, .42);
+}
+.cancel-sheet {
+  width: min(100%, 460px);
+  padding: 20px 18px 18px;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 16px 48px rgba(15,23,42,.22);
+  text-align: center;
+}
+.cancel-sheet h3 { margin: 0; color: #0f172a; font-size: 17px; }
+.cancel-sheet p { margin: 8px 0 16px; color: #64748b; font-size: 13px; }
+.cancel-sheet button {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  margin-top: 9px;
+  border: 0;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #0f172a;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.cancel-sheet .cancel-sheet-save { background: #2563eb; color: #fff; }
+.cancel-sheet .cancel-sheet-discard { color: #dc2626; }
+.cancel-sheet button:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+@media (min-width: 768px) {
+  .editor-card { height: min(82dvh, 800px); max-height: calc(100dvh - 48px); }
+}
+@media (max-width: 360px) {
+  .editor-body { padding-right: 14px; padding-left: 14px; }
+  .audience-cards { gap: 6px; }
+  .audience-card { font-size: 12px; min-height: 96px; }
+  .composer-toolbar .send-btn { padding: 9px 14px; }
+}
+
 </style>
