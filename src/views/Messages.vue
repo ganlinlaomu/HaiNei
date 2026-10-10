@@ -433,6 +433,7 @@ import { createVoiceRecordingSession, type VoiceRecordingResult, type VoiceRecor
 import { openProfile } from "@/utils/profileNavigation";
 import { useMentionComposer } from "@/composables/useMentionComposer";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
+import { quotedMessageExcerpt } from "@/utils/quotedMessageExcerpt";
 import { canMarkConversationTailRead } from "@/utils/messageReadVisibility";
 import type { MentionCandidate } from "@/utils/mentions";
 import { loadAccountStoresOnce, waitForFirstPaint } from "@/utils/bottomTabActivation";
@@ -818,7 +819,7 @@ function quotePreview(message?: InboxItem) {
   if (!message) return "引用的消息暂不可用";
   if (isDisappearing(message)) return "阅后即焚消息";
   const preview = directMessagePreview(message.content);
-  return preview || (hasAudio(message) ? "[语音]" : hasMessageImage(message) ? "[图片]" : "消息");
+  return quotedMessageExcerpt(preview || (hasAudio(message) ? "[语音]" : hasMessageImage(message) ? "[图片]" : "消息"));
 }
 function quotedMessage(replyTo?: string) {
   return lookupMessage(replyTo);
@@ -2140,4 +2141,63 @@ onBeforeUnmount(() => {
 .temporary-reveal strong{font-size:13px;font-weight:650}.temporary-reveal>span{font-size:14px;color:#bd584f}.temporary-reveal small{font-size:11px;color:#927370}.temporary-reveal:disabled{opacity:.5}
 .burned-placeholder{display:flex;align-items:center;gap:6px;color:#8c8280;font-size:12px;white-space:nowrap}
 @media (max-width:360px){.temporary-composer-mode{margin-right:16px;margin-left:16px}.temporary-composer-mode select{max-width:85px}}
+
+/*
+ * Mobile quoted replies: constrain the entire sizing chain, not just the
+ * preview text. WebKit otherwise allows a long quoted URL / unbroken string
+ * to contribute to flex/grid min-content widths and widen the PWA.
+ */
+.message-stack,
+.message-bubble {
+  min-width: 0;
+}
+.message-bubble {
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+.quoted-message {
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow: hidden;
+}
+.quoted-message strong,
+.quoted-message span {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.quoted-message span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+/* 100% width plus 10px margins on each side previously overflowed media captions. */
+.media-caption-bubble > .quoted-message {
+  width: calc(100% - 20px);
+}
+.composer-region {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+.replying-preview {
+  box-sizing: border-box;
+  max-width: calc(100% - 32px);
+  overflow: hidden;
+}
+.replying-copy strong,
+.replying-copy span {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.replying-copy span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
 </style>
