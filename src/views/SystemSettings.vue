@@ -213,11 +213,11 @@
         <p class="section-detail">推送仅用于私信，固定显示“你有新的私信消息”，不会包含好友名称、消息内容或图片信息。</p>
         <div class="account-row">
           <span class="small">{{ pushHelpText }}</span>
-          <button v-if="!isNativeApp" class="btn btn-secondary" type="button" :disabled="pushBusy || !pushSupported" @click="togglePush">
+          <button v-if="pushSupported" class="btn btn-secondary" type="button" :disabled="pushBusy" @click="togglePush">
             {{ pushBusy ? "处理中…" : pushEnabled ? "关闭推送" : "开启推送" }}
           </button>
-          <span v-else class="pill pending">原生 Push 待启用</span>
-          <button v-if="!isNativeApp && pushEnabled" class="btn btn-secondary" type="button" :disabled="pushBusy" @click="testCurrentPush">测试本机推送</button>
+          <span v-else class="pill pending">需要配置 Firebase</span>
+          <button v-if="pushSupported && pushEnabled" class="btn btn-secondary" type="button" :disabled="pushBusy" @click="testCurrentPush">测试本机推送</button>
         </div>
         <p v-if="pushTestResult" class="section-detail" role="status">{{ pushTestResult }}</p>
       </details>
@@ -374,6 +374,7 @@ import {
   supportsPushNotifications,
   testPushNotification
 } from "@/services/pushNotifications";
+import { nativePushAvailable, enableAndroidNativePush, detachAndroidNativePush, testAndroidNativePush } from "@/services/nativePushNotifications";
 import {
   DEFAULT_RELAY_URLS,
   type MediaServer,
@@ -427,14 +428,14 @@ const isNativeAndroid = isNativeAndroidApp();
 const checkingAndroidUpdate = ref(false);
 const androidVersionName = ref("");
 const androidUpdateSummary = ref("自动检查更新");
-const pushSupported = !isNativeApp && supportsPushNotifications();
-const pushStatusText = computed(() => isNativeApp
-  ? "原生通知将在下一阶段启用"
-  : !pushSupported
-    ? "不支持"
-    : pushEnabled.value ? "已开启 · 通用隐私通知" : "未开启");
+const pushSupported = isNativeApp ? nativePushAvailable() : supportsPushNotifications();
+const pushStatusText = computed(() => !pushSupported
+  ? isNativeApp ? "FCM 未配置" : "不支持"
+  : pushEnabled.value ? "已开启 · 私信隐私通知" : "未开启");
 const pushHelpText = computed(() => isNativeApp
-  ? "Android APK 已禁用 PWA Service Worker；后续将接入原生 Push 与 Badge。"
+  ? pushSupported
+    ? "通过 Google FCM 发送固定内容的私信通知；需要允许 Android 通知权限"
+    : "此 APK 尚未集成 Firebase FCM。请配置 Firebase 后安装新版 APK。"
   : pushSupported ? "需要你主动授权浏览器通知权限" : "当前浏览器不支持 Web Push");
 const backgroundLock = ref(deviceStorage.getItem(autoLockKey(keyStore.pkHex)) === "1");
 function toggleBackgroundLock(event: Event) {
@@ -823,7 +824,9 @@ async function testCurrentPush() {
   pushBusy.value = true;
   pushTestResult.value = "正在检查本机订阅并发送测试通知…";
   try {
-    const result = await testPushNotification(account, event => keyStore.signEvent(event));
+    const result = isNativeApp
+      ? await testAndroidNativePush(account, event => keyStore.signEvent(event))
+      : await testPushNotification(account, event => keyStore.signEvent(event));
     if (keyStore.pkHex === account) pushTestResult.value = result;
   } catch (error) {
     if (keyStore.pkHex === account) pushTestResult.value = error instanceof Error ? error.message : "测试推送失败";
@@ -837,13 +840,16 @@ async function togglePush() {
   if (!account || pushBusy.value) return;
   pushBusy.value = true;
   try {
-    if (pushEnabled.value) await disablePushNotifications(account, event => keyStore.signEvent(event));
-    else {
+    if (pushEnabled.value) {
+      if (isNativeApp) await detachAndroidNativePush(account, event => keyStore.signEvent(event), true);
+      else await disablePushNotifications(account, event => keyStore.signEvent(event));
+    } else {
       if (friendships.loadedFor !== account || !friendships.authorizationReady) await friendships.load(account);
       const acceptedSenders = friendships.records
         .filter(record => record.state === "accepted")
         .map(record => record.peerPubkey);
-      await enablePushNotifications(account, event => keyStore.signEvent(event), acceptedSenders);
+      if (isNativeApp) await enableAndroidNativePush(account, event => keyStore.signEvent(event), acceptedSenders);
+      else await enablePushNotifications(account, event => keyStore.signEvent(event), acceptedSenders);
     }
     if (keyStore.pkHex !== account) return;
     pushEnabled.value = pushEnabledForAccount(account);
