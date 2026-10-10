@@ -21,6 +21,10 @@ describe("Android Capacitor build", () => {
     expect(workflow).toContain("@capacitor/android@8");
     expect(workflow).toContain('"platform-tools" "platforms;android-36" "build-tools;36.0.0"');
     expect(workflow).toContain("./.capacitor-ci/node_modules/.bin/cap add android");
+    expect(workflow).toContain("@capacitor/push-notifications@8");
+    expect(workflow).toContain("HAINEI_FIREBASE_CONFIG_BASE64");
+    expect(workflow).toContain("android/app/google-services.json");
+    expect(workflow).toContain("cafe.aso.hainei");
     expect(workflow).toContain("node scripts/patch-android-update.mjs");
     expect(workflow).toContain("./gradlew assembleDebug --no-daemon");
     expect(workflow).toContain("./gradlew assembleRelease --no-daemon");
