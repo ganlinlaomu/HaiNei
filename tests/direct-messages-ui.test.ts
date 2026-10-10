@@ -178,10 +178,12 @@ describe("direct-message navigation and UI contract", () => {
   it("bounds long DM quotes without stretching message bubbles or the composer on iPhone", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const css = (selector: string) => {
-      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\  it("supports quoted replies in direct-message bubbles and composer", () => {");
-      const rule = chat.match(new RegExp(escaped + "\\\{([^}]*)\\\}"));
-      expect(rule, `missing CSS rule: ${selector}`).not.toBeNull();
-      return rule![1];
+      const anchor = selector + "{";
+      const start = chat.indexOf(anchor);
+      expect(start, "missing CSS rule: " + selector).toBeGreaterThanOrEqual(0);
+      const stop = chat.indexOf("}", start + anchor.length);
+      expect(stop).toBeGreaterThan(start);
+      return chat.slice(start + anchor.length, stop);
     };
 
     const page = css(".chat-page");
