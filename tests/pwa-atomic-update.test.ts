@@ -2,7 +2,6 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("atomic PWA update handoff", () => {
