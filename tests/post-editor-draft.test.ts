@@ -196,7 +196,8 @@ describe("post editor close and media UX", () => {
 
   it("keeps normal route and swipe closes on the save path", () => {
     expect(source).toContain("if (ui.showPostEditor) onClose();");
-    expect(source).toContain("onClose();\n        }, 220);");
+    expect(source).toContain("requestCancel();");
+    expect(source).toContain("shouldDismissPostEditor(distance, velocity");
     expect(source).toContain("persistDraft();\n        draftPersistenceEnabled = false;");
   });
 
