@@ -335,9 +335,14 @@ export default defineComponent({
     let dismissTimer: number | null = null;
 
     // recipients selection state
-    const allFriends = ref(true);
+    const allFriends = ref(false);
     const selectedGroups = ref<Array<string>>([]);
-    const visibilityOpen = ref(false);
+    const audienceChosen = ref(false);
+    const visibilityError = ref(false);
+    const visibilityOpen = ref(true);
+    const visibilityRow = ref<HTMLButtonElement | null>(null);
+    const confirmAllFriends = ref(false);
+    const confirmationRecipients = ref("");
     let draftPersistenceEnabled = false;
     let draftAccount = "";
 
@@ -347,6 +352,7 @@ export default defineComponent({
         content: content.value,
         allFriends: allFriends.value,
         selectedGroups: [...selectedGroups.value],
+        audienceChosen: audienceChosen.value,
         images: serializeCompletedDraftImages(uploads.value),
         video: videoPreview.value,
       });
@@ -419,10 +425,10 @@ export default defineComponent({
     const recipientsCount = computed(() => recipients.value.length + Number(botMentioned.value));
 
     const visibilitySummary = computed(() => {
-      const base = allFriends.value
+      const base = !audienceChosen.value ? "请选择 · 必选" : allFriends.value
         ? "全部好友"
         : selectedGroups.value.length > 0 ? `${selectedGroups.value.length} 个分组` : "仅自己可见";
-      if (!botMentioned.value) return base;
+      if (!audienceChosen.value || !botMentioned.value) return base;
       return base === "仅自己可见" ? "仅自己和 Hainei Bot" : `${base} + Hainei Bot`;
     });
 
@@ -430,22 +436,44 @@ export default defineComponent({
       return g === "未分组" ? "未分组" : g;
     }
 
+    function dismissAudienceConfirmation() {
+      confirmAllFriends.value = false;
+      confirmationRecipients.value = "";
+    }
+    function cancelAllFriendsConfirmation() {
+      dismissAudienceConfirmation();
+      visibilityOpen.value = true;
+    }
+    function chooseSelf() {
+      closeMention();
+      dismissAudienceConfirmation();
+      allFriends.value = false;
+      selectedGroups.value = [];
+      audienceChosen.value = true;
+      visibilityError.value = false;
+    }
     function toggleAll() {
       closeMention();
-      allFriends.value = !allFriends.value;
+      dismissAudienceConfirmation();
+      allFriends.value = true;
       selectedGroups.value = [];
+      audienceChosen.value = true;
+      visibilityError.value = false;
     }
-
     function toggleGroup(g: string) {
       closeMention();
-      if (allFriends.value) {
+      dismissAudienceConfirmation();
+      if (allFriends.value || !audienceChosen.value || selectedGroups.value.length === 0) {
         allFriends.value = false;
         selectedGroups.value = [g];
-        return;
+      } else {
+        const idx = selectedGroups.value.indexOf(g);
+        if (idx === -1) selectedGroups.value.push(g);
+        else selectedGroups.value.splice(idx, 1);
       }
-      const idx = selectedGroups.value.indexOf(g);
-      if (idx === -1) selectedGroups.value.push(g);
-      else selectedGroups.value.splice(idx, 1);
+      // Deselecting the final group must not silently become a self-only post.
+      audienceChosen.value = selectedGroups.value.length > 0;
+      visibilityError.value = false;
     }
 
     const uploads = ref<PostEditorUploadItem[]>([]);
@@ -830,9 +858,12 @@ export default defineComponent({
       content.value = "";
       error.value = null;
       pendingPostRetry.value = null;
-      allFriends.value = true;
+      allFriends.value = false;
       selectedGroups.value = [];
-      visibilityOpen.value = false;
+      audienceChosen.value = false;
+      visibilityError.value = false;
+      visibilityOpen.value = true;
+      dismissAudienceConfirmation();
       uploads.value = [];
       videoPreview.value = null;
       sheetDragging.value = false;
@@ -947,8 +978,14 @@ export default defineComponent({
         draftAccount = accountAtOpen;
         const draft = loadPostDraft(accountAtOpen);
         content.value = draft?.content || "";
-        allFriends.value = draft?.allFriends ?? true;
-        selectedGroups.value = normalizeSelectedAudienceGroups(draft?.selectedGroups || [], groups.value);
+        const restoredGroups = normalizeSelectedAudienceGroups(draft?.selectedGroups || [], groups.value);
+        allFriends.value = !!draft?.audienceChosen && !!draft.allFriends && postAudienceFriends.value.length > 0;
+        selectedGroups.value = allFriends.value ? [] : restoredGroups;
+        // Deleted groups must never silently turn a targeted draft into a self-only post.
+        audienceChosen.value = !!draft?.audienceChosen && (
+          allFriends.value || (draft.selectedGroups.length === 0 && !draft.allFriends) || restoredGroups.length > 0
+        );
+        visibilityOpen.value = !audienceChosen.value;
         uploads.value = restoreDraftImageUploads(draft?.images || []);
         videoPreview.value = draft?.video || null;
         draftPersistenceEnabled = true;
@@ -977,19 +1014,27 @@ export default defineComponent({
     }, { immediate: true });
 
     watch(groups, availableGroups => {
-      if (allFriends.value) return;
+      if (allFriends.value || selectedGroups.value.length === 0) return;
       const normalizedGroups = normalizeSelectedAudienceGroups(selectedGroups.value, availableGroups);
       if (normalizedGroups.length !== selectedGroups.value.length
         || normalizedGroups.some((group, index) => group !== selectedGroups.value[index])) {
         selectedGroups.value = normalizedGroups;
+        if (!normalizedGroups.length) audienceChosen.value = false;
       }
     });
 
+    watch(postAudienceFriends, list => {
+      if (allFriends.value && list.length === 0) {
+        allFriends.value = false;
+        audienceChosen.value = false;
+      }
+    });
     watch(
       [
         content,
         allFriends,
         selectedGroups,
+        audienceChosen,
         () => uploads.value.map(item => item.encryptedRef || "").join("|"),
         videoPreview,
       ],
@@ -1025,11 +1070,36 @@ export default defineComponent({
       releasePostEditorMediaUrls(uploads.value, videoPreview.value);
     });
 
-    async function onSend() {
+    async function onSend(confirmedAllFriends = false) {
+      if (sending.value) return;
       // Use pkHex check for consistency with onMounted and reliability
       if (!keys.pkHex) { error.value = "请先登录"; return; }
       if (!pendingPostRetry.value && !canSend.value) { error.value = "请输入内容"; return; }
       if (uploadingAny.value) { error.value = "请等待媒体上传完成"; return; }
+      if (!pendingPostRetry.value) {
+        const validAudience = audienceChosen.value && (
+          (!allFriends.value && selectedGroups.value.length === 0)
+          || recipients.value.length > 0
+        );
+        if (!validAudience) {
+          dismissAudienceConfirmation();
+          visibilityError.value = true;
+          visibilityOpen.value = true;
+          error.value = "请先选择可见范围";
+          await nextTick();
+          visibilityRow.value?.scrollIntoView({ block: "center", behavior: "smooth" });
+          return;
+        }
+        if (allFriends.value) {
+          const signature = recipients.value.slice().sort().join(",");
+          if (!confirmedAllFriends || confirmationRecipients.value !== signature) {
+            confirmationRecipients.value = signature;
+            confirmAllFriends.value = true;
+            return;
+          }
+        }
+      }
+      dismissAudienceConfirmation();
       const accountAtSend = keys.pkHex;
       sending.value = true;
       error.value = null;
@@ -1198,7 +1268,8 @@ export default defineComponent({
     }
 
     return {
-      visible, content, sending, pendingPostRetry, allFriends, selectedGroups, groups, countByGroup,
+      visible, content, sending, pendingPostRetry, allFriends, selectedGroups, audienceChosen, visibilityError,
+      visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseSelf, recipients, groups, countByGroup,
       canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, discardDraft, toggleAll, toggleGroup,
       recipientsCount, botMentioned, selectedSet, gLabel, acceptedFriends, postAudienceFriends, uploads, uploadEnabled, uploadingAny,
       visibilityOpen, visibilitySummary,
