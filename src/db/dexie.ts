@@ -1,10 +1,11 @@
 import { installLocalVault } from "@/services/localVault";
 import Dexie, { type Table, type Transaction } from "dexie";
+import { isConversationMessage } from "@/nostr/messaging/messageRouting";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
 export const APP_VERSION = "0.1.42";
-export const DB_VERSION = 19;
+export const DB_VERSION = 20;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -721,6 +722,20 @@ export class HaiNeiDatabase extends Dexie {
     // Metadata is inside the vault envelope; old v18 rows remain readable.
     this.version(19).stores({
       accountNotes: "[accountPubkey+id], accountPubkey, [accountPubkey+updatedAt]"
+    });
+
+    // Reclassify existing NIP-17 data without changing keys or indexes.
+    // Invalidate cached unread counts so they reflect the new DM policy.
+    this.version(20).stores({
+      syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+conversationId+createdAt+id], [accountPubkey+createdAt+id], [accountPubkey+conversationId+messageClass+createdAt+id], [accountPubkey+createdAt], [accountPubkey+senderPubkey]"
+    }).upgrade(async transaction => {
+      await transaction.table("syncedMessages").toCollection().modify(record => {
+        record.messageClass = isConversationMessage(record) ? "direct" : "other";
+      });
+      await transaction.table("conversationStates").toCollection().modify(record => {
+        delete record.unreadCache;
+        delete record.visibleUnreadCache;
+      });
     });
 
   }
