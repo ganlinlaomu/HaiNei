@@ -1,6 +1,6 @@
 <template>
   <transition name="slide-up">
-    <div class="editor-overlay" v-if="visible" @keydown.esc="onClose" @click.self="onClose" tabindex="-1" ref="overlay">
+    <div class="editor-overlay" v-if="visible" @click.self="requestCancel" tabindex="-1" ref="overlay">
       <div
         ref="editorCard"
         class="editor-card"
@@ -19,48 +19,29 @@
       >
         <header class="editor-header">
           <div class="drag-handle" aria-hidden="true"></div>
-          <div class="title">发帖</div>
+          <div class="editor-header-row">
+            <button class="header-cancel" type="button" :disabled="sending" @click="requestCancel">取消</button>
+            <strong class="title">新建动态</strong>
+            <span class="header-balance" aria-hidden="true"></span>
+          </div>
         </header>
 
         <main ref="editorBody" class="editor-body">
+          <div class="editor-author">
+            <ProfileAvatar :pubkey="keys.pkHex" :size="42" />
+            <div class="editor-author-copy"><strong>{{ ownName }}</strong><span>分享此刻的想法</span></div>
+          </div>
           <div class="editor-textarea-wrap">
-            <textarea
-              v-model="content"
-              ref="textarea"
-              class="editor-textarea"
-              placeholder="分享此刻…"
-              rows="8"
-              :disabled="!!pendingPostRetry"
-              @paste="onPaste"
-              @input="onMentionInput"
-              @focus="onMentionFocus"
-              @blur="onMentionBlur"
-              @click="onMentionClick"
-              @keydown="onMentionKeydown"
-            ></textarea>
-            <MentionSuggestions
-              v-if="mentionOpen"
-              :items="mentionMatches"
-              :active-index="mentionActiveIndex"
-              inline
-              @select="selectMention"
-            />
+            <textarea v-model="content" ref="textarea" class="editor-textarea"
+              placeholder="这一刻，你想分享什么？" rows="6" :disabled="!!pendingPostRetry"
+              @paste="onPaste" @input="onMentionInput" @focus="onMentionFocus"
+              @blur="onMentionBlur" @click="onMentionClick" @keydown="onMentionKeydown"></textarea>
+            <MentionSuggestions v-if="mentionOpen" :items="mentionMatches" :active-index="mentionActiveIndex"
+              inline @select="selectMention" />
           </div>
 
           <!-- 图片/视频上传区域 -->
           <div class="upload-panel">
-            <div class="upload-controls">
-              <label
-                class="upload-btn"
-                :class="{ disabled: !uploadEnabled || uploadingAny || !!pendingPostRetry }"
-                :title="pendingPostRetry ? '当前有待重试贴文，请先重试或关闭后重新编辑' : (uploadEnabled ? (uploadingAny ? '上传中…' : '添加照片或视频') : '请先在设置中配置媒体服务')"
-              >
-                <input type="file" accept="image/*,video/*" multiple @change="onFilesSelected" :disabled="!uploadEnabled || uploadingAny || !!pendingPostRetry" />
-                添加照片或视频
-              </label>
-              <div v-if="!uploadEnabled" class="upload-config-hint small">请先在设置中配置图片与视频服务</div>
-            </div>
-
             <div class="previews">
               <div v-for="(item, idx) in uploads" :key="item.id" class="preview-item">
                 <div class="thumb-container">
@@ -135,87 +116,70 @@
             </div>
           </div>
 
-          <button
-            ref="visibilityRow"
-            class="visibility-row"
-            :class="{ 'visibility-row-error': visibilityError }"
-            type="button"
-            :aria-expanded="visibilityOpen"
-            :aria-describedby="visibilityError ? 'visibility-error' : undefined"
-            :disabled="!!pendingPostRetry"
-            @click="visibilityOpen = !visibilityOpen"
-          >
-            <span>可见范围</span>
-            <span class="visibility-value" :class="{ 'visibility-required': !audienceChosen }">{{ visibilitySummary }} <span aria-hidden="true">›</span></span>
-          </button>
-          <div v-if="visibilityError" id="visibility-error" class="visibility-error" role="alert">
-            请先选择可见范围，再发布动态。
-          </div>
-
-          <div v-if="botMentioned" class="small recips-empty-hint">
-            已 @Hainei Bot：将向 Bot 发送这条完整的加密动态。
-          </div>
-
-          <div v-if="visibilityOpen" class="groups">
-            <div class="chips-row">
-              <button
-                class="chip"
-                :class="{ 'chip-selected': audienceChosen && !allFriends && selectedGroups.length === 0 }"
-                :disabled="!!pendingPostRetry"
-                @click="chooseSelf()"
-                type="button"
-                :aria-pressed="String(audienceChosen && !allFriends && selectedGroups.length === 0)"
-              >仅自己</button>
-              <button
-                class="chip"
-                :class="{ 'chip-selected': audienceChosen && allFriends }"
-                :disabled="!!pendingPostRetry || postAudienceFriends.length === 0"
-                @click="toggleAll()"
-                type="button"
-                :aria-pressed="String(audienceChosen && allFriends)"
-              >
-                全部好友
-                <span class="chip-count">{{ postAudienceFriends.length }}</span>
+          <section ref="visibilityRow" class="audience-section" :class="{ 'audience-section-error': visibilityError }" aria-labelledby="audience-title">
+            <div class="audience-heading">
+              <h3 id="audience-title">谁可以看到这条动态？</h3>
+              <span class="audience-required" :class="{ chosen: audienceChosen }">{{ audienceChosen ? "已选择" : "必选" }}</span>
+            </div>
+            <div class="audience-cards" role="group" aria-label="可见范围">
+              <button type="button" class="audience-card"
+                :class="{ selected: audienceChosen && !allFriends && selectedGroups.length === 0 }"
+                :aria-pressed="audienceChosen && !allFriends && selectedGroups.length === 0"
+                :disabled="!!pendingPostRetry" @click="chooseSelf">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg>
+                <span>仅自己</span><small v-if="audienceChosen && !allFriends && selectedGroups.length === 0">✓</small>
               </button>
-              <div class="divider"></div>
-              <div class="chips-scroll" role="list">
-                <button
-                  v-for="g in groups"
-                  :key="g"
-                  class="chip"
-                  :class="{ 'chip-selected': audienceChosen && selectedSet.has(g) }"
-                  :disabled="!!pendingPostRetry"
-                  :aria-pressed="String(audienceChosen && selectedSet.has(g))"
-                  @click="toggleGroup(g)"
-                  role="listitem"
-                  type="button"
-                >
-                  <span class="group-name">{{ gLabel(g) }}</span>
-                  <span class="chip-count">{{ countByGroup[g] || 0 }}</span>
+              <button type="button" class="audience-card"
+                :class="{ selected: visibilityOpen || (audienceChosen && !allFriends && selectedGroups.length > 0) }"
+                :aria-pressed="audienceChosen && !allFriends && selectedGroups.length > 0"
+                :aria-expanded="visibilityOpen" :disabled="!!pendingPostRetry" @click="chooseGroups">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M2 20v-2a7 7 0 0 1 14 0v2"/><path d="M17 6a3 3 0 0 1 0 6"/><path d="M18 15a5 5 0 0 1 4 5"/></svg>
+                <span>指定分组</span><small v-if="audienceChosen && !allFriends && selectedGroups.length > 0">✓</small>
+              </button>
+              <button type="button" class="audience-card"
+                :class="{ selected: audienceChosen && allFriends }" :aria-pressed="audienceChosen && allFriends"
+                :disabled="!!pendingPostRetry || postAudienceFriends.length === 0" @click="toggleAll">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-5 5-5 13 0 18M12 3c5 5 5 13 0 18"/></svg>
+                <span>全部好友</span><small v-if="audienceChosen && allFriends">✓</small>
+              </button>
+            </div>
+            <div v-if="visibilityOpen" class="group-picker">
+              <p class="group-picker-title">选择可以看到动态的好友分组</p>
+              <div class="group-options">
+                <button v-for="g in groups" :key="g" type="button" class="group-option"
+                  :class="{ selected: selectedSet.has(g) }" :aria-pressed="selectedSet.has(g)"
+                  :disabled="!!pendingPostRetry" @click="toggleGroup(g)">
+                  <span>{{ gLabel(g) }}</span><small>{{ countByGroup[g] || 0 }} 人</small>
                 </button>
               </div>
+              <p v-if="groups.length === 0" class="group-picker-empty">暂无好友分组，可以选择仅自己或全部好友。</p>
             </div>
+            <div v-if="visibilityError" id="visibility-error" class="visibility-error" role="alert">请先选择可见范围，再发布动态。</div>
+            <p v-if="audienceChosen" class="audience-summary">{{ visibilitySummary }} · {{ recipientsCount }} 位接收者</p>
+            <p v-else class="audience-summary muted">发布前请明确选择接收范围。</p>
+            <p v-if="botMentioned" class="audience-bot-hint">已 @Hainei Bot：将额外向 Bot 发送这条加密动态。</p>
+            <p v-else-if="acceptedFriends.length > postAudienceFriends.length" class="audience-bot-hint">Hainei Bot 默认不接收动态，主动 @ 才会收到。</p>
+          </section>
 
-            <div class="recips-info" v-if="audienceChosen">
-              目标人数：<strong>{{ recipientsCount }}</strong>
+          <div class="composer-toolbar">
+            <div class="composer-tools">
+              <label class="composer-tool" :class="{ disabled: !uploadEnabled || uploadingAny || !!pendingPostRetry }"
+                :title="pendingPostRetry ? '当前贴文待重试' : (uploadEnabled ? '添加照片或视频' : '请先在设置中配置媒体服务')">
+                <input type="file" accept="image/*,video/*" multiple @change="onFilesSelected"
+                  :disabled="!uploadEnabled || uploadingAny || !!pendingPostRetry" />
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 5-5 4 3 3-4 5 6"/></svg>
+                <span class="sr-only">添加照片或视频</span>
+              </label>
+              <button type="button" class="composer-tool" aria-label="提及好友"
+                :disabled="!!pendingPostRetry" @click="insertMentionTrigger">@</button>
             </div>
-            <div class="recips-info" v-else>请选择要分享给谁（必选）</div>
-            <div v-if="acceptedFriends.length > postAudienceFriends.length && !botMentioned" class="small recips-empty-hint">
-              HaiNei Bot 默认不接收动态；主动 @ 才会收到。
-            </div>
-            <div v-if="postAudienceFriends.length === 0 && !botMentioned" class="small recips-empty-hint">
-              无其他可发送好友，此帖仅会保留给自己。若需分享，请先添加并确认好友。
-            </div>
-          </div>
-
-          <!-- 草稿和发送操作 -->
-          <div class="action-buttons">
-            <button class="discard-btn" type="button" @click="discardDraft">丢弃草稿</button>
-            <button class="save-draft-btn" type="button" @click="onClose">保存草稿</button>
-            <button class="send-btn" :disabled="sending || uploadingAny || (!canSend && !pendingPostRetry)" @click="onSend()">
-              {{ sending ? "发送中..." : pendingPostRetry ? "重新发送" : "发送" }}
+            <button type="button" class="send-btn"
+              :disabled="sending || uploadingAny || (!canSend && !pendingPostRetry)" @click="onSend()">
+              {{ sending ? "发送中…" : pendingPostRetry ? "重新发送" : "发布动态" }}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
             </button>
           </div>
+          <p v-if="!uploadEnabled" class="upload-config-hint small">请先在设置中配置图片与视频服务</p>
 
           <div v-if="error" class="error">{{ error }}</div>
         </main>
@@ -228,6 +192,16 @@
               <button type="button" class="send-btn" :disabled="sending" @click="onSend(true)">确认发布</button>
             </div>
           </div>
+        </div>
+        <div v-if="cancelSheetOpen" class="cancel-sheet-backdrop" @pointerdown.stop @pointermove.stop @pointerup.stop @click.self="continueEditing">
+          <section class="cancel-sheet" role="alertdialog" aria-modal="true"
+            aria-labelledby="cancel-sheet-title" aria-describedby="cancel-sheet-description">
+            <h3 id="cancel-sheet-title">退出编辑？</h3>
+            <p id="cancel-sheet-description">可以保存草稿，之后继续编辑。</p>
+            <button class="cancel-sheet-save" type="button" @click="saveAndClose">保存草稿</button>
+            <button class="cancel-sheet-discard" type="button" @click="discardDraft">放弃</button>
+            <button ref="cancelContinueButton" class="cancel-sheet-continue" type="button" @click="continueEditing">继续编辑</button>
+          </section>
         </div>
       </div>
     </div>
@@ -248,6 +222,7 @@ import { useMessagesStore } from "@/stores/messages";
 import { useUIStore } from "@/stores/ui";
 import { useProfilesStore } from "@/stores/profiles";
 import PostImagePreview from "@/components/PostImagePreview.vue";
+import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import { mentionTags, type MentionCandidate } from "@/utils/mentions";
 import { HAINEI_BOT_NAME, HAINEI_BOT_PUBKEY, isHaiNeiBot } from "@/utils/haineiBot";
@@ -302,7 +277,7 @@ const VIDEO_METADATA_SUFFIX = ']';
 
 export default defineComponent({
   name: "PostEditorModal",
-  components: { PostImagePreview, MentionSuggestions },
+  components: { PostImagePreview, ProfileAvatar, MentionSuggestions },
   setup() {
     const router = useRouter();
     const route = useRoute();
