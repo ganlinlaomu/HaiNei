@@ -20,6 +20,7 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useProfilesStore } from "@/stores/profiles";
 import { splitKnownMentions, type KnownMention } from "@/utils/mentions";
+import { HAINEI_BOT_NAME, isHaiNeiBot } from "@/utils/haineiBot";
 import { openProfile } from "@/utils/profileNavigation";
 
 const props = defineProps<{ text: string }>();
@@ -33,7 +34,8 @@ const known = computed<KnownMention[]>(() => {
   const peerMentions = friends.getAcceptedList(friendships.isAccepted).map(friend => {
     const profileName = profiles.getProfile(friend.pubkey)?.nickname?.trim();
     const fallback = `${friend.pubkey.slice(0, 8)}…`;
-    const labels = [...new Set([profileName, friend.name?.trim(), fallback].filter((value): value is string => !!value))];
+    const labels = [...new Set([isHaiNeiBot(friend.pubkey) ? HAINEI_BOT_NAME : undefined, profileName, friend.name?.trim(), fallback]
+      .filter((value): value is string => !!value))];
     return { pubkey: friend.pubkey, labels };
   });
   const account = keys.pkHex.toLowerCase();
