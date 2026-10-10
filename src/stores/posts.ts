@@ -130,7 +130,8 @@ export const usePostsStore = defineStore("posts", {
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
       const accountAtStart = key.pkHex;
-      const requestedRecipients = permittedPostRecipients(recipients, accountAtStart);
+      // Explicit direct messages remain available for the Bot and every accepted friend.
+      const requestedRecipients = [...new Set(recipients.map(pubkey => String(pubkey || "").trim().toLowerCase()).filter(Boolean))];
       if (requestedRecipients.length === 0) throw new Error("recipients 不能为空");
       const otherRecipients = requestedRecipients.filter(pubkey => pubkey !== accountAtStart);
       const recipientPubkeys = otherRecipients.length > 0 ? otherRecipients : [accountAtStart];
