@@ -314,7 +314,7 @@ export default defineComponent({
     const selectedGroups = ref<Array<string>>([]);
     const audienceChosen = ref(false);
     const visibilityError = ref(false);
-    const visibilityOpen = ref(true);
+    const visibilityOpen = ref(false);
     const visibilityRow = ref<HTMLElement | null>(null);
     const cancelSheetOpen = ref(false);
     const cancelContinueButton = ref<HTMLButtonElement | null>(null);
@@ -420,7 +420,7 @@ export default defineComponent({
     }
     function cancelAllFriendsConfirmation() {
       dismissAudienceConfirmation();
-      visibilityOpen.value = true;
+      visibilityOpen.value = false;
     }
     function chooseSelf() {
       closeMention();
@@ -852,7 +852,7 @@ export default defineComponent({
       selectedGroups.value = [];
       audienceChosen.value = false;
       visibilityError.value = false;
-      visibilityOpen.value = true;
+      visibilityOpen.value = false;
       dismissAudienceConfirmation();
       cancelSheetOpen.value = false;
       uploads.value = [];
@@ -878,6 +878,12 @@ export default defineComponent({
     function requestCancel() {
       if (sending.value) return;
       sheetOffset.value = 0;
+      // Opening is async. Do not delete an existing saved draft before it has
+      // been restored and its content is visible to this editor.
+      if (!draftPersistenceEnabled) {
+        onClose();
+        return;
+      }
       if (confirmAllFriends.value) {
         cancelAllFriendsConfirmation();
         return;
@@ -902,7 +908,7 @@ export default defineComponent({
       if (!field || pendingPostRetry.value) return;
       const start = field.selectionStart ?? content.value.length;
       const end = field.selectionEnd ?? start;
-      const prefix = start > 0 && !/\\s/.test(content.value[start - 1]) ? " " : "";
+      const prefix = start > 0 && !/\s/.test(content.value[start - 1]) ? " " : "";
       content.value = content.value.slice(0, start) + prefix + "@" + content.value.slice(end);
       const cursor = start + prefix.length + 1;
       await nextTick();
