@@ -1,4 +1,5 @@
 import { clearAccountDeviceData } from "@/services/accountDeviceData";
+import { releaseAndroidNativePushSession } from "@/services/nativePushNotifications";
 import { prepareAccountLock } from "@/services/accountLifecycle";
 import { flushDeviceWrites } from "@/services/deviceStorage";
 import { unlockLocalVault, lockLocalVault, migrateLocalVault } from "@/services/localVault";
@@ -286,9 +287,7 @@ export const useKeyStore = defineStore("keys", {
     resetAccountStores(currentPk: string) {
       // Always invalidate native FCM before switching away from an account,
       // including direct login/account selection paths that skip clearActiveSession.
-      void import("@/services/nativePushNotifications").then(({ releaseAndroidNativePushSession }) => {
-        void releaseAndroidNativePushSession();
-      });
+      void releaseAndroidNativePushSession();
       this.sessionGeneration++;
       clearRelaySessionSigner(currentPk);
       void import("@/services/privateSpaceSync").then(({ cancelPrivateSpaceSync }) => {
