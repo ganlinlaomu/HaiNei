@@ -17,6 +17,10 @@ const OTHER = "b".repeat(64);
 function mockEnv() {
   const rows = new Map<string, NativeRow>();
   const env = {
+    FCM_SERVICE_ACCOUNT_JSON: JSON.stringify({
+      project_id: "test-project", client_email: "sender@test-project.iam.gserviceaccount.com",
+      private_key: "-----BEGIN PRIVATE KEY-----fixture",
+    }),
     DB: {
       prepare(sql: string) {
         return {
