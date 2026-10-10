@@ -180,7 +180,7 @@
               HaiNei Bot 默认不接收动态；主动 @ 才会收到。
             </div>
             <div v-if="postAudienceFriends.length === 0 && !botMentioned" class="small recips-empty-hint">
-              暂无可发送的好友，当前仅会发送给自己。请先添加并完成好友确认。
+              无其他可发送好友，此帖仅会保留给自己。若需分享，请先添加并确认好友。
             </div>
           </div>
 
@@ -385,9 +385,13 @@ export default defineComponent({
       && mentionedPubkeys().some(isHaiNeiBot));
     const recipientsCount = computed(() => recipients.value.length + Number(botMentioned.value));
 
-    const visibilitySummary = computed(() => allFriends.value
-      ? "全部好友"
-      : selectedGroups.value.length > 0 ? `${selectedGroups.value.length} 个分组` : "仅自己可见");
+    const visibilitySummary = computed(() => {
+      const base = allFriends.value
+        ? "全部好友"
+        : selectedGroups.value.length > 0 ? `${selectedGroups.value.length} 个分组` : "仅自己可见";
+      if (!botMentioned.value) return base;
+      return base === "仅自己可见" ? "仅自己和 Hainei Bot" : `${base} + Hainei Bot`;
+    });
 
     function gLabel(g: string) {
       return g === "未分组" ? "未分组" : g;
