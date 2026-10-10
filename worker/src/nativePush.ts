@@ -65,16 +65,24 @@ export async function findNativePushToken(env: Env, account: string, rawToken: u
 export async function authorizedNativePushRows(env: Env, sender: string, recipients: string[], now: number) {
   if (!recipients.length) return [] as NativePushRow[];
   const placeholders = recipients.map(() => "?").join(",");
-  const rows = await env.DB.prepare(`
-    SELECT t.account_pubkey, t.token_hash, t.token
-    FROM hainei_native_push_tokens AS t
-    INNER JOIN hainei_push_authorizations AS a
-      ON a.recipient_pubkey = t.account_pubkey
-      AND a.sender_pubkey = ?
-      AND a.expires_at > ?
-    WHERE t.account_pubkey IN (${placeholders})
-  `).bind(sender, now, ...recipients).all<NativePushRow>();
-  return rows.results;
+  try {
+    const rows = await env.DB.prepare(`
+      SELECT t.account_pubkey, t.token_hash, t.token
+      FROM hainei_native_push_tokens AS t
+      INNER JOIN hainei_push_authorizations AS a
+        ON a.recipient_pubkey = t.account_pubkey
+        AND a.sender_pubkey = ?
+        AND a.expires_at > ?
+      WHERE t.account_pubkey IN (${placeholders})
+    `).bind(sender, now, ...recipients).all<NativePushRow>();
+    return rows.results;
+  } catch (error) {
+    // Rolling deployments can briefly serve a new Worker before D1 migration.
+    // Do not regress working iOS/Chrome Web Push when the optional native table
+    // does not exist yet; all other storage errors remain fatal and visible.
+    if (error instanceof Error && /no such table: hainei_native_push_tokens/i.test(error.message)) return [];
+    throw error;
+  }
 }
 
 function accountCredentials(env: Env): ServiceAccount {
