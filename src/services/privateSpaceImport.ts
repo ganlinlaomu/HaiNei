@@ -1,7 +1,7 @@
 import type { InboxItem } from "@/nostr/messaging/messageViewModel";
 import { isFeedRenderableMessage, isHomeControl } from "@/nostr/messaging/messageViewModel";
 import { hasDisappearingMarker, isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
-import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { isConversationMessage } from "@/nostr/messaging/messageRouting";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { parseFriendRecommendation } from "@/nostr/messaging/friendRecommendation";
 import { privateSpaceRepository, type PrivateSpaceRepository } from "@/repositories/privateSpaceRepository";
@@ -45,7 +45,7 @@ export function canImportDirectMessage(
     && (message.pubkey.toLowerCase() === owner || message.pubkey.toLowerCase() === conversationPeer)
     && Number.isSafeInteger(message.created_at) && message.created_at > 0
     && typeof message.content === "string"
-    && isDirectMessageTags(message.tags)
+    && isConversationMessage(message)
     && !hasDisappearingMarker(message.tags)
     && !isExpiredDisappearing(message.tags)
     && !isHomeControl(message.tags, message.content)
