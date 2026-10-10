@@ -11,6 +11,7 @@ import { useKeyStore } from "@/stores/keys";
 import { logger } from "@/utils/logger";
 import { isExcludedPostRecipient } from "@/utils/friendAudience";
 import { HAINEI_BOT_PUBKEY } from "@/utils/haineiBot";
+import { DIRECT_MESSAGE_TYPE, FEED_POST_TYPE } from "@/nostr/messaging/messageRouting";
 import { mentionedPubkeysFromTags } from "@/utils/mentions";
 import { useMessagesStore } from "@/stores/messages";
 import { useFriendshipsStore } from "@/stores/friendships";
@@ -103,11 +104,16 @@ export const usePostsStore = defineStore("posts", {
       const unauthorized = otherRecipients.find(pubkey => !friendships.isAccepted(pubkey));
       if (unauthorized) throw new Error("只能向已互相确认的好友发送消息");
 
+      // Every new Home post is explicit; standard unmarked NIP-17 is DM.
+      const postTags = [
+        ...(tags || []).filter(tag => !(tag[0] === "t" && (tag[1] === DIRECT_MESSAGE_TYPE || tag[1] === FEED_POST_TYPE))),
+        ["t", FEED_POST_TYPE],
+      ];
       const queued = await queueMessage({
         recipientPubkeys,
         content: plaintext,
         replyTo,
-        tags,
+        tags: postTags,
         relays: getRelaysFromStorage(),
         context: {
           senderPubkey: accountAtStart,
