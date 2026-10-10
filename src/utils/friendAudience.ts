@@ -1,3 +1,5 @@
+import { HAINEI_BOT_PUBKEY, isHaiNeiBot } from "@/utils/haineiBot";
+
 export type AudienceFriend = {
   pubkey: string;
   groups?: string[];
@@ -6,13 +8,11 @@ export type AudienceFriend = {
 
 export const UNGROUPED_FRIEND_LABEL = "未分组";
 
-// Dedicated HaiNei AI Bot. It remains a friend for private chat but is never
-// included in encrypted feed-post audiences (including manually selected groups).
-// npub15m0wl0dqr2ucudfqqengmw0prwfgkjfed92z5t3q5rpjc3wx68mq30yq57
-export const HAINEI_BOT_PUBKEY_HEX = "a6deefbda01ab98e352006668db9e11b928b493969542a2e20a0c32c45c6d1f6";
+// Re-export for existing post-audience call sites and tests.
+export const HAINEI_BOT_PUBKEY_HEX = HAINEI_BOT_PUBKEY;
 
 export function isExcludedPostRecipient(pubkey: string): boolean {
-  return String(pubkey || "").trim().toLowerCase() === HAINEI_BOT_PUBKEY_HEX;
+  return isHaiNeiBot(pubkey);
 }
 
 export function friendGroupTags(friend: Pick<AudienceFriend, "groups" | "group">): string[] {
