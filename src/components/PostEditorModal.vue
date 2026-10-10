@@ -156,7 +156,6 @@
             </div>
             <div v-if="visibilityError" id="visibility-error" class="visibility-error" role="alert">请先选择可见范围，再发布动态。</div>
             <p v-if="audienceChosen" class="audience-summary">{{ visibilitySummary }}<template v-if="allFriends || selectedGroups.length"> · {{ recipients.length }} 位好友</template></p>
-            <p v-else class="audience-summary muted">发布前请明确选择接收范围。</p>
             <p v-if="botMentioned" class="audience-bot-hint">已 @Hainei Bot：将额外向 Bot 发送这条加密动态。</p>
             <p v-else-if="acceptedFriends.length > postAudienceFriends.length" class="audience-bot-hint">Hainei Bot 默认不接收动态，主动 @ 才会收到。</p>
           </section>
@@ -1130,7 +1129,6 @@ export default defineComponent({
           dismissAudienceConfirmation();
           visibilityError.value = true;
           visibilityOpen.value = true;
-          error.value = "请先选择可见范围";
           await nextTick();
           visibilityRow.value?.scrollIntoView({ block: "center", behavior: "smooth" });
           return;

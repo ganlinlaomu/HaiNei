@@ -157,6 +157,16 @@ describe("post editor close and media UX", () => {
     expect(source.indexOf("if (!validAudience)")).toBeLessThan(source.indexOf("const { message } = await posts.queuePost("));
   });
 
+  it("does not show persistent or duplicate visibility warnings below the publisher", () => {
+    expect(source).not.toContain("发布前请明确选择接收范围。");
+    expect(source).not.toContain('error.value = "请先选择可见范围"');
+    // A validation message still appears next to the audience selector
+    // only when the user attempts to publish without selecting one.
+    expect(source).toContain('v-if="visibilityError" id="visibility-error"');
+    expect(source).toContain("visibilityError.value = true;");
+    expect(source).toContain("if (!validAudience)");
+  });
+
   it("redesigns the publisher into content, audience cards, and a compact toolbar", () => {
     expect(source).toContain('class="editor-header-row"');
     expect(source).toContain('class="editor-author"');
