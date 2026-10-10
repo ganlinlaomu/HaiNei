@@ -126,8 +126,16 @@ async function registerForAccount(pubkey: string, signEvent: SignEvent, accepted
 }
 
 export async function enableAndroidNativePush(pubkey: string, signEvent: SignEvent, accepted: string[]) {
-  await registerForAccount(pubkey, signEvent, accepted, true);
-  deviceStorage.setItem(`hainei_native_push_enabled_${pubkey.toLowerCase()}`, "1");
+  try {
+    await registerForAccount(pubkey, signEvent, accepted, true);
+    deviceStorage.setItem(`hainei_native_push_enabled_${pubkey.toLowerCase()}`, "1");
+  } catch (error) {
+    // Failed first-time opt-in must not leave an active FCM listener or token.
+    currentAccount = null;
+    await unregisterNativePlugin();
+    deviceStorage.removeItem(TOKEN_KEY);
+    throw error;
+  }
 }
 
 export async function resumeAndroidNativePush(pubkey: string, signEvent: SignEvent, accepted: string[]) {
@@ -143,8 +151,10 @@ export async function detachAndroidNativePush(pubkey: string, signEvent: SignEve
   const plugin = nativePlugin();
   try {
     if (token) await postPushAuthorized("/api/push/native/unsubscribe", { token }, pubkey, signEvent);
+  } catch {
+    // Unregistering locally invalidates the token even when the Worker is offline.
+    console.warn("[push] offline native token revoke; FCM token will be invalidated locally");
   } finally {
-    // Even without network, an invalidated FCM registration cannot receive old-account pushes.
     await unregisterNativePlugin();
     deviceStorage.removeItem(TOKEN_KEY);
     if (disable) deviceStorage.removeItem(`hainei_native_push_enabled_${pubkey.toLowerCase()}`);
