@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { HAINEI_BOT_PUBKEY } from "@/utils/haineiBot";
 
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
@@ -89,6 +90,30 @@ describe("post publish retry identity", () => {
     mocks.publishQueued.mockResolvedValueOnce(published("post-1"));
     store.startQueuedPostDelivery("post-1");
     await vi.waitFor(() => expect(mocks.publishQueued).toHaveBeenCalledWith(ACCOUNT, "post-1"));
+  });
+
+  it("never encrypts posts to the Bot, including uppercase and mixed recipient lists", async () => {
+    const store = usePostsStore();
+    await store.queuePost([PEER, HAINEI_BOT_PUBKEY.toUpperCase(), ACCOUNT], "hello");
+    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
+      recipientPubkeys: [PEER],
+    }));
+    expect(mocks.queue.mock.calls[0][0].recipientPubkeys).not.toContain(HAINEI_BOT_PUBKEY);
+
+    mocks.queue.mockClear();
+    await store.queuePost([ACCOUNT, HAINEI_BOT_PUBKEY], "self-only");
+    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
+      recipientPubkeys: [ACCOUNT],
+    }));
+    await expect(store.queuePost([HAINEI_BOT_PUBKEY], "not allowed")).rejects.toThrow("recipients 不能为空");
+  });
+
+  it("keeps direct messages to the Bot permitted", async () => {
+    mocks.send.mockResolvedValueOnce(published("dm-bot"));
+    await usePostsStore().sendDirectMessage([HAINEI_BOT_PUBKEY], "hi");
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({
+      recipientPubkeys: [HAINEI_BOT_PUBKEY],
+    }));
   });
 
   it("freezes a queued post after a visible publish failure and exposes the same outgoing id", async () => {
