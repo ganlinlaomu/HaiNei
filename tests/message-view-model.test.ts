@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SyncedMessageRecord } from "@/db/dexie";
 import { DM_RECEIPT_TYPE } from "@/nostr/messaging/dmReceipts";
+import { FEED_POST_TYPE, LEGACY_FEED_CUTOFF_SECONDS } from "@/nostr/messaging/messageRouting";
 import { DM_BURN_CONTROL_TYPE, isBurnControlPayload, parseBurnControl, serializeBurnControl } from "@/nostr/messaging/dmBurnControl";
 import {
   isFeedRenderableMessage,
@@ -86,14 +87,16 @@ describe("message view model", () => {
     const malformed = JSON.stringify({ type: DM_BURN_CONTROL_TYPE, messageId: "not-an-event-id" });
     for (const content of [unrelated, malformed, '{"type":"hainei-dm-burn"', "regular post"]) {
       expect(isBurnControlPayload(content)).toBe(false);
-      expect(isFeedRenderableMessage({ tags: [], content })).toBe(true);
+      expect(isFeedRenderableMessage({ tags: [], content, created_at: LEGACY_FEED_CUTOFF_SECONDS - 1 })).toBe(true);
     }
     // A missing/invalid payload with a burn-control tag remains a control, never a post.
     expect(isFeedRenderableMessage({ tags: [["t", DM_BURN_CONTROL_TYPE]], content: malformed })).toBe(false);
   });
 
   it("uses one feed predicate for normal posts, DMs, controls and receipts", () => {
-    expect(isFeedRenderableMessage({ content: "post", tags: [] })).toBe(true);
+    expect(isFeedRenderableMessage({ content: "post", tags: [["t", FEED_POST_TYPE]] })).toBe(true);
+    expect(isFeedRenderableMessage({ content: "legacy post", tags: [], created_at: LEGACY_FEED_CUTOFF_SECONDS - 1 })).toBe(true);
+    expect(isFeedRenderableMessage({ content: "third-party DM", tags: [], created_at: LEGACY_FEED_CUTOFF_SECONDS + 1 })).toBe(false);
     expect(isFeedRenderableMessage({ content: "dm", tags: [["t", "hainei-dm"]] })).toBe(false);
     expect(isFeedRenderableMessage({ content: "profile", tags: [["t", "hainei-profile"]] })).toBe(false);
     expect(isFeedRenderableMessage({ content: "receipt", tags: [["t", DM_RECEIPT_TYPE]] })).toBe(false);
