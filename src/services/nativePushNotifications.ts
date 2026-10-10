@@ -16,6 +16,7 @@ type NativePlugin = {
 type NativeCapacitor = {
   Plugins?: Record<string, unknown>;
   registerPlugin?: (name: string) => unknown;
+  isPluginAvailable?: (name: string) => boolean;
 };
 
 const TOKEN_KEY = "hainei_native_push_token";
@@ -46,9 +47,9 @@ export function releaseAndroidNativePushSession() {
 function nativePlugin(): NativePlugin | null {
   if (!isNativeAndroidApp()) return null;
   const bridge = (window as Window & { Capacitor?: NativeCapacitor }).Capacitor;
-  if (!bridge) return null;
+  if (!bridge || bridge.isPluginAvailable?.("PushNotifications") !== true) return null;
   if (pluginInstance) return pluginInstance;
-  const plugin = bridge.Plugins?.PushNotifications ?? bridge.registerPlugin?.("PushNotifications");
+  const plugin = bridge.registerPlugin?.("PushNotifications") ?? bridge.Plugins?.PushNotifications;
   if (!plugin || typeof (plugin as NativePlugin).register !== "function") return null;
   pluginInstance = plugin as NativePlugin;
   return pluginInstance;
