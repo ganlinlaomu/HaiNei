@@ -2,7 +2,8 @@ import type { CanonicalMessage } from "./protocol";
 import { parsePrivateAudioMessage } from "./privateMedia";
 import { parseFriendRecommendation } from "./friendRecommendation";
 
-export const DIRECT_MESSAGE_TYPE = "hainei-dm";
+import { DIRECT_MESSAGE_TYPE, isDirectMessageTags } from "./messageRouting";
+export { DIRECT_MESSAGE_TYPE, isDirectMessageTags } from "./messageRouting";
 
 export function canStartDirectMessage(
   accountPubkey: string,
@@ -12,10 +13,6 @@ export function canStartDirectMessage(
   const account = accountPubkey.trim().toLowerCase();
   const peer = peerPubkey.trim().toLowerCase();
   return !!account && !!peer && peer !== account && isAccepted(peer);
-}
-
-export function isDirectMessageTags(tags: string[][] | undefined) {
-  return !!tags?.some(tag => tag[0] === "t" && tag[1] === DIRECT_MESSAGE_TYPE);
 }
 
 export function isDirectMessage(message: Pick<CanonicalMessage, "tags">) {
