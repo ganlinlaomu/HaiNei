@@ -37,6 +37,7 @@ let cachedAvailableUpdate: AndroidUpdateManifest | null = null;
 const listeners = new Set<(update: AndroidUpdateManifest) => void>();
 
 function capacitor(): CapacitorGlobal | undefined {
+  if (typeof window === "undefined") return undefined;
   return (window as Window & { Capacitor?: CapacitorGlobal }).Capacitor;
 }
 

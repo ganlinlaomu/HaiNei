@@ -1,5 +1,6 @@
 import { HttpError, integerSetting, type Env } from "./types";
 import { consumeRateLimit } from "./requestGuards";
+import { authorizedNativePushRows, deliverNativePushRows, findNativePushToken } from "./nativePush";
 
 const encoder = new TextEncoder();
 const WEB_PUSH_INFO = encoder.encode("WebPush: info\0");
@@ -447,9 +448,34 @@ export async function triggerGenericPush(
     WHERE s.account_pubkey IN (${placeholders})
   `).bind(senderPubkey, now, ...recipients).all<PushSubscriptionRow>();
   diagnostics.subscriptionsFound = rows.results.length;
-  if (!rows.results.length) return diagnostics;
+  if (rows.results.length) await deliverPushRows(env, senderPubkey, messageId, rows.results, diagnostics, now);
+  const native = await authorizedNativePushRows(env, senderPubkey, recipients, now);
+  if (native.length) {
+    const extra = await deliverNativePushRows(env, senderPubkey, messageId, native, now,
+      (s, r, m, token, t) => reservePushDelivery(env, s, r, m, token, t),
+      (s, r, m, hash, sent, t) => completePushDelivery(env, s, r, m, hash, sent, t));
+    diagnostics.subscriptionsFound += extra.subscriptionsFound;
+    diagnostics.sent += extra.sent;
+    diagnostics.failed += extra.failed;
+    diagnostics.expired += extra.expired;
+  }
+  return diagnostics;
+}
 
-  return deliverPushRows(env, senderPubkey, messageId, rows.results, diagnostics, now);
+export async function testOwnNativePush(env: Env, accountPubkey: string, token: unknown) {
+  const now = Math.floor(Date.now() / 1000);
+  await consumeRateLimit(env, `push:test:${accountPubkey}`, 5, 60, now);
+  const row = await findNativePushToken(env, accountPubkey, token);
+  const diagnostics: PushDiagnostics = { requested: 1, subscriptionsFound: row ? 1 : 0, sent: 0, failed: 0, expired: 0 };
+  if (!row) return diagnostics;
+  const messageId = await sha256Hex(crypto.randomUUID());
+  const extra = await deliverNativePushRows(env, accountPubkey, messageId, [row], now,
+    (s, r, m, value, t) => reservePushDelivery(env, s, r, m, value, t),
+    (s, r, m, hash, sent, t) => completePushDelivery(env, s, r, m, hash, sent, t));
+  diagnostics.sent = extra.sent;
+  diagnostics.failed = extra.failed;
+  diagnostics.expired = extra.expired;
+  return diagnostics;
 }
 
 // The authenticated account can inspect delivery only to its own browser endpoint.

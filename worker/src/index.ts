@@ -9,7 +9,9 @@ import {
   savePushSubscription,
   triggerGenericPush,
   testOwnPush,
+  testOwnNativePush,
 } from "./push";
+import { saveNativePushToken, removeNativePushToken } from "./nativePush";
 import { HttpError, integerSetting, type Env } from "./types";
 import { enforceChallengeRateLimit, readJsonBody } from "./requestGuards";
 import { AccountStateConflict, getAccountState, putAccountState } from "./accountState";
@@ -140,6 +142,15 @@ export async function handleRequest(request: Request, env: Env) {
         env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
       );
       return json(await testOwnPush(env, pubkey, payload.endpoint));
+    }
+    if (path === "/api/push/native/subscribe" || path === "/api/push/native/unsubscribe" || path === "/api/push/native/test") {
+      const payload = await body(request, env, 8 * 1024);
+      const pubkey = await verifyAndConsumeChallenge(
+        env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
+      );
+      if (path.endsWith("/subscribe")) return json(await saveNativePushToken(env, pubkey, payload.token), 201);
+      if (path.endsWith("/unsubscribe")) return json(await removeNativePushToken(env, pubkey, payload.token));
+      return json(await testOwnNativePush(env, pubkey, payload.token));
     }
     if (path === "/api/push/trigger") {
       const payload = await body(request, env, 32 * 1024);

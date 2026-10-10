@@ -46,6 +46,7 @@ jobs:
       HAINEI_KEYSTORE_PASSWORD: ${{ secrets.HAINEI_ANDROID_KEYSTORE_PASSWORD }}
       HAINEI_KEY_ALIAS: ${{ secrets.HAINEI_ANDROID_KEY_ALIAS }}
       HAINEI_KEY_PASSWORD: ${{ secrets.HAINEI_ANDROID_KEY_PASSWORD }}
+      HAINEI_FIREBASE_CONFIG_BASE64: ${{ secrets.HAINEI_FIREBASE_CONFIG_BASE64 }}
 
     steps:
       - name: Checkout
@@ -96,6 +97,21 @@ jobs:
           ln -sfn "$PWD/.capacitor-ci/node_modules/@capacitor/cli" node_modules/@capacitor/cli
           ln -sfn "$PWD/.capacitor-ci/node_modules/@capacitor/android" node_modules/@capacitor/android
 
+      - name: Install optional Firebase push plugin
+        run: |
+          if [ -z "$HAINEI_FIREBASE_CONFIG_BASE64" ]; then
+            echo "::warning::Firebase config missing; native Android push will be unavailable in this APK."
+            exit 0
+          fi
+          npm install --prefix .capacitor-ci --package-lock=false @capacitor/push-notifications@8
+          ln -sfn "$PWD/.capacitor-ci/node_modules/@capacitor/push-notifications" node_modules/@capacitor/push-notifications
+          node - <<'NODE'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.dependencies['@capacitor/push-notifications'] = '^8.0.0';
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          NODE
+
       - name: Install Android SDK 36
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -110,6 +126,17 @@ jobs:
         run: |
           ./.capacitor-ci/node_modules/.bin/cap add android
           ./.capacitor-ci/node_modules/.bin/cap sync android
+
+      - name: Inject Firebase Android configuration
+        run: |
+          if [ -z "$HAINEI_FIREBASE_CONFIG_BASE64" ]; then exit 0; fi
+          printf '%s' "$HAINEI_FIREBASE_CONFIG_BASE64" | base64 --decode > android/app/google-services.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const data = JSON.parse(fs.readFileSync('android/app/google-services.json', 'utf8'));
+          const matches = data.client?.some(c => c.client_info?.android_client_info?.package_name === 'cafe.aso.hainei');
+          if (!matches) throw new Error('Firebase google-services.json must match cafe.aso.hainei');
+          NODE
 
       - name: Prepare Android build metadata
         run: |

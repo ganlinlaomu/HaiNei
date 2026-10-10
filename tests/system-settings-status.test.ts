@@ -31,12 +31,13 @@ describe("System Settings status UX", () => {
     expect(source).toContain("不会为每位联系人保持额外长连接");
   });
 
-  it("does not present browser Web Push controls inside the Capacitor Android shell", () => {
+  it("uses native FCM for Android APK and Web Push for browser PWA", () => {
     expect(source).toContain('Capacitor?: { isNativePlatform?: () => boolean }');
     expect(source).toContain('后台推送 / {{ isNativeApp ? "Android Push" : "Web Push" }}');
-    expect(source).toContain('v-if="!isNativeApp"');
-    expect(source).toContain("原生 Push 待启用");
-    expect(source).toContain("Android APK 已禁用 PWA Service Worker");
+    expect(source).toContain("nativePushAvailable()");
+    expect(source).toContain("enableAndroidNativePush(");
+    expect(source).toContain("testAndroidNativePush(");
+    expect(source).toContain("需要配置 Firebase");
   });
 
   it("shows how the current private key is protected on this device", () => {
