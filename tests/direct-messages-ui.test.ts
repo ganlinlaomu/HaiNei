@@ -179,7 +179,7 @@ describe("direct-message navigation and UI contract", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const css = (selector: string) => {
       const anchor = selector + "{";
-      const start = chat.indexOf(anchor);
+      const start = chat.lastIndexOf(anchor);
       expect(start, "missing CSS rule: " + selector).toBeGreaterThanOrEqual(0);
       const stop = chat.indexOf("}", start + anchor.length);
       expect(stop).toBeGreaterThan(start);
