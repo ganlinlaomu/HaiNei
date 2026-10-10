@@ -386,7 +386,17 @@ export const useKeyStore = defineStore("keys", {
     async clearActiveSession() {
       const currentPk = this.pkHex;
       const currentMethod = this.loginMethod;
-      if (currentPk) { await prepareAccountLock(currentPk); await flushDeviceWrites(); this.resetAccountStores(currentPk); }
+      if (currentPk) {
+        try {
+          const { detachAndroidNativePush, nativePushEnabled } = await import("@/services/nativePushNotifications");
+          if (nativePushEnabled(currentPk)) await detachAndroidNativePush(currentPk, this.signEvent.bind(this));
+        } catch {
+          console.warn("[push] native token detach failed during account switch");
+        }
+        await prepareAccountLock(currentPk);
+        await flushDeviceWrites();
+        this.resetAccountStores(currentPk);
+      }
       if (currentPk && currentMethod === "nip46") {
         await disconnectRemoteSigner(currentPk);
         remoteSignerLastReconnectAt.delete(currentPk);
