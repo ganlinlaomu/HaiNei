@@ -12,6 +12,7 @@ import {
 } from "@/nostr/messaging/privateProfile";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { ProfileRepository } from "@/repositories/profileRepository";
+import { HAINEI_BOT_NAME, HAINEI_BOT_PUBKEY, isHaiNeiBot } from "@/utils/haineiBot";
 import {
   acceptedProfileRecipients,
   privateProfileDisplayName,
@@ -129,6 +130,16 @@ describe("HaiNei private profiles", () => {
     expect(privateProfileDisplayName("对方昵称", FRIEND, "本地备注")).toBe("本地备注");
     expect(privateProfileDisplayName("对方昵称", FRIEND)).toBe("对方昵称");
     expect(privateProfileDisplayName(undefined, FRIEND)).toBe(`${FRIEND.slice(0, 8)}…`);
+  });
+
+  it("uses Hainei Bot as the default nickname, keeping explicit user remarks", () => {
+    expect(isHaiNeiBot(HAINEI_BOT_PUBKEY.toUpperCase())).toBe(true);
+    expect(isHaiNeiBot(FRIEND)).toBe(false);
+    expect(privateProfileDisplayName(undefined, HAINEI_BOT_PUBKEY)).toBe(HAINEI_BOT_NAME);
+    expect(privateProfileDisplayName("Other name", HAINEI_BOT_PUBKEY)).toBe(HAINEI_BOT_NAME);
+    expect(privateProfileDisplayName("Other name", HAINEI_BOT_PUBKEY, "我的机器人")).toBe("我的机器人");
+    expect(privateProfileDisplayName(undefined, HAINEI_BOT_PUBKEY, `${HAINEI_BOT_PUBKEY.slice(0, 8)}…`)).toBe(HAINEI_BOT_NAME);
+    expect(profileAvatarInitial(undefined, HAINEI_BOT_PUBKEY)).toBe("H");
   });
 
   it("provides a letter fallback when no private avatar or nickname exists", () => {
