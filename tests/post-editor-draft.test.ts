@@ -60,6 +60,35 @@ describe("complete post draft media", () => {
     expect(loadPostDraft(ACCOUNT)).toMatchObject({ content: "draft", images: [image], video: { provider: "Encrypted" } });
   });
 
+  it("does not treat legacy draft defaults as explicit permission to share", () => {
+    localStorage.setItem(postDraftKey(ACCOUNT)!, JSON.stringify({
+      content: "legacy post", allFriends: true, selectedGroups: [], updatedAt: 1,
+    }));
+    expect(loadPostDraft(ACCOUNT)).toMatchObject({
+      content: "legacy post", allFriends: false, selectedGroups: [], audienceChosen: false,
+    });
+  });
+
+  it("remembers only explicitly selected audiences, including self-only", () => {
+    savePostDraft(ACCOUNT, { content: "private", allFriends: false, selectedGroups: [], audienceChosen: true });
+    expect(loadPostDraft(ACCOUNT)).toMatchObject({
+      allFriends: false, selectedGroups: [], audienceChosen: true,
+    });
+    savePostDraft(ACCOUNT, { content: "group", allFriends: false, selectedGroups: ["家人"], audienceChosen: true });
+    expect(loadPostDraft(ACCOUNT)).toMatchObject({
+      allFriends: false, selectedGroups: ["家人"], audienceChosen: true,
+    });
+    savePostDraft(ACCOUNT, { content: "all", allFriends: true, selectedGroups: [], audienceChosen: true });
+    mergeCompletedPostDraftImage(ACCOUNT, image);
+    expect(loadPostDraft(ACCOUNT)).toMatchObject({
+      allFriends: true, selectedGroups: [], audienceChosen: true,
+    });
+    savePostDraft(ACCOUNT, { content: "unselected", allFriends: true, selectedGroups: ["家人"] });
+    expect(loadPostDraft(ACCOUNT)).toMatchObject({
+      allFriends: false, selectedGroups: [], audienceChosen: false,
+    });
+  });
+
   it("persists only serializable media descriptor fields", () => {
     savePostDraft(ACCOUNT, {
       content: "",
@@ -112,6 +141,21 @@ describe("post editor swipe dismissal", () => {
 
 describe("post editor close and media UX", () => {
   const source = readFileSync(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
+
+  it("forces an explicit choice and confirms broadcast before queuePost", () => {
+    expect(source).toContain("const allFriends = ref(false)");
+    expect(source).toContain("const audienceChosen = ref(false)");
+    expect(source).toContain("audienceChosen: audienceChosen.value");
+    expect(source).toContain("visibilityOpen.value = !audienceChosen.value");
+    expect(source).toContain("function chooseSelf()");
+    expect(source).toContain("audienceChosen.value = selectedGroups.value.length > 0");
+    expect(source).toContain("if (!validAudience)");
+    expect(source).toContain("visibilityRow.value?.scrollIntoView");
+    expect(source).toContain("confirmationRecipients.value !== signature");
+    expect(source).toContain('@click="onSend(true)"');
+    expect(source).toContain("const { message } = await posts.queuePost(");
+    expect(source.indexOf("if (!validAudience)")).toBeLessThan(source.indexOf("const { message } = await posts.queuePost("));
+  });
 
   it("distinguishes draft-saving close from explicit discard", () => {
     expect(source).toContain('@click="discardDraft">丢弃草稿</button>');
