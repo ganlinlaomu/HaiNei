@@ -175,6 +175,59 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).not.toContain('class="message-status"');
   });
 
+  it("bounds long DM quotes without stretching message bubbles or the composer on iPhone", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const css = (selector: string) => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\  it("supports quoted replies in direct-message bubbles and composer", () => {");
+      const rule = chat.match(new RegExp(escaped + "\\\{([^}]*)\\\}"));
+      expect(rule, `missing CSS rule: ${selector}`).not.toBeNull();
+      return rule![1];
+    };
+
+    const page = css(".chat-page");
+    const stack = css(".message-stack");
+    const bubble = css(".message-bubble");
+    const quote = css(".quoted-message");
+    const quoteAuthor = css(".quoted-message strong");
+    const quoteBody = css(".quoted-message span");
+    const mediaQuote = css(".media-caption-bubble>.quoted-message");
+    const composerRegion = css(".composer-region");
+    const replying = css(".replying-preview");
+    const replyingCopy = css(".replying-copy");
+    const replyingAuthor = css(".replying-copy strong");
+    const replyingBody = css(".replying-copy span");
+
+    expect(page).toContain("grid-template-columns:minmax(0,1fr)");
+    expect(stack).toContain("min-width:0");
+    expect(bubble).toContain("box-sizing:border-box");
+    expect(bubble).toContain("min-width:0");
+    expect(quote).toContain("box-sizing:border-box");
+    expect(quote).toContain("max-width:100%");
+    expect(mediaQuote).toContain("width:calc(100% - 20px)");
+    expect(composerRegion).toContain("min-width:0");
+    expect(replying).toContain("width:calc(100% - 32px)");
+    expect(replying).toContain("box-sizing:border-box");
+    expect(replyingCopy).toContain("flex:1 1 0");
+
+    for (const body of [quoteBody, replyingBody]) {
+      expect(body).toContain("display:-webkit-box");
+      expect(body).toContain("-webkit-line-clamp:2");
+      expect(body).toContain("-webkit-box-orient:vertical");
+      expect(body).toContain("overflow-wrap:anywhere");
+      expect(body).toContain("word-break:break-word");
+      expect(body).toContain("white-space:normal");
+      expect(body).toContain("max-width:100%");
+    }
+    for (const title of [quoteAuthor, replyingAuthor]) {
+      expect(title).toContain("white-space:nowrap");
+      expect(title).toContain("max-width:100%");
+      expect(title).toContain("text-overflow:ellipsis");
+    }
+    expect(chat).toContain('@click.stop="jumpToQuotedMessage(message.replyTo)"');
+    expect(chat).toContain('@click="cancelReply"');
+    expect(chat).toContain('class="composer-normal"');
+  });
+
   it("supports quoted replies in direct-message bubbles and composer", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
