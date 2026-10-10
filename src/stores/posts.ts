@@ -26,7 +26,7 @@ function permittedPostRecipients(
   // The mention tag and visible @Bot token must agree before the Bot can
   // receive a complete encrypted post. A plain audience selection is not consent.
   const explicitBotMention = mentionedPubkeysFromTags(tags).includes(HAINEI_BOT_PUBKEY)
-    && /(^|[^\\p{L}\\p{N}_])@Hainei Bot(?![\\p{L}\\p{N}_])/u.test(plaintext);
+    && plaintext.includes("@Hainei Bot");
   return [...new Set(recipients
     .map(pubkey => String(pubkey || "").trim().toLowerCase())
     .filter(pubkey => pubkey
