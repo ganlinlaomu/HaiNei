@@ -175,6 +175,24 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).not.toContain('class="message-status"');
   });
 
+  it("keeps long quoted replies inside mobile bubbles and the composer", () => {
+    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    // Both sent bubbles and the active reply composer must be bounded,
+    // including single uninterrupted URLs, emojis and long CJK previews.
+    expect(chat).toContain("class=\"quoted-message\"");
+    expect(chat).toContain("class=\"replying-preview\"");
+    expect(chat).toMatch(/\.message-stack,\s*\.message-bubble\s*\{\s*min-width:\s*0;/);
+    expect(chat).toMatch(/\.quoted-message\s*\{[^}]*max-width:\s*100%;[^}]*overflow:\s*hidden;/);
+    expect(chat).toMatch(/\.quoted-message span\s*\{[^}]*-webkit-line-clamp:\s*2;[^}]*white-space:\s*normal;/);
+    expect(chat).toMatch(/\.media-caption-bubble\s*>\s*\.quoted-message\s*\{\s*width:\s*calc\(100% - 20px\)/);
+    expect(chat).toMatch(/\.composer-region\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/);
+    expect(chat).toMatch(/\.replying-preview\s*\{[^}]*max-width:\s*calc\(100% - 32px\);[^}]*overflow:\s*hidden;/);
+    expect(chat).toMatch(/\.replying-copy span\s*\{[^}]*-webkit-line-clamp:\s*2;[^}]*white-space:\s*normal;/);
+    // No change to the actual quoted message ID / send path.
+    expect(chat).toContain('@click.stop="jumpToQuotedMessage(message.replyTo)"');
+    expect(chat).toContain("const replyTo = replyingToMessage.value?.id;");
+  });
+
   it("supports quoted replies in direct-message bubbles and composer", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
