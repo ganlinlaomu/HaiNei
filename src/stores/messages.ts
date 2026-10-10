@@ -6,7 +6,7 @@ import { isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { notifyCanonicalMessageAdded } from "@/services/directMessageStateEvents";
-import { isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { isConversationMessage } from "@/nostr/messaging/messageRouting";
 import {
   isHomeControl,
   syncedMessageRecordToInboxItem,
@@ -138,7 +138,7 @@ export const useMessagesStore = defineStore("messages", {
         const message = item.message as CanonicalMessage;
         const tags = message.tags || [];
         if (message.senderPubkey.toLowerCase() !== targetPk.toLowerCase()) continue;
-        if (isHomeControl(tags, message.plaintext) || isDirectMessageTags(tags)) continue;
+        if (isHomeControl(tags, message.plaintext) || isConversationMessage(message)) continue;
         const outgoingState: NonNullable<InboxItem["outgoing"]> = {
           localId: item.outgoingId,
           state: optimisticOutgoingState(item.state),
@@ -242,7 +242,7 @@ export const useMessagesStore = defineStore("messages", {
       const index = this.inbox.findIndex(item => item.id === messageId);
       if (index < 0) return;
       const current = this.inbox[index];
-      if (!current.outgoing || isDirectMessageTags(current.tags)) return;
+      if (!current.outgoing || isConversationMessage(current)) return;
       this.inbox[index] = {
         ...current,
         outgoing: {
