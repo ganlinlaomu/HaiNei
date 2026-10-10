@@ -26,6 +26,8 @@ export async function nativeTokenHash(token: string): Promise<string> {
 }
 
 export async function saveNativePushToken(env: Env, account: string, rawToken: unknown) {
+  // Never report native Push as enabled when the Worker cannot authenticate to FCM.
+  accountCredentials(env);
   if (!ACCOUNT_PATTERN.test(account)) throw new HttpError(400, "invalid_account");
   const token = validToken(rawToken);
   const hash = await nativeTokenHash(token);
