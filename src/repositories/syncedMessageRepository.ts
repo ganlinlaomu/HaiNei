@@ -445,6 +445,30 @@ export class SyncedMessageRepository {
       .equals([account, sender])
       .toArray();
   }
+  // Vault-backed tag fields cannot be decrypted in a Dexie versionchange
+  // transaction. Reindex after this account's key has been unlocked instead.
+  async migrateMessageRoutingAfterUnlock(accountPubkey: string) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const key = "migration:nip17-message-routing-v1";
+    if ((await this.database.accountMeta.get([account, key]))?.value === true) return;
+    await this.database.transaction(
+      "rw", this.database.syncedMessages, this.database.conversationStates, this.database.accountMeta,
+      async () => {
+        if ((await this.database.accountMeta.get([account, key]))?.value === true) return;
+        await this.database.syncedMessages.where("accountPubkey").equals(account).modify(record => {
+          record.messageClass = isConversationMessage(record) ? "direct" : "other";
+        });
+        await this.database.conversationStates.where("accountPubkey").equals(account).modify(record => {
+          delete record.unreadCache;
+          delete record.visibleUnreadCache;
+        });
+        await this.database.accountMeta.put({
+          accountPubkey: account, key, value: true,
+        });
+      },
+    );
+  }
+
   async listDirectConversationHeads(accountPubkey: string, conversationId?: string) {
     const account = normalizeAccountPubkey(accountPubkey);
     const conversationIds = conversationId
