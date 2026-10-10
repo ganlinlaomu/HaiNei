@@ -1,5 +1,6 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { deviceStorage } from "@/services/deviceStorage";
+import { isNativeAndroidApp } from "@/services/androidUpdater";
 import { debugLog } from "@/utils/debugLog";
 import { signWorkerRequest } from "@/services/workerAuth";
 import { DEFAULT_HAINEI_WORKER_URL, haineiWorkerBaseUrl, resolveHaiNeiWorkerBaseUrl } from "@/services/workerUrl";
@@ -130,7 +131,14 @@ export function supportsPushNotifications() {
 }
 
 export function pushEnabledForAccount(pubkey: string) {
-  return !!pubkey && deviceStorage.getItem(`hainei_push_enabled_${pubkey.toLowerCase()}`) === "1";
+  return !!pubkey && (
+    deviceStorage.getItem(`hainei_push_enabled_${pubkey.toLowerCase()}`) === "1"
+    || (isNativeAndroidApp() && deviceStorage.getItem(`hainei_native_push_enabled_${pubkey.toLowerCase()}`) === "1")
+  );
+}
+
+export async function postPushAuthorized(path: string, payload: Record<string, unknown>, pubkey: string, signEvent: SignEvent) {
+  return authenticatedPost(path, payload, pubkey, signEvent);
 }
 
 export async function enablePushNotifications(pubkey: string, signEvent: SignEvent, authorizedSenderPubkeys: string[] = []) {
@@ -195,6 +203,13 @@ export async function syncPushAuthorizationPolicy(
   signEvent: SignEvent,
 ) {
   if (!pushEnabledForAccount(pubkey)) return false;
+  if (isNativeAndroidApp()) {
+    await authenticatedPost("/api/push/policy", {
+      senderPubkeys: [...new Set(senderPubkeys.map(value => value.toLowerCase()))],
+    }, pubkey, signEvent);
+    debugLog("system", "native_push_policy_resync_ok");
+    return true;
+  }
   if (!supportsPushNotifications() || Notification.permission !== "granted") return false;
 
   // The local opt-in flag can outlive a Worker/D1 redeploy. Re-register the
