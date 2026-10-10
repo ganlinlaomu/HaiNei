@@ -26,6 +26,22 @@ let initialized = false;
 let pendingToken: { resolve: (token: string) => void; reject: (error: Error) => void } | null = null;
 let currentAccount: { pubkey: string; signEvent: SignEvent; accepted: string[] } | null = null;
 let publishing = Promise.resolve();
+let unregisterQueue = Promise.resolve();
+
+function unregisterNativePlugin() {
+  const plugin = nativePlugin();
+  unregisterQueue = unregisterQueue.catch(() => {}).then(async () => {
+    await plugin?.unregister().catch(() => {});
+  });
+  return unregisterQueue;
+}
+
+export function releaseAndroidNativePushSession() {
+  if (!isNativeAndroidApp()) return Promise.resolve();
+  currentAccount = null;
+  deviceStorage.removeItem(TOKEN_KEY);
+  return unregisterNativePlugin();
+}
 
 function nativePlugin(): NativePlugin | null {
   if (!isNativeAndroidApp()) return null;
@@ -85,6 +101,7 @@ async function publishToken(pubkey: string, rawToken: string, accepted: string[]
 async function registerForAccount(pubkey: string, signEvent: SignEvent, accepted: string[], requestPermission: boolean) {
   const plugin = nativePlugin();
   if (!plugin) throw new Error("APK 尚未配置 Firebase 原生推送，请安装启用 FCM 的新版本");
+  await unregisterQueue;
   await initialize(plugin);
   let permission = await plugin.checkPermissions();
   if (permission.receive !== "granted" && requestPermission) permission = await plugin.requestPermissions();
@@ -127,7 +144,7 @@ export async function detachAndroidNativePush(pubkey: string, signEvent: SignEve
     if (token) await postPushAuthorized("/api/push/native/unsubscribe", { token }, pubkey, signEvent);
   } finally {
     // Even without network, an invalidated FCM registration cannot receive old-account pushes.
-    await plugin?.unregister().catch(() => {});
+    await unregisterNativePlugin();
     deviceStorage.removeItem(TOKEN_KEY);
     if (disable) deviceStorage.removeItem(`hainei_native_push_enabled_${pubkey.toLowerCase()}`);
   }
