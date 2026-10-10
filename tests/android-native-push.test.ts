@@ -94,7 +94,7 @@ describe("FCM HTTP v1 delivery", () => {
       true, ["sign", "verify"],
     );
     const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", key.privateKey));
-    privatePem = "-----BEGIN PRIVATE KEY-----\\n" + Buffer.from(pkcs8).toString("base64").match(/.{1,64}/g)!.join("\\n") + "\\n-----END PRIVATE KEY-----";
+    privatePem = "-----BEGIN PRIVATE KEY-----\n" + Buffer.from(pkcs8).toString("base64").match(/.{1,64}/g)!.join("\n") + "\n-----END PRIVATE KEY-----";
   });
 
   function fcmEnv() {
