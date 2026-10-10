@@ -1,4 +1,5 @@
 import { directMessagePeer, isDirectMessageTags } from "@/nostr/messaging/directMessages";
+import { isConversationMessage } from "@/nostr/messaging/messageRouting";
 import { disappearingMetadata, hasDisappearingMarker, isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
 import Dexie from "dexie";
 import {
@@ -47,7 +48,7 @@ function toRecord(accountPubkey: string, message: CanonicalMessage, nowMs: numbe
     senderPubkey: message.senderPubkey.toLowerCase(),
     recipientPubkeys: message.recipientPubkeys.map(value => value.toLowerCase()),
     conversationId: message.conversationId || message.id,
-    messageClass: isDirectMessageTags(message.tags) ? "direct" : "other",
+    messageClass: isConversationMessage(message) ? "direct" : "other",
     plaintext: message.plaintext,
     ciphertext: message.ciphertext,
     createdAt: message.createdAt,
@@ -167,9 +168,9 @@ export class SyncedMessageRepository {
         const previousCache = current?.unreadCache?.cursor === cursorKey ? current.unreadCache : !current ? {cursor:cursorKey,count:0,directCount:0} : undefined;
         const visiblePolicy = this.visiblePolicies.get(JSON.stringify(conversationKey));
         const visibleUnreadCache = current?.visibleUnreadCache && visiblePolicy?.policy === current.visibleUnreadCache.policy
-          ? { policy: visiblePolicy.policy, count: current.visibleUnreadCache.count + Number(incoming.senderPubkey !== account && isDirectMessageTags(incoming.tags) && visiblePolicy.test(incoming)) }
+          ? { policy: visiblePolicy.policy, count: current.visibleUnreadCache.count + Number(incoming.senderPubkey !== account && isConversationMessage(incoming) && visiblePolicy.test(incoming)) }
           : undefined;
-        const unreadCache = previousCache ? {...previousCache,count:previousCache.count + Number(unread),directCount:previousCache.directCount + Number(unread && isDirectMessageTags(incoming.tags))} : undefined;
+        const unreadCache = previousCache ? {...previousCache,count:previousCache.count + Number(unread),directCount:previousCache.directCount + Number(unread && isConversationMessage(incoming))} : undefined;
         if (!current || incoming.createdAt > current.lastMessageAt ||
           (incoming.createdAt === current.lastMessageAt && incoming.id.localeCompare(current.lastMessageId) > 0)) {
           await this.database.conversationStates.put({
@@ -773,7 +774,7 @@ export class SyncedMessageRepository {
           [account,conversationId,Number.MAX_SAFE_INTEGER,"\uffff"],false,true)
         .each(message=>{
           if(message.senderPubkey !== account && isMessageAfter({id:message.id,createdAt:message.createdAt},cursor)) {
-            count++;if(isDirectMessageTags(message.tags))directCount++;
+            count++;if(isConversationMessage(message))directCount++;
           }
         });
       if(summary) await this.database.conversationStates.update(key,{unreadCache:{cursor:cursorKey,count,directCount}});
@@ -797,7 +798,7 @@ export class SyncedMessageRepository {
       await this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
         .between([account, conversationId, cursor?.lastReadCreatedAt || 0, cursor?.lastReadMessageId || ""],
           [account, conversationId, Number.MAX_SAFE_INTEGER, "\uffff"], false, true)
-        .each(message => { if (message.senderPubkey !== account && isDirectMessageTags(message.tags) && visible(message)) count++; });
+        .each(message => { if (message.senderPubkey !== account && isConversationMessage(message) && visible(message)) count++; });
       if (summary) await this.database.conversationStates.update(key, { visibleUnreadCache: { policy, count } });
       return count;
     });
