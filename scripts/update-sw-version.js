@@ -39,10 +39,10 @@ function fingerprint(relativePath) {
   let bytes = fs.readFileSync(fullPath);
   // Never hash the previously generated BUILD_ID: rebuilds must be idempotent.
   if (relativePath.replace(/\\/g, '/') === 'public/service-worker.js') {
-    bytes = Buffer.from(bytes.toString('utf8').replace(
-      /const BUILD_ID = ['"][^'"]+['"]/,
-      'const BUILD_ID = "<stable-build-id>"'
-    ));
+    bytes = Buffer.from(bytes.toString('utf8')
+      .replace(/const VERSION = ['"][^'"]+['"]/, 'const VERSION = "<stable-version>"')
+      .replace(/const BUILD_ID = ['"][^'"]+['"]/, 'const BUILD_ID = "<stable-build-id>"')
+    );
   }
   hash.update(relativePath.replace(/\\/g, '/'));
   hash.update(bytes);
