@@ -179,7 +179,16 @@ describe("direct-message navigation and UI contract", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const css = (selector: string) => {
       const anchor = selector + "{";
-      const start = chat.lastIndexOf(anchor);
+      // Match standalone CSS selectors, not a substring of a longer selector
+      // (e.g. ".message-line:not(.own) .message-stack").
+      let start = -1;
+      for (let index = chat.indexOf(anchor); index >= 0; index = chat.indexOf(anchor, index + anchor.length)) {
+        const prefix = chat.slice(0, index).trimEnd();
+        if (prefix.endsWith("}") || prefix.endsWith("<style scoped>")) {
+          start = index;
+          break;
+        }
+      }
       expect(start, "missing CSS rule: " + selector).toBeGreaterThanOrEqual(0);
       const stop = chat.indexOf("}", start + anchor.length);
       expect(stop).toBeGreaterThan(start);
