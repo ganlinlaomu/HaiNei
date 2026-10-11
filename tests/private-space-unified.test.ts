@@ -56,6 +56,29 @@ describe("private space unified navigation", () => {
     expect(privateSpace).toContain("备份 / 恢复");
   });
 
+  it("removes repetitive sync/privacy banners without changing storage behavior", () => {
+    const privateSpace = source("src/views/PrivateSpace.vue");
+    const saved = source("src/components/SavedPosts.vue");
+    const oldSaved = source("src/views/Saved.vue");
+    for (const rendered of [privateSpace, saved, oldSaved]) {
+      expect(rendered).not.toContain("收藏会先保存在本机");
+      expect(rendered).not.toContain("本地与云端均加密");
+      expect(rendered).not.toContain("已加密同步至云端");
+      expect(rendered).not.toContain("privacy-line");
+      expect(rendered).not.toContain("cloud-status");
+    }
+    expect(privateSpace).toContain("syncPrivateSpace(keys)");
+    expect(saved).toContain("bookmarks.load(account)");
+  });
+
+  it("keeps 收藏、笔记、待办 the same fixed height", () => {
+    const privateSpace = source("src/views/PrivateSpace.vue");
+    expect(privateSpace).toContain("grid-template-columns:repeat(3,minmax(0,1fr))");
+    expect(privateSpace).toContain("height:42px;min-height:42px");
+    expect(privateSpace).toContain("align-items:center;justify-content:center;width:100%");
+    expect(privateSpace).toContain('role="tablist"');
+  });
+
   it("uses the account-scoped encrypted local message repository for older bookmarks", () => {
     const saved = source("src/components/SavedPosts.vue");
     expect(saved).toContain("syncedMessageRepository.get(account, id)");
