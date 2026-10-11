@@ -12,7 +12,6 @@ import {
   loadProfileView,
   loadFriendsView,
   loadMyProfileView,
-  loadSavedView,
   loadPrivateSpaceView,
 } from "@/router/lazyViews";
 // Lazy load less frequently accessed views
@@ -96,9 +95,7 @@ const routes: Array<RouteRecordRaw> = [
   },
   {
     path: "/settings/saved",
-    name: "Saved",
-    component: loadSavedView,
-    meta: { requiresAuth: true }
+    redirect: { path: "/settings/private-space", query: { tab: "saved" } }
   },
   {
     path: "/settings/private-space",
