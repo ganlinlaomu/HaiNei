@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.43",
-  "releaseSummary": "加密动态与私信准确分流，兼容其他 NIP-17 客户端私信",
+  "version": "0.1.44",
+  "releaseSummary": "私人空间统一收藏、笔记、待办入口，历史收藏支持本地补齐",
   "private": true,
   "scripts": {
     "dev": "vite",

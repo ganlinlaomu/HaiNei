@@ -136,8 +136,10 @@ describe("PR3-B account-bound encrypted backups", () => {
     const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     const view = readFileSync(join(process.cwd(), "src/views/PrivateSpace.vue"), "utf8");
     const dm = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(settings).toContain("quickCreate('note')");
-    expect(settings).toContain("quickCreate('todo')");
+    expect(settings).not.toContain("quickCreate('note')");
+    expect(settings).not.toContain("quickCreate('todo')");
+    expect(view).toContain('@click="create(\'note\')"');
+    expect(view).toContain('@click="create(\'todo\')"');
     expect(view).toContain("确认合并恢复");
     expect(view).toContain("导出加密备份");
     expect(view).toContain("明文文件不加密");
