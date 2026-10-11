@@ -1,6 +1,5 @@
 <template>
   <section class="saved-content" aria-label="收藏的动态">
-    <p class="saved-help">收藏会先保存在本机，并通过加密同步到其他设备。</p>
     <p v-if="loadError" class="saved-error" role="alert">{{ loadError }}</p>
     <p v-if="loading && !rows.length" class="saved-empty">正在读取收藏…</p>
     <p v-else-if="!rows.length" class="saved-empty">{{ query.trim() ? "没有匹配的收藏" : "暂无收藏" }}</p>
@@ -127,7 +126,6 @@ async function removeMissing(id: string) {
 
 <style scoped>
 .saved-content{padding-bottom:12px}
-.saved-help{margin:8px 14px 12px;color:#64748b;font-size:12px;line-height:1.5}
 .saved-error{margin:8px 14px;color:#b91c1c;font-size:13px}
 .saved-empty{text-align:center;padding:64px 16px;color:#94a3b8;font-size:13px}
 .saved-list{display:grid;gap:12px;padding:0 10px}

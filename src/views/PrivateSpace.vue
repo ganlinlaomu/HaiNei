@@ -1,12 +1,6 @@
 <template>
   <main class="private-space-page app-page">
     <SecondaryPageHeader title="私人空间" back-label="返回我的" />
-    <div class="privacy-line">{{ filter === "saved" ? "🔒 收藏先保存在本机，并加密同步" : "🔒 本地与云端均加密 · 仅当前账号可访问" }}</div>
-    <div v-if="filter !== 'saved'" class="cloud-status" aria-live="polite">
-      <span>{{ cloudStatusLabel }}</span>
-      <button v-if="syncStatus.status === 'error' || syncStatus.status === 'offline'"
-        type="button" @click="retrySync">重新同步</button>
-    </div>
     <p v-if="error && filter !== 'saved'" role="alert" class="error-line">{{ error }}</p>
     <section v-if="backupOpen && !editor" class="backup-panel" aria-label="私人空间备份">
       <div class="backup-panel-header"><strong>备份与恢复</strong><button type="button" @click="closeBackupPanel">关闭</button></div>
@@ -171,8 +165,7 @@ import { privateSpaceDisplay } from "@/services/privateSpaceContent";
 import { getPrivateSpaceTab, rememberPrivateSpaceTab } from "@/services/privateSpaceNavigation";
 import { useSwipeActions } from "@/composables/useSwipeActions";
 import {
-  syncPrivateSpace, notePrivateSpaceMutation, getPrivateSpaceSyncState,
-  subscribePrivateSpaceSync, setPrivateSpaceEditing, type PrivateSpaceSyncState,
+  syncPrivateSpace, notePrivateSpaceMutation, setPrivateSpaceEditing,
 } from "@/services/privateSpaceSync";
 
 const PostImagePreview = defineAsyncComponent(() => import("@/components/PostImagePreview.vue"));
@@ -384,18 +377,6 @@ const loading = ref(false);
 const error = ref("");
 const saveStatus = ref("已保存在本机");
 const newTaskText = ref("");
-const syncStatus = ref<PrivateSpaceSyncState>(getPrivateSpaceSyncState(keys.pkHex.toLowerCase()));
-const cloudStatusLabel = computed(() => {
-  if (syncStatus.value.status === "synced") return syncStatus.value.conflicts
-    ? "云端已同步 · 已保留 " + syncStatus.value.conflicts + " 条冲突副本"
-    : "已加密同步至云端";
-  if (syncStatus.value.status === "syncing") return "正在加密同步…";
-  if (syncStatus.value.status === "error") return "云同步失败 · 内容已保存在本机：" + (syncStatus.value.error || "请重试");
-  if (syncStatus.value.status === "offline") return "当前离线 · 内容仅保存在本机";
-  if (syncStatus.value.status === "unavailable") return "当前登录方式不支持加密同步";
-  return "已保存在本机 · 等待云同步";
-});
-function retrySync() { void syncPrivateSpace(keys); }
 const tabs = [
   { value: "saved", label: "收藏" }, { value: "note", label: "笔记" }, { value: "todo", label: "待办" },
 ] as const;
@@ -410,7 +391,6 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let writes: Promise<void> = Promise.resolve();
 let loadVersion = 0;
 let unsubscribeLock: (() => void) | undefined;
-let unsubscribeSync: (() => void) | undefined;
 
 async function consumeQuickCreate(requested: unknown, duringLoad = false) {
   if ((requested !== "note" && requested !== "todo") || handlingQuickCreate
@@ -560,7 +540,6 @@ async function loadForAccount(account: string) {
     const records = await privateSpaceRepository.list(account);
     if (version === loadVersion && keys.pkHex === account) {
       notes.value = records;
-      syncStatus.value = getPrivateSpaceSyncState(account);
       void syncPrivateSpace(keys);
       await consumeQuickCreate(route.query.new, true);
     }
@@ -767,9 +746,6 @@ function onVisibilityChange() {
     void flush().catch(handleError);
 }
 onMounted(() => {
-  unsubscribeSync = subscribePrivateSpaceSync(state => {
-    if (state.account === keys.pkHex.toLowerCase()) syncStatus.value = state;
-  });
   window.addEventListener("hainei-private-space-synced", onCloudUpdate);
   unsubscribeLock = onBeforeAccountLock(async account => {
     if (editor.value?.accountPubkey === account) await flush();
@@ -789,7 +765,6 @@ onBeforeUnmount(() => {
   backupPassword.value = ""; backupConfirm.value = "";
   if (editor.value) setPrivateSpaceEditing(editor.value.accountPubkey, false);
   unsubscribeLock?.();
-  unsubscribeSync?.();
   window.removeEventListener("hainei-private-space-synced", onCloudUpdate);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   if (timer) clearTimeout(timer);
@@ -800,17 +775,14 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .private-space-page{min-height:100%;background:#fff;color:#172033;padding-bottom:calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
-.privacy-line{padding:12px 16px 6px;font-size:12px;color:#64748b}
-.cloud-status{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 16px 8px;font-size:12px;color:#64748b}
-.cloud-status button{border:0;border-radius:7px;background:#eff6ff;color:#1d4ed8;padding:7px 9px;white-space:nowrap}
 .error-line{margin:8px 16px;padding:10px;border-radius:8px;background:#fef2f2;color:#b91c1c;font-size:13px}
 .toolbar{display:flex;gap:8px;align-items:center;padding:14px 14px 10px}
 .toolbar input{min-width:0;flex:1;border:1px solid #e2e8f0;border-radius:11px;padding:10px;font:inherit;font-size:14px}
 button{font:inherit;cursor:pointer}
 .primary{padding:10px;border:0;border-radius:11px;background:#172033;color:white;white-space:nowrap;font-size:13px}
 .primary.secondary{background:#e9edf3;color:#172033}
-.tabs{display:flex;gap:4px;padding:0 14px 12px;border-bottom:1px solid #f1f3f5}
-.tabs button{flex:1;min-width:0;border:0;border-radius:9px;background:#f1f5f9;padding:10px 2px;color:#64748b;font-size:12px}
+.tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:12px 14px;border-bottom:1px solid #f1f3f5}
+.tabs button{display:flex;align-items:center;justify-content:center;width:100%;height:42px;min-height:42px;box-sizing:border-box;border:0;border-radius:9px;background:#f1f5f9;padding:0 8px;color:#64748b;font-size:13px;line-height:1}
 .tabs button.selected{color:#0f172a;background:#dfe8f4;font-weight:650}
 .subsection{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;color:#334155;font-size:13px}
 .subsection button{border:0;background:transparent;color:#2563eb;padding:6px}
