@@ -168,6 +168,7 @@ import {
 } from "@/services/privateSpaceBackup";
 import { privateNoteSource } from "@/services/privateSpaceSource";
 import { privateSpaceDisplay } from "@/services/privateSpaceContent";
+import { getPrivateSpaceTab, rememberPrivateSpaceTab } from "@/services/privateSpaceNavigation";
 import { useSwipeActions } from "@/composables/useSwipeActions";
 import {
   syncPrivateSpace, notePrivateSpaceMutation, getPrivateSpaceSyncState,
@@ -377,7 +378,7 @@ let swipeStart: { id: string; x: number; y: number } | null = null;
 let handlingQuickCreate = false;
 const query = ref("");
 type SpaceFilter = "saved" | "all" | "note" | "todo" | "archived" | "trash";
-const filter = ref<SpaceFilter>(route.query.new === "note" ? "note" : route.query.new === "todo" ? "todo" : "saved");
+const filter = ref<SpaceFilter>(route.query.new === "note" ? "note" : route.query.new === "todo" ? "todo" : route.query.tab === "saved" ? "saved" : getPrivateSpaceTab(keys.pkHex));
 const moreOpen = ref(false);
 const loading = ref(false);
 const error = ref("");
@@ -400,6 +401,7 @@ const tabs = [
 ] as const;
 function selectFilter(value: SpaceFilter) {
   filter.value = value;
+  if (value === "saved" || value === "note" || value === "todo") rememberPrivateSpaceTab(keys.pkHex, value);
   query.value = "";
   moreOpen.value = false;
   closeAllNoteSwipes();
@@ -538,6 +540,8 @@ function updateInList(record: PrivateSpaceRecord) {
 }
 async function loadForAccount(account: string) {
   const version = ++loadVersion;
+  filter.value = route.query.new === "note" ? "note" : route.query.new === "todo" ? "todo"
+    : route.query.tab === "saved" ? "saved" : getPrivateSpaceTab(account);
   closeAllNoteSwipes();
   blockedSwipeClickId.value = "";
   notes.value = [];
