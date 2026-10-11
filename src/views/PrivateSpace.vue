@@ -1,13 +1,13 @@
 <template>
   <main class="private-space-page app-page">
     <SecondaryPageHeader title="私人空间" back-label="返回我的" />
-    <div class="privacy-line">🔒 本地与云端均加密 · 仅当前账号可访问</div>
-    <div class="cloud-status" aria-live="polite">
+    <div class="privacy-line">{{ filter === "saved" ? "🔒 收藏先保存在本机，并加密同步" : "🔒 本地与云端均加密 · 仅当前账号可访问" }}</div>
+    <div v-if="filter !== 'saved'" class="cloud-status" aria-live="polite">
       <span>{{ cloudStatusLabel }}</span>
       <button v-if="syncStatus.status === 'error' || syncStatus.status === 'offline'"
         type="button" @click="retrySync">重新同步</button>
     </div>
-    <p v-if="error" role="alert" class="error-line">{{ error }}</p>
+    <p v-if="error && filter !== 'saved'" role="alert" class="error-line">{{ error }}</p>
     <section v-if="backupOpen && !editor" class="backup-panel" aria-label="私人空间备份">
       <div class="backup-panel-header"><strong>备份与恢复</strong><button type="button" @click="closeBackupPanel">关闭</button></div>
       <p>加密备份包含当前账号的笔记、待办、归档和最近删除。密码只用于当前操作，不会上传或保存。</p>
@@ -44,18 +44,33 @@
       <button type="button" :disabled="backupBusy" @click="downloadPlainBackup('md')">导出 Markdown 明文</button>
     </section>
     <template v-if="!editor">
+      <div class="tabs" role="tablist" aria-label="私人空间分类">
+        <button v-for="tab in tabs" :key="tab.value" type="button" role="tab"
+          :class="{ selected: filter === tab.value }" :aria-selected="filter === tab.value"
+          @click="selectFilter(tab.value)">{{ tab.label }}</button>
+      </div>
+      <div v-if="filter === 'all' || filter === 'archived' || filter === 'trash'" class="subsection">
+        <strong>{{ filter === 'all' ? '全部笔记与待办' : filter === 'archived' ? '归档' : '最近删除' }}</strong>
+        <button type="button" @click="selectFilter('note')">返回笔记</button>
+      </div>
       <div class="toolbar">
-        <input v-model="query" type="search" aria-label="搜索私人笔记" placeholder="搜索笔记和待办" />
-        <button type="button" class="primary" :disabled="backupBusy || loading || editorTransitionBusy" @click="create('note')">＋ 笔记</button>
-        <button type="button" class="primary secondary" :disabled="backupBusy || loading || editorTransitionBusy" @click="create('todo')">＋ 待办</button>
-        <button type="button" class="more-action" :disabled="backupBusy" :aria-expanded="backupOpen" aria-label="备份与恢复"
-          @click="backupOpen ? closeBackupPanel() : backupOpen = true">•••</button>
+        <input v-model="query" type="search" :aria-label="'搜索' + (filter === 'saved' ? '收藏' : '私人笔记')"
+          :placeholder="filter === 'saved' ? '搜索收藏' : '搜索笔记和待办'" />
+        <button v-if="filter !== 'saved'" type="button" class="primary"
+          :disabled="backupBusy || loading || editorTransitionBusy" @click="create('note')">＋ 笔记</button>
+        <button v-if="filter !== 'saved'" type="button" class="primary secondary"
+          :disabled="backupBusy || loading || editorTransitionBusy" @click="create('todo')">＋ 待办</button>
+        <button type="button" class="more-action" :disabled="backupBusy" :aria-expanded="moreOpen"
+          aria-label="更多私人空间操作" @click="moreOpen = !moreOpen">•••</button>
       </div>
-      <div class="tabs" role="group" aria-label="笔记分类">
-        <button v-for="tab in tabs" :key="tab.value" type="button" :class="{ selected: filter === tab.value }"
-          :aria-pressed="filter === tab.value" @click="filter = tab.value">{{ tab.label }}</button>
+      <div v-if="moreOpen" class="space-more-menu" role="group" aria-label="更多私人空间操作">
+        <button type="button" @click="selectFilter('all')">全部笔记与待办</button>
+        <button type="button" @click="selectFilter('archived')">归档</button>
+        <button type="button" @click="selectFilter('trash')">最近删除</button>
+        <button type="button" @click="moreOpen = false; backupOpen = true">笔记与待办备份 / 恢复</button>
       </div>
-      <p v-if="loading" class="empty-state">正在读取本地笔记…</p>
+      <SavedPosts v-if="filter === 'saved'" :query="query" />
+      <p v-else-if="loading" class="empty-state">正在读取本地笔记…</p>
       <div v-else-if="!filtered.length" class="empty-state">这里还没有内容。可以新建一条笔记或待办。</div>
       <ul v-else class="items">
         <li v-for="note in filtered" :key="note.id" class="private-space-row"
@@ -160,6 +175,7 @@ import {
 } from "@/services/privateSpaceSync";
 
 const PostImagePreview = defineAsyncComponent(() => import("@/components/PostImagePreview.vue"));
+const SavedPosts = defineAsyncComponent(() => import("@/components/SavedPosts.vue"));
 const keys = useKeyStore();
 const route = useRoute();
 const router = useRouter();
@@ -360,7 +376,9 @@ const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, o
 let swipeStart: { id: string; x: number; y: number } | null = null;
 let handlingQuickCreate = false;
 const query = ref("");
-const filter = ref<"all" | "note" | "todo" | "archived" | "trash">("all");
+type SpaceFilter = "saved" | "all" | "note" | "todo" | "archived" | "trash";
+const filter = ref<SpaceFilter>(route.query.new === "note" ? "note" : route.query.new === "todo" ? "todo" : "saved");
+const moreOpen = ref(false);
 const loading = ref(false);
 const error = ref("");
 const saveStatus = ref("已保存在本机");
@@ -378,9 +396,14 @@ const cloudStatusLabel = computed(() => {
 });
 function retrySync() { void syncPrivateSpace(keys); }
 const tabs = [
-  { value: "all", label: "全部" }, { value: "note", label: "笔记" }, { value: "todo", label: "待办" },
-  { value: "archived", label: "归档" }, { value: "trash", label: "最近删除" },
+  { value: "saved", label: "收藏" }, { value: "note", label: "笔记" }, { value: "todo", label: "待办" },
 ] as const;
+function selectFilter(value: SpaceFilter) {
+  filter.value = value;
+  query.value = "";
+  moreOpen.value = false;
+  closeAllNoteSwipes();
+}
 let timer: ReturnType<typeof setTimeout> | undefined;
 let writes: Promise<void> = Promise.resolve();
 let loadVersion = 0;
@@ -522,6 +545,7 @@ async function loadForAccount(account: string) {
   isUnsavedDraft.value = false;
   newTaskText.value = "";
   query.value = "";
+  moreOpen.value = false;
   if (timer) clearTimeout(timer);
   timer = undefined;
   error.value = "";
@@ -544,6 +568,7 @@ async function loadForAccount(account: string) {
 }
 
 watch(() => route.query.new, requested => {
+  if (requested === "note" || requested === "todo") selectFilter(requested);
   void consumeQuickCreate(requested);
 });
 
@@ -783,6 +808,11 @@ button{font:inherit;cursor:pointer}
 .tabs{display:flex;gap:4px;padding:0 14px 12px;border-bottom:1px solid #f1f3f5}
 .tabs button{flex:1;min-width:0;border:0;border-radius:9px;background:#f1f5f9;padding:10px 2px;color:#64748b;font-size:12px}
 .tabs button.selected{color:#0f172a;background:#dfe8f4;font-weight:650}
+.subsection{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;color:#334155;font-size:13px}
+.subsection button{border:0;background:transparent;color:#2563eb;padding:6px}
+.space-more-menu{display:grid;gap:2px;margin:0 14px 12px;padding:6px;border:1px solid #e2e8f0;border-radius:11px;background:#fff}
+.space-more-menu button{border:0;background:transparent;padding:12px 9px;text-align:left;color:#334155;font-size:13px;border-radius:7px}
+.space-more-menu button:active{background:#f1f5f9}
 .items{list-style:none;margin:0;padding:0 14px}
 .items li{border-bottom:1px solid #edf0f2}
 .private-space-row{position:relative;overflow:hidden;background:#fff}
