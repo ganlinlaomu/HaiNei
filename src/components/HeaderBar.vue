@@ -138,14 +138,10 @@ export default defineComponent({
   justify-content: space-around;
   align-items: center;
 
-  /* Frosted tint without blurring the whole scrolling viewport. */
-  background: linear-gradient(180deg,
-    rgba(251, 253, 255, .86),
-    rgba(246, 249, 253, .94));
-  border-top: 1px solid rgba(255, 255, 255, .9);
-  box-shadow:
-    0 -1px 0 rgba(66, 88, 113, .08),
-    0 -6px 16px rgba(28, 48, 74, .05);
+  /* 视觉（替代 backdrop-filter，性能友好） */
+  background: rgba(255, 255, 255, 0.94);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 -1px 8px rgba(0, 0, 0, 0.06);
 
   /* 层级 */
   z-index: var(--z-bottom-nav, 9999);
@@ -180,88 +176,37 @@ export default defineComponent({
   pointer-events: none;
 }
 
-/* A single small blurred capsule: static highlights mimic liquid refraction
-   without WebGPU, full-bar blur or continuous repainting animations. */
 .nav-liquid-surface {
   position: absolute;
   inset: 1px 5px;
   border-radius: 999px;
-  background:
-    radial-gradient(ellipse 90% 95% at 18% 3%,
-      rgba(255, 255, 255, .92), rgba(255, 255, 255, 0) 72%),
-    linear-gradient(140deg,
-      rgba(241, 250, 255, .84) 0%,
-      rgba(207, 226, 242, .68) 49%,
-      rgba(234, 244, 253, .8) 100%);
-  border: 1px solid rgba(255, 255, 255, .92);
+  background: linear-gradient(150deg,
+    rgba(255, 255, 255, .89),
+    rgba(213, 222, 233, .64) 52%,
+    rgba(227, 234, 242, .76));
+  border: 1px solid rgba(255, 255, 255, .96);
   box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, .98),
-    inset 0 -2px 3px rgba(63, 96, 136, .16),
-    0 3px 10px rgba(41, 64, 91, .14);
-  -webkit-backdrop-filter: blur(4px) saturate(1.18);
-  backdrop-filter: blur(4px) saturate(1.18);
+    inset 0 1px 2px rgba(255, 255, 255, .95),
+    inset 0 -2px 3px rgba(92, 114, 139, .11),
+    0 2px 9px rgba(49, 64, 83, .11);
+  -webkit-backdrop-filter: blur(6px) saturate(1.15);
+  backdrop-filter: blur(6px) saturate(1.15);
   animation: nav-liquid-settle 440ms cubic-bezier(.2, .8, .28, 1) both;
 }
 
-/* Curved specular glint is static; no pointer tracking or extra animation. */
-.nav-liquid-surface::before,
 .nav-liquid-surface::after {
   content: "";
   position: absolute;
   inset: 1px;
   border-radius: inherit;
+  border-top: 1px solid rgba(255, 255, 255, .9);
   pointer-events: none;
-}
-
-.nav-liquid-surface::before {
-  background:
-    radial-gradient(ellipse 67% 44% at 32% 3%,
-      rgba(255, 255, 255, .8), transparent 95%),
-    linear-gradient(104deg,
-      rgba(255, 255, 255, .36), transparent 37%,
-      rgba(68, 110, 150, .09) 87%, rgba(255, 255, 255, .26));
-}
-
-.nav-liquid-surface::after {
-  border-top: 1px solid rgba(255, 255, 255, .96);
-  border-left: 1px solid rgba(255, 255, 255, .66);
-  border-right: 1px solid rgba(88, 127, 166, .16);
-  border-bottom: 1px solid rgba(90, 124, 158, .17);
 }
 
 @keyframes nav-liquid-settle {
   0%, 100% { transform: scaleX(1) scaleY(1); }
-  48% { transform: scaleX(1.13) scaleY(.95); }
-  78% { transform: scaleX(.98) scaleY(1.02); }
-}
-
-/* Preserve a clear selected state when transparency is disabled or unavailable. */
-@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .nav-liquid-surface {
-    background: linear-gradient(145deg, #f7fcff, #d8e9f8);
-  }
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .bottom-nav { background: #fff; }
-  .nav-liquid-surface {
-    background: #e5f1fc;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-}
-
-@media (forced-colors: active) {
-  .nav-liquid-surface {
-    background: Highlight;
-    border: 1px solid Highlight;
-    box-shadow: none;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-  .nav-liquid-surface::before,
-  .nav-liquid-surface::after { display: none; }
-  .nav-item.is-current-tab { color: HighlightText; }
+  48% { transform: scaleX(1.16) scaleY(.94); }
+  78% { transform: scaleX(.97) scaleY(1.02); }
 }
 
 /* =========================
@@ -419,7 +364,6 @@ export default defineComponent({
     gap: 12px;
     border-top: 0;
     border-right: 1px solid rgba(0, 0, 0, 0.08);
-    background: #fff;
     box-shadow: 1px 0 8px rgba(0, 0, 0, 0.05);
     transform: none;
     -webkit-transform: none;
