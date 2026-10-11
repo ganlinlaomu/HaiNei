@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.44",
-  "releaseSummary": "私人空间统一收藏、笔记、待办入口，历史收藏支持本地补齐",
+  "version": "0.1.45",
+  "releaseSummary": "精简私人空间同步提示，统一收藏、笔记、待办标签高度",
   "private": true,
   "scripts": {
     "dev": "vite",
