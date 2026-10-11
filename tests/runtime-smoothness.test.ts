@@ -70,7 +70,7 @@ describe("v0.1.10 runtime smoothness", () => {
     const routes = readFileSync("src/router/index.ts", "utf8");
     expect(conversations).toContain('@pointerdown="warmConversation(conversation.peerPubkey)"');
     expect(conversations).toContain("directMessages.prefetchPeerHistory(pubkey)");
-    expect(settings).toContain('@pointerdown="loadSavedView"');
+    expect(settings).toContain('@pointerdown="loadPrivateSpaceView"');
     expect(settings).toContain('@pointerdown="loadFriendsView"');
     expect(card).toContain('@pointerdown="preloadProfile"');
     expect(routes).toContain("component: loadMessagesView");
