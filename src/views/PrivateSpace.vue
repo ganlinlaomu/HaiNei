@@ -391,7 +391,6 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let writes: Promise<void> = Promise.resolve();
 let loadVersion = 0;
 let unsubscribeLock: (() => void) | undefined;
-let unsubscribeSync: (() => void) | undefined;
 
 async function consumeQuickCreate(requested: unknown, duringLoad = false) {
   if ((requested !== "note" && requested !== "todo") || handlingQuickCreate
