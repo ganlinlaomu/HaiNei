@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isFeedRenderableMessage, syncedMessageRecordToInboxItem } from "@/nostr/messaging/messageViewModel";
 import type { SyncedMessageRecord } from "@/db/dexie";
+import { getPrivateSpaceTab, rememberPrivateSpaceTab } from "@/services/privateSpaceNavigation";
 
 const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 const fakeRecord = (tags: string[][]): SyncedMessageRecord => ({
@@ -22,6 +23,15 @@ const fakeRecord = (tags: string[][]): SyncedMessageRecord => ({
 });
 
 describe("private space unified navigation", () => {
+  it("remembers the last main tab per account only in memory", () => {
+    const first = "f".repeat(64);
+    const other = "e".repeat(64);
+    expect(getPrivateSpaceTab(first)).toBe("saved");
+    rememberPrivateSpaceTab(first, "todo");
+    expect(getPrivateSpaceTab(first)).toBe("todo");
+    expect(getPrivateSpaceTab(other)).toBe("saved");
+    rememberPrivateSpaceTab(first, "saved");
+  });
   it("has one entry in My and forwards legacy saved links into the saved category", () => {
     const settings = source("src/views/Settings.vue");
     const router = source("src/router/index.ts");
