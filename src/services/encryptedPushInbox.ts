@@ -12,10 +12,10 @@ const HEX64 = /^[0-9a-f]{64}$/i;
 const PUSH_HINT_WAIT_MS = 1_500;
 
 export function isVerifiedPushGiftWrap(event: NostrEvent, account: string, eventId: string) {
-  return !!event && HEX64.test(eventId) && event.id === eventId
-    && event.kind === 1059 && Array.isArray(event.tags)
-    && event.tags.some(tag => tag[0] === "p" && tag[1] === account)
-    && verifyEvent(event);
+  if (!event || !HEX64.test(eventId) || event.id !== eventId
+    || event.kind !== 1059 || !Array.isArray(event.tags)
+    || !event.tags.some(tag => tag[0] === "p" && tag[1] === account)) return false;
+  try { return verifyEvent(event); } catch { return false; }
 }
 
 export function safePushRelays(value: unknown): string[] {
@@ -58,7 +58,7 @@ export async function readEncryptedPushInbox(account: string): Promise<Encrypted
   const response = await requestPushInbox(account, "GET_ENCRYPTED_PUSH_HINTS");
   if (!Array.isArray(response?.entries)) return [];
   const now = Date.now();
-  return response.entries.filter((entry): entry is EncryptedPushInboxEntry => {
+  return response.entries.filter((entry: unknown): entry is EncryptedPushInboxEntry => {
     if (!entry || typeof entry !== "object") return false;
     const item = entry as EncryptedPushInboxEntry;
     return HEX64.test(item.id || "") && HEX64.test(item.hint?.eventId || "")
