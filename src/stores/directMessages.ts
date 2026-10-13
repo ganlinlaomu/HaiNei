@@ -56,6 +56,7 @@ function freshUnreadCounts(state: {
     const count = records.filter(item => {
       const preference = state.preferencesByPeer[item.peer];
       return !preference?.hidden
+        && friendships.isAccepted(item.peer)
         && isFriendshipAcceptedAt(friendships.getRecord(item.peer), item.createdAt)
         && isMessageAfter({ id: item.id, createdAt: item.createdAt }, read)
         && isMessageAfter({ id: item.id, createdAt: item.createdAt },
@@ -1097,8 +1098,9 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         || !isConversationMessage(message)) return;
       const peer = directMessagePeer(message, account);
       if (!peer || peer !== message.senderPubkey.toLowerCase()) return;
-      const friendship = useFriendshipsStore().getRecord(peer);
-      if (!isFriendshipAcceptedAt(friendship, message.createdAt)
+      const friendships = useFriendshipsStore();
+      const friendship = friendships.getRecord(peer);
+      if (!friendships.isAccepted(peer) || !isFriendshipAcceptedAt(friendship, message.createdAt)
         || !isMessageAfter({ id: message.id, createdAt: message.createdAt }, this.readCursors[message.conversationId])) return;
       if (this.readStateRestorePhase === "ready") {
         // Relay manager may restart without a new cloud-cursor restore. Do not
