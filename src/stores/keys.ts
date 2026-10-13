@@ -34,7 +34,7 @@ import { ACCOUNT_STATE_NAMESPACES, fetchAndMaterializeAccountState, syncAccountS
 import { syncPrivateBookmarkMirror } from "@/services/privateBookmarkMirror";
 import { reconcileBookmarkCloudState } from "@/services/bookmarkCloudSync";
 import { hydratePrivateDeviceValues, clearPrivateDeviceValues, deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/deviceStorage";
-import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
+import { warmDmRelaysForSession, warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { startAccountMessageSync, stopAccountMessageSync } from "@/services/accountMessageSync";
 import { clearRelaySessionSigner, registerRelaySessionSigner } from "@/services/relaySession";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -158,6 +158,13 @@ export const useKeyStore = defineStore("keys", {
       // an account switch can briefly reconnect using the previous account's Relay mirror.
       if (!isCurrent()) return;
       warmReadRelaysForSession(this);
+      // Establish cached NIP-17 inbox sockets in parallel with remote read-state
+      // restoration. Do not start subscriptions or expose unread until ready.
+      void warmDmRelaysForSession(pk, this, isCurrent).catch(error => {
+        if (isCurrent()) debugLog("relay", "dm_warmup_unavailable", {
+          reason: error instanceof Error ? error.name : "unknown",
+        }, "warn");
+      });
       // DM read state, notification read state and friendship authorization are
       // startup-critical. Do not let Relay history race ahead of them: otherwise
       // old history is temporarily counted as unread during a new-device login.
