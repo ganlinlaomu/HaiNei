@@ -1093,7 +1093,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     noteFreshPersistedIncoming(accountPubkey: string, message: CanonicalMessage, inserted: boolean) {
       const account = accountPubkey.toLowerCase();
       if (!inserted || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account
-        || this.historyHydrationPhase !== "hydrating"
+        || (this.historyHydrationPhase !== "hydrating" && this.readStateRestorePhase !== "restoring")
         || message.senderPubkey.toLowerCase() === account || !message.conversationId
         || !isConversationMessage(message)) return;
       const peer = directMessagePeer(message, account);
