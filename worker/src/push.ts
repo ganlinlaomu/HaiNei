@@ -55,9 +55,14 @@ export function sanitizeEncryptedPushHints(value: unknown): WorkerEncryptedPushH
     const event = candidate.event as NostrEvent | undefined;
     if (event && JSON.stringify(event).length <= MAX_PUSH_HINT_EVENT_BYTES
       && event.id === eventId && event.kind === 1059
-      && Array.isArray(event.tags) && event.tags.some(tag => tag[0] === "p" && tag[1] === recipient)
-      && verifyEvent(event)) {
-      hint.event = event;
+      && Array.isArray(event.tags) && event.tags.some(tag => tag[0] === "p" && tag[1] === recipient)) {
+      // Verify a fresh plain event; never trust nostr-tools' symbol-cached
+      // verification result on a mutated object passed by a caller.
+      const signed = {
+        id: event.id, sig: event.sig, pubkey: event.pubkey, created_at: event.created_at,
+        kind: event.kind, tags: event.tags, content: event.content,
+      };
+      try { if (verifyEvent(signed)) hint.event = signed; } catch {}
     }
     return [hint];
   });
