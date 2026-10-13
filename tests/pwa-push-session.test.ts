@@ -33,7 +33,19 @@ function harness() {
   const postMessage = (data: unknown) => handlers.get("message")!({ data, waitUntil: (promise: Promise<unknown>) => pending.push(promise) });
   const target = { clearAppBadge: vi.fn(async () => {}), setAppBadge: vi.fn(async () => {}),
     serviceWorker: { controller: { postMessage }, ready: Promise.resolve({ active: { postMessage } }) } } as any;
-  return { target, pending, showNotification, backgroundSetAppBadge: self.navigator.setAppBadge, push: (payload: unknown) => {
+  return { target, pending, cacheRows, showNotification, backgroundSetAppBadge: self.navigator.setAppBadge,
+    inbox: async (type: string, accountScope: string, ids: string[] = []) => {
+      let value: any = null;
+      handlers.get("message")!({
+        data: { type, accountScope, ids },
+        ports: [{ postMessage: (result: unknown) => { value = result; } }],
+        waitUntil: (promise: Promise<unknown>) => pending.push(promise),
+      });
+      await nextTick();
+      while (pending.length) await Promise.all(pending.splice(0));
+      return value;
+    },
+    push: (payload: unknown) => {
     handlers.get("push")!({ data: { text: () => JSON.stringify(payload) }, waitUntil: (promise: Promise<unknown>) => pending.push(promise) });
   }, settle: async () => {
     await nextTick();
@@ -145,4 +157,62 @@ describe("PWA push across account lock and restore", () => {
       expect(worker.showNotification).toHaveBeenCalledOnce();
     } finally { stop(); }
   });
+  it("caches opaque encrypted gift wraps and consumes them independently of notification taps", async () => {
+    const worker = harness();
+    await syncAppBadge(0, worker.target, ACCOUNT);
+    await worker.settle();
+    const accountScope = await scope(ACCOUNT);
+    const eventId = "c".repeat(64);
+    const notificationId = "d".repeat(64);
+    const event = { id: eventId, kind: 1059, content: "opaque-encrypted-wrap", tags: [["p", ACCOUNT]] };
+    worker.push({ type: "message", accountScope, notificationId,
+      hint: { eventId, relays: ["wss://dm.test"], event } });
+    await worker.settle();
+
+    const result = await worker.inbox("GET_ENCRYPTED_PUSH_HINTS", accountScope);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].hint.event).toEqual(event);
+    expect(result.entries[0].hint.event).not.toHaveProperty("plaintext");
+
+    await worker.inbox("ACK_ENCRYPTED_PUSH_HINTS", accountScope, [notificationId]);
+    expect((await worker.inbox("GET_ENCRYPTED_PUSH_HINTS", accountScope)).entries).toEqual([]);
+  });
+
+  it("purges encrypted cache on account switch, while preserving push notifications", async () => {
+    const worker = harness();
+    await syncAppBadge(0, worker.target, ACCOUNT);
+    await worker.settle();
+    const firstScope = await scope(ACCOUNT);
+    const secondScope = await scope(OTHER);
+    worker.push({ type: "message", accountScope: firstScope, notificationId: "e".repeat(64),
+      hint: { eventId: "f".repeat(64), relays: ["wss://dm.test"] } });
+    await worker.settle();
+    expect((await worker.inbox("GET_ENCRYPTED_PUSH_HINTS", firstScope)).entries).toHaveLength(1);
+
+    await syncAppBadge(0, worker.target, OTHER);
+    await worker.settle();
+    expect((await worker.inbox("GET_ENCRYPTED_PUSH_HINTS", firstScope)).entries).toEqual([]);
+    expect((await worker.inbox("GET_ENCRYPTED_PUSH_HINTS", secondScope)).entries).toEqual([]);
+
+    worker.push({ type: "message", accountScope: firstScope, notificationId: "1".repeat(64) });
+    await worker.settle();
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("prunes expired ciphertext hints before delivering to the app", async () => {
+    const worker = harness();
+    await syncAppBadge(0, worker.target, ACCOUNT);
+    await worker.settle();
+    const accountScope = await scope(ACCOUNT);
+    worker.push({ type: "message", accountScope, notificationId: "9".repeat(64),
+      hint: { eventId: "8".repeat(64), relays: ["wss://dm.test"] } });
+    await worker.settle();
+    const cache = worker.cacheRows.get("closed-community-pwa-runtime-state")!;
+    const cacheUrl = "https://app.test/__hainei_push_inbox__";
+    const entry = await cache.get(cacheUrl)!.json();
+    entry.entries[0].at = Date.now() - 25 * 60 * 60 * 1000;
+    cache.set(cacheUrl, new Response(JSON.stringify(entry)));
+    expect((await worker.inbox("GET_ENCRYPTED_PUSH_HINTS", accountScope)).entries).toEqual([]);
+  });
+
 });

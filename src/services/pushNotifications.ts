@@ -1,4 +1,4 @@
-import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
+import type { EventTemplate, VerifiedEvent, NostrEvent } from "nostr-tools";
 import { deviceStorage } from "@/services/deviceStorage";
 import { debugLog } from "@/utils/debugLog";
 import { signWorkerRequest } from "@/services/workerAuth";
@@ -11,6 +11,7 @@ const FETCH_TIMEOUT_MS = 15_000;
 
 type SignEvent = (event: EventTemplate) => Promise<VerifiedEvent>;
 export type PushCategory = "message" | "activity";
+export type EncryptedPushHint = { recipient: string; eventId: string; relays: string[]; event?: NostrEvent };
 
 export { DEFAULT_HAINEI_WORKER_URL };
 
@@ -247,6 +248,7 @@ export async function triggerGenericPush(
   signEvent: SignEvent,
   type: PushCategory = "activity",
   messageId?: string,
+  hints: EncryptedPushHint[] = [],
 ) {
   if (type !== "message") return;
   const recipients = [...new Set(recipientPubkeys.map(value => value.toLowerCase()))]
@@ -256,6 +258,7 @@ export async function triggerGenericPush(
     recipientPubkeys: recipients,
     type,
     ...(messageId ? { messageId } : {}),
+    ...(hints.length ? { hints } : {}),
   }, pubkey, signEvent);
 }
 

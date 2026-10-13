@@ -5,7 +5,7 @@ import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./proto
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import type { OutgoingEventRoute, OutgoingQueueRecord, OutgoingQueueState, OutgoingRelayResult } from "@/db/dexie";
 import { triggerGenericPush } from "@/services/pushNotifications";
-import type { PushCategory } from "@/services/pushNotifications";
+import type { EncryptedPushHint, PushCategory } from "@/services/pushNotifications";
 import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/directMessages";
 import {
   cancelDmRelayDirectoryWork,
@@ -435,8 +435,23 @@ async function deliverQueuedPush(record: OutgoingQueueRecord) {
     pushAttempts: attempts, pushNextAttemptAt: Date.now() + delay,
   });
   try {
-    const recipients = [...new Set((record.events as NostrEvent[]).map(eventTarget).filter((value): value is string => !!value))];
-    await triggerGenericPush(recipients, record.accountPubkey, signer, "message", (record.message as CanonicalMessage).id);
+    const events = record.events as NostrEvent[];
+    const recipients = [...new Set(events.map(eventTarget).filter((value): value is string => !!value))];
+    // Pass only receiver-bound, Relay-acknowledged NIP-17 wraps. Large events
+    // use their exact event id and successful Relay addresses as a fallback.
+    const hints: EncryptedPushHint[] = events.flatMap(event => {
+      const recipient = eventTarget(event);
+      if (!recipient || recipient === record.accountPubkey || event.kind !== 1059) return [];
+      const relays = [...new Set((record.relayResults || [])
+        .filter(result => result.ok && result.eventId === event.id)
+        .map(result => result.relay))].slice(0, 2);
+      if (!relays.length) return [];
+      return [{
+        recipient, eventId: event.id, relays,
+        ...(JSON.stringify(event).length <= 6_000 ? { event } : {}),
+      }];
+    });
+    await triggerGenericPush(recipients, record.accountPubkey, signer, "message", (record.message as CanonicalMessage).id, hints);
     await outgoingQueueRepository.update(record.accountPubkey, record.outgoingId, {
       pushState: "accepted", pushNextAttemptAt: undefined,
     });

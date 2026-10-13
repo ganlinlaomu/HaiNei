@@ -15,6 +15,7 @@ import { retryOutgoingQueue } from "@/nostr/messaging/service";
 import { onAppResume } from "@/services/appResumeCoordinator";
 import { scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
 import { normalizeRelayUrl } from "@/services/connectionSettings";
+import { acknowledgeEncryptedPushInbox, isVerifiedPushGiftWrap, readEncryptedPushInbox, safePushRelays, type EncryptedPushInboxEntry } from "@/services/encryptedPushInbox";
 import {
   INITIAL_HISTORY_MAX_BATCHES,
   type MessageSource,
@@ -78,6 +79,8 @@ export class MessageSyncManager {
   private removeForegroundResume: (() => void) | null = null;
   private connectedRelays = new Set<string>();
   private activeCatchupSubscriptions = new Set<SubscriptionLike>();
+  private pushInboxFlight: Promise<void> | null = null;
+  private removePushInboxListener: (() => void) | null = null;
   private abortController: AbortController | null = null;
   private catchupAbortController: AbortController | null = null;
   private removeBackgroundListener: (() => void) | null = null;
@@ -136,6 +139,80 @@ export class MessageSyncManager {
     if (this.isCurrent(sessionId, options.accountPubkey)) options.onStatus?.(status);
   }
 
+  private async fetchPushedEvent(
+    hint: EncryptedPushInboxEntry["hint"],
+    account: string,
+    sessionId: string,
+  ): Promise<NostrEvent | null> {
+    const relays = safePushRelays(hint.relays);
+    if (!relays.length || !this.isCurrent(sessionId, account)) return null;
+    return new Promise(resolve => {
+      let complete = false;
+      let subscription: SubscriptionLike | null = null;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = (event: NostrEvent | null) => {
+        if (complete) return;
+        complete = true;
+        if (timer) clearTimeout(timer);
+        closeSubscription(subscription);
+        resolve(event);
+      };
+      try {
+        subscription = this.subscribeFn(relays, [{
+          kinds: [1059], ids: [hint.eventId], "#p": [account],
+        }]);
+        subscription.on("event", (event: NostrEvent) => {
+          if (this.isCurrent(sessionId, account) && isVerifiedPushGiftWrap(event, account, hint.eventId)) done(event);
+        });
+        subscription.on("failure", () => undefined);
+        // A relay's EOSE does not mean another relay has responded.
+        timer = setTimeout(() => done(null), 2_500);
+      } catch {
+        done(null);
+      }
+    });
+  }
+
+  private drainEncryptedPushInbox(sessionId: string, account: string) {
+    if (this.pushInboxFlight || !this.isCurrent(sessionId, account) || !this.pipeline) return;
+    const flight = (async () => {
+      const entries = await readEncryptedPushInbox(account);
+      if (!this.isCurrent(sessionId, account)) return;
+      const acknowledged: string[] = [];
+      let next = 0;
+      // Bound expensive decryption and relay lookups without blocking normal REQ.
+      await Promise.all(Array.from({ length: Math.min(2, entries.length) }, async () => {
+        while (next < entries.length && this.isCurrent(sessionId, account)) {
+          const entry = entries[next++];
+          const hint = entry.hint;
+          let event: NostrEvent | null = null;
+          try {
+            if (hint.event && isVerifiedPushGiftWrap(hint.event, account, hint.eventId)) {
+              event = hint.event;
+            } else {
+              event = await this.fetchPushedEvent(hint, account, sessionId);
+            }
+            if (!event || !this.isCurrent(sessionId, account)) continue;
+            // Reuse the same NIP-17 authorization, durable storage and dedupe
+            // pipeline as realtime Relay delivery. Never mirror raw push data.
+            const result = await this.pipeline?.ingestNostrEvent(event, { source: "realtime" });
+            if (result && (result.inserted || result.deferred || result.discarded)) acknowledged.push(entry.id);
+          } catch (error) {
+            logger.warn("[message-sync] encrypted push hint deferred", error instanceof Error ? error.name : "unknown");
+          }
+        }
+      }));
+      if (acknowledged.length && this.isCurrent(sessionId, account)) {
+        await acknowledgeEncryptedPushInbox(account, acknowledged);
+      }
+    })().catch(error => {
+      logger.warn("[message-sync] encrypted push inbox unavailable", error instanceof Error ? error.name : "unknown");
+    }).finally(() => {
+      if (this.pushInboxFlight === flight) this.pushInboxFlight = null;
+    });
+    this.pushInboxFlight = flight;
+  }
+
   async start(options: MessageSyncOptions) {
     this.stop();
     const accountPubkey = options.accountPubkey.toLowerCase();
@@ -165,6 +242,8 @@ export class MessageSyncManager {
     if (cleanup.ran) {
       logger.info(`[message-sync] message cleanup migration v${cleanup.version} completed purged=${cleanup.purged}`);
     }
+    // Consume cached encrypted Push events without waiting for legacy history.
+    if (isCurrent()) this.drainEncryptedPushInbox(sessionId, accountPubkey);
     const localMessages = (await this.repository.listRecent(accountPubkey))
       .filter(record => record.protocol === "nip17" && record.transportKind === 1059);
     for (const record of localMessages) {
@@ -564,6 +643,19 @@ export class MessageSyncManager {
       document.addEventListener("visibilitychange", onVisibilityChange);
       this.removeBackgroundListener = () => document.removeEventListener("visibilitychange", onVisibilityChange);
     }
+    // The service worker can receive a Push while this tab is already visible.
+    this.removePushInboxListener?.();
+    if (typeof navigator !== "undefined" && navigator.serviceWorker
+      && typeof navigator.serviceWorker.addEventListener === "function"
+      && typeof navigator.serviceWorker.removeEventListener === "function") {
+      const onPushHint = (event: MessageEvent) => {
+        if (event.data?.type === "ENCRYPTED_PUSH_HINT_AVAILABLE" && this.options && this.sessionId) {
+          this.drainEncryptedPushInbox(this.sessionId, this.options.accountPubkey);
+        }
+      };
+      navigator.serviceWorker.addEventListener("message", onPushHint);
+      this.removePushInboxListener = () => navigator.serviceWorker.removeEventListener("message", onPushHint);
+    }
     this.removeForegroundResume = onAppResume(() => {
       const options = this.options;
       if (!options || !this.sessionId) return;
@@ -571,6 +663,7 @@ export class MessageSyncManager {
       // Recover exactly the active account's subscriptions alongside read relays.
       // restoreRelayConnections skips healthy/in-flight sockets itself.
       this.resumeRelays([...new Set([...options.relays, ...this.activeReadRelays()])]);
+      this.drainEncryptedPushInbox(this.sessionId, options.accountPubkey);
       void this.retryOutgoing(options.accountPubkey);
       void this.resume("resume");
     });
@@ -593,6 +686,9 @@ export class MessageSyncManager {
     this.removeRelayObserver = null;
     this.removeForegroundResume?.();
     this.removeForegroundResume = null;
+    this.removePushInboxListener?.();
+    this.removePushInboxListener = null;
+    this.pushInboxFlight = null;
     this.connectedRelays.clear();
     this.catchupRunning = false;
     this.catchupSessionId = "";

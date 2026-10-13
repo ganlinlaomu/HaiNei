@@ -146,7 +146,7 @@ export async function handleRequest(request: Request, env: Env) {
       const pubkey = await verifyAndConsumeChallenge(
         env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
       );
-      const diagnostics = await triggerGenericPush(env, pubkey, payload.recipientPubkeys, payload.type, payload.messageId);
+      const diagnostics = await triggerGenericPush(env, pubkey, payload.recipientPubkeys, payload.type, payload.messageId, payload.hints);
       console.info({ ...diagnostics, message: "push trigger processed" });
       if (diagnostics.failed > 0) return json({ error: "push_delivery_failed" }, 503);
       return json({ accepted: true }, 202);
