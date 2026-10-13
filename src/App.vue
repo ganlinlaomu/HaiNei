@@ -217,8 +217,13 @@ export default defineComponent({
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked && keys.credentialMode !== "device",lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
       stopForegroundResume = onAppResume(reason => {
+        // Friendship authorization stays urgent. Bookmark reconciliation can
+        // wait for foreground idle time so NIP-17 catch-up wins on app resume.
         reconcileFriendStateOnForeground();
-        reconcileBookmarksOnForeground(reason === "online");
+        const resumedAccount = keys.pkHex;
+        scheduleBackgroundTask("foreground-bookmark-sync", () => {
+          if (keys.pkHex === resumedAccount) reconcileBookmarksOnForeground(reason === "online");
+        }, { priority: "idle", timeoutMs: 2_500 });
         if (keys.isLoggedIn && keys.isUnlocked) {
           void import("@/services/privateSpaceSync").then(({ schedulePrivateSpaceSync }) => {
             if (keys.isLoggedIn && keys.isUnlocked) schedulePrivateSpaceSync(keys, reason === "online" ? 0 : 3_000);
@@ -233,6 +238,7 @@ export default defineComponent({
       stopActivityMonitor?.();
       cancelBackgroundTask("preload-post-editor");
       cancelBackgroundTask("preload-bottom-tabs");
+      cancelBackgroundTask("foreground-bookmark-sync");
       disposed = true;
       document.body.classList.remove("login-page", "post-editor-open");
     });
