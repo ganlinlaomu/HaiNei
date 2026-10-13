@@ -209,6 +209,18 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
     && activeKeys === keys
     && keys.isLoggedIn
     && keys.pkHex.toLowerCase() === account;
+  // A managed-relay refresh must not block NIP-17 subscriptions. If it changes
+  // the read-relay set, reconcile once the current startup has settled.
+  let subscribedReadRelaySignature: string | null = null;
+  let startupSettled = false;
+  const readRelaySignature = (relays: string[]) => [...new Set(relays)].sort().join("|");
+  const reconcileManagedRelay = () => {
+    if (!isCurrent() || !startupSettled || subscribedReadRelaySignature === null) return;
+    if (readRelaySignature(getRelaysFromStorage("read")) === subscribedReadRelaySignature) return;
+    void restartAccountMessageSync().catch(error => {
+      console.warn("[message-sync] managed relay refresh restart failed", error instanceof Error ? error.message : "unknown");
+    });
+  };
   const assertCurrentSigner = async (event: EventTemplate) => {
     if (!isCurrent()) throw new Error("account_sync_cancelled");
     const signed = await keys.signEvent(event);
@@ -233,8 +245,11 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   if (!isCurrent()) return false;
   const profiles = useProfilesStore();
   if (getActivePinia()) {
-    await useSettingsStore().refreshManagedRelay();
-    if (!isCurrent()) return false;
+    void useSettingsStore().refreshManagedRelay()
+      .then(reconcileManagedRelay)
+      .catch(error => {
+        console.warn("[message-sync] managed relay refresh unavailable", error instanceof Error ? error.message : "unknown");
+      });
   }
   const initialSyncState = await syncedMessageRepository.getSyncState(account);
   if (!isCurrent()) return false;
@@ -266,10 +281,11 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
 
   try {
     let homeHandler: ReturnType<typeof createHomeMessageHandler>;
-    const legacyReadRelays = getRelaysFromStorage("read");
     const storedOwnDm = await getOwnDmRelayStatus(account);
     if (!isCurrent()) return false;
+    const legacyReadRelays = getRelaysFromStorage("read");
     const dmRelays = storedOwnDm.relays.length ? storedOwnDm.relays : selectOwnDmRelays(legacyReadRelays);
+    subscribedReadRelaySignature = readRelaySignature(legacyReadRelays);
     const messageRelays = [...new Set([...dmRelays, ...legacyReadRelays])];
     // Connectivity is independent of historical repair. Observe first, then
     // inspect the current pool so already-open sockets are not reported offline.
@@ -417,6 +433,9 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         });
       },
     });
+    if (!isCurrent()) return false;
+    startupSettled = true;
+    reconcileManagedRelay();
     if (!isCurrent()) return false;
     if (keys.supportsNip44) {
       bindDmRelayHealthWatch(account, isCurrent, assertCurrentSigner);
