@@ -18,7 +18,7 @@ async function syncServiceWorkerBadgeState(count: number, target: BadgeNavigator
   }
 }
 
-async function accountScopeForBadge(account: string) {
+export async function accountScopeForBadge(account: string) {
   const hash = account ? await crypto.subtle.digest("SHA-256", new TextEncoder().encode(account)) : null;
   return hash ? Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, "0")).join("") : "";
 }
