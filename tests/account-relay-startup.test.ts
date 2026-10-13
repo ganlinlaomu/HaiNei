@@ -11,6 +11,33 @@ describe("account relay startup ordering", () => {
     expect(warmup).toBeGreaterThan(settingsLoad);
   });
 
+  it("preconnects the stored DM inbox during local startup without bypassing unread recovery", () => {
+    const source = readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8");
+    const settingsLoad = source.indexOf("await useSettingsStore().load(pk)");
+    const dmWarmup = source.indexOf("void warmDmRelaysForSession(pk, this, isCurrent)");
+    const criticalRestore = source.indexOf("const criticalStateRestore:");
+    const cloudWait = source.indexOf("const criticalState = await criticalStateRestore");
+    expect(dmWarmup).toBeGreaterThan(settingsLoad);
+    expect(dmWarmup).toBeLessThan(criticalRestore);
+    expect(dmWarmup).toBeLessThan(cloudWait);
+
+    const warmup = readFileSync(join(process.cwd(), "src/nostr/relayWarmup.ts"), "utf8");
+    expect(warmup).toContain("await getOwnDmRelayStatus(accountPubkey)");
+    expect(warmup).toContain("!isCurrent()");
+    expect(warmup).not.toContain("subscribe(");
+  });
+
+  it("does not serialize managed Relay network requests or healthy resume catch-up", () => {
+    const source = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
+    expect(source).not.toContain("await useSettingsStore().refreshManagedRelay()");
+    expect(source).toContain(".then(reconcileManagedRelay)");
+    expect(source).toContain("startupSettled = true");
+
+    const manager = readFileSync(join(process.cwd(), "src/nostr/messaging/sync/MessageSyncManager.ts"), "utf8");
+    expect(manager.indexOf("this.resumeRelays(options.relays)")).toBeLessThan(manager.indexOf('await this.setStatus("connecting", sessionId)'));
+    expect(manager).toContain('relayConcurrency: activeSource === "history" ? 1 : 2');
+  });
+
   it("returns from local restore without waiting for remote critical state, but gates Relay history on authoritative unread", () => {
     const source = readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8");
     const criticalRequest = source.indexOf("fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false");
