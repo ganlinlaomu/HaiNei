@@ -9,6 +9,9 @@ const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
 const HTML_CACHE = `${CACHE_PREFIX}-html-${VERSION}-${BUILD_ID}`;
 const RUNTIME_STATE_CACHE = `${CACHE_PREFIX}-runtime-state`;
 const BADGE_STATE_URL = new URL('/__hainei_badge_state__', self.location.origin).href;
+const PUSH_INBOX_URL = new URL('/__hainei_push_inbox__', self.location.origin).href;
+const PUSH_HINT_TTL_MS = 24 * 60 * 60 * 1000;
+const PUSH_HINT_MAX_ITEMS = 32;
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', VERSION, BUILD_ID);
@@ -121,12 +124,76 @@ async function scopedPushHint(payload) {
     }
   };
 }
+async function loadEncryptedPushInbox() {
+  const cache = await caches.open(RUNTIME_STATE_CACHE);
+  let stored = {};
+  try { stored = await (await cache.match(PUSH_INBOX_URL))?.json() || {}; } catch {}
+  return { cache, scope: stored.scope || "", entries: Array.isArray(stored.entries) ? stored.entries : [] };
+}
+function keepFreshHints(entries) {
+  return entries.filter(item =>
+    item && typeof item.id === "string" && /^[a-f0-9]{64}$/i.test(item.id)
+    && item.hint && typeof item.hint.eventId === "string"
+    && /^[a-f0-9]{64}$/i.test(item.hint.eventId)
+    && Number.isFinite(item.at) && Date.now() - item.at < PUSH_HINT_TTL_MS
+    && item.at <= Date.now() + 60_000
+  ).slice(-PUSH_HINT_MAX_ITEMS);
+}
+async function saveEncryptedPushInbox(cache, scope, entries) {
+  await cache.put(PUSH_INBOX_URL, new Response(JSON.stringify({ scope, entries: keepFreshHints(entries) })));
+}
+async function cacheEncryptedPushHint(payload) {
+  if (!payload?.hint || !/^[a-f0-9]{64}$/i.test(payload?.accountScope || "")
+    || !/^[a-f0-9]{64}$/i.test(payload?.notificationId || "")
+    || !/^[a-f0-9]{64}$/i.test(payload.hint.eventId || "")) return;
+  const hint = payload.hint;
+  const relays = Array.isArray(hint.relays) ? hint.relays
+    .filter(url => typeof url === "string" && /^wss:\/\/[^/@]+/i.test(url) && url.length <= 250).slice(0, 2) : [];
+  // Only opaque ciphertext is retained. Never decode NIP-17 in the worker.
+  const encrypted = hint.event && typeof hint.event === "object"
+    && hint.event.id === hint.eventId && hint.event.kind === 1059
+    && JSON.stringify(hint.event).length <= 8_000 ? hint.event : undefined;
+  if (!encrypted && !relays.length) return;
+  const { cache, scope, entries } = await loadEncryptedPushInbox();
+  const sameScope = scope === payload.accountScope;
+  const current = sameScope ? keepFreshHints(entries) : [];
+  const updated = current.filter(item => item.id !== payload.notificationId);
+  updated.push({ id: payload.notificationId, hint: { eventId: hint.eventId, relays, ...(encrypted ? { event: encrypted } : {}) }, at: Date.now() });
+  await saveEncryptedPushInbox(cache, payload.accountScope, updated);
+}
+async function handleEncryptedPushInboxMessage(data, port) {
+  const accountScope = typeof data?.accountScope === "string" ? data.accountScope : "";
+  if (!/^[a-f0-9]{64}$/i.test(accountScope)) {
+    port?.postMessage({ entries: [] });
+    return;
+  }
+  const { cache, scope, entries } = await loadEncryptedPushInbox();
+  if (scope !== accountScope) {
+    port?.postMessage({ entries: [] });
+    return;
+  }
+  const fresh = keepFreshHints(entries);
+  if (data.type === "ACK_ENCRYPTED_PUSH_HINTS") {
+    const accepted = new Set((Array.isArray(data.ids) ? data.ids : []).filter(id => typeof id === "string").slice(0, PUSH_HINT_MAX_ITEMS));
+    await saveEncryptedPushInbox(cache, scope, fresh.filter(item => !accepted.has(item.id)));
+    port?.postMessage({ ok: true });
+  } else {
+    await saveEncryptedPushInbox(cache, scope, fresh);
+    port?.postMessage({ entries: fresh });
+  }
+}
+
 async function setBadgeScope(scope) {
   const cache = await caches.open(RUNTIME_STATE_CACHE);
   const url = new URL('/__hainei_push_state__', self.location.origin).href;
   let state = {};
   try { state = await (await cache.match(url))?.json() || {}; } catch {}
-  if (state.scope !== scope) await cache.put(url,new Response(JSON.stringify({scope,seen:[]})));
+  if (state.scope !== scope) {
+    await cache.put(url,new Response(JSON.stringify({scope,seen:[]})));
+    // Do not keep another account's encrypted hints after logout/switch.
+    const inbox = await loadEncryptedPushInbox();
+    await saveEncryptedPushInbox(inbox.cache, scope, []);
+  }
 }
 
 self.addEventListener('message', (event) => {
@@ -147,7 +214,19 @@ self.addEventListener('message', (event) => {
     return;
   }
   if (event.data?.type === 'SYNC_APP_BADGE_SCOPE') {
-    event.waitUntil(setBadgeScope(event.data.accountScope || ""));
+    badgeUpdateQueue = badgeUpdateQueue.catch(() => undefined)
+      .then(() => setBadgeScope(event.data.accountScope || ""));
+    event.waitUntil(badgeUpdateQueue);
+    return;
+  }
+  if (event.data?.type === 'GET_ENCRYPTED_PUSH_HINTS' || event.data?.type === 'ACK_ENCRYPTED_PUSH_HINTS') {
+    const port = event.ports?.[0];
+    if (!port) return;
+    badgeUpdateQueue = badgeUpdateQueue.catch(() => undefined)
+      .then(() => handleEncryptedPushInboxMessage(event.data, port))
+      .catch(() => port.postMessage({ entries: [] }));
+    event.waitUntil(badgeUpdateQueue);
+    return;
   }
 });
 
@@ -209,7 +288,15 @@ self.addEventListener('push', (event) => {
         body:'你有新的私信消息', icon:'/icon-192.png', badge:'/icon-192.png',
         tag: payload.notificationId, data:{type:'message'}
       });
+      // Notification delivery must survive CacheStorage quota failures.
+      try { await cacheEncryptedPushHint(payload); } catch {}
       await acknowledge();
+      if (payload.hint) {
+        const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        for (const client of windows) {
+          if (client.visibilityState === 'visible') client.postMessage({ type: 'ENCRYPTED_PUSH_HINT_AVAILABLE' });
+        }
+      }
     });
     await badgeUpdateQueue;
   })());
