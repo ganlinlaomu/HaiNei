@@ -391,8 +391,14 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
           });
         },
       }),
-      onPersistedMessage: async (message, metadata) => {
+      onPersistedMessage: async (message, metadata, inserted) => {
         await homeHandler(message, {...metadata,durable:true});
+        // A Push-cached or live NIP-17 wrap can be durable before initial
+        // history EOSE. Show ONLY this new incoming unread, not the provisional
+        // historical total. The canonical cursor and friend policy still apply.
+        if (isCurrent() && metadata.source === "realtime") {
+          directMessages.noteFreshPersistedIncoming(account, message, inserted);
+        }
         // Restoring cached messages is not a new delivery. Their persisted
         // receipt state already survives the session; avoid per-message work.
         if (metadata.source !== "local-migration") {
