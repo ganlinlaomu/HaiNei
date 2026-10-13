@@ -41,6 +41,31 @@ import { onAppResume } from "@/services/appResumeCoordinator";
 import { scanMessageSearchPages } from "@/utils/messageSearch";
 
 type MessageCursor = { lastReadCreatedAt: number; lastReadMessageId: string };
+type StartupFreshUnread = { id: string; createdAt: number; peer: string };
+// This overlay contains ONLY messages inserted by the active session's live
+// subscription while the historical unread projection is intentionally hidden.
+function freshUnreadCounts(state: {
+  freshUnreadDuringRestore: Record<string, StartupFreshUnread[]>;
+  readCursors: Record<string, MessageCursor | undefined>;
+  preferencesByPeer: Record<string, ConversationPreference | undefined>;
+}): Record<string, number> {
+  const counts: Record<string, number> = {};
+  const friendships = useFriendshipsStore();
+  for (const [conversationId, records] of Object.entries(state.freshUnreadDuringRestore)) {
+    const read = state.readCursors[conversationId];
+    const count = records.filter(item => {
+      const preference = state.preferencesByPeer[item.peer];
+      return !preference?.hidden
+        && friendships.isAccepted(item.peer)
+        && isFriendshipAcceptedAt(friendships.getRecord(item.peer), item.createdAt)
+        && isMessageAfter({ id: item.id, createdAt: item.createdAt }, read)
+        && isMessageAfter({ id: item.id, createdAt: item.createdAt },
+          cursor(preference?.deletedThroughCreatedAt, preference?.deletedThroughMessageId));
+    }).length;
+    if (count) counts[conversationId] = count;
+  }
+  return counts;
+}
 export type PeerReceiptState = {
   delivered?: DmReceiptCursor;
   read?: DmReceiptCursor;
@@ -336,6 +361,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
   state: () => ({
     loadedFor: "",
     unreadByConversation: {} as Record<string, number>,
+    freshUnreadDuringRestore: {} as Record<string, StartupFreshUnread[]>,
     readStateRestorePhase: "ready" as "ready" | "restoring",
     historyHydrationPhase: "idle" as "idle" | "hydrating" | "live" | "error",
     readCursors: {} as Record<string, MessageCursor | undefined>,
@@ -349,11 +375,11 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     outgoingTasks: [] as OutgoingDmTaskRecord[],
   }),
   getters: {
-    unreadCount: state => state.readStateRestorePhase === "restoring"
-      ? 0
-      : Object.values(state.unreadByConversation).reduce((sum, value) => sum + value, 0),
+    unreadCount: state => Object.values(state.readStateRestorePhase === "restoring"
+      ? freshUnreadCounts(state)
+      : state.unreadByConversation).reduce((sum, value) => sum + value, 0),
     visibleUnreadByConversation: state => state.readStateRestorePhase === "restoring"
-      ? {}
+      ? freshUnreadCounts(state)
       : state.unreadByConversation,
   },
   actions: {
@@ -1064,6 +1090,35 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
       await this.reconcileDurableUnread();
     },
+    noteFreshPersistedIncoming(accountPubkey: string, message: CanonicalMessage, inserted: boolean) {
+      const account = accountPubkey.toLowerCase();
+      if (!inserted || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account
+        || (this.historyHydrationPhase !== "hydrating" && this.readStateRestorePhase !== "restoring")
+        || message.senderPubkey.toLowerCase() === account || !message.conversationId
+        || !isConversationMessage(message)) return;
+      const peer = directMessagePeer(message, account);
+      if (!peer || peer !== message.senderPubkey.toLowerCase()) return;
+      const friendships = useFriendshipsStore();
+      const friendship = friendships.getRecord(peer);
+      if (!friendships.isAccepted(peer) || !isFriendshipAcceptedAt(friendship, message.createdAt)
+        || !isMessageAfter({ id: message.id, createdAt: message.createdAt }, this.readCursors[message.conversationId])) return;
+      if (this.readStateRestorePhase === "ready") {
+        // Relay manager may restart without a new cloud-cursor restore. Do not
+        // freeze already-authoritative unread simply because history is active.
+        void this.reconcileDurableUnread(message.conversationId).catch(error => {
+          console.warn("[dm] incoming unread reconciliation failed", error instanceof Error ? error.name : "unknown");
+        });
+        return;
+      }
+      const current = this.freshUnreadDuringRestore[message.conversationId] || [];
+      if (current.some(entry => entry.id === message.id)) return;
+      // Only actual newly inserted, fully authenticated realtime messages
+      // can bypass the historical unread mask; keep this memory-only.
+      this.freshUnreadDuringRestore = {
+        ...this.freshUnreadDuringRestore,
+        [message.conversationId]: [...current, { id: message.id, createdAt: message.createdAt, peer }],
+      };
+    },
     beginReadStateRestore(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
       // Startup must enter restoring *before* the first local refresh. The
@@ -1072,6 +1127,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // Never let another account's asynchronous restore own this state.
       if (!account || (this.loadedFor && this.loadedFor !== account)
         || useKeyStore().pkHex.toLowerCase() !== account) return;
+      this.freshUnreadDuringRestore = {};
       this.readStateRestorePhase = "restoring";
     },
     finishReadStateRestore(accountPubkey: string) {
@@ -1080,7 +1136,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // initial history and friendship-authorization pass may still revise it.
       // Guard against other callers lifting the badge barrier mid-hydration.
       if (account && this.loadedFor === account && useKeyStore().pkHex.toLowerCase() === account
-        && this.historyHydrationPhase !== "hydrating") this.readStateRestorePhase = "ready";
+        && this.historyHydrationPhase !== "hydrating") {
+        this.readStateRestorePhase = "ready";
+        this.freshUnreadDuringRestore = {};
+      }
     },
     beginHistoryHydration(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
@@ -1728,6 +1787,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
       this.loadedFor = "";
       this.unreadByConversation = {};
+      this.freshUnreadDuringRestore = {};
       this.readStateRestorePhase = "ready";
       this.historyHydrationPhase = "idle";
       this.readCursors = {};
