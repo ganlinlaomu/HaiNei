@@ -38,6 +38,14 @@ describe("account relay startup ordering", () => {
     expect(manager).toContain('relayConcurrency: activeSource === "history" ? 1 : 2');
   });
 
+  it("deprioritizes bookmark cloud refresh but preserves friendship authorization on foreground resume", () => {
+    const source = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
+    expect(source).toContain("reconcileFriendStateOnForeground();");
+    expect(source).toContain('scheduleBackgroundTask("foreground-bookmark-sync"');
+    expect(source).toContain('cancelBackgroundTask("foreground-bookmark-sync")');
+    expect(source).not.toContain("        reconcileBookmarksOnForeground(reason === \"online\");");
+  });
+
   it("returns from local restore without waiting for remote critical state, but gates Relay history on authoritative unread", () => {
     const source = readFileSync(join(process.cwd(), "src/stores/keys.ts"), "utf8");
     const criticalRequest = source.indexOf("fetchAndMaterializeAccountState(this, criticalStateNamespaces, { onlyNewer: false");
