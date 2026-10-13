@@ -1,3 +1,5 @@
+import { verifyEvent } from "nostr-tools";
+import type { NostrEvent } from "nostr-tools";
 import { HttpError, integerSetting, type Env } from "./types";
 import { consumeRateLimit } from "./requestGuards";
 
@@ -25,6 +27,42 @@ export const MESSAGE_PUSH_PAYLOAD = Object.freeze({
   url: "/#/conversations",
 });
 export const GENERIC_PUSH_PAYLOAD = MESSAGE_PUSH_PAYLOAD;
+const MAX_PUSH_HINTS = 8;
+const MAX_PUSH_HINT_EVENT_BYTES = 8_000;
+export type WorkerEncryptedPushHint = {
+  recipient: string;
+  eventId: string;
+  relays: string[];
+  event?: NostrEvent;
+};
+
+/** Hints are only routing metadata or signed, encrypted NIP-17 wraps. */
+export function sanitizeEncryptedPushHints(value: unknown): WorkerEncryptedPushHint[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, MAX_PUSH_HINTS).flatMap((item): WorkerEncryptedPushHint[] => {
+    if (!item || typeof item !== "object") return [];
+    const candidate = item as Record<string, unknown>;
+    const recipient = typeof candidate.recipient === "string" ? candidate.recipient.toLowerCase() : "";
+    const eventId = typeof candidate.eventId === "string" ? candidate.eventId.toLowerCase() : "";
+    if (!PUBKEY.test(recipient) || !EVENT_ID.test(eventId)) return [];
+    const relays = [...new Set((Array.isArray(candidate.relays) ? candidate.relays : [])
+      .filter((url): url is string => typeof url === "string")
+      .filter(url => {
+        try { const parsed = new URL(url); return parsed.protocol === "wss:" && !parsed.username && !parsed.password && url.length <= 250; }
+        catch { return false; }
+      }))].slice(0, 2);
+    const hint: WorkerEncryptedPushHint = { recipient, eventId, relays };
+    const event = candidate.event as NostrEvent | undefined;
+    if (event && JSON.stringify(event).length <= MAX_PUSH_HINT_EVENT_BYTES
+      && event.id === eventId && event.kind === 1059
+      && Array.isArray(event.tags) && event.tags.some(tag => tag[0] === "p" && tag[1] === recipient)
+      && verifyEvent(event)) {
+      hint.event = event;
+    }
+    return [hint];
+  });
+}
+
 
 export function pushPayloadForType(value: unknown) {
   return value === "message" ? MESSAGE_PUSH_PAYLOAD : null;
@@ -415,6 +453,7 @@ export async function triggerGenericPush(
   recipientValue: unknown,
   typeValue?: unknown,
   messageIdValue?: unknown,
+  hintsValue?: unknown,
 ) {
   const recipients = sanitizePushRecipients(recipientValue, senderPubkey);
   const diagnostics: PushDiagnostics = {
@@ -449,7 +488,7 @@ export async function triggerGenericPush(
   diagnostics.subscriptionsFound = rows.results.length;
   if (!rows.results.length) return diagnostics;
 
-  return deliverPushRows(env, senderPubkey, messageId, rows.results, diagnostics, now);
+  return deliverPushRows(env, senderPubkey, messageId, rows.results, diagnostics, now, sanitizeEncryptedPushHints(hintsValue));
 }
 
 // The authenticated account can inspect delivery only to its own browser endpoint.
@@ -476,6 +515,7 @@ async function deliverPushRows(
   rows: PushSubscriptionRow[],
   diagnostics: PushDiagnostics,
   now: number,
+  hints: WorkerEncryptedPushHint[] = [],
 ) {
   const pushPayload = MESSAGE_PUSH_PAYLOAD;
   const config = pushConfig(env);
@@ -497,8 +537,25 @@ async function deliverPushRows(
       reservation = await reservePushDelivery(env, senderPubkey, row.account_pubkey, messageId, row.endpoint, now);
       if (!reservation.reserved) return;
 
+      const basePayload = {
+        ...pushPayload,
+        accountScope: await sha256Hex(row.account_pubkey),
+        notificationId: await sha256Hex(`${row.auth}:${senderPubkey}:${messageId}`),
+      };
+      const matching = hints.find(hint => hint.recipient === row.account_pubkey);
+      const hint = matching && {
+        eventId: matching.eventId,
+        relays: matching.relays,
+        ...(matching.event ? { event: matching.event } : {}),
+      };
+      // Account for Web Push framing and UTF-8 content. Always retain the
+      // small exact-ID route when the encrypted event exceeds push capacity.
+      let packed = { ...basePayload, ...(hint ? { hint } : {}) };
+      if (hint?.event && encoder.encode(JSON.stringify(packed)).length > 3_400) {
+        packed = { ...basePayload, hint: { eventId: hint.eventId, relays: hint.relays } };
+      }
       const [body, vapidHeaders] = await Promise.all([
-        encryptPushPayload(JSON.stringify({ ...pushPayload, accountScope: await sha256Hex(row.account_pubkey), notificationId: await sha256Hex(`${row.auth}:${senderPubkey}:${messageId}`) }), row.p256dh, row.auth),
+        encryptPushPayload(JSON.stringify(packed), row.p256dh, row.auth),
         createVapidHeaders(config, row.endpoint),
       ]);
       const controller = new AbortController();
