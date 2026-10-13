@@ -42,7 +42,13 @@ describe("durable outgoing queue", () => {
     const signer = vi.fn();
     registerOutgoingPushSigner(ACCOUNT, signer);
     await publishQueuedOutgoing(ACCOUNT, "logical-1", "message");
-    expect(triggerPush).toHaveBeenCalledWith([OTHER], ACCOUNT, signer, "message", "logical-1");
+    expect(triggerPush).toHaveBeenCalledWith([OTHER], ACCOUNT, signer, "message", "logical-1", [
+      expect.objectContaining({
+        recipient: OTHER,
+        eventId: "wrap-logical-1",
+        relays: ["wss://relay.test"],
+      }),
+    ]);
   });
 
   it("persists failed push work and retries after reopening without republishing the DM", async () => {
