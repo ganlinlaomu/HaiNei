@@ -645,7 +645,9 @@ export class MessageSyncManager {
     }
     // The service worker can receive a Push while this tab is already visible.
     this.removePushInboxListener?.();
-    if (typeof navigator !== "undefined" && navigator.serviceWorker) {
+    if (typeof navigator !== "undefined" && navigator.serviceWorker
+      && typeof navigator.serviceWorker.addEventListener === "function"
+      && typeof navigator.serviceWorker.removeEventListener === "function") {
       const onPushHint = (event: MessageEvent) => {
         if (event.data?.type === "ENCRYPTED_PUSH_HINT_AVAILABLE" && this.options && this.sessionId) {
           this.drainEncryptedPushInbox(this.sessionId, this.options.accountPubkey);
