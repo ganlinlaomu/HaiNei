@@ -156,10 +156,11 @@ export class MessageSyncManager {
       options.onPersistedMessage
     );
 
-    await this.setStatus("connecting", sessionId);
-    // Reset exhausted retry state and start connecting the exact Relay set selected
-    // for this account before subscriptions/catch-up are created.
+    // Open pooled inbox sockets before awaiting IndexedDB status writes.
+    // The subscription itself still waits for authorized account restoration.
     this.resumeRelays(options.relays);
+    await this.setStatus("connecting", sessionId);
+    if (!isCurrent()) return;
     const cleanup = await this.repository.runUnsupportedMessageCleanupMigration(accountPubkey);
     if (cleanup.ran) {
       logger.info(`[message-sync] message cleanup migration v${cleanup.version} completed purged=${cleanup.purged}`);
@@ -370,7 +371,9 @@ export class MessageSyncManager {
           // Initial onboarding can resume a bounded history page sequence.
           // Normal resume/reconnect runs just one page per relay per wake.
           maxBatches: freshHistoryRepair && activeSource === "history" ? INITIAL_HISTORY_MAX_BATCHES : 1,
-          relayConcurrency: 1,
+          // On resume, a dead relay must not serially delay a healthy inbox.
+          // Keep initial history repair conservative; bound resume to two.
+          relayConcurrency: activeSource === "history" ? 1 : 2,
           isCurrent: () => this.isCurrent(sessionId, options.accountPubkey),
           onEvent: async (event, eventRelay) => {
             await this.pipeline?.ingestNostrEvent(event, { source: activeSource!, relayUrl: eventRelay });
