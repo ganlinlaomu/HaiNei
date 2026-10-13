@@ -262,6 +262,24 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(context.direct.unreadCount).toBe(0);
   });
 
+  it("reconciles new realtime unread even if Relay sync restarts after read-state recovery", async () => {
+    const context = seed([dm("old", 5)], relationship("accepted"));
+    await context.direct.refresh(ACCOUNT);
+    context.direct.beginHistoryHydration(ACCOUNT);
+    expect(context.direct.readStateRestorePhase).toBe("ready");
+    const reconcile = vi.spyOn(context.direct, "reconcileDurableUnread").mockImplementation(async conversationId => {
+      if (conversationId === CONVERSATION) context.direct.unreadByConversation = { [CONVERSATION]: 2 };
+    });
+    context.direct.noteFreshPersistedIncoming(ACCOUNT, {
+      id: "new", senderPubkey: PEER, recipientPubkeys: [ACCOUNT],
+      conversationId: CONVERSATION, createdAt: 6, plaintext: "new",
+      protocol: "nip17", transportKind: 1059, tags: [["t", "hainei-dm"]],
+    }, true);
+    await vi.waitFor(() => expect(context.direct.unreadCount).toBe(2));
+    expect(reconcile).toHaveBeenCalledWith(CONVERSATION);
+    expect(context.direct.freshUnreadDuringRestore).toEqual({});
+  });
+
   it("does not leak live startup unread across revoked friendships or account reset", async () => {
     const context = seed([], relationship("accepted"));
     context.direct.beginReadStateRestore(ACCOUNT);
