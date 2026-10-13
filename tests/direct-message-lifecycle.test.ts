@@ -217,6 +217,71 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(context.direct.unreadCount).toBe(0);
   });
 
+  it("shows only newly persisted realtime unread while startup history is still masked", async () => {
+    const context = seed([dm("old", 5)], relationship("accepted"));
+    context.direct.beginReadStateRestore(ACCOUNT);
+    await context.direct.refresh(ACCOUNT);
+    context.direct.unreadByConversation = { [CONVERSATION]: 151 };
+    context.direct.beginHistoryHydration(ACCOUNT);
+
+    const incoming = {
+      id: "fresh", senderPubkey: PEER, recipientPubkeys: [ACCOUNT],
+      conversationId: CONVERSATION, createdAt: 6, plaintext: "new",
+      protocol: "nip17" as const, transportKind: 1059 as const,
+      tags: [["t", "hainei-dm"]],
+    };
+    // The regular database projection stays blocked, but a verified newly
+    // inserted NIP-17 message must still light up the conversation badge.
+    expect(context.direct.unreadCount).toBe(0);
+    context.direct.noteFreshPersistedIncoming(ACCOUNT, incoming, true);
+    expect(context.direct.readStateRestorePhase).toBe("restoring");
+    expect(context.direct.unreadByConversation[CONVERSATION]).toBe(151);
+    expect(context.direct.visibleUnreadByConversation).toEqual({ [CONVERSATION]: 1 });
+    expect(context.direct.unreadCount).toBe(1);
+
+    // Replayed Relay envelopes and failed persistence cannot increment it.
+    context.direct.noteFreshPersistedIncoming(ACCOUNT, incoming, true);
+    context.direct.noteFreshPersistedIncoming(ACCOUNT, { ...incoming, id: "duplicate" }, false);
+    context.direct.noteFreshPersistedIncoming(ACCOUNT, { ...incoming, id: "sent", senderPubkey: ACCOUNT }, true);
+    expect(context.direct.unreadCount).toBe(1);
+
+    // Reading that message removes the live overlay even before backfill EOSE.
+    context.direct.readCursors = {
+      [CONVERSATION]: { lastReadCreatedAt: incoming.createdAt, lastReadMessageId: incoming.id },
+    };
+    expect(context.direct.visibleUnreadByConversation).toEqual({});
+    expect(context.direct.unreadCount).toBe(0);
+
+    vi.spyOn(context.direct, "reconcileDurableUnread").mockImplementation(async () => {
+      context.direct.unreadByConversation = { [CONVERSATION]: 0 };
+    });
+    await context.direct.finishHistoryHydration(ACCOUNT);
+    context.direct.finishReadStateRestore(ACCOUNT);
+    expect(context.direct.readStateRestorePhase).toBe("ready");
+    expect(context.direct.freshUnreadDuringRestore).toEqual({});
+    expect(context.direct.unreadCount).toBe(0);
+  });
+
+  it("does not leak live startup unread across revoked friendships or account reset", async () => {
+    const context = seed([], relationship("accepted"));
+    context.direct.beginReadStateRestore(ACCOUNT);
+    await context.direct.refresh(ACCOUNT);
+    context.direct.beginHistoryHydration(ACCOUNT);
+    const incoming = {
+      id: "new", senderPubkey: PEER, recipientPubkeys: [ACCOUNT],
+      conversationId: CONVERSATION, createdAt: 6, plaintext: "new",
+      protocol: "nip17" as const, transportKind: 1059 as const,
+      tags: [["t", "hainei-dm"]],
+    };
+    context.direct.noteFreshPersistedIncoming(ACCOUNT, incoming, true);
+    expect(context.direct.unreadCount).toBe(1);
+    context.friendships.records = [relationship("removed")];
+    expect(context.direct.unreadCount).toBe(0);
+    context.direct.reset();
+    expect(context.direct.freshUnreadDuringRestore).toEqual({});
+    expect(context.direct.unreadCount).toBe(0);
+  });
+
   it("keeps unread stable while startup Relay history is hydrating", async () => {
     const context = seed([dm("first", 5)], relationship("accepted"));
     await context.direct.refresh(ACCOUNT);
