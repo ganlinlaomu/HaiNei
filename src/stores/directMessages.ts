@@ -1092,7 +1092,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     noteFreshPersistedIncoming(accountPubkey: string, message: CanonicalMessage, inserted: boolean) {
       const account = accountPubkey.toLowerCase();
       if (!inserted || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account
-        || this.readStateRestorePhase !== "restoring" || this.historyHydrationPhase !== "hydrating"
+        || this.historyHydrationPhase !== "hydrating"
         || message.senderPubkey.toLowerCase() === account || !message.conversationId
         || !isConversationMessage(message)) return;
       const peer = directMessagePeer(message, account);
@@ -1100,6 +1100,14 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const friendship = useFriendshipsStore().getRecord(peer);
       if (!isFriendshipAcceptedAt(friendship, message.createdAt)
         || !isMessageAfter({ id: message.id, createdAt: message.createdAt }, this.readCursors[message.conversationId])) return;
+      if (this.readStateRestorePhase === "ready") {
+        // Relay manager may restart without a new cloud-cursor restore. Do not
+        // freeze already-authoritative unread simply because history is active.
+        void this.reconcileDurableUnread(message.conversationId).catch(error => {
+          console.warn("[dm] incoming unread reconciliation failed", error instanceof Error ? error.name : "unknown");
+        });
+        return;
+      }
       const current = this.freshUnreadDuringRestore[message.conversationId] || [];
       if (current.some(entry => entry.id === message.id)) return;
       // Only actual newly inserted, fully authenticated realtime messages
