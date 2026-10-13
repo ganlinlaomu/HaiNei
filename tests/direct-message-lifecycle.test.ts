@@ -280,6 +280,24 @@ describe("direct-message authorization and conversation lifecycle", () => {
     expect(context.direct.freshUnreadDuringRestore).toEqual({});
   });
 
+  it("keeps counting newly delivered realtime messages after history backfill fails", async () => {
+    const context = seed([], relationship("accepted"));
+    context.direct.beginReadStateRestore(ACCOUNT);
+    await context.direct.refresh(ACCOUNT);
+    context.direct.beginHistoryHydration(ACCOUNT);
+    // An offline Relay may leave the first history pass incomplete. That must
+    // not suppress a new Push-delivered message which has already been stored.
+    context.direct.historyHydrationPhase = "error";
+    context.direct.noteFreshPersistedIncoming(ACCOUNT, {
+      id: "new", senderPubkey: PEER, recipientPubkeys: [ACCOUNT],
+      conversationId: CONVERSATION, createdAt: 6, plaintext: "new",
+      protocol: "nip17", transportKind: 1059, tags: [["t", "hainei-dm"]],
+    }, true);
+    expect(context.direct.readStateRestorePhase).toBe("restoring");
+    expect(context.direct.visibleUnreadByConversation).toEqual({ [CONVERSATION]: 1 });
+    expect(context.direct.unreadCount).toBe(1);
+  });
+
   it("does not leak live startup unread across revoked friendships or account reset", async () => {
     const context = seed([], relationship("accepted"));
     context.direct.beginReadStateRestore(ACCOUNT);
