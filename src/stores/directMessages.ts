@@ -1255,23 +1255,23 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const draftPeers = Object.keys(drafts);
       for (const peer of draftPeers) if (!peers.includes(peer)) peers.push(peer);
 
-      const [preferenceEntries, receiptEntries, sentReceiptEntries] = await Promise.all([
-        Promise.all(peers.map(async peer => {
-          const record = await metaRepository.get(account, preferenceKey(peer));
-          return [peer, record?.value as ConversationPreference | undefined] as const;
-        })),
-        Promise.all(peers.map(async peer => {
-          const record = await metaRepository.get(account, receiptStateKey(peer));
-          return [peer, record?.value as PeerReceiptState | undefined] as const;
-        })),
-        Promise.all(peers.map(async peer => {
-          const record = await metaRepository.get(account, sentReceiptStateKey(peer));
-          return [peer, record?.value as PeerReceiptState | undefined] as const;
-        })),
+      // Three prefix range reads instead of three point reads per peer. Every
+      // known peer keeps an own (possibly undefined) entry so ensurePeerState
+      // treats it as loaded.
+      const byPeer = async <T>(prefix: string) => {
+        const rows = await metaRepository.listPrefix(account, prefix);
+        const values: Record<string, T | undefined> = Object.fromEntries(peers.map(peer => [peer, undefined]));
+        for (const row of rows) {
+          const peer = row.key.slice(prefix.length).toLowerCase();
+          if (peer) values[peer] = row.value as T | undefined;
+        }
+        return values;
+      };
+      const [preferences, receiptStates, sentReceiptStates] = await Promise.all([
+        byPeer<ConversationPreference>(preferenceKey("")),
+        byPeer<PeerReceiptState>(receiptStateKey("")),
+        byPeer<PeerReceiptState>(sentReceiptStateKey("")),
       ]);
-      const preferences = Object.fromEntries(preferenceEntries) as Record<string, ConversationPreference | undefined>;
-      const receiptStates = Object.fromEntries(receiptEntries) as Record<string, PeerReceiptState | undefined>;
-      const sentReceiptStates = Object.fromEntries(sentReceiptEntries) as Record<string, PeerReceiptState | undefined>;
       const exactReadRows = await metaRepository.listPrefix(account, EXACT_READ_PREFIX);
       if (useKeyStore().pkHex.toLowerCase() !== account) return;
       const exactReads: Record<string, string> = {};

@@ -58,6 +58,8 @@ function validatedCheckpoint(
   return saved;
 }
 
+const RELAY_EVENT_FLUSH_MS = 5_000;
+
 export class MessageSyncManager {
   private readonly repository: SyncedMessageRepository;
   private readonly subscribeFn: SubscribeForCatchup;
@@ -86,6 +88,36 @@ export class MessageSyncManager {
   private removeBackgroundListener: (() => void) | null = null;
    private idleContinuationTimer: ReturnType<typeof setTimeout> | null = null;
   private cancelIdleContinuation: (() => void) | null = null;
+
+  // Realtime relay diagnostics are batched: a (re)subscription replays the
+  // 48h NIP-17 window, and one write transaction per event contends with the
+  // message inserts that share the messageSyncStates store.
+  private relayEventHighs = new Map<string, number>();
+  private pendingRelayEventWrites = new Map<string, { account: string; createdAt: number }>();
+  private relayEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private noteRealtimeEvent(account: string, relayUrl: string, createdAt: number) {
+    const key = `${account}\n${relayUrl}`;
+    if (!Number.isFinite(createdAt) || createdAt <= (this.relayEventHighs.get(key) ?? -Infinity)) return;
+    this.relayEventHighs.set(key, createdAt);
+    this.pendingRelayEventWrites.set(key, { account, createdAt });
+    if (this.relayEventFlushTimer === null) {
+      this.relayEventFlushTimer = setTimeout(() => this.flushRealtimeEventWrites(), RELAY_EVENT_FLUSH_MS);
+      (this.relayEventFlushTimer as any).unref?.();
+    }
+  }
+
+  private flushRealtimeEventWrites() {
+    if (this.relayEventFlushTimer !== null) clearTimeout(this.relayEventFlushTimer);
+    this.relayEventFlushTimer = null;
+    const pending = [...this.pendingRelayEventWrites.entries()];
+    this.pendingRelayEventWrites.clear();
+    for (const [key, { account, createdAt }] of pending) {
+      const relayUrl = key.slice(account.length + 1);
+      void this.repository.updateRelayState(account, relayUrl, { lastEventCreatedAt: createdAt })
+        .catch(() => undefined);
+    }
+  }
 
   private clearIdleContinuation() {
     if (this.idleContinuationTimer !== null) clearTimeout(this.idleContinuationTimer);
@@ -297,23 +329,19 @@ export class MessageSyncManager {
       state = await this.repository.updateSyncState(accountPubkey, { historyBackfillStartedAt: this.now() });
     }
     const nowSeconds = Math.floor(this.now() / 1000);
-    // Realtime only needs to bridge the startup race. The separate bounded
-    // catch-up below owns full history repair; keeping that work out of the
-    // long-lived subscription prevents a new device from opening an unbounded
-    // stream from timestamp zero.
-    const realtimeSince = state.highWatermarkCreatedAt
-      ? calculateCatchupSince(state.highWatermarkCreatedAt, nowSeconds)
-      : nowSeconds;
-    const filters = buildMessageSubscriptions(accountPubkey, options.authors, realtimeSince);
+    // Realtime only needs to bridge the startup race. The separate bounded,
+    // checkpointed catch-up below owns every gap since the last session; an
+    // old watermark here would reopen an unbounded backlog stream (and replay
+    // it on every reconnect). buildMessageSubscriptions still applies the
+    // NIP-17 48h wrapper skew.
+    const filters = buildMessageSubscriptions(accountPubkey, options.authors, nowSeconds);
 
     // Subscribe before catch-up so an event arriving during the historical query
     // is already covered. Both streams converge in the same idempotent pipeline.
     this.realtimeSubscription = this.subscribeFn(options.relays, filters);
     this.realtimeSubscription.on("event", (event: NostrEvent, relayUrl?: string) => {
       if (!isCurrent()) return;
-      void this.repository.updateRelayState(accountPubkey, relayUrl || "unknown", {
-        lastEventCreatedAt: event.created_at
-      });
+      this.noteRealtimeEvent(accountPubkey, relayUrl || "unknown", event.created_at);
       void this.pipeline?.ingestNostrEvent(event, { source: "realtime", relayUrl });
     });
     this.realtimeSubscription.on("eose", (relayUrl: string) => {
@@ -390,8 +418,7 @@ export class MessageSyncManager {
         );
         const newlyAddedRelays = options.relays.filter(url => !previousRelaySet.has(url));
         const localHighWatermark = state.highWatermarkCreatedAt
-          || (await this.repository.list(options.accountPubkey))
-            .reduce((max, message) => Math.max(max, message.createdAt || 0), 0)
+          || await this.repository.latestMessageCreatedAt(options.accountPubkey)
           || undefined;
         if (catchupAbortController.signal.aborted || !this.isForeground()) return;
         const freshHistoryRepair = !state.historyBackfillCompletedAt
@@ -670,6 +697,8 @@ export class MessageSyncManager {
   }
 
   stop() {
+    this.flushRealtimeEventWrites();
+    this.relayEventHighs.clear();
     this.sessionId = "";
     this.abortController?.abort();
     this.abortController = null;
