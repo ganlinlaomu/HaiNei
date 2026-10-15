@@ -43,7 +43,7 @@ import {
   isAuthorizedDirectMessage,
   useDirectMessagesStore
 } from "@/stores/directMessages";
-import { useFriendshipsStore } from "@/stores/friendships";
+import { FRIENDSHIP_CLOCK_SKEW_SECONDS, useFriendshipsStore } from "@/stores/friendships";
 import { useMessagesStore } from "@/stores/messages";
 import { metaRepository } from "@/repositories/metaRepository";
 import { notifyDirectMessageAuthorizationChanged } from "@/services/directMessageStateEvents";
@@ -426,16 +426,17 @@ describe("direct-message authorization and conversation lifecycle", () => {
       accountPubkey: ACCOUNT,
       peerPubkey: PEER,
       state: "removed",
-      acceptedAt: 3,
+      acceptedAt: 3_000,
       acceptedEventId: "accepted-old",
-      lastControlAt: 10,
+      lastControlAt: 10_000,
       lastControlEventId: "removed-old",
       lastAction: "remove",
-      updatedAt: 10,
+      updatedAt: 10_000,
     };
-    expect(isAuthorizedDirectMessage(dm("before-accept", 2), ACCOUNT, legacyRemoved)).toBe(false);
-    expect(isAuthorizedDirectMessage(dm("during", 5), ACCOUNT, legacyRemoved)).toBe(true);
-    expect(isAuthorizedDirectMessage(dm("after", 11), ACCOUNT, legacyRemoved)).toBe(false);
+    // The window start tolerates FRIENDSHIP_CLOCK_SKEW_SECONDS of clock skew.
+    expect(isAuthorizedDirectMessage(dm("before-accept", 3_000 - FRIENDSHIP_CLOCK_SKEW_SECONDS - 1), ACCOUNT, legacyRemoved)).toBe(false);
+    expect(isAuthorizedDirectMessage(dm("during", 5_000), ACCOUNT, legacyRemoved)).toBe(true);
+    expect(isAuthorizedDirectMessage(dm("after", 10_001), ACCOUNT, legacyRemoved)).toBe(false);
   });
 
   it("shows only current friends in the conversation list while retaining removed-friend history", async () => {
