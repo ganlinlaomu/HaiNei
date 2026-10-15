@@ -26,6 +26,7 @@
       <article class="summary-card"><span>Publish</span><small>success {{ summary.publishOk }} · failed {{ summary.publishFailed }} · timeout {{ summary.publishTimeout }}</small></article>
       <article class="summary-card"><span>NIP-17</span><small>received {{ summary.nipReceived }} · decoded {{ summary.nipDecoded }} · failed {{ summary.nipFailed }}</small></article>
       <article class="summary-card"><span>Storage</span><small>inserted {{ summary.inserted }} · duplicates {{ summary.duplicates }}</small></article>
+      <article class="summary-card"><span>DM 重复投递</span><strong>{{ deliveryStats.relay.duplicate }}</strong><small>新消息 {{ deliveryStats.relay.inserted }} · 耗时 {{ deliveryStats.relay.duplicateMs }}ms · 改动列表 {{ deliveryStats.relay.duplicateChangedInbox }} · 本地回放 {{ deliveryStats.bySource["local-migration"]?.duplicate ?? 0 }}</small></article>
     </section>
 
     <section class="card-panel">
@@ -99,6 +100,7 @@ import { APP_VERSION, DB_VERSION } from "@/db/dexie";
 import { getRelayPerformanceDiagnostics, inspectRelays, reconnectRelay, type RelayRuntimeStatus } from "@/nostr/relays";
 import { useDebugLogsStore, type DebugLogCategory, type DebugLogEntry, type DebugLogLevel } from "@/stores/debugLogs";
 import { useKeyStore } from "@/stores/keys";
+import { getDeliveryStats } from "@/services/dmDeliveryStats";
 
 type RelayStatus = RelayRuntimeStatus;
 type LastSend = { ts: number; logicalMessageId: string; recipients: number; giftWraps: number; copies: Array<{ eventId: string; target: string; role: string; relays: Array<{ relay: string; status: string; reason?: string }> }> };
@@ -107,6 +109,7 @@ const logs = useDebugLogsStore();
 const keys = useKeyStore();
 const relayStatus = ref<Record<string, RelayStatus>>({});
 const relayStats = ref({ idleRelayConnections: 0, idleConnectionsReleased: 0 });
+const deliveryStats = ref(getDeliveryStats());
 const now = ref(Date.now());
 const categoryFilter = ref<DebugLogCategory | "all">("all");
 const levelFilter = ref<DebugLogLevel | "all">("all");
@@ -118,6 +121,7 @@ const currentTime = computed(() => new Date(now.value).toLocaleString());
 
 function refreshRelayStatus() {
   relayStatus.value = inspectRelays();
+  deliveryStats.value = getDeliveryStats();
   const stats = getRelayPerformanceDiagnostics();
   relayStats.value = {
     idleRelayConnections: stats.idleRelayConnections,
