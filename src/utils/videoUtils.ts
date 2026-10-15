@@ -1,6 +1,7 @@
 /**
  * Utility functions for parsing and handling video URLs
  */
+import { isEncryptedVideoRef } from './encryptedVideoRef';
 
 export interface VideoData {
   type: 'video';
@@ -8,6 +9,34 @@ export interface VideoData {
   provider: string;
   embedUrl?: string;
   thumbnail?: string;
+}
+
+function isHttpsUrl(value: string) {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+const YOUTUBE_EMBED = /^https:\/\/www\.youtube\.com\/embed\/[a-zA-Z0-9_-]{11}$/;
+const VIMEO_EMBED = /^https:\/\/player\.vimeo\.com\/video\/\d+$/;
+
+/**
+ * Render-time guard for VideoPlayer (defense in depth): iframes only for the
+ * two known embed origins, every other URL must be https.
+ */
+export function safeVideoEmbed(video: VideoData) {
+  const embed = typeof video.embedUrl === 'string' ? video.embedUrl : '';
+  const iframeUrl = (video.provider === 'YouTube' && YOUTUBE_EMBED.test(embed))
+    || (video.provider === 'Vimeo' && VIMEO_EMBED.test(embed))
+    ? embed
+    : undefined;
+  return {
+    iframeUrl,
+    mediaUrl: !iframeUrl && isHttpsUrl(embed) ? embed : undefined,
+    linkUrl: typeof video.url === 'string' && isHttpsUrl(video.url) ? video.url : undefined,
+  };
 }
 
 // Video URL regex patterns (without global flag to avoid stateful behavior)
@@ -24,6 +53,10 @@ export function parseVideoUrl(url: string): VideoData | null {
   if (!url || !url.trim()) return null;
   
   const trimmedUrl = url.trim();
+  // Post content is peer-controlled. Only https links (and the app's own
+  // encrypted references, handled by extractVideoData) may become a video:
+  // a javascript:/data: URL in an iframe or link executes in the app origin.
+  if (!isHttpsUrl(trimmedUrl)) return null;
   
   // Check for YouTube URLs
   const youtubeMatch = trimmedUrl.match(YOUTUBE_URL_PATTERN);
@@ -61,20 +94,13 @@ export function parseVideoUrl(url: string): VideoData | null {
     };
   }
   
-  // Check if it's a valid URL, otherwise don't treat as video
-  try {
-    new URL(trimmedUrl);
-    // Valid URL but not a recognized video platform - treat as external
-    return {
-      type: 'video',
-      url: trimmedUrl,
-      provider: 'External',
-      embedUrl: trimmedUrl
-    };
-  } catch {
-    // Not a valid URL
-    return null;
-  }
+  // Valid https URL but not a recognized video platform - treat as external
+  return {
+    type: 'video',
+    url: trimmedUrl,
+    provider: 'External',
+    embedUrl: trimmedUrl
+  };
 }
 
 /**
@@ -93,12 +119,19 @@ export function extractVideoData(content: string): VideoData | null {
   if (match && match[1]) {
     try {
       const videoData = JSON.parse(match[1]);
-      if (videoData.type === 'video' && videoData.url) {
-        return videoData;
+      if (videoData?.type === 'video' && typeof videoData.url === 'string') {
+        // Trust only the url: provider/embedUrl/thumbnail are re-derived so
+        // a forged block cannot smuggle an executable URL into an iframe.
+        const url = videoData.url.trim();
+        if (isEncryptedVideoRef(url)) {
+          return { type: 'video', url, provider: 'Encrypted' };
+        }
+        return parseVideoUrl(url);
       }
     } catch (e) {
       console.error("Failed to parse video data:", e);
     }
+    return null;
   }
   
   // Second, check for plain video URLs

@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import path from "path";
+import { cspMetaPlugin } from "./build-plugins/cspMeta";
 
 const DEFAULT_PORT = 5173;
 
@@ -9,7 +10,8 @@ const rawAllowed = (process.env.ALLOWED_HOSTS ?? "localhost,127.0.0.1,raspberryp
 const ALLOWED_HOSTS = rawAllowed === "" ? [] : rawAllowed.split(",").map(s => s.trim());
 
 export default defineConfig({
-  plugins: [vue()],
+  // Dev server keeps no CSP so Vite HMR (ws://) keeps working.
+  plugins: [vue(), cspMetaPlugin(path.resolve(__dirname, "public/_headers"))],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src")
