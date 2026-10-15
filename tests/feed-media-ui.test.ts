@@ -1,3 +1,4 @@
+import { readThemedSource } from "./helpers/themedSource";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -14,7 +15,7 @@ describe("feed media carousel and actions", () => {
     expect(carouselActiveIndex(320, 320, 4)).toBe(1);
     expect(adjacentSlideIndexes(1, 4)).toEqual([0, 1, 2]);
     expect(adjacentSlideIndexes(0, 4)).toEqual([0, 1]);
-    const source = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
     expect(source).toContain("flex: 0 0 100%");
     expect(source).toContain("scroll-snap-type: x mandatory");
   });
@@ -33,7 +34,7 @@ describe("feed media carousel and actions", () => {
   });
 
   it("keeps comments and bookmark actions but renders no share or repost action", () => {
-    const source = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     expect(source).toContain('aria-label="评论"');
     expect(source).toContain("@click=\"toggleComments\"");
     expect(source).toContain("@click=\"toggleBookmark\"");
@@ -45,8 +46,8 @@ describe("feed media carousel and actions", () => {
   });
 
   it("keeps the saved bookmark blue but uses the shared green success feedback", () => {
-    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
-    const toasts = readFileSync(join(process.cwd(), "src/components/ToastContainer.vue"), "utf8");
+    const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const toasts = readThemedSource(join(process.cwd(), "src/components/ToastContainer.vue"), "utf8");
     expect(card).toContain(".action.bookmark.saved{color:#60A5FA}");
     expect(card).toContain('saved ? "已添加到收藏夹" : "已从收藏夹移除"');
     expect(card).toContain('1700, "success"');
@@ -58,7 +59,7 @@ describe("feed media carousel and actions", () => {
   });
 
   it("mounts heavy feed UI only when the post actually needs it", () => {
-    const source = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     expect(source).toContain('const PostImagePreview = defineAsyncComponent');
     expect(source).toContain('const VideoPlayer = defineAsyncComponent');
     expect(source).toContain('const CommentSheet = defineAsyncComponent');
@@ -68,8 +69,8 @@ describe("feed media carousel and actions", () => {
   });
 
   it("opens the viewer from the loaded preview, promotes the current original, and only keeps adjacent originals warm", () => {
-    const source = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
-    const viewer = readFileSync(join(process.cwd(), "src/components/ImageViewer.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
+    const viewer = readThemedSource(join(process.cwd(), "src/components/ImageViewer.vue"), "utf8");
     expect(source).toContain("viewerVisible.value = true;");
     expect(source.indexOf("viewerVisible.value = true;")).toBeLessThan(source.indexOf("syncViewerLoads(index);"));
     expect(source).toContain("new Set(adjacentSlideIndexes(index, images.value.length))");
@@ -81,7 +82,7 @@ describe("feed media carousel and actions", () => {
   });
 
   it("shows no counter or dots for a single image", () => {
-    const source = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
     expect(source).toContain('v-if="images.length > 1" class="carousel-counter"');
     expect(source).toContain('v-if="images.length > 1" class="carousel-dots"');
   });

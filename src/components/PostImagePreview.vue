@@ -696,7 +696,7 @@ export default defineComponent({
   border-radius: inherit;
 }
 .gallery-skeleton {
-  background: linear-gradient(100deg, #edf1f5 25%, #f7f9fb 40%, #edf1f5 55%);
+  background: linear-gradient(100deg, var(--bg-edf1f5) 25%, var(--bg-f7f9fb) 40%, var(--bg-edf1f5) 55%);
   background-size: 220% 100%;
   animation: shimmer 1.4s ease-in-out infinite;
 }
@@ -706,13 +706,13 @@ export default defineComponent({
   align-items: center;
   justify-content: center;
   gap: 4px;
-  color: #64748b;
-  background: #f1f5f9;
+  color: var(--fg-64748b);
+  background: var(--bg-f1f5f9);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
 }
-.retry-label { color: #2563eb; font-size: 12px; }
+.retry-label { color: var(--fg-2563eb); font-size: 12px; }
 .carousel-counter {
   position: absolute;
   top: 10px;
@@ -724,9 +724,9 @@ export default defineComponent({
   font-size: 11px;
 }
 .carousel-dots { display:flex;justify-content:center;gap:5px;min-height:16px;padding-top:7px; }
-.carousel-dots span { width:6px;height:6px;border-radius:50%;background:#cbd5e1;transition:background 150ms ease,transform 150ms ease; }
+.carousel-dots span { width:6px;height:6px;border-radius:50%;background:var(--bg-cbd5e1);transition:background 150ms ease,transform 150ms ease; }
 .carousel-dots span.active { background:#2563eb;transform:scale(1.1); }
-.carousel-nav { position:absolute;top:50%;width:32px;height:32px;margin-top:-16px;border:0;border-radius:50%;background:rgba(255,255,255,.88);color:#334155;font-size:24px;line-height:1;box-shadow:0 1px 5px rgba(15,23,42,.2);cursor:pointer; }
+.carousel-nav { position:absolute;top:50%;width:32px;height:32px;margin-top:-16px;border:0;border-radius:50%;background:var(--bg-rgba-255-255-255-88);color:var(--fg-334155);font-size:24px;line-height:1;box-shadow:0 1px 5px rgba(15,23,42,.2);cursor:pointer; }
 .carousel-nav.previous { left:8px; }.carousel-nav.next { right:8px; }
 .heart-burst { position:absolute;left:50%;top:50%;color:#fff;font-size:72px;line-height:1;filter:drop-shadow(0 2px 8px rgba(0,0,0,.3));transform:translate(-50%,-50%);animation:heart-pop 650ms ease both;pointer-events:none; }
 @keyframes heart-pop { 0%{opacity:0;transform:translate(-50%,-50%) scale(.35)} 35%{opacity:1;transform:translate(-50%,-50%) scale(1.12)} 100%{opacity:0;transform:translate(-50%,-50%) scale(1)} }

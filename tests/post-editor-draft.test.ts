@@ -18,6 +18,7 @@ import {
   type PostEditorUploadItem,
 } from "@/utils/postEditorMediaDraft";
 import { cacheEncryptedPreviewBestEffort } from "@/utils/postEditorMediaUpload";
+import { readThemedSource } from "./helpers/themedSource";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -140,7 +141,7 @@ describe("post editor swipe dismissal", () => {
 });
 
 describe("post editor close and media UX", () => {
-  const source = readFileSync(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
+  const source = readThemedSource(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
 
   it("forces an explicit choice and confirms broadcast before queuePost", () => {
     expect(source).toContain("const allFriends = ref(false)");

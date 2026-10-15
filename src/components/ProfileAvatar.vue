@@ -217,7 +217,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .profile-avatar{position:relative;display:inline-grid;place-items:center;width:var(--avatar-size);height:var(--avatar-size);min-width:var(--avatar-size);overflow:hidden;border-radius:50%;background:var(--avatar-color);color:#fff;line-height:1;vertical-align:middle}
 .avatar-fallback{font-size:calc(var(--avatar-size) * .39);font-weight:700;text-transform:uppercase}
-.avatar-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;background:#e2e8f0}
+.avatar-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;background:var(--bg-e2e8f0)}
 .avatar-image.ready{opacity:1}
 @media(prefers-reduced-motion:no-preference){.avatar-image{transition:opacity .15s ease}}
 </style>

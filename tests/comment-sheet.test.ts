@@ -1,3 +1,4 @@
+import { readThemedSource } from "./helpers/themedSource";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,7 +32,7 @@ const NESTED: Comment = {
 
 describe("comment bottom sheet", () => {
   it("closes an open comment sheet when navigating away from its route", () => {
-    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     expect(card).toContain("sheetRoute = router.currentRoute.value.fullPath");
     expect(card).toContain("watch(() => router.currentRoute.value.fullPath");
     expect(card).toContain("commentsOpen.value && sheetRoute && currentRoute !== sheetRoute");
@@ -40,13 +41,13 @@ describe("comment bottom sheet", () => {
   });
 
   it("opens from the comment action without route navigation", () => {
-    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     expect(card).toContain("<CommentSheet");
     expect(card).toContain('@click="toggleComments"');
     expect(card).not.toContain("router.push({ path: '/post'");
   });
   it("restores bottom navigation immediately when the comment sheet closes", () => {
-    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     expect(card).toContain("function clearCommentSheetOverlays()");
     expect(card).toContain('name.startsWith("comment-sheet-")');
     expect(card).toContain("ui.setBlockingOverlay(name, false)");
@@ -145,19 +146,19 @@ describe("comment bottom sheet", () => {
     expect(buildCommentSubmission("post", ROOT.author, " hello ", REPLY, ROOT.author)).toEqual({
       messageId: "post", recipientPubkey: REPLY.author, text: "hello", parentCommentId: "reply"
     });
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain("interactions.sendComment(");
   });
 
   it("keeps failed text and prevents a duplicate submit while sending", () => {
     expect(commentDraftAfterSend("保留这段文字", false)).toBe("保留这段文字");
     expect(commentDraftAfterSend("已发送", true)).toBe("");
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain("if (!canSubmitComment(text, !!selectedImage.value) || sending.value) return");
   });
 
   it("uses private avatars and shared profile navigation for comment authors", () => {
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain("ProfileAvatar");
     expect(sheet).toContain("openProfile(router, keys.pkHex, pubkey, event)");
   });
@@ -172,7 +173,7 @@ describe("comment bottom sheet", () => {
     expect(shouldCloseCommentSheetDrag(80, 1000, 80)).toBe(true);
     expect(shouldCloseCommentSheetDrag(80, 1000, 500)).toBe(false);
     expect(shouldCloseCommentSheetDrag(8, 1000, 1)).toBe(false);
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain('<Transition name="comment-sheet" appear>');
     expect(sheet).toContain("height:70dvh");
     expect(sheet).toContain("background:rgba(0,0,0,.66)");
@@ -285,8 +286,8 @@ describe("comment bottom sheet", () => {
   });
 
   it("keeps the root toggle before expanded roots and collapses back in place", () => {
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
-    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     expect(sheet).toContain("const INITIAL_ROOT_COUNT = 1");
     expect(sheet).toContain("index < INITIAL_ROOT_COUNT || commentsExpanded");
     expect(sheet).toContain("`查看 ${remainingRootCount} 条评论`");
@@ -297,7 +298,7 @@ describe("comment bottom sheet", () => {
   });
 
   it("keeps reply expansion independent per root and the control before replies", () => {
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain("const expandedReplyRoots = ref(new Set<string>())");
     expect(sheet).toContain("toggleReplyThread(thread.root.id)");
     expect(sheet).toContain("isReplyThreadExpanded(thread.root.id)");
@@ -307,7 +308,7 @@ describe("comment bottom sheet", () => {
   });
 
   it("uses a plain Instagram-style author row and clean empty state", () => {
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain('class: "comment-author-line"');
     expect(sheet).toContain('h("time", formatRelativeTime');
     expect(sheet).toContain(":deep(.comment-name){min-width:0;color:#1f2937");
@@ -326,7 +327,7 @@ describe("comment bottom sheet", () => {
   });
 
   it("uses a wide two-sided root separator and a shorter reply separator", () => {
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain("grid-template-columns:minmax(48px,1fr) auto minmax(48px,1fr)");
     expect(sheet).toContain(".root-toggle .toggle-line{width:100%");
     expect(sheet).toContain(".reply-toggle .toggle-line{width:24px");
@@ -337,7 +338,7 @@ describe("comment bottom sheet", () => {
   });
 
   it("derives all root and reply counts only from locally available interactions", () => {
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain("buildCommentThreads(interactions.getComments(props.message.id))");
     expect(sheet).toContain("threads.value.length - INITIAL_ROOT_COUNT");
     expect(sheet).toContain("thread.replies.length");
@@ -356,8 +357,8 @@ describe("comment bottom sheet", () => {
   });
 
   it("uses an Instagram-style modal that hides the bottom navigation", () => {
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
-    const header = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const header = readThemedSource(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
     expect(sheet).toContain("comment-sheet-backdrop{position:fixed;inset:0;z-index:12000");
     expect(sheet).toContain("height:70dvh");
     expect(header).toContain('[...ui.blockingOverlays].some(name => name.startsWith("comment-sheet-"))');
@@ -366,7 +367,7 @@ describe("comment bottom sheet", () => {
   });
 
   it("uses a focus-expanding multiline comment composer where Enter inserts a newline", () => {
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain("<textarea");
     expect(sheet).toContain('rows="1"');
     expect(sheet).toContain('enterkeyhint="enter"');
@@ -404,7 +405,7 @@ describe("comment bottom sheet", () => {
     expect(canSubmitComment("", false)).toBe(false);
     expect(canSubmitComment("", true)).toBe(true);
     expect(canSubmitComment("text", false)).toBe(true);
-    const sheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
     expect(sheet).toContain('accept="image/*"');
     expect(sheet).toContain("removeSelectedImage");
     expect(sheet).toContain("uploadEncryptedCommentImage(selectedImage.value.file");
@@ -414,12 +415,12 @@ describe("comment bottom sheet", () => {
   });
 
   it("reuses encrypted Blossom media and never inserts a raw image in the comment payload", () => {
-    const helper = readFileSync(join(process.cwd(), "src/utils/commentImage.ts"), "utf8");
+    const helper = readThemedSource(join(process.cwd(), "src/utils/commentImage.ts"), "utf8");
     expect(helper).toContain("uploadImageToBlossomWithFallback");
     expect(helper).toContain("encryptImageBytes");
     expect(helper).toContain("encodeEncryptedImageRef");
     expect(helper).toContain("storeImageInCache");
-    const store = readFileSync(join(process.cwd(), "src/stores/interactions.ts"), "utf8");
+    const store = readThemedSource(join(process.cwd(), "src/stores/interactions.ts"), "utf8");
     expect(store).toContain("media?: CommentMedia[]");
     expect(store).toContain("media?.slice(0, 1)");
     expect(store).not.toContain("data:image");

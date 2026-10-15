@@ -33,5 +33,5 @@ watch(() => keys.pkHex, async account => {
 
 <style scoped>
 .saved-page{width:100%;margin:0 auto;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
-.saved-list{display:grid;gap:12px;padding:0 10px}.empty-state{padding:64px 16px;text-align:center;color:#94a3b8}
+.saved-list{display:grid;gap:12px;padding:0 10px}.empty-state{padding:64px 16px;text-align:center;color:var(--fg-94a3b8)}
 </style>

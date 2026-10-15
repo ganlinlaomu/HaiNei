@@ -11,6 +11,26 @@
   --main-content-max-width: var(--app-page-max-width);
   /* Increased padding to ensure load-more button is always above bottom bar */
   --load-more-padding: 40px;
+  color-scheme: light;
+}
+
+/* Dark theme: explicit choice, or the system setting when no choice is stored.
+ * Component colors are switched through the tokens in theme-tokens.css. */
+:root[data-theme="dark"] {
+  --bg: #0e0f12;
+  --card: #16181c;
+  --primary: #e7e9ea;
+  --accent: #4b9bec;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e0f12;
+    --card: #16181c;
+    --primary: #e7e9ea;
+    --accent: #4b9bec;
+    color-scheme: dark;
+  }
 }
 
 /* 基础盒模型 */
@@ -127,7 +147,7 @@ body > #app {
 /* 按钮 */
 .btn {
   background: var(--accent);
-  color: white;
+  color: #fff;
   border: none;
   padding: 8px 12px;
   border-radius: 8px;
@@ -141,7 +161,7 @@ textarea {
   max-width: 100%;
   padding: 8px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bd-e2e8f0);
   margin-top: 8px;
   box-sizing: border-box;
   font-size: 16px;
@@ -175,7 +195,7 @@ textarea {
 /* 小字 */
 .small {
   font-size: 12px;
-  color: #64748b;
+  color: var(--fg-64748b);
 }
 
 /* ✅ 底部导航栏修复版 */
@@ -186,8 +206,8 @@ textarea {
   bottom: 0;
 
   height: var(--bottom-nav-height);
-  background: #ffffff;
-  border-top: 1px solid #e2e8f0;
+  background: var(--bg-ffffff);
+  border-top: 1px solid var(--bd-e2e8f0);
   padding-bottom: env(safe-area-inset-bottom);
 
   /* ✅ 移动端稳定显示关键 */

@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readThemedSource } from "./helpers/themedSource";
 
 describe("Home visual polish contract", () => {
   it("uses a flat mobile feed and keeps card treatment on larger screens", () => {
-    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
-    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
 
     expect(home).toContain(".feed {");
     expect(home).toContain("gap: 0;");
@@ -18,7 +19,7 @@ describe("Home visual polish contract", () => {
   });
 
   it("moves audience context into author metadata and keeps actions focused", () => {
-    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     expect(card).toContain('class="author-meta"');
     expect(card).toContain('class="audience-link"');
     expect(card).toContain('return "仅自己可见"');
@@ -27,8 +28,8 @@ describe("Home visual polish contract", () => {
   });
 
   it("uses inline long-text expansion and a quieter new-post pill", () => {
-    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
-    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
 
     expect(card).toContain(".text-button{display:inline-flex");
     expect(home).toContain('<span class="notification-icon">↑</span>');
@@ -37,8 +38,8 @@ describe("Home visual polish contract", () => {
   });
 
   it("keeps profile activity flat regardless of wide viewport", () => {
-    const card = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
-    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const profile = readThemedSource(join(process.cwd(), "src/views/Profile.vue"), "utf8");
 
     expect(card).toContain("flat?: boolean");
     expect(card).toContain("'force-flat': flat");
@@ -49,9 +50,9 @@ describe("Home visual polish contract", () => {
   });
 
   it("renders one compact green success style across successful actions", () => {
-    const toast = readFileSync(join(process.cwd(), "src/components/ToastContainer.vue"), "utf8");
-    const editor = readFileSync(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
-    const profile = readFileSync(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
+    const toast = readThemedSource(join(process.cwd(), "src/components/ToastContainer.vue"), "utf8");
+    const editor = readThemedSource(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
+    const profile = readThemedSource(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
 
     expect(toast).toContain("font-size:13px");
     expect(toast).toContain('background:rgba(255,255,255,.96)');

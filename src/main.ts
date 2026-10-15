@@ -2,12 +2,14 @@ import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";
 import "./styles.css";
+import "./theme-tokens.css";
 import router from "./router";
 
 import { useKeyStore } from "@/stores/keys";
 import { clearExpiredCache } from "@/utils/imageCache";
 import { initVersionTracking, handleVersionUpdate } from "@/utils/versionManager";
 import { migrateLegacyLocalStorage } from "@/services/legacyLocalStorageMigration";
+import { initTheme } from "@/services/theme";
 
 let serviceWorkerRegistration: Promise<ServiceWorkerRegistration> | null = null;
 let serviceWorkerLoadListenerAttached = false;
@@ -66,6 +68,8 @@ async function bootstrap() {
   // Vue Router runs its auth guard. Otherwise restoreSession() sees an empty
   // in-memory deviceStorage map and permanently marks the session as restored.
   await migrateLegacyLocalStorage();
+  // Device storage is hydrated now; apply an explicit light/dark choice before mount.
+  initTheme();
 
   const versionChanged = initVersionTracking();
   if (versionChanged) {

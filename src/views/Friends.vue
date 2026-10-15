@@ -720,8 +720,8 @@ export default defineComponent({
 </script>
 
 <style scoped>
-.pubkey-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.scan-qr-button{min-width:64px;border:1px solid #1687e8;border-radius:9px;background:#fff;color:#1687e8;font-weight:700}.optional{color:#94a3b8;font-size:12px;font-weight:400}
-.friend-swipe{position:relative;overflow:hidden;touch-action:pan-y}.friend-swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:120px}.swipe-action{width:60px;border:0;color:#fff;font-size:12px;font-weight:650}.swipe-action.edit{background:#536471}.swipe-action.delete{background:#ef4444}.friend-swipe .friend-item{position:relative;z-index:1;background:#fff;transition:transform .2s ease}.friends-empty{display:flex;min-height:28vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:#64748b;text-align:center}.friends-empty strong{color:#0f1419;font-size:18px}.friends-empty span{font-size:14px}.friends-empty button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:#0f1419;color:#fff;font-size:14px;font-weight:650}
+.pubkey-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.scan-qr-button{min-width:64px;border:1px solid #1687e8;border-radius:9px;background:var(--bg-fff);color:var(--fg-1687e8);font-weight:700}.optional{color:var(--fg-94a3b8);font-size:12px;font-weight:400}
+.friend-swipe{position:relative;overflow:hidden;touch-action:pan-y}.friend-swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:120px}.swipe-action{width:60px;border:0;color:#fff;font-size:12px;font-weight:650}.swipe-action.edit{background:#536471}.swipe-action.delete{background:#ef4444}.friend-swipe .friend-item{position:relative;z-index:1;background:var(--bg-fff);transition:transform .2s ease}.friends-empty{display:flex;min-height:28vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:var(--fg-64748b);text-align:center}.friends-empty strong{color:var(--fg-0f1419);font-size:18px}.friends-empty span{font-size:14px}.friends-empty button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:var(--bg-0f1419);color:#fff;font-size:14px;font-weight:650}
 
 .friends-container {
   position: relative;
@@ -747,18 +747,18 @@ export default defineComponent({
 }
 
 .sync-status.syncing {
-  background: #dbeafe;
-  color: #1e40af;
+  background: var(--bg-dbeafe);
+  color: var(--fg-1e40af);
 }
 
 .sync-status.success {
-  background: #dcfce7;
-  color: #15803d;
+  background: var(--bg-dcfce7);
+  color: var(--fg-15803d);
 }
 
 .sync-status.error {
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--bg-fee2e2);
+  color: var(--fg-991b1b);
 }
 
 .sync-icon {
@@ -771,7 +771,7 @@ export default defineComponent({
   margin: 0 10px 10px;
   padding: 4px;
   border-radius: 12px;
-  background: #eef2f6;
+  background: var(--bg-eef2f6);
 }
 .friend-tabs button {
   flex: 1;
@@ -781,10 +781,10 @@ export default defineComponent({
   border: 0;
   border-radius: 9px;
   background: transparent;
-  color: #64748b;
+  color: var(--fg-64748b);
   font-size: 13px;
 }
-.friend-tabs button.active { background:#fff;color:#1d4ed8;box-shadow:0 1px 4px rgba(15,23,42,.08); }
+.friend-tabs button.active { background:var(--bg-fff);color:var(--fg-1d4ed8);box-shadow:0 1px 4px rgba(15,23,42,.08); }
 .friend-tabs span { margin-left:3px;font-size:11px; }
 
 .friend-item {
@@ -793,8 +793,8 @@ export default defineComponent({
   justify-content: space-between;
   min-height: 56px;
   padding: 9px 4px;
-  background: #fff;
-  border-bottom: 1px solid #eef2f6;
+  background: var(--bg-fff);
+  border-bottom: 1px solid var(--bd-eef2f6);
   gap: 10px;
 }
 
@@ -817,10 +817,10 @@ export default defineComponent({
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #64748b;
+  color: var(--fg-64748b);
   cursor: pointer;
 }
-.message-button{display:grid;place-items:center;width:44px;height:44px;padding:10px;border:0;border-radius:9px;background:transparent;color:#1687e8;cursor:pointer}.message-button svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.message-button:active{background:#eaf5ff}
+.message-button{display:grid;place-items:center;width:44px;height:44px;padding:10px;border:0;border-radius:9px;background:transparent;color:var(--fg-1687e8);cursor:pointer}.message-button svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.message-button:active{background:var(--bg-eaf5ff)}
 .friend-menu {
   position: absolute;
   z-index: 20;
@@ -830,9 +830,9 @@ export default defineComponent({
   padding: 5px;
   display: grid;
   gap: 2px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bd-e2e8f0);
   border-radius: 10px;
-  background: #fff;
+  background: var(--bg-fff);
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
 }
 .friend-menu button {
@@ -841,12 +841,12 @@ export default defineComponent({
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: #334155;
+  color: var(--fg-334155);
   text-align: left;
   cursor: pointer;
 }
-.friend-menu button:hover { background: #f8fafc; }
-.friend-menu button.danger { color: #dc2626; }
+.friend-menu button:hover { background: var(--bg-f8fafc); }
+.friend-menu button.danger { color: var(--fg-dc2626); }
 
 .btn {
   background: #1976d2;
@@ -881,13 +881,13 @@ export default defineComponent({
   justify-content: center;
   font-size: 16px;
   transition: all 0.2s;
-  background: white;
+  background: var(--bg-fff);
 }
 
 .btn-add {
   width: calc(32px * 2 + 6px);
   height: 32px;
-  color: #1976d2;
+  color: var(--fg-1976d2);
   border: 1px solid #1976d2;
   font-size: 20px;
   font-weight: 300;
@@ -896,7 +896,7 @@ export default defineComponent({
 
 .btn-add:hover {
   background: #1976d2;
-  color: white;
+  color: #fff;
   transform: translateY(-1px);
   box-shadow: 0 2px 6px rgba(25, 118, 210, 0.3);
 }
@@ -917,7 +917,7 @@ export default defineComponent({
 }
 
 .modal-content {
-  background: white;
+  background: var(--bg-fff);
   border-radius: 12px;
   padding: 24px;
   max-width: 500px;
@@ -940,18 +940,18 @@ export default defineComponent({
   display: block;
   margin-bottom: 6px;
   font-weight: 500;
-  color: #374151;
+  color: var(--fg-374151);
 }
 
 .required {
-  color: #ef4444;
+  color: var(--fg-ef4444);
 }
 
 .input {
   width: 100%;
   padding: 10px;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--bd-e5e7eb);
   font-size: 16px;
   box-sizing: border-box;
 }
@@ -963,7 +963,7 @@ export default defineComponent({
 }
 
 .input-disabled {
-  background: #f3f4f6;
+  background: var(--bg-f3f4f6);
   cursor: not-allowed;
 }
 
@@ -976,24 +976,24 @@ export default defineComponent({
 
 .small {
   font-size: 12px;
-  color: #64748b;
+  color: var(--fg-64748b);
 }
 
-.friends-list-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.friend-heading-actions{display:flex;align-items:center;gap:8px}.btn-scan{width:40px;height:32px;border:1px solid #1976d2;background:#fff;color:#1976d2}.btn-scan svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.friends-list-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.friend-heading-actions{display:flex;align-items:center;gap:8px}.btn-scan{width:40px;height:32px;border:1px solid #1976d2;background:var(--bg-fff);color:var(--fg-1976d2)}.btn-scan svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .friends-list-heading h3{margin:0}
-.friends-load-state{display:flex;min-height:120px;align-items:center;justify-content:center;gap:10px;padding:24px;color:#64748b;font-size:14px;text-align:center}
-.friends-load-state.load-error{flex-direction:column;color:#b91c1c}
-.friends-load-state button{min-height:38px;padding:0 15px;border:1px solid #cbd5e1;border-radius:999px;background:#fff;color:#0f1419;font:inherit;font-weight:600}
-.load-spinner{width:18px;height:18px;border:2px solid #cbd5e1;border-top-color:#2563eb;border-radius:50%;animation:friends-spin .7s linear infinite}
+.friends-load-state{display:flex;min-height:120px;align-items:center;justify-content:center;gap:10px;padding:24px;color:var(--fg-64748b);font-size:14px;text-align:center}
+.friends-load-state.load-error{flex-direction:column;color:var(--fg-b91c1c)}
+.friends-load-state button{min-height:38px;padding:0 15px;border:1px solid var(--bd-cbd5e1);border-radius:999px;background:var(--bg-fff);color:var(--fg-0f1419);font:inherit;font-weight:600}
+.load-spinner{width:18px;height:18px;border:2px solid var(--bd-cbd5e1);border-top-color:#2563eb;border-radius:50%;animation:friends-spin .7s linear infinite}
 @keyframes friends-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.load-spinner{animation:none}}
 
 .card {
-  background: #fff;
+  background: var(--bg-fff);
   padding: 14px;
   border-radius: 12px;
   margin: 0 10px 10px;
-  border: 1px solid #e8edf3;
+  border: 1px solid var(--bd-e8edf3);
   box-shadow: 0 2px 8px rgba(15,23,42,0.03);
 }
 
@@ -1014,8 +1014,8 @@ export default defineComponent({
   top: 100%;
   left: 0;
   right: 0;
-  background: white;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-fff);
+  border: 1px solid var(--bd-e5e7eb);
   border-top: none;
   border-radius: 0 0 8px 8px;
   max-height: 200px;
@@ -1033,7 +1033,7 @@ export default defineComponent({
 
 .suggestion-item:hover,
 .suggestion-item.highlighted {
-  background-color: #f3f4f6;
+  background-color: var(--bg-f3f4f6);
 }
 
 .suggestion-item:last-child {

@@ -267,7 +267,7 @@ export default defineComponent({
 <style>
 body.login-page {
   padding-bottom: 0;
-  background: #0b1017;
+  background: var(--bg-0b1017);
 }
 
 body.login-page > #app {
@@ -349,15 +349,15 @@ body.post-editor-open > #app {
   justify-content: center;
   gap: 10px;
   border-radius: 14px;
-  background: #fff;
-  color: #475569;
+  background: var(--bg-fff);
+  color: var(--fg-475569);
   font-size: 14px;
 }
 
 .composer-loading-spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid #cbd5e1;
+  border: 2px solid var(--bd-cbd5e1);
   border-top-color: #3b82f6;
   border-radius: 50%;
   animation: composer-spin 650ms linear infinite;

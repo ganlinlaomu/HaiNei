@@ -126,12 +126,12 @@ async function removeMissing(id: string) {
 
 <style scoped>
 .saved-content{padding-bottom:12px}
-.saved-error{margin:8px 14px;color:#b91c1c;font-size:13px}
-.saved-empty{text-align:center;padding:64px 16px;color:#94a3b8;font-size:13px}
+.saved-error{margin:8px 14px;color:var(--fg-b91c1c);font-size:13px}
+.saved-empty{text-align:center;padding:64px 16px;color:var(--fg-94a3b8);font-size:13px}
 .saved-list{display:grid;gap:12px;padding:0 10px}
-.missing-summary{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 14px;padding:11px;border:1px solid #e2e8f0;border-radius:10px;color:#64748b;font-size:12px;line-height:1.5}
-.missing-summary button,.missing-post button{border:0;background:#eef2f6;border-radius:7px;padding:8px;color:#334155;font:inherit;white-space:nowrap}
+.missing-summary{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 14px;padding:11px;border:1px solid var(--bd-e2e8f0);border-radius:10px;color:var(--fg-64748b);font-size:12px;line-height:1.5}
+.missing-summary button,.missing-post button{border:0;background:var(--bg-eef2f6);border-radius:7px;padding:8px;color:var(--fg-334155);font:inherit;white-space:nowrap}
 .missing-summary button:disabled{opacity:.55}
-.missing-post{padding:16px;border:1px solid #e2e8f0;border-radius:12px;color:#334155;font-size:13px}
-.missing-post p{margin:8px 0;color:#64748b;font-size:12px;overflow-wrap:anywhere}
+.missing-post{padding:16px;border:1px solid var(--bd-e2e8f0);border-radius:12px;color:var(--fg-334155);font-size:13px}
+.missing-post p{margin:8px 0;color:var(--fg-64748b);font-size:12px;overflow-wrap:anywhere}
 </style>
