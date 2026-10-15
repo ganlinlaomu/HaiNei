@@ -1400,7 +1400,9 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         && item.conversationId === conversationId
         && isMessageAfter({ id: item.id, createdAt: item.created_at }, read)).length;
       this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: sealedUnread };
-      if (typeof navigator !== "undefined") {
+      // A masked (restoring) count is not authoritative; App.vue syncs the
+      // badge once the durable projection is ready.
+      if (typeof navigator !== "undefined" && this.readStateRestorePhase !== "restoring") {
         const notifications = useNotificationsStore();
         void syncAppBadge(accountBadgeCount(
           account,
