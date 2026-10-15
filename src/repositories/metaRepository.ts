@@ -27,10 +27,11 @@ export class MetaRepository {
 
   async listPrefix(accountPubkey: string, prefix: string) {
     const account = normalizeAccountPubkey(accountPubkey);
+    // Range over the [accountPubkey+key] primary key instead of reading every
+    // row of the account and filtering (burn tombstones, receipts, drafts...).
     return this.database.accountMeta
-      .where("accountPubkey")
-      .equals(account)
-      .filter(record => record.key.startsWith(prefix))
+      .where("[accountPubkey+key]")
+      .between([account, prefix], [account, `${prefix}\uffff`], true, true)
       .toArray();
   }
 }

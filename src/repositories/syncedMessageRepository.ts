@@ -482,6 +482,14 @@ export class SyncedMessageRepository {
     return latestDirect.filter((message): message is SyncedMessageRecord => !!message);
   }
 
+  /** Newest stored message timestamp via the [accountPubkey+createdAt] index. */
+  async latestMessageCreatedAt(accountPubkey: string): Promise<number | undefined> {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const newest = await this.database.syncedMessages.where("[accountPubkey+createdAt]")
+      .between([account, Dexie.minKey], [account, Dexie.maxKey]).last();
+    return newest?.createdAt || undefined;
+  }
+
   async listRecent(accountPubkey: string, limit = 200) {
     const account = normalizeAccountPubkey(accountPubkey);
     const recent = await this.database.syncedMessages.where("[accountPubkey+createdAt]")
@@ -814,8 +822,12 @@ export class SyncedMessageRepository {
     this.visiblePolicies.delete(token);
     this.visiblePolicies.set(token, { policy, test: message => isMessageAfter({ id: message.id, createdAt: message.createdAt }, cursor) && visible(message) });
     if (this.visiblePolicies.size > 512) this.visiblePolicies.delete(this.visiblePolicies.keys().next().value!);
+    const key: [string, string] = [account, conversationId];
+    // Cache hits are the common case during full reconciliation. A plain read
+    // avoids serializing every conversation behind a read-write transaction.
+    const cached = await this.database.conversationStates.get(key);
+    if (cached?.visibleUnreadCache?.policy === policy) return cached.visibleUnreadCache.count;
     return this.database.transaction("rw", this.database.syncedMessages, this.database.conversationStates, async () => {
-      const key: [string, string] = [account, conversationId];
       const summary = await this.database.conversationStates.get(key);
       if (summary?.visibleUnreadCache?.policy === policy) return summary.visibleUnreadCache.count;
       let count = 0;

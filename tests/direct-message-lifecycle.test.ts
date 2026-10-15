@@ -339,19 +339,20 @@ describe("direct-message authorization and conversation lifecycle", () => {
   it("keeps a foreground read made while background refresh is still loading peer state", async () => {
     const context = seed([dm("latest", 20)], relationship("accepted"));
     await context.direct.refresh(ACCOUNT);
-    const get = vi.mocked(metaRepository.get);
+    // refresh() loads conversation preferences with one prefix read.
+    const get = vi.mocked(metaRepository.listPrefix);
     const original = get.getMockImplementation()!;
     let release!: () => void;
     let captured!: () => void;
     const capturedRead = new Promise<void>(resolve => { captured = resolve; });
     const gate = new Promise<void>(resolve => { release = resolve; });
-    get.mockImplementation(async (account, key) => {
-      const record = await original(account, key);
-      if (key === `dm-conversation:${PEER}`) {
+    get.mockImplementation(async (account, prefix) => {
+      const records = await original(account, prefix);
+      if (prefix === "dm-conversation:") {
         captured();
         await gate;
       }
-      return record;
+      return records;
     });
     try {
       const refresh = context.direct.refresh(ACCOUNT);
