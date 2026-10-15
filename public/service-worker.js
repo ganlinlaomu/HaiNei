@@ -12,6 +12,8 @@ const BADGE_STATE_URL = new URL('/__hainei_badge_state__', self.location.origin)
 const PUSH_INBOX_URL = new URL('/__hainei_push_inbox__', self.location.origin).href;
 const PUSH_HINT_TTL_MS = 24 * 60 * 60 * 1000;
 const PUSH_HINT_MAX_ITEMS = 32;
+// One replaceable DM notification instead of one per message.
+const DM_NOTIFICATION_TAG = 'hainei-dm';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', VERSION, BUILD_ID);
@@ -68,6 +70,13 @@ async function writeStoredBadgeCount(count) {
     }));
   } catch {}
   return normalized;
+}
+
+async function closeDmNotifications() {
+  try {
+    const notifications = await self.registration?.getNotifications?.({ tag: DM_NOTIFICATION_TAG }) || [];
+    for (const notification of notifications) notification.close();
+  } catch {}
 }
 
 async function applyAppBadge(count) {
@@ -210,7 +219,14 @@ self.addEventListener('message', (event) => {
     return;
   }
   if (event.data?.type === 'SYNC_APP_BADGE') {
-    event.waitUntil(queueBadgeSync(event.data.count, event.data.accountScope || ""));
+    // Close inside the same queue so a push queued right after this sync
+    // cannot have its fresh notification closed.
+    badgeUpdateQueue = queueBadgeSync(event.data.count, event.data.accountScope || "").then(async count => {
+      // The foreground app read everything: the DM notification is stale.
+      if (count === 0) await closeDmNotifications();
+      return count;
+    });
+    event.waitUntil(badgeUpdateQueue);
     return;
   }
   if (event.data?.type === 'SYNC_APP_BADGE_SCOPE') {
@@ -284,9 +300,15 @@ self.addEventListener('push', (event) => {
     badgeUpdateQueue = badgeUpdateQueue.catch(() => undefined).then(async () => {
       const acknowledge = await scopedPushHint(payload);
       if (!acknowledge) return;
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const appVisible = windows.some(client => client.visibilityState === 'visible');
+      // Every push must still display a notification: WebKit revokes the
+      // subscription for silent pushes. While the app is on screen it shows
+      // its own unread state, so stay quiet; otherwise re-alert on replace.
       await self.registration.showNotification('HaiNei', {
         body:'你有新的私信消息', icon:'/icon-192.png', badge:'/icon-192.png',
-        tag: payload.notificationId, data:{type:'message'}
+        tag: DM_NOTIFICATION_TAG, data:{type:'message'},
+        ...(appVisible ? { silent: true } : { renotify: true })
       });
       // Notification delivery must survive CacheStorage quota failures.
       try { await cacheEncryptedPushHint(payload); } catch {}
@@ -308,9 +330,16 @@ self.addEventListener('notificationclick', (event) => {
   const target = new URL(path, self.location.origin).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    if (windows[0]) {
-      await windows[0].navigate(target);
-      return windows[0].focus();
+    const client = windows.find(item => item.focused)
+      || windows.find(item => item.visibilityState === 'visible')
+      || windows[0];
+    if (client) {
+      try {
+        const navigated = await client.navigate(target);
+        return (navigated || client).focus();
+      } catch {
+        // navigate() rejects for clients this worker does not control.
+      }
     }
     return self.clients.openWindow(target);
   })());

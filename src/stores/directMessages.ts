@@ -334,6 +334,9 @@ export function buildDirectConversationSummaries(
   options: { friendshipRecords?: FriendshipRecord[]; preferencesByPeer?: Record<string, ConversationPreference | undefined> } = {},
 ) {
   const latestByPeer = new Map<string, InboxItem>();
+  // An unmatched outgoing task carries "local:<peer>"; unread is keyed by
+  // the canonical conversation id seen on any durable item for that peer.
+  const canonicalConversationByPeer = new Map<string, string>();
   const friendshipByPeer = options.friendshipRecords
     ? new Map(options.friendshipRecords.map(record => [record.peerPubkey.toLowerCase(), record]))
     : undefined;
@@ -345,6 +348,9 @@ export function buildDirectConversationSummaries(
     if (friendshipByPeer && friendship?.state !== "accepted") continue;
     if (friendshipByPeer && !isAuthorizedDirectMessage(item, accountPubkey, friendship)) continue;
     if (!afterDeletion(item, options.preferencesByPeer?.[peer])) continue;
+    if (item.conversationId && !item.conversationId.startsWith("local:")) {
+      canonicalConversationByPeer.set(peer, item.conversationId);
+    }
     const current = latestByPeer.get(peer);
     if (!current || item.created_at > current.created_at || (item.created_at === current.created_at && item.id.localeCompare(current.id) > 0)) {
       latestByPeer.set(peer, item);
@@ -354,7 +360,7 @@ export function buildDirectConversationSummaries(
     peerPubkey,
     conversationId: latest.conversationId || latest.id,
     latest,
-    unread: unreadByConversation[latest.conversationId || latest.id] || 0,
+    unread: unreadByConversation[canonicalConversationByPeer.get(peerPubkey) || latest.conversationId || latest.id] || 0,
   })).sort((a, b) => b.latest.created_at - a.latest.created_at || a.latest.id.localeCompare(b.latest.id));
 }
 
@@ -1198,9 +1204,9 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         messages.loadedFor === account ? Promise.resolve() : messages.load(account),
         friendships.loadedFor === account && !friendships.loading ? Promise.resolve() : friendships.load(account),
       ]);
-      if (useKeyStore().pkHex !== account) return;
+      if (useKeyStore().pkHex.toLowerCase() !== account) return;
       let outgoingTasks = await outgoingDmTaskRepository.list(account);
-      if (useKeyStore().pkHex !== account) return;
+      if (useKeyStore().pkHex.toLowerCase() !== account) return;
       const outgoingMatches = matchOutgoingTasksToCanonical(messages.inbox, outgoingTasks, account);
       for (const [messageId, task] of outgoingMatches.taskByMessageId) {
         if (task.outgoingId === messageId && task.canonicalMessageId === messageId) continue;
@@ -1226,7 +1232,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         }
         return normalized;
       }));
-      if (useKeyStore().pkHex !== account) return;
+      if (useKeyStore().pkHex.toLowerCase() !== account) return;
       const mergedById = new Map(outgoingTasks.map(task => [task.localId, task]));
       for (const current of this.outgoingTasks.filter(task => task.accountPubkey === account)) {
         const loaded = mergedById.get(current.localId);
@@ -1312,7 +1318,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         };
         return [conversationId, read] as const;
       }));
-      if (useKeyStore().pkHex !== account) return;
+      if (useKeyStore().pkHex.toLowerCase() !== account) return;
       this.preferencesByPeer = preferences;
       this.receiptStateByPeer = receiptStates;
       this.sentReceiptStateByPeer = sentReceiptStates;
@@ -1587,7 +1593,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           const preparedAudio = await prepareEncryptedDmAudio(recording.blob, recording.duration);
           const updated = { ...task, preparedAudio, updatedAt: Date.now() };
           await outgoingDmTaskRepository.put(updated);
-          if (useKeyStore().pkHex !== account || this.loadedFor !== account) return;
+          if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return;
           const index = this.outgoingTasks.findIndex(item => item.accountPubkey === account && item.localId === task.localId);
           if (index >= 0) this.outgoingTasks.splice(index, 1, updated);
           void this.runTask(task.localId);
@@ -1681,7 +1687,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const work = (async () => {
         let task = this.outgoingTasks.find(item => item.accountPubkey === account && item.localId === localId)
           || await outgoingDmTaskRepository.get(account, localId);
-        if (!task || task.state === "sent" || useKeyStore().pkHex !== account) return;
+        if (!task || task.state === "sent" || useKeyStore().pkHex.toLowerCase() !== account) return;
         if (task.imageName && !task.imageBytes && !task.preparedImage && !task.uploadedRef && !task.outgoingId) return;
         if (task.mediaType === "audio" && !task.preparedAudio && !task.uploadedRef && !task.outgoingId) return;
         const friendships = useFriendshipsStore();
@@ -1731,7 +1737,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           } else {
             task = (await this.patchTask(localId, { state: "sending", lastError: undefined })) || task;
           }
-          if (useKeyStore().pkHex !== account) throw new Error("账号已切换");
+          if (useKeyStore().pkHex.toLowerCase() !== account) throw new Error("账号已切换");
           if (!friendships.isAccepted(task.peerPubkey)) throw new Error("好友关系已变更");
           const keys = useKeyStore();
           registerOutgoingPushSigner(account, keys.signEvent.bind(keys));
