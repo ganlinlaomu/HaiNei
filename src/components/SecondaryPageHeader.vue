@@ -30,7 +30,7 @@ function goBack() {
 </script>
 
 <style scoped>
-.secondary-page-header{position:sticky;top:0;z-index:10;display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:54px;background:rgba(248,250,252,.96);border-bottom:1px solid #e2e8f0}
-.secondary-page-header button{width:44px;height:44px;padding:0;border:0;background:transparent;color:#334155;font-size:30px;line-height:1;cursor:pointer}
+.secondary-page-header{position:sticky;top:0;z-index:10;display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:54px;background:var(--bg-rgba-248-250-252-96);border-bottom:1px solid var(--bd-e2e8f0)}
+.secondary-page-header button{width:44px;height:44px;padding:0;border:0;background:transparent;color:var(--fg-334155);font-size:30px;line-height:1;cursor:pointer}
 .secondary-page-header h1{min-width:0;margin:0;overflow:hidden;text-align:center;text-overflow:ellipsis;white-space:nowrap;font-size:17px}
 </style>

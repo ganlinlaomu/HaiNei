@@ -335,7 +335,7 @@ onUnmounted(() => {
 }
 
 .update-button {
-  background: #fff;
+  background: var(--bg-fff);
   color: #667eea;
   border: none;
   border-radius: 8px;

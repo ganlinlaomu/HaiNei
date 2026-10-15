@@ -9,6 +9,7 @@ import {
 } from "@/nostr/messaging/directMessages";
 import { buildDirectConversationSummaries, directMessagesForPeer } from "@/stores/directMessages";
 import type { InboxItem } from "@/stores/messages";
+import { readThemedSource } from "./helpers/themedSource";
 
 const ACCOUNT = "a".repeat(64);
 const FRIEND = "b".repeat(64);
@@ -30,19 +31,19 @@ function dm(id: string, pubkey: string, recipientPubkeys: string[], created_at: 
 
 describe("direct-message navigation and UI contract", () => {
   it("has exactly the required four icon-only bottom tabs and keeps friends under My", () => {
-    const source = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
     const labels = [...source.matchAll(/<router-link class="nav-item"[^>]*aria-label="([^"]+)"/g)].map(match => match[1]);
     expect(labels).toEqual(["首页", "私信", "通知", "我的"]);
     expect(source).toContain('to="/conversations"');
     expect(source).not.toContain('to="/friends"');
     expect(source).not.toContain('class="nav-label"');
     expect(source).toContain('to="/settings"');
-    const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
+    const settings = readThemedSource(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     expect(settings).toContain('router.push("/friends")');
   });
 
   it("shows profile save progress and prevents duplicate submissions", () => {
-    const profile = readFileSync(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
+    const profile = readThemedSource(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
     expect(profile).toContain('const saving = ref(false)');
     expect(profile).toContain(':disabled="saving"');
     expect(profile).toContain('saving ? "保存中…" : "保存"');
@@ -52,8 +53,8 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("uses the shared secondary header on friend profiles while preserving history-back behavior", () => {
-    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
-    const secondaryHeader = readFileSync(join(process.cwd(), "src/components/SecondaryPageHeader.vue"), "utf8");
+    const profile = readThemedSource(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const secondaryHeader = readThemedSource(join(process.cwd(), "src/components/SecondaryPageHeader.vue"), "utf8");
     expect(profile).toContain('<SecondaryPageHeader title="个人资料" back-label="返回上一页" back-mode="history" />');
     expect(profile).not.toContain('class="profile-topbar"');
     expect(profile).not.toContain('class="back-button"');
@@ -62,10 +63,10 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("keeps DM receipt controls out of Home and profile feeds", () => {
-    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
-    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
-    const viewModel = readFileSync(join(process.cwd(), "src/nostr/messaging/messageViewModel.ts"), "utf8");
-    const routing = readFileSync(join(process.cwd(), "src/nostr/messaging/messageRouting.ts"), "utf8");
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const profile = readThemedSource(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const viewModel = readThemedSource(join(process.cwd(), "src/nostr/messaging/messageViewModel.ts"), "utf8");
+    const routing = readThemedSource(join(process.cwd(), "src/nostr/messaging/messageRouting.ts"), "utf8");
     expect(home).toContain("const isHomeRenderable = isFeedRenderableMessage");
     expect(profile).toContain("isFeedRenderableMessage(message)");
     expect(routing).toContain('values.has(`t:${DM_RECEIPT_TYPE}`)');
@@ -74,11 +75,11 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("uses one durable-record mapper across Home, Profile, inbox restore and DM history", () => {
-    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
-    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
-    const messages = readFileSync(join(process.cwd(), "src/stores/messages.ts"), "utf8");
-    const directMessages = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
-    const viewModel = readFileSync(join(process.cwd(), "src/nostr/messaging/messageViewModel.ts"), "utf8");
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const profile = readThemedSource(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const messages = readThemedSource(join(process.cwd(), "src/stores/messages.ts"), "utf8");
+    const directMessages = readThemedSource(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const viewModel = readThemedSource(join(process.cwd(), "src/nostr/messaging/messageViewModel.ts"), "utf8");
 
     expect(viewModel).toContain("export function syncedMessageRecordToInboxItem");
     expect(messages).toContain(".map(syncedMessageRecordToInboxItem)");
@@ -91,8 +92,8 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("shows a friend's non-DM posts on their profile", () => {
-    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
-    const repository = readFileSync(join(process.cwd(), "src/repositories/syncedMessageRepository.ts"), "utf8");
+    const profile = readThemedSource(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const repository = readThemedSource(join(process.cwd(), "src/repositories/syncedMessageRepository.ts"), "utf8");
     expect(profile).toContain('class="profile-posts"');
     expect(profile).toContain('<PostCard v-for="post in ownerPosts"');
     expect(profile).toContain("syncedMessageRepository.listBySender(account, owner)");
@@ -109,8 +110,8 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("uses the same profile view for self and exposes editing only there", () => {
-    const profile = readFileSync(join(process.cwd(), "src/views/Profile.vue"), "utf8");
-    const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
+    const profile = readThemedSource(join(process.cwd(), "src/views/Profile.vue"), "utf8");
+    const settings = readThemedSource(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     expect(profile).toContain("const isSelf = computed(() => ownerPubkey.value === keys.pkHex)");
     expect(profile).toContain('v-if="isSelf" class="message-button"');
     expect(profile).toContain("@click=\"router.push('/settings/profile')\">编辑资料</button>");
@@ -121,7 +122,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("opens the peer profile from the DM header name/avatar and received-message avatar", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain('class="peer-profile avatar-profile-link"');
     expect(chat).toContain('class="peer-profile name-profile-link"');
     expect(chat).toContain('class="message-avatar-link"');
@@ -130,7 +131,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("shows the sender's temporary text until burn without revealing the receiver's unopened text", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const burned = chat.indexOf('v-if="isBurned(message)" class="burned-placeholder"');
     const sent = chat.indexOf('v-else-if="isOwn(message)" class="temporary-message"');
     const opened = chat.indexOf('v-else-if="canShowTemporaryText(message)" class="temporary-message"');
@@ -153,8 +154,8 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("marks a disappearing message read only after an explicit reveal and an exact receipt", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const store = readThemedSource(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
     expect(chat).toContain("void directMessages.acknowledgeOpenedDisappearing(peer, message, deadline)");
     expect(store).toContain("this.scheduleOpenedBurn(peer, id, deadline)");
     expect(chat).toContain('v-if="isBurned(message)" class="burned-placeholder"');
@@ -166,7 +167,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("shows a compact timestamp for every direct-message type", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain('v-if="!isMediaCaption(message) || isDisappearing(message)" class="message-meta"');
     expect(chat).toContain('<time>{{ formatBubbleTime(message.created_at) }}</time>');
     expect(chat).toContain(".message-meta{display:flex");
@@ -176,7 +177,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("keeps long quoted replies inside mobile bubbles and the composer", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     // Both sent bubbles and the active reply composer must be bounded,
     // including single uninterrupted URLs, emojis and long CJK previews.
     expect(chat).toContain("class=\"quoted-message\"");
@@ -194,9 +195,9 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("supports quoted replies in direct-message bubbles and composer", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
-    const taskRepository = readFileSync(join(process.cwd(), "src/repositories/outgoingDmTaskRepository.ts"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const store = readThemedSource(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const taskRepository = readThemedSource(join(process.cwd(), "src/repositories/outgoingDmTaskRepository.ts"), "utf8");
 
     expect(chat).not.toContain('class="message-reply-button"');
     expect(chat).toContain('class="quoted-message"');
@@ -232,13 +233,13 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("uses My as a navigation hub with dedicated settings and consistent back navigation", () => {
-    const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
-    const system = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
-    const friends = readFileSync(join(process.cwd(), "src/views/Friends.vue"), "utf8");
-    const profile = readFileSync(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
-    const saved = readFileSync(join(process.cwd(), "src/views/Saved.vue"), "utf8");
-    const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
-    const secondaryHeader = readFileSync(join(process.cwd(), "src/components/SecondaryPageHeader.vue"), "utf8");
+    const settings = readThemedSource(join(process.cwd(), "src/views/Settings.vue"), "utf8");
+    const system = readThemedSource(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    const friends = readThemedSource(join(process.cwd(), "src/views/Friends.vue"), "utf8");
+    const profile = readThemedSource(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
+    const saved = readThemedSource(join(process.cwd(), "src/views/Saved.vue"), "utf8");
+    const router = readThemedSource(join(process.cwd(), "src/router/index.ts"), "utf8");
+    const secondaryHeader = readThemedSource(join(process.cwd(), "src/components/SecondaryPageHeader.vue"), "utf8");
     expect(settings).toContain("openSystemSettings");
     expect(settings).toContain('router.push("/settings/system")');
     expect(settings).toContain("loadSystemSettingsView");
@@ -292,7 +293,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("guards friend relationship actions against duplicate taps and restores the default tab", () => {
-    const friends = readFileSync(join(process.cwd(), "src/views/Friends.vue"), "utf8");
+    const friends = readThemedSource(join(process.cwd(), "src/views/Friends.vue"), "utf8");
     expect(friends).toContain('relationshipBusy = reactive(new Set<string>())');
     expect(friends).toContain(':disabled="relationshipBusy.has(request.peerPubkey)"');
     expect(friends).toContain('if (relationshipBusy.has(pubkey)) return');
@@ -302,8 +303,8 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("keeps post audiences tied to live accepted-friend groups", () => {
-    const editor = readFileSync(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
-    const friends = readFileSync(join(process.cwd(), "src/views/Friends.vue"), "utf8");
+    const editor = readThemedSource(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
+    const friends = readThemedSource(join(process.cwd(), "src/views/Friends.vue"), "utf8");
     expect(editor).toContain("audienceRecipients(");
     expect(editor).toContain("audienceGroupsMeta(");
     expect(editor).toContain("normalizeSelectedAudienceGroups(");
@@ -316,7 +317,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("uses the existing composer behind a route-aware floating button", () => {
-    const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
+    const app = readThemedSource(join(process.cwd(), "src/App.vue"), "utf8");
     expect(app.match(/class="compose-fab"/g)).toHaveLength(1);
     expect(app).toContain("ui.openPostEditor()");
     expect(app).toContain('route.name === "Conversations"');
@@ -332,17 +333,17 @@ describe("direct-message navigation and UI contract", () => {
     expect(app).toContain("PostEditorModal");
     expect(app).toContain("ui.blockingOverlays.size === 0");
     expect(app).not.toContain("new PostEditor");
-    const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
+    const router = readThemedSource(join(process.cwd(), "src/router/index.ts"), "utf8");
     expect(router).toContain('path: "/messages/:pubkey"');
     expect(router).toContain("hideBottomNav: true");
-    const navigation = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
+    const navigation = readThemedSource(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
     expect(navigation).toContain('<nav v-if="shouldShowBottomNav" class="bottom-nav" aria-label="主导航">');
     expect(navigation).not.toContain('<nav v-show="shouldShowBottomNav"');
   });
 
   it("keeps mobile conversation and profile page roots full width", () => {
     for (const file of ["Conversations.vue", "Messages.vue", "MyProfile.vue", "Profile.vue"]) {
-      const source = readFileSync(join(process.cwd(), `src/views/${file}`), "utf8");
+      const source = readThemedSource(join(process.cwd(), `src/views/${file}`), "utf8");
       expect(source, file).toContain("width:100%");
       expect(source, file).toContain("margin:0");
       expect(source, file).toContain("box-sizing:border-box");
@@ -350,7 +351,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("provides X-style conversation search and the required empty state", () => {
-    const source = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     expect(source).toContain("私信</h1>");
     expect(source).toContain("全部");
     expect(source).toContain("未读");
@@ -367,7 +368,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("uses swipe actions instead of a more menu for conversation hide/delete", () => {
-    const source = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     expect(source).toContain('@touchstart="onTouchStart($event, conversation.peerPubkey)"');
     expect(source).toContain('class="swipe-actions"');
     expect(source).toContain('class="action hide"');
@@ -382,8 +383,8 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("shares swipe gesture handling with notifications", () => {
-    const swipe = readFileSync(join(process.cwd(), "src/composables/useSwipeActions.ts"), "utf8");
-    const notifications = readFileSync(join(process.cwd(), "src/views/Notifications.vue"), "utf8");
+    const swipe = readThemedSource(join(process.cwd(), "src/composables/useSwipeActions.ts"), "utf8");
+    const notifications = readThemedSource(join(process.cwd(), "src/views/Notifications.vue"), "utf8");
     expect(swipe).toContain("export function useSwipeActions");
     expect(swipe).toContain("Math.abs(dy) > Math.abs(dx)");
     expect(swipe).toContain("event.preventDefault()");
@@ -396,10 +397,10 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("uses card feed surfaces for Home and flat full-width list surfaces for messaging", () => {
-    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
-    const postCard = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
-    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
-    const notifications = readFileSync(join(process.cwd(), "src/views/Notifications.vue"), "utf8");
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const postCard = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const conversations = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const notifications = readThemedSource(join(process.cwd(), "src/views/Notifications.vue"), "utf8");
     expect(home).toContain("<PostCard");
     expect(postCard).toContain(".post-card{");
     expect(postCard).toContain("border-radius:14px");
@@ -414,9 +415,9 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("keeps UX consistency across friends, Home, and conversation empty states", () => {
-    const friends = readFileSync(join(process.cwd(), "src/views/Friends.vue"), "utf8");
-    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
-    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const friends = readThemedSource(join(process.cwd(), "src/views/Friends.vue"), "utf8");
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const conversations = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     expect(friends).toContain('useSwipeActions } from "@/composables/useSwipeActions"');
     expect(friends).toContain('class="friend-swipe-actions"');
     expect(friends).toContain("loadAccountStoresOnce(account, stores)");
@@ -438,9 +439,9 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("prioritizes near-viewport encrypted images and auto-loads Home pages with an unsupported-browser fallback", () => {
-    const imagePreview = readFileSync(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
-    const priorityQueue = readFileSync(join(process.cwd(), "src/utils/priorityTaskQueue.ts"), "utf8");
-    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const imagePreview = readThemedSource(join(process.cwd(), "src/components/PostImagePreview.vue"), "utf8");
+    const priorityQueue = readThemedSource(join(process.cwd(), "src/utils/priorityTaskQueue.ts"), "utf8");
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
     expect(imagePreview).toContain("IntersectionObserver");
     expect(imagePreview).toContain('rootMargin: "500px 0px"');
     expect(imagePreview).toContain("DecryptPriority");
@@ -469,8 +470,8 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("hydrates device session before version checks and router auth restore", () => {
-    const main = readFileSync(join(process.cwd(), "src/main.ts"), "utf8");
-    const worker = readFileSync(join(process.cwd(), "public/service-worker.js"), "utf8");
+    const main = readThemedSource(join(process.cwd(), "src/main.ts"), "utf8");
+    const worker = readThemedSource(join(process.cwd(), "public/service-worker.js"), "utf8");
     const migrationIndex = main.indexOf("await migrateLegacyLocalStorage()");
     const versionIndex = main.indexOf("const versionChanged = initVersionTracking()");
     const routerIndex = main.indexOf("app.use(router)");
@@ -485,9 +486,9 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("uses revisions and a safe single-insert fast path for Home reconciliation", () => {
-    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
-    const messages = readFileSync(join(process.cwd(), "src/stores/messages.ts"), "utf8");
-    const preferences = readFileSync(join(process.cwd(), "src/stores/feedPreferences.ts"), "utf8");
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const messages = readThemedSource(join(process.cwd(), "src/stores/messages.ts"), "utf8");
+    const preferences = readThemedSource(join(process.cwd(), "src/stores/feedPreferences.ts"), "utf8");
     expect(home).toContain("lastReconciledSnapshot");
     expect(home).toContain("msgs.inboxRevision");
     expect(home).toContain("feedPreferences.revision");
@@ -503,10 +504,10 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("surfaces key action failures in the owning component", () => {
-    const postCard = readFileSync(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
-    const commentSheet = readFileSync(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
-    const messages = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const postCard = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
+    const commentSheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    const messages = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const conversations = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     expect(postCard).toContain('ui.addToast("操作失败，请重试"');
     expect(commentSheet).toContain('"发送失败，草稿已保留，可重试"');
     expect(messages).toContain("ui.addToast(");
@@ -515,7 +516,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("lists only accepted non-self friends in the new-conversation sheet", () => {
-    const source = readFileSync(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
     expect(source).toContain('record.state === "accepted"');
     expect(source).toContain("record.peerPubkey !== keys.pkHex");
     expect(source).toContain("friend.note");
@@ -524,7 +525,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("shows loading, failure, and retry states while opening a new conversation", () => {
-    const source = readFileSync(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
     expect(source).toContain("正在加载好友…");
     expect(source).toContain("好友加载失败");
     expect(source).toContain(">重新加载</button>");
@@ -556,8 +557,8 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("keeps app-icon badge synchronization alive while the bottom navigation is hidden in a chat", () => {
-    const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
-    const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
+    const app = readThemedSource(join(process.cwd(), "src/App.vue"), "utf8");
+    const router = readThemedSource(join(process.cwd(), "src/router/index.ts"), "utf8");
     expect(app).toContain("syncAppBadge(");
     expect(app).toContain("directMessages.unreadCount");
     expect(router).toContain('path: "/messages/:pubkey"');
@@ -565,17 +566,17 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("keeps DM unread and activity unread as separate navigation badges", () => {
-    const source = readFileSync(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
+    const source = readThemedSource(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
     expect(source).toContain("directMessages.unreadCount");
     expect(source).toContain("notifications.unreadCount");
     expect(source).not.toContain("notifications.unreadCount + directMessages.unreadCount");
   });
 
   it("reuses NIP-17 send, durable queue, and encrypted image components", () => {
-    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
-    const service = readFileSync(join(process.cwd(), "src/nostr/messaging/service.ts"), "utf8");
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const store = readThemedSource(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const service = readThemedSource(join(process.cwd(), "src/nostr/messaging/service.ts"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const conversations = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     expect(store).toContain("sendDirectMessage({");
     expect(store).toContain('pushCategory: "message"');
     expect(store).not.toContain("nostrClient.publish");
@@ -597,10 +598,10 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("opens cached conversations from indexed history without waiting for Relay or rescanning the whole inbox", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
-    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
-    const lazyViews = readFileSync(join(process.cwd(), "src/router/lazyViews.ts"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const conversations = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const store = readThemedSource(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const lazyViews = readThemedSource(join(process.cwd(), "src/router/lazyViews.ts"), "utf8");
 
     expect(conversations).toContain("warmConversation(conversation.peerPubkey)");
     expect(conversations).toContain("directMessages.prefetchPeerHistory(pubkey)");
@@ -619,10 +620,10 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("provides local in-chat search and per-peer durable drafts without Relay search", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
-    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
-    const meta = readFileSync(join(process.cwd(), "src/repositories/metaRepository.ts"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const conversations = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    const store = readThemedSource(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const meta = readThemedSource(join(process.cwd(), "src/repositories/metaRepository.ts"), "utf8");
 
     expect(chat).toContain('aria-label="搜索当前聊天"');
     expect(chat).toContain('placeholder="搜索当前聊天"');
@@ -654,7 +655,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("keeps the latest private message visible when the composer receives focus", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain('@focus="handleComposerFocus"');
     expect(chat).toContain('@blur="handleComposerBlur"');
     expect(chat).toContain('window.visualViewport?.addEventListener("resize", handleVisualViewportResize)');
@@ -664,7 +665,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("keeps long DM rendering bounded while preserving playback, anchors, and latest-read semantics", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain("const windowEnd = ref(initialWindowRange.end)");
     expect(chat).toContain("mergeBoundedMessageIndexes(");
     expect(chat).toContain("MAX_RENDERED_MESSAGES = 100");
@@ -683,7 +684,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("offers a jump-to-latest control without changing DM read or sync semantics", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain('class="jump-to-latest"');
     expect(chat).toContain("pendingTailCount");
     expect(chat).toContain("showJumpToLatest");
@@ -695,7 +696,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("uses a ChatGPT-like multiline DM composer that expands on focus and keeps Enter for newlines", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain("calc(28px + env(safe-area-inset-bottom))");
     expect(chat).toContain('class="composer-normal"');
     expect(chat).toContain('class="composer-recording"');
@@ -734,10 +735,10 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("revalidates friendship before new DM navigation and keeps DM authorization in the account sync owner", () => {
-    const sheet = readFileSync(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
-    const accountSync = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
-    const home = readFileSync(join(process.cwd(), "src/views/Home.vue"), "utf8");
-    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const sheet = readThemedSource(join(process.cwd(), "src/components/NewConversationSheet.vue"), "utf8");
+    const accountSync = readThemedSource(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    const store = readThemedSource(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
 
     expect(sheet).toContain("if (!friendships.isAccepted(pubkey))");
     expect(sheet).toContain("好友关系已变更，请重新选择");
@@ -752,7 +753,7 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("uses per-message optimistic status without blocking the composer", () => {
-    const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
+    const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     expect(chat).toContain("上传中…");
     expect(chat).toContain("发送中…");
     expect(chat).toContain("✓ Relay 已接受");
@@ -765,7 +766,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('draft.value = ""');
     expect(chat).not.toContain("sendError");
     expect(chat).not.toContain("sending.value");
-    const store = readFileSync(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
+    const store = readThemedSource(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
     expect(store).toContain('onAppResume(() => {');
     expect(store).not.toContain('window.addEventListener("pageshow", resume)');
     expect(store).toContain("resumePending(true)");

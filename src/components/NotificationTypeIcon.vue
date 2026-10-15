@@ -24,10 +24,10 @@ defineProps<{ kind: "like" | "comment" | "reply" | "friend" | "mention" }>();
 <style scoped>
 .notification-type-icon { width:36px;height:36px;flex:0 0 36px;display:grid;place-items:center;border-radius:50%; }
 svg { width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round; }
-.like { color:#ef476f;background:#fff0f4; }.like svg { fill:currentColor;stroke:none; }
-.comment { color:#3b82f6;background:#eff6ff; }
-.reply { color:#8b5cf6;background:#f5f3ff; }
-.mention { color:#7c3aed;background:#f5f3ff; }
+.like { color:var(--fg-ef476f);background:var(--bg-fff0f4); }.like svg { fill:currentColor;stroke:none; }
+.comment { color:var(--fg-3b82f6);background:var(--bg-eff6ff); }
+.reply { color:#8b5cf6;background:var(--bg-f5f3ff); }
+.mention { color:var(--fg-7c3aed);background:var(--bg-f5f3ff); }
 .mention-glyph { font-size:20px;font-weight:800;line-height:1; }
-.friend { color:#10b981;background:#ecfdf5; }
+.friend { color:var(--fg-10b981);background:var(--bg-ecfdf5); }
 </style>

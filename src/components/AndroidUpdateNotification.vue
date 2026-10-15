@@ -110,7 +110,7 @@ onBeforeUnmount(() => {
   flex: 0 0 34px;
   place-items: center;
   border-radius: 50%;
-  background: rgba(255,255,255,.12);
+  background: var(--bg-rgba-255-255-255-12);
   font-size: 22px;
 }
 
@@ -127,7 +127,7 @@ onBeforeUnmount(() => {
 
 .android-update-text p {
   margin: 0;
-  color: #d1d5db;
+  color: var(--fg-d1d5db);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -148,15 +148,15 @@ onBeforeUnmount(() => {
 }
 
 .android-update-later {
-  border: 1px solid rgba(255,255,255,.26);
+  border: 1px solid var(--bd-rgba-255-255-255-26);
   background: transparent;
   color: #e5e7eb;
 }
 
 .android-update-button {
   border: 0;
-  background: #fff;
-  color: #111827;
+  background: var(--bg-fff);
+  color: var(--fg-111827);
 }
 
 .android-update-actions button:disabled {

@@ -56,6 +56,6 @@ function openMention(pubkey: string, event: Event) {
 
 <style scoped>
 .mention-text{white-space:inherit}
-.mention-link{display:inline;padding:0;border:0;background:transparent;color:#2563eb;font:inherit;line-height:inherit;vertical-align:baseline;cursor:pointer}
+.mention-link{display:inline;padding:0;border:0;background:transparent;color:var(--fg-2563eb);font:inherit;line-height:inherit;vertical-align:baseline;cursor:pointer}
 .mention-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:3px}
 </style>

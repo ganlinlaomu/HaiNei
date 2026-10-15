@@ -63,12 +63,12 @@ async function copyNpub() {
 
 <style scoped>
 .qr-overlay{position:fixed;inset:0;z-index:12000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.48)}
-.qr-sheet{position:relative;width:min(100%,460px);box-sizing:border-box;padding:10px 22px calc(24px + env(safe-area-inset-bottom));border-radius:22px 22px 0 0;background:#fff;text-align:center;box-shadow:0 -12px 36px rgba(15,23,42,.16)}
-.sheet-handle{width:40px;height:4px;margin:0 auto 14px;border-radius:999px;background:#cbd5e1}
-.close-button{position:absolute;top:14px;right:16px;width:34px;height:34px;border:0;border-radius:50%;background:#f1f5f9;color:#475569;font-size:24px;line-height:1}
-h2{margin:9px 0 3px;color:#172033;font-size:20px}.hint{margin:0 0 16px;color:#64748b;font-size:13px}
+.qr-sheet{position:relative;width:min(100%,460px);box-sizing:border-box;padding:10px 22px calc(24px + env(safe-area-inset-bottom));border-radius:22px 22px 0 0;background:var(--bg-fff);text-align:center;box-shadow:0 -12px 36px rgba(15,23,42,.16)}
+.sheet-handle{width:40px;height:4px;margin:0 auto 14px;border-radius:999px;background:var(--bg-cbd5e1)}
+.close-button{position:absolute;top:14px;right:16px;width:34px;height:34px;border:0;border-radius:50%;background:var(--bg-f1f5f9);color:var(--fg-475569);font-size:24px;line-height:1}
+h2{margin:9px 0 3px;color:var(--fg-172033);font-size:20px}.hint{margin:0 0 16px;color:var(--fg-64748b);font-size:13px}
 .qr-card{width:min(78vw,290px);aspect-ratio:1;margin:0 auto;padding:10px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:16px;background:#fff}
-.qr-card :deep(svg){display:block;width:100%;height:100%}.npub{margin:14px auto 16px;max-width:330px;color:#64748b;font-size:12px;overflow-wrap:anywhere}
+.qr-card :deep(svg){display:block;width:100%;height:100%}.npub{margin:14px auto 16px;max-width:330px;color:var(--fg-64748b);font-size:12px;overflow-wrap:anywhere}
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.actions button{min-height:44px;border-radius:11px;font-weight:700}
-.copy-button{border:1px solid #cbd5e1;background:#fff;color:#334155}.done-button{border:0;background:#1687e8;color:#fff}
+.copy-button{border:1px solid var(--bd-cbd5e1);background:var(--bg-fff);color:var(--fg-334155)}.done-button{border:0;background:#1687e8;color:#fff}
 </style>

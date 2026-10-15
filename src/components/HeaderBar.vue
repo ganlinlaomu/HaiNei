@@ -112,11 +112,11 @@ export default defineComponent({
   justify-content: space-between;
   align-items: center;
   padding: 10px 14px;
-  background: #fff;
+  background: var(--bg-fff);
   border-bottom: 1px solid rgba(0,0,0,0.06);
 }
 .brand { font-weight: 700; text-decoration: none; color: inherit; }
-.login-link { text-decoration: none; color: #1976d2; }
+.login-link { text-decoration: none; color: var(--fg-1976d2); }
 
 /* =========================
    Bottom Navigation (iOS / PWA Optimized)
@@ -139,7 +139,7 @@ export default defineComponent({
   align-items: center;
 
   /* 视觉（替代 backdrop-filter，性能友好） */
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--bg-rgba-255-255-255-0-94);
   border-top: 1px solid rgba(0, 0, 0, 0.08);
   box-shadow: 0 -1px 8px rgba(0, 0, 0, 0.06);
 
@@ -181,10 +181,10 @@ export default defineComponent({
   inset: 1px 5px;
   border-radius: 999px;
   background: linear-gradient(150deg,
-    rgba(255, 255, 255, .89),
-    rgba(213, 222, 233, .64) 52%,
-    rgba(227, 234, 242, .76));
-  border: 1px solid rgba(255, 255, 255, .96);
+    var(--bg-rgba-255-255-255-89),
+    var(--bg-rgba-213-222-233-64) 52%,
+    var(--bg-rgba-227-234-242-76));
+  border: 1px solid var(--bd-rgba-255-255-255-96);
   box-shadow:
     inset 0 1px 2px rgba(255, 255, 255, .95),
     inset 0 -2px 3px rgba(92, 114, 139, .11),
@@ -199,7 +199,7 @@ export default defineComponent({
   position: absolute;
   inset: 1px;
   border-radius: inherit;
-  border-top: 1px solid rgba(255, 255, 255, .9);
+  border-top: 1px solid var(--bd-rgba-255-255-255-9);
   pointer-events: none;
 }
 
@@ -225,7 +225,7 @@ export default defineComponent({
   justify-content: center;
 
   text-decoration: none;
-  color: #64748b;
+  color: var(--fg-64748b);
   cursor: pointer;
   border-radius: 12px;
   position: relative;
@@ -240,7 +240,7 @@ export default defineComponent({
 
 .nav-item:active {
   background: rgba(59, 130, 246, 0.08);
-  color: #3b82f6;
+  color: var(--fg-3b82f6);
   transform: scale(.97);
 }
 
@@ -249,7 +249,7 @@ export default defineComponent({
 @media (hover: hover) and (pointer: fine) {
   .nav-item:hover {
     background: rgba(59, 130, 246, 0.08);
-    color: #3b82f6;
+    color: var(--fg-3b82f6);
     transform: translateY(-2px);
   }
 }
@@ -257,7 +257,7 @@ export default defineComponent({
 /* 路由激活 */
 .nav-item.router-link-active,
 .nav-item.is-current-tab {
-  color: #1976d2;
+  color: var(--fg-1976d2);
 }
 
 /* =========================
@@ -298,7 +298,7 @@ export default defineComponent({
   padding: 0 4px;
 
   background: #ef4444;
-  color: white;
+  color: #fff;
 
   font-size: 10px;
   font-weight: 600;

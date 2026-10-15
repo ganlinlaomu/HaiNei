@@ -372,8 +372,8 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   margin: 0 auto;
   box-sizing: border-box;
   padding: 0 0 calc(20px + var(--bottom-nav-height) + env(safe-area-inset-bottom));
-  background: #fff;
-  color: #0f1419;
+  background: var(--bg-fff);
+  color: var(--fg-0f1419);
 }
 .page-header {
   position: sticky;
@@ -384,7 +384,7 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   align-items: center;
   min-height: 54px;
   padding: 0 16px;
-  background: rgba(255,255,255,.97);
+  background: var(--bg-rgba-255-255-255-97);
 }
 .page-header h1 {
   margin: 0;
@@ -405,8 +405,8 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   padding: 0 13px;
   flex: 0 0 auto;
   border-radius: 18px;
-  color: #64748b;
-  background: #f1f5f9;
+  color: var(--fg-64748b);
+  background: var(--bg-f1f5f9);
   font-size: 13px;
 }
 .notification-tab.active {
@@ -415,17 +415,17 @@ function summarizeNotificationText(text: string, maxLength = 40) {
 }
 .mark-read {
   font-size: 12px;
-  color: #64748b;
+  color: var(--fg-64748b);
 }
 .empty {
   text-align: center;
-  color: #94a3b8;
+  color: var(--fg-94a3b8);
   margin-top: 40px;
 }
 .group-title {
   font-size: 12px;
   font-weight: 600;
-  color: #64748b;
+  color: var(--fg-64748b);
   margin: 14px 16px 6px;
 }
 .notification-list {
@@ -436,7 +436,7 @@ function summarizeNotificationText(text: string, maxLength = 40) {
 .swipe-wrapper {
   position: relative;
   overflow: hidden;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--bd-e5e7eb);
   touch-action: pan-y;
 }
 .swipe-actions {
@@ -462,12 +462,12 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   display: flex;
   gap: 10px;
   padding: 10px 16px;
-  background: #fff;
+  background: var(--bg-fff);
   position: relative;
   transition: transform 0.2s ease;
 }
 .notification-item.unread {
-  background: #f8fafc;
+  background: var(--bg-f8fafc);
 }
 .notification-identity {
   position: relative;
@@ -482,7 +482,7 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   bottom: -2px;
   width: 18px;
   height: 18px;
-  border: 2px solid #fff;
+  border: 2px solid var(--bd-fff);
 }
 .notification-identity :deep(.notification-type-icon svg) {
   width: 11px;
@@ -503,14 +503,14 @@ function summarizeNotificationText(text: string, maxLength = 40) {
 }
 .comment-content {
   font-size: 13px;
-  color: #334155;
+  color: var(--fg-334155);
   margin-top: 2px;
   white-space: pre-line;
   word-break: break-word;
 }
 .time {
   font-size: 12px;
-  color: #64748b;
+  color: var(--fg-64748b);
 }
 .dot {
   width: 8px;

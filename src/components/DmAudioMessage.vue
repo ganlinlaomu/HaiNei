@@ -325,14 +325,14 @@ onBeforeUnmount(releaseRuntimeAudio);
   to{opacity:.86}
 }
 .voice-duration{
-  color:#536471;
+  color:var(--fg-536471);
   font-size:11px;
   font-variant-numeric:tabular-nums;
   text-align:right;
   transition:color 150ms ease,opacity 150ms ease
 }
 .voice-duration.played{
-  color:#8c9aa6;
+  color:var(--fg-8c9aa6);
   opacity:.68
 }
 .voice-message audio{display:none}
@@ -340,7 +340,7 @@ onBeforeUnmount(releaseRuntimeAudio);
   padding:0 0 0 50px;
   border:0;
   background:transparent;
-  color:#dc2626;
+  color:var(--fg-dc2626);
   font-size:11px;
   text-align:left
 }
