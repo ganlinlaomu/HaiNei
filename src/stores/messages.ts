@@ -21,7 +21,26 @@ export type InboxMutation = {
   type: "replace" | "insert" | "update" | "reset";
   itemId?: string;
   evictedId?: string;
+  /** The inserted item, even when it fell outside the bounded window. */
+  item?: InboxItem;
 };
+
+const MAX_INBOX_ITEMS = 1000;
+
+/** Inbox order is newest-first; ties keep the same id order as load(). */
+function inboxInsertIndex(inbox: InboxItem[], item: InboxItem) {
+  let low = 0;
+  let high = inbox.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    const current = inbox[middle];
+    const before = current.created_at > item.created_at
+      || (current.created_at === item.created_at && current.id.localeCompare(item.id) < 0);
+    if (before) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
 
 export type OutboxItem = {
   id: string;
@@ -69,9 +88,9 @@ export const useMessagesStore = defineStore("messages", {
     lastInboxMutation: null as InboxMutation | null
   }),
   actions: {
-    recordInboxMutation(type: InboxMutation["type"], itemId?: string, evictedId?: string) {
+    recordInboxMutation(type: InboxMutation["type"], itemId?: string, evictedId?: string, item?: InboxItem) {
       this.inboxRevision += 1;
-      this.lastInboxMutation = { revision: this.inboxRevision, type, itemId, evictedId };
+      this.lastInboxMutation = { revision: this.inboxRevision, type, itemId, evictedId, ...(item ? { item } : {}) };
     },
 
     async load(pk?: string) {
@@ -223,13 +242,13 @@ export const useMessagesStore = defineStore("messages", {
         return;
       }
       
-      // Add new message. Home can consume the common single-insert case
-      // incrementally, while storage/sync behavior remains unchanged.
-      this.inbox.unshift(item);
-      const evictedId = this.inbox.length > 1000 ? this.inbox[1000]?.id : undefined;
-      // keep bounded history
-      if (this.inbox.length > 1000) this.inbox.splice(1000);
-      this.recordInboxMutation("insert", item.id, evictedId);
+      // Insert at its sorted position and evict the OLDEST entry. Relay
+      // catch-up delivers history newest-first; prepending it would push the
+      // newest messages (conversation heads) out of the bounded window.
+      this.inbox.splice(inboxInsertIndex(this.inbox, item), 0, item);
+      const evictedId = this.inbox.length > MAX_INBOX_ITEMS ? this.inbox[MAX_INBOX_ITEMS]?.id : undefined;
+      if (this.inbox.length > MAX_INBOX_ITEMS) this.inbox.splice(MAX_INBOX_ITEMS);
+      this.recordInboxMutation("insert", item.id, evictedId, item);
       this.scheduleInboxSave();
       notifyCanonicalMessageAdded(this.loadedFor, item);
     },

@@ -498,7 +498,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(home).toContain("rebuildVisibleInbox()");
     expect(home).not.toContain("[...feedPreferences.hiddenMessageIds].sort()");
     expect(messages).toContain('type: "replace" | "insert" | "update" | "reset"');
-    expect(messages).toContain('this.recordInboxMutation("insert", item.id, evictedId)');
+    expect(messages).toContain('this.recordInboxMutation("insert", item.id, evictedId, item)');
     expect(preferences).toContain("revision: 0");
   });
 

@@ -813,6 +813,9 @@ function handleBurnVisibility() {
   else {
     startBurnClock();
     void checkBurnDeadlines();
+    // Messages that arrived while hidden were deliberately left unread; the
+    // gate re-checks that the newest messages are actually on screen.
+    if (!loadingConversation) void markVisibleMessagesRead().catch(() => undefined);
   }
 }
 function quotePreview(message?: InboxItem) {
@@ -1441,6 +1444,7 @@ function markVisibleMessagesRead() {
     searchingHistory: searchContextActive.value,
     tailRendered: windowEnd.value >= messages.value.length,
     nearBottom: !!list && isNearMessageBottom(scrollMetrics(list), BOTTOM_FOLLOW_THRESHOLD),
+    pageVisible: document.visibilityState === "visible",
   })) return Promise.resolve();
   // Showing a sealed preview is never equivalent to reading its content.
   const latest = windowMessages.value.filter(message => !hasDisappearingMarker(message.tags)
@@ -1902,7 +1906,12 @@ function applyLatestInboxMutation() {
   if (!account || !peer || messageStore.loadedFor.toLowerCase() !== account) return;
 
   if (mutation?.type === "insert" || mutation?.type === "update") {
-    const item = mutation.itemId ? messageStore.inbox.find(message => message.id === mutation.itemId) : undefined;
+    // An older history item may already be evicted from the bounded inbox;
+    // the mutation still carries it for an open chat that has paged that far.
+    const item = mutation.itemId
+      ? messageStore.inbox.find(message => message.id === mutation.itemId)
+        || (mutation.item?.id === mutation.itemId ? mutation.item : undefined)
+      : undefined;
     if (!item) return;
     const matched = directMessagesForPeer([item], account, peer, {
       friendship: friendships.getRecord(peer),

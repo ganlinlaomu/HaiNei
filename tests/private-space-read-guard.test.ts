@@ -5,7 +5,7 @@ import { canMarkConversationTailRead } from "@/utils/messageReadVisibility";
 
 const visible = {
   hasList: true, sourceFocused: false, searchingHistory: false,
-  tailRendered: true, nearBottom: true,
+  tailRendered: true, nearBottom: true, pageVisible: true,
 };
 describe("PR-FIX-C: source-linked DM read boundaries", () => {
   it("does not advance unread on a historical source jump", () => {

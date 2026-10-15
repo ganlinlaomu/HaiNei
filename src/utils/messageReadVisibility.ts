@@ -5,7 +5,9 @@ export function canMarkConversationTailRead(input: {
   searchingHistory: boolean;
   tailRendered: boolean;
   nearBottom: boolean;
+  /** A hidden page (background tab, locked phone) is not the user reading. */
+  pageVisible: boolean;
 }): boolean {
-  return input.hasList && !input.sourceFocused && !input.searchingHistory
+  return input.pageVisible && input.hasList && !input.sourceFocused && !input.searchingHistory
     && input.tailRendered && input.nearBottom;
 }
