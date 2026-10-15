@@ -15,16 +15,24 @@ import { pushEnabledForAccount, syncPushAuthorizationPolicy } from "@/services/p
 
 function normalized(pubkey: string) { return pubkey.trim().toLowerCase(); }
 
+/**
+ * Control timestamps come from the sender's clock and an accept must order
+ * after its request, so a fast clock on either device moves the window start
+ * ahead of the other device's message timestamps. Tolerate bounded skew at the
+ * start of a window only; its end (removal) stays strict.
+ */
+export const FRIENDSHIP_CLOCK_SKEW_SECONDS = 15 * 60;
+
 export function isFriendshipAcceptedAt(friendship: FriendshipRecord | undefined, createdAt: number) {
   if (!friendship) return false;
   const windows = friendship.acceptedWindows || [];
   if (!windows.length) {
     if (!friendship.acceptedAt) return friendship.state === "accepted";
     const endedAt = friendship.state === "accepted" ? undefined : friendship.lastControlAt;
-    return createdAt >= friendship.acceptedAt
+    return createdAt >= friendship.acceptedAt - FRIENDSHIP_CLOCK_SKEW_SECONDS
       && (endedAt === undefined || createdAt <= endedAt);
   }
-  return windows.some(window => createdAt >= window.acceptedAt
+  return windows.some(window => createdAt >= window.acceptedAt - FRIENDSHIP_CLOCK_SKEW_SECONDS
     && (window.endedAt === undefined || createdAt <= window.endedAt));
 }
 
