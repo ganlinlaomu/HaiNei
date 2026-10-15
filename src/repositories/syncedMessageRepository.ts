@@ -305,7 +305,7 @@ export class SyncedMessageRepository {
         const current = await this.database.conversationStates.get(stateKey);
         if (current?.lastMessageId === id) {
           const latest = await this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
-            .between([account, target.conversationId, 0, ""], [account, target.conversationId, Number.MAX_SAFE_INTEGER, "\\uffff"])
+            .between([account, target.conversationId, 0, ""], [account, target.conversationId, Number.MAX_SAFE_INTEGER, "\uffff"])
             .reverse().first();
           if (latest) await this.database.conversationStates.put({ ...current, lastMessageId: latest.id,
             lastMessageAt: latest.createdAt, lastMessageSenderPubkey: latest.senderPubkey,
