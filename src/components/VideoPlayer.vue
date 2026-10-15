@@ -11,8 +11,8 @@
     <div v-else class="video-player">
       <!-- YouTube embed -->
       <iframe
-        v-if="videoData.provider === 'YouTube' && videoData.embedUrl"
-        :src="videoData.embedUrl"
+        v-if="videoData.provider === 'YouTube' && embed.iframeUrl"
+        :src="embed.iframeUrl"
         frameborder="0"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowfullscreen
@@ -21,8 +21,8 @@
 
       <!-- Vimeo embed -->
       <iframe
-        v-else-if="videoData.provider === 'Vimeo' && videoData.embedUrl"
-        :src="videoData.embedUrl"
+        v-else-if="videoData.provider === 'Vimeo' && embed.iframeUrl"
+        :src="embed.iframeUrl"
         frameborder="0"
         allow="autoplay; fullscreen; picture-in-picture"
         allowfullscreen
@@ -31,8 +31,8 @@
 
       <!-- Direct video or hosted video -->
       <video
-        v-else-if="videoData.embedUrl"
-        :src="videoData.embedUrl"
+        v-else-if="embed.mediaUrl"
+        :src="embed.mediaUrl"
         controls
         class="video-element"
         :preload="settings.dataSaver ? 'none' : 'metadata'"
@@ -41,8 +41,8 @@
       </video>
 
       <!-- Fallback for external links -->
-      <div v-else class="video-fallback">
-        <a :href="videoData.url" target="_blank" rel="noopener noreferrer" class="external-link">
+      <div v-else-if="embed.linkUrl" class="video-fallback">
+        <a :href="embed.linkUrl" target="_blank" rel="noopener noreferrer" class="external-link">
           打开外部视频链接
         </a>
       </div>
@@ -52,7 +52,7 @@
 
 <script lang="ts">
 import { defineComponent, PropType, computed } from 'vue';
-import type { VideoData } from '@/utils/videoUtils';
+import { safeVideoEmbed, type VideoData } from '@/utils/videoUtils';
 import { isEncryptedVideoRef, decodeEncryptedVideoRef } from '@/utils/encryptedVideoRef';
 import EncryptedVideoPlayer from './EncryptedVideoPlayer.vue';
 import { useSettingsStore } from '@/stores/settings';
@@ -81,10 +81,14 @@ export default defineComponent({
       return decodeEncryptedVideoRef(props.videoData.url);
     });
 
+    // Never bind raw videoData URLs: they come from peer-authored content.
+    const embed = computed(() => safeVideoEmbed(props.videoData));
+
     return {
       settings,
       isEncrypted,
-      encryptedMetadata
+      encryptedMetadata,
+      embed
     };
   }
 });
