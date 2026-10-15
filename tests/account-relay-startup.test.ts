@@ -58,7 +58,7 @@ describe("account relay startup ordering", () => {
     const relayStart = source.indexOf("await startAccountMessageSync(this)");
     const vaultUnlock = source.indexOf("await unlockLocalVault(pk, vaultSecretHex, isCurrent)");
     const service = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
-    const historyReconcile = service.indexOf('directMessages.finishHistoryHydration(account, "live").then(');
+    const historyReconcile = service.indexOf("directMessages.finishHistoryHydration(account, outcome).then(");
     const finishUnread = service.indexOf("directMessages.finishReadStateRestore(account)", historyReconcile);
 
     expect(criticalRequest).toBeGreaterThan(-1);

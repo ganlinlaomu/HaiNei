@@ -267,6 +267,20 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   const messages = useMessagesStore();
   const directMessages = useDirectMessagesStore();
   directMessages.beginHistoryHydration(account);
+  const settleStartupUnread = (outcome: "live" | "error") => {
+    void directMessages.finishHistoryHydration(account, outcome).then(() => {
+      // Last startup gate: only show unread after both the cloud cursor
+      // and the first durable history/authorization reconciliation.
+      // Old manager callbacks must not unmask a newer account session.
+      if (isCurrent() && directMessages.historyHydrationPhase === outcome) {
+        directMessages.finishReadStateRestore(account);
+      }
+    }).catch(error => {
+      // Do not expose the provisional hundreds-of-unread projection on
+      // an incomplete reconciliation; retry on the next status transition.
+      console.warn("[dm] startup unread reconciliation failed", error instanceof Error ? error.message : "unknown");
+    });
+  };
   const accepted = friendships.records
     .filter(record => record.state === "accepted")
     .map(record => record.peerPubkey);
@@ -415,19 +429,14 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
           live: status === "connecting" ? "subscribing" : status === "live" || status === "catching-up" ? "active" : "idle",
           catchup: status === "catching-up" ? "running" : status === "error" ? "error" : accountSyncSnapshot.catchup,
         });
-        if (status === "live") {
-          void directMessages.finishHistoryHydration(account, "live").then(() => {
-            // Last startup gate: only show unread after both the cloud cursor
-            // and the first durable history/authorization reconciliation.
-            // Old manager callbacks must not unmask a newer account session.
-            if (isCurrent() && directMessages.historyHydrationPhase === "live") {
-              directMessages.finishReadStateRestore(account);
-            }
-          }).catch(error => {
-            // Do not expose the provisional hundreds-of-unread projection on
-            // an incomplete reconciliation; retry on the next live transition.
-            console.warn("[dm] startup unread reconciliation failed", error instanceof Error ? error.message : "unknown");
-          });
+        if (status === "live") settleStartupUnread("live");
+        // Terminal startup outcomes that never become live: a failed catch-up,
+        // or no message Relay at all. A transient all-Relays-disconnected
+        // "offline" normally still reaches live after catch-up, so keep the
+        // barrier for it. Read cursors were restored before sync started, so
+        // the durable local projection is safe to show.
+        else if (status === "error" || (status === "offline" && messageRelays.length === 0)) {
+          settleStartupUnread("error");
         }
         if (status !== "live" || friendshipHistoryComplete) return;
         void syncedMessageRepository.getSyncState(account).then(state => {
@@ -451,7 +460,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   } catch (error) {
     if (isCurrent()) {
       setAccountMessageSyncStatus(account, "error");
-      void directMessages.finishHistoryHydration(account, "error").catch(() => undefined);
+      settleStartupUnread("error");
     }
     throw error;
   }

@@ -110,6 +110,7 @@ type PeerHistoryPage = {
   exhausted: boolean;
 };
 const PEER_HISTORY_WARM_TTL_MS = 30_000;
+const MAX_UNREAD_RECONCILE_ATTEMPTS = 4;
 const peerHistoryWarmups = new Map<string, { createdAt: number; promise: Promise<PeerHistoryPage> }>();
 const activeOutgoingTasks = new Map<string, Promise<void>>();
 const activeBurnRequests = new Set<string>();
@@ -965,17 +966,28 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         this.recomputeUnreadWithoutIndexedDb(conversationId);
         return;
       }
+      // Peer state can change while IndexedDB is counting (a foreground read,
+      // a first message from another friend). Recount from the new snapshot
+      // instead of dropping the result and leaving a cleared projection.
+      for (let attempt = 0; attempt < MAX_UNREAD_RECONCILE_ATTEMPTS; attempt++) {
+        if (this.loadedFor !== account) return;
+        if (await this.reconcileDurableUnreadSnapshot(account, conversationId)) return;
+      }
+      console.warn("[dm] unread reconciliation kept racing peer state changes");
+    },
+    /** Returns false when peer state changed mid-count and the snapshot is stale. */
+    async reconcileDurableUnreadSnapshot(account: string, conversationId?: string) {
       const friendships = useFriendshipsStore();
       const cursors = this.readCursors;
       const preferences = this.preferencesByPeer;
       const records = friendships.records;
       const durableHeads = await syncedMessageRepository.listDirectConversationHeads(account, conversationId);
       if (conversationId && durableHeads.length === 0) {
-        if (this.loadedFor === account && this.readCursors === cursors && this.preferencesByPeer === preferences
-          && friendships.records === records) {
-          this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: 0 };
-        }
-        return;
+        if (this.loadedFor !== account) return true;
+        if (this.readCursors !== cursors || this.preferencesByPeer !== preferences
+          || friendships.records !== records) return false;
+        this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: 0 };
+        return true;
       }
       const counts = await Promise.all(durableHeads.map(async head => {
         const id = head.conversationId;
@@ -995,14 +1007,16 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         });
         return [id, count] as const;
       }));
-      if (this.loadedFor !== account || this.readCursors !== cursors || this.preferencesByPeer !== preferences
-        || friendships.records !== records) return;
+      if (this.loadedFor !== account) return true;
+      if (this.readCursors !== cursors || this.preferencesByPeer !== preferences
+        || friendships.records !== records) return false;
       // Single source of truth: de-duplicated durable messages strictly after
       // the persisted read cursor. Never merge a provisional memory-window
       // count into a full reconciliation.
       const next = conversationId ? { ...this.unreadByConversation } : {} as Record<string, number>;
       for (const [id, count] of counts) next[id] = count;
       this.unreadByConversation = next;
+      return true;
     },
     async ensurePeerState(account: string, peer: string, conversationId?: string) {
       const needsPreference = !Object.prototype.hasOwnProperty.call(this.preferencesByPeer, peer);
