@@ -20,6 +20,12 @@ export class FriendRepository {
     return this.database.accountFriends.get([account, friend]);
   }
 
+  /** Friends whose conversation is muted (excluded from badges and push). */
+  async listMutedPeers(accountPubkey: string) {
+    const records = await this.list(accountPubkey);
+    return records.filter(record => record.dmMuted === true && !record.deleted).map(record => record.pubkey);
+  }
+
   async put(accountPubkey: string, friend: DBFriend) {
     const account = normalizeAccountPubkey(accountPubkey);
     const record: AccountFriendRecord = {
@@ -31,6 +37,8 @@ export class FriendRepository {
         ? { groups: Array.from(friend.groups).filter((group): group is string => typeof group === "string") }
         : {}),
       ...(typeof friend.note === "string" ? { note: friend.note } : {}),
+      ...(typeof friend.dmPinnedAt === "number" && friend.dmPinnedAt > 0 ? { dmPinnedAt: friend.dmPinnedAt } : {}),
+      ...(friend.dmMuted === true ? { dmMuted: true } : {}),
       ...(typeof friend.updatedAt === "number" ? { updatedAt: friend.updatedAt } : {}),
       ...(typeof friend.deleted === "boolean" ? { deleted: friend.deleted } : {})
     };
