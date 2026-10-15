@@ -20,6 +20,10 @@ export type DBFriend = {
   group?: string;
   groups?: string[];
   note?: string;
+  /** Conversation pinned at (ms); 0/absent = not pinned. Synced as friend_metadata. */
+  dmPinnedAt?: number;
+  /** Conversation muted: no badge count, no push. Synced as friend_metadata. */
+  dmMuted?: boolean;
   updatedAt?: number;
   deleted?: boolean;
 };

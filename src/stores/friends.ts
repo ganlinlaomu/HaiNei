@@ -3,6 +3,7 @@ import { friendRepository } from "@/repositories/friendRepository";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
+import { pushEnabledForAccount, syncPushAuthorizationPolicy } from "@/services/pushNotifications";
 import type { DBFriend } from "@/db/dexie";
 
 export type Friend = {
@@ -12,8 +13,16 @@ export type Friend = {
   groups?: string[];
   group?: string;
   note?: string;
+  dmPinnedAt?: number;
+  dmMuted?: boolean;
   updatedAt?: number;
 };
+
+export type ConversationPreferenceState = { pinned: boolean; muted: boolean; pinnedAt: number };
+
+function placeholderName(pubkey: string) {
+  return `${pubkey.slice(0, 8)}…`;
+}
 
 function normalized(friend: Friend): Friend {
   return { ...friend, pubkey: friend.pubkey.toLowerCase(), groups: friend.groups ?? (friend.group ? [friend.group] : []) };
@@ -29,6 +38,12 @@ export const useFriendsStore = defineStore("friends", {
         .filter(record => record.state === "accepted")
         .map(record => metadata.get(record.peerPubkey) || { pubkey: record.peerPubkey, name: `${record.peerPubkey.slice(0, 8)}…` })
         .sort((a, b) => (a.name || "").localeCompare(b.name || "", "zh-CN"));
+    },
+    /** Pin / mute of the 1:1 conversation with this friend. */
+    conversationPreference: state => (pubkey: string): ConversationPreferenceState => {
+      const friend = state.list.find(item => item.pubkey === pubkey.toLowerCase());
+      const pinnedAt = Number(friend?.dmPinnedAt || 0);
+      return { pinned: pinnedAt > 0, muted: friend?.dmMuted === true, pinnedAt };
     },
     getAcceptedList(): (isAccepted: (peerPubkey: string) => boolean) => Friend[] {
       return isAccepted => this.sortedList.filter(friend => isAccepted(friend.pubkey));
@@ -137,6 +152,34 @@ export const useFriendsStore = defineStore("friends", {
       Object.assign(friend, patch, { updatedAt: Date.now() });
       this.version++;
       void this.save();
+      return true;
+    },
+    async setConversationPreference(pubkey: string, patch: { pinned?: boolean; muted?: boolean }) {
+      const account = this.loadedFor;
+      const peer = pubkey.toLowerCase();
+      if (!account || !peer) return false;
+      let friend = this.list.find(item => item.pubkey === peer);
+      if (!friend) {
+        friend = normalized({ pubkey: peer, name: placeholderName(peer) });
+        this.list.push(friend);
+      }
+      const wasMuted = friend.dmMuted === true;
+      if (patch.pinned !== undefined) friend.dmPinnedAt = patch.pinned ? Date.now() : 0;
+      if (patch.muted !== undefined) friend.dmMuted = patch.muted;
+      friend.updatedAt = Date.now();
+      this.version++;
+      // Never sync a generated placeholder as if it were the user's remark.
+      const record: DBFriend = { ...friend, name: friend.name === placeholderName(peer) ? undefined : friend.name };
+      await this.persist([record]);
+      const keys = useKeyStore();
+      if (patch.muted !== undefined && patch.muted !== wasMuted && this.loadedFor === account
+        && keys.pkHex.toLowerCase() === account && pushEnabledForAccount(account)) {
+        // The Worker policy is account-wide; muted friends are filtered out in
+        // syncPushAuthorizationPolicy on every device from the synced records.
+        const accepted = useFriendshipsStore().records.filter(item => item.state === "accepted").map(item => item.peerPubkey);
+        void syncPushAuthorizationPolicy(account, accepted, keys.signEvent.bind(keys))
+          .catch(error => console.warn("[push] mute policy sync failed", error instanceof Error ? error.message : "unknown"));
+      }
       return true;
     },
     async publishToRelays() { return false; },

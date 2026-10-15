@@ -35,6 +35,7 @@ import { prepareEncryptedDmAudio, uploadPreparedEncryptedDmAudio } from "@/utils
 import { serializePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
 import { useNotificationsStore } from "@/stores/notifications";
+import { useFriendsStore } from "@/stores/friends";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { registerDirectMessageStateOwner } from "@/services/directMessageStateEvents";
 import { onAppResume } from "@/services/appResumeCoordinator";
@@ -368,6 +369,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
   state: () => ({
     loadedFor: "",
     unreadByConversation: {} as Record<string, number>,
+    /** conversationId -> peer, so muted conversations can be left out of totals. */
+    peerByConversation: {} as Record<string, string>,
     freshUnreadDuringRestore: {} as Record<string, StartupFreshUnread[]>,
     readStateRestorePhase: "ready" as "ready" | "restoring",
     historyHydrationPhase: "idle" as "idle" | "hydrating" | "live" | "error",
@@ -382,9 +385,19 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     outgoingTasks: [] as OutgoingDmTaskRecord[],
   }),
   getters: {
-    unreadCount: state => Object.values(state.readStateRestorePhase === "restoring"
-      ? freshUnreadCounts(state)
-      : state.unreadByConversation).reduce((sum, value) => sum + value, 0),
+    /** Badge total (tab, app icon): muted conversations are not counted. */
+    unreadCount: state => {
+      const counts = state.readStateRestorePhase === "restoring" ? freshUnreadCounts(state) : state.unreadByConversation;
+      const friends = useFriendsStore();
+      return Object.entries(counts).reduce((sum, [conversationId, value]) => {
+        const peer = state.peerByConversation[conversationId];
+        return peer && friends.conversationPreference(peer).muted ? sum : sum + value;
+      }, 0);
+    },
+    isConversationMuted: state => (conversationId: string) => {
+      const peer = state.peerByConversation[conversationId];
+      return !!peer && useFriendsStore().conversationPreference(peer).muted;
+    },
     visibleUnreadByConversation: state => state.readStateRestorePhase === "restoring"
       ? freshUnreadCounts(state)
       : state.unreadByConversation,
@@ -929,6 +942,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
       this.scheduleReceipt(peer, "delivered", { createdAt: message.createdAt, messageId: message.id });
     },
+    rememberConversationPeer(conversationId: string, peer: string) {
+      if (this.peerByConversation[conversationId] === peer) return;
+      this.peerByConversation = { ...this.peerByConversation, [conversationId]: peer };
+    },
     recomputeUnreadWithoutIndexedDb(conversationId?: string) {
       // Degraded fallback for environments where IndexedDB is genuinely
       // unavailable (including lightweight unit tests). Production PWA unread
@@ -958,6 +975,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           continue;
         }
         const read = this.readCursors[id];
+        this.rememberConversationPeer(id, peer);
         next[id] = friendships.isAccepted(peer)
           ? conversation.filter(item => item.pubkey !== account
               && isMessageAfter({ id: item.id, createdAt: item.created_at }, read)).length
@@ -1001,6 +1019,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           senderPubkey: head.senderPubkey,
           recipientPubkeys: head.recipientPubkeys || [],
         }, account);
+        if (peer) this.rememberConversationPeer(id, peer);
         if (!peer || !friendships.isAccepted(peer) || preferences[peer]?.hidden) return [id, 0] as const;
         const friendship = friendships.getRecord(peer);
         const preference = preferences[peer];
@@ -1138,6 +1157,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         ...this.freshUnreadDuringRestore,
         [message.conversationId]: [...current, { id: message.id, createdAt: message.createdAt, peer }],
       };
+      this.rememberConversationPeer(message.conversationId, peer);
     },
     beginReadStateRestore(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
@@ -1809,6 +1829,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       }
       this.loadedFor = "";
       this.unreadByConversation = {};
+      this.peerByConversation = {};
       this.freshUnreadDuringRestore = {};
       this.readStateRestorePhase = "ready";
       this.historyHydrationPhase = "idle";

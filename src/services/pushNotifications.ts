@@ -3,6 +3,7 @@ import { deviceStorage } from "@/services/deviceStorage";
 import { debugLog } from "@/utils/debugLog";
 import { signWorkerRequest } from "@/services/workerAuth";
 import { DEFAULT_HAINEI_WORKER_URL, haineiWorkerBaseUrl, resolveHaiNeiWorkerBaseUrl } from "@/services/workerUrl";
+import { friendRepository } from "@/repositories/friendRepository";
 
 const PUSH_ACTION = "hainei_push";
 const SERVICE_WORKER_TIMEOUT_MS = 10_000;
@@ -225,8 +226,11 @@ export async function syncPushAuthorizationPolicy(
 
   await authenticatedPost("/api/push/subscribe", { subscription: subscription.toJSON() }, pubkey, signEvent);
   debugLog("system", "push_worker_resubscribe_ok");
+  // Muted conversations never wake this account. The mute flag is synced per
+  // friend (friend_metadata), so every device computes the same policy.
+  const muted = new Set(await friendRepository.listMutedPeers(pubkey).catch(() => [] as string[]));
   await authenticatedPost("/api/push/policy", {
-    senderPubkeys: [...new Set(senderPubkeys.map(value => value.toLowerCase()))],
+    senderPubkeys: [...new Set(senderPubkeys.map(value => value.toLowerCase()))].filter(value => !muted.has(value)),
   }, pubkey, signEvent);
   debugLog("system", "push_policy_resync_ok");
   return true;
