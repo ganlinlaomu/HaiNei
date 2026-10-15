@@ -176,11 +176,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onMounted, ref, watch } from "vue";
 import { generateSecretKey, nip19 } from "nostr-tools";
 import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
-import GoogleRecoveryPanel from "@/components/GoogleRecoveryPanel.vue";
+// Only used when adding/recovering an account; keep it out of the startup
+// bundle that every cold start (including the unlock screen) has to parse.
+const GoogleRecoveryPanel = defineAsyncComponent(() => import("@/components/GoogleRecoveryPanel.vue"));
 import { logger } from "@/utils/logger";
 
 type LoginMethod = "private-key" | "unlock" | "switch" | "register" | "google";
