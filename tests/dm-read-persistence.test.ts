@@ -16,6 +16,9 @@ import { scheduleAccountStateSync } from "@/services/accountStateSync";
 const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
 const CONVERSATION = "dm-persisted-history";
+// These cases seed ~360 encrypted messages one by one into fake-indexeddb;
+// on slower machines (e.g. a Raspberry Pi) that alone approaches 5s.
+const SLOW_SEED_TIMEOUT_MS = 20_000;
 vi.mock("@/stores/keys", () => ({ useKeyStore: () => ({ pkHex: "a".repeat(64), supportsNip44: true }) }));
 vi.mock("@/services/accountStateSync", () => ({ scheduleAccountStateSync: vi.fn() }));
 
@@ -217,7 +220,7 @@ describe("reading paged DM history with an encrypted database", () => {
       lastReadMessageId: item(350).id,
     });
     expect(vi.mocked(scheduleAccountStateSync)).not.toHaveBeenCalled();
-  });
+  }, SLOW_SEED_TIMEOUT_MS);
 
   it("persists the actual chat read position when incoming messages are absent from the home cache", async () => {
     for (let i = 1; i <= 151; i++) await save(item(i));
@@ -253,5 +256,5 @@ describe("reading paged DM history with an encrypted database", () => {
     await save(item(361));
     await direct.reconcileDurableUnread();
     expect(direct.unreadCount).toBe(1);
-  });
+  }, SLOW_SEED_TIMEOUT_MS);
 });

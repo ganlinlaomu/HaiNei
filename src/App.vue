@@ -166,8 +166,9 @@ export default defineComponent({
         notifications.unreadCount,
         directMessages.loadedFor,
         directMessages.unreadCount,
+        directMessages.readStateRestorePhase,
       ] as const,
-      ([account, unlocked, restored, loadedFor, unreadCount, directLoadedFor, directUnread]) => {
+      ([account, unlocked, restored, loadedFor, unreadCount, directLoadedFor, directUnread, directRestorePhase]) => {
         // Before session restoration finishes, an empty store is not a logout.
         // Keep the persisted push scope so a cold-start race cannot suppress it.
         if (!account && !restored) return;
@@ -178,7 +179,10 @@ export default defineComponent({
           void syncAppBadge(0, undefined, "").catch(() => undefined);
           return;
         }
-        if (!unlocked) {
+        // While DM unread is still restoring, the in-app count is masked and
+        // is not authoritative. Keep the Push-provided badge (and its routing)
+        // until the durable projection is ready instead of writing 0.
+        if (!unlocked || directRestorePhase === "restoring") {
           void syncAppBadgeScope(account).catch(() => undefined);
           return;
         }
