@@ -11,6 +11,7 @@ import { deviceStorage } from "@/services/deviceStorage";
 import { migrateConnectionSettings, SETTINGS_VERSION } from "@/services/connectionSettings";
 import { signWorkerRequest } from "@/services/workerAuth";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
+import { onAppResume } from "@/services/appResumeCoordinator";
 
 export const ACCOUNT_STATE_NAMESPACES: AccountStateNamespace[] = [
   "friendships", "friend_metadata", "own_profile", "settings", "bookmarks",
@@ -321,6 +322,113 @@ export async function syncAccountStateNamespace(keys: AccountStateKeys, namespac
 }
 
 const timers = new Map<string, number>();
+
+// Failed uploads (offline, timeout, Worker error) are retried with backoff and
+// on every foreground/online transition. Otherwise e.g. a read cursor written
+// while offline never reaches the user's other devices until a cold start.
+const RETRY_DELAYS_MS = [5_000, 15_000, 60_000, 5 * 60_000];
+// After this many timer-driven rounds, only foreground/online events retry.
+const MAX_TIMER_RETRIES = 8;
+
+/** 4xx other than timeout/rate limit will not succeed by resending the same state. */
+function isRetryableSyncError(error: unknown) {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status !== "number") return true;
+  return status === 408 || status === 429 || status >= 500;
+}
+type PendingRetry = {
+  keys: AccountStateKeys;
+  account: string;
+  generation: number | undefined;
+  namespaces: Set<AccountStateNamespace>;
+  attempt: number;
+  timer: number | null;
+  running: boolean;
+};
+let pendingRetry: PendingRetry | null = null;
+let stopRetryResume: (() => void) | null = null;
+
+function sessionMatches(keys: AccountStateKeys, account: string, generation: number | undefined) {
+  return keys.pkHex === account && keys.sessionGeneration === generation && keys.supportsNip44;
+}
+
+function clearRetryTimer(retry: PendingRetry) {
+  if (retry.timer !== null) window.clearTimeout(retry.timer);
+  retry.timer = null;
+}
+
+function dropPendingRetries() {
+  if (pendingRetry) clearRetryTimer(pendingRetry);
+  pendingRetry = null;
+  stopRetryResume?.();
+  stopRetryResume = null;
+}
+
+function scheduleRetryTimer(retry: PendingRetry) {
+  clearRetryTimer(retry);
+  const delay = RETRY_DELAYS_MS[Math.min(retry.attempt, RETRY_DELAYS_MS.length - 1)];
+  retry.timer = window.setTimeout(() => {
+    retry.timer = null;
+    void runPendingRetries();
+  }, delay);
+}
+
+async function runPendingRetries() {
+  const retry = pendingRetry;
+  if (!retry || retry.running) return;
+  if (!sessionMatches(retry.keys, retry.account, retry.generation)) {
+    dropPendingRetries();
+    return;
+  }
+  retry.running = true;
+  clearRetryTimer(retry);
+  try {
+    for (const namespace of [...retry.namespaces]) {
+      if (pendingRetry !== retry || !sessionMatches(retry.keys, retry.account, retry.generation)) return;
+      try {
+        await syncAccountStateNamespace(retry.keys, namespace);
+        retry.namespaces.delete(namespace);
+      } catch (error) {
+        console.warn("[account-state] retry failed", namespace, error instanceof Error ? error.message : "unknown");
+        if (!isRetryableSyncError(error)) retry.namespaces.delete(namespace);
+      }
+    }
+  } finally {
+    retry.running = false;
+  }
+  if (pendingRetry !== retry) return;
+  if (!retry.namespaces.size) {
+    dropPendingRetries();
+    return;
+  }
+  retry.attempt += 1;
+  if (retry.attempt < MAX_TIMER_RETRIES) scheduleRetryTimer(retry);
+}
+
+function queueRetry(keys: AccountStateKeys, account: string, generation: number | undefined, namespace: AccountStateNamespace) {
+  if (!pendingRetry || pendingRetry.account !== account || pendingRetry.generation !== generation) {
+    dropPendingRetries();
+    pendingRetry = { keys, account, generation, namespaces: new Set(), attempt: 0, timer: null, running: false };
+  }
+  pendingRetry.namespaces.add(namespace);
+  // Fresh local changes restart the timer budget.
+  pendingRetry.attempt = 0;
+  if (!stopRetryResume) stopRetryResume = onAppResume(() => { void runPendingRetries(); });
+  if (pendingRetry.timer === null && !pendingRetry.running) scheduleRetryTimer(pendingRetry);
+}
+
+export function resetAccountStateSyncRetriesForTests() {
+  dropPendingRetries();
+}
+
+export function accountStateSyncRetryStateForTests() {
+  return {
+    namespaces: [...(pendingRetry?.namespaces || [])],
+    timerScheduled: pendingRetry?.timer != null,
+    running: !!pendingRetry?.running,
+  };
+}
+
 export function scheduleAccountStateSync(
   keys: AccountStateKeys,
   namespace: AccountStateNamespace,
@@ -337,8 +445,17 @@ export function scheduleAccountStateSync(
   timers.set(id, window.setTimeout(() => {
     timers.delete(id);
     if (keys.pkHex !== scheduledAccount || keys.sessionGeneration !== scheduledGeneration || !keys.supportsNip44) return;
-    void syncAccountStateNamespace(keys, namespace, deviceId).catch(error => {
+    void syncAccountStateNamespace(keys, namespace, deviceId).then(() => {
+      // A successful direct sync supersedes a pending retry of this namespace.
+      if (pendingRetry?.account === scheduledAccount && pendingRetry.generation === scheduledGeneration) {
+        pendingRetry.namespaces.delete(namespace);
+        if (!pendingRetry.namespaces.size) dropPendingRetries();
+      }
+    }).catch(error => {
       console.warn("[account-state] sync failed", namespace, error instanceof Error ? error.message : "unknown");
+      if (isRetryableSyncError(error) && keys.pkHex === scheduledAccount && keys.sessionGeneration === scheduledGeneration && keys.supportsNip44) {
+        queueRetry(keys, scheduledAccount, scheduledGeneration, namespace);
+      }
     });
   }, delayMs));
 }
