@@ -915,7 +915,8 @@ async function safeUpdateLocalRefs() {
   background: rgba(255,255,255,.96);
   color: #334155;
   box-shadow: 0 4px 14px rgba(15,23,42,.09);
-  backdrop-filter: blur(10px);
+  /* No backdrop-filter: the background is 96% opaque, so a blur is invisible
+     but would be recomputed on every scroll frame under this sticky pill. */
   cursor: pointer;
   z-index: 999;
   font-size: 13px;
