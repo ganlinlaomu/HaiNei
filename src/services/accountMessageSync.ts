@@ -20,6 +20,8 @@ import { syncedMessageRepository } from "@/repositories/syncedMessageRepository"
 import { onMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 import { pushEnabledForAccount, syncPushAuthorizationPolicy } from "@/services/pushNotifications";
 import { mentionedPubkeysFromTags } from "@/utils/mentions";
+import { debugLog } from "@/utils/debugLog";
+import { deliveryStatsLogData, recordPersistedDelivery, resetDeliveryStats } from "@/services/dmDeliveryStats";
 import {
   cancelDmRelayDirectoryWork,
   ensureOwnDmRelayList,
@@ -266,6 +268,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   const notifications = useNotificationsStore();
   const messages = useMessagesStore();
   const directMessages = useDirectMessagesStore();
+  resetDeliveryStats();
   directMessages.beginHistoryHydration(account);
   const settleStartupUnread = (outcome: "live" | "error") => {
     void directMessages.finishHistoryHydration(account, outcome).then(() => {
@@ -406,17 +409,27 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         },
       }),
       onPersistedMessage: async (message, metadata, inserted) => {
-        await homeHandler(message, {...metadata,durable:true});
-        // A Push-cached or live NIP-17 wrap can be durable before initial
-        // history EOSE. Show ONLY this new incoming unread, not the provisional
-        // historical total. The canonical cursor and friend policy still apply.
-        if (isCurrent() && metadata.source === "realtime") {
-          directMessages.noteFreshPersistedIncoming(account, message, inserted);
-        }
-        // Restoring cached messages is not a new delivery. Their persisted
-        // receipt state already survives the session; avoid per-message work.
-        if (metadata.source !== "local-migration") {
-          await directMessages.acknowledgePersistedIncoming(account, message);
+        // Diagnostics for duplicate re-delivery cost (review item #8).
+        const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+        const inboxRevision = messages.inboxRevision;
+        try {
+          await homeHandler(message, {...metadata,durable:true});
+          // A Push-cached or live NIP-17 wrap can be durable before initial
+          // history EOSE. Show ONLY this new incoming unread, not the provisional
+          // historical total. The canonical cursor and friend policy still apply.
+          if (isCurrent() && metadata.source === "realtime") {
+            directMessages.noteFreshPersistedIncoming(account, message, inserted);
+          }
+          // Restoring cached messages is not a new delivery. Their persisted
+          // receipt state already survives the session; avoid per-message work.
+          if (metadata.source !== "local-migration") {
+            await directMessages.acknowledgePersistedIncoming(account, message);
+          }
+        } finally {
+          if (isCurrent()) {
+            const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+            recordPersistedDelivery(metadata.source, inserted, elapsed, messages.inboxRevision !== inboxRevision);
+          }
         }
       },
       onCatchupStatus: catchup => {
@@ -429,7 +442,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
           live: status === "connecting" ? "subscribing" : status === "live" || status === "catching-up" ? "active" : "idle",
           catchup: status === "catching-up" ? "running" : status === "error" ? "error" : accountSyncSnapshot.catchup,
         });
-        if (status === "live") settleStartupUnread("live");
+        if (status === "live") {
+          settleStartupUnread("live");
+          debugLog("sync", "dm_delivery_stats", deliveryStatsLogData(), "info");
+        }
         // Terminal startup outcomes that never become live: a failed catch-up,
         // or no message Relay at all. A transient all-Relays-disconnected
         // "offline" normally still reaches live after catch-up, so keep the
