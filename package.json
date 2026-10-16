@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.46",
-  "releaseSummary": "待办长句自动换行，新建按钮仅在对应分类显示",
+  "version": "0.1.47",
+  "releaseSummary": "修复私人空间搜索聚焦缩放，搜索与空白提示随分类切换",
   "private": true,
   "scripts": {
     "dev": "vite",
