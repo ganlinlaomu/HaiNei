@@ -395,7 +395,35 @@ describe("relay reconnect", () => {
     first.unsub();
     expect(inspectRelays()["wss://receive.test"].subs).toBe(1);
     second.unsub();
+    // A warmed session relay is not torn down by its last unsubscribe; it
+    // falls back to the ordinary idle lease and is reclaimed after the TTL.
+    expect(inspectRelays()["wss://receive.test"]).toMatchObject({ subs: 0, usage: "idle", idleExpiresAt: Date.now() + IDLE_RELAY_TTL_MS });
+    await vi.advanceTimersByTimeAsync(IDLE_RELAY_TTL_MS);
     expect(inspectRelays()["wss://receive.test"]).toBeUndefined();
+  });
+
+  it("reuses a warmed socket for back-to-back one-off queries", async () => {
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { warmRelays, subscribe, inspectRelays } = await import("@/nostr/relays");
+    warmRelays(["wss://warm-reuse.test"]);
+    MockWebSocket.instances[0].emit("open", {});
+    subscribe(["wss://warm-reuse.test"], [{ kinds: [0], limit: 1 }]).unsub();
+    subscribe(["wss://warm-reuse.test"], [{ kinds: [0], limit: 1 }]).unsub();
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(inspectRelays()["wss://warm-reuse.test"].ready).toBe(true);
+  });
+
+  it("still closes a one-off lookup socket that was never warmed", async () => {
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { subscribe, inspectRelays } = await import("@/nostr/relays");
+    const lookup = subscribe(["wss://directory.test"], [{ kinds: [10050], limit: 1 }]);
+    MockWebSocket.instances[0].emit("open", {});
+    lookup.unsub();
+    expect(inspectRelays()["wss://directory.test"]).toBeUndefined();
   });
 
   it("cancels the warm TTL while publishing, and starts a new idle lease after OK", async () => {

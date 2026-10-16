@@ -102,7 +102,7 @@
                 </div>
                 <div v-else-if="canShowTemporaryText(message)" class="temporary-message">
                   <MentionText class="bubble-text" :text="messageText(message.content)" />
-                  <span class="temporary-countdown" role="timer" aria-live="off">♨ {{ remainingBurnSeconds(message) }} 秒后销毁</span>
+                  <DmBurnCountdown class="temporary-countdown" :deadline="openedDeadlines[message.id]" />
                 </div>
                 <button v-else class="temporary-reveal" type="button" :disabled="openingMessageId === message.id" @click.stop="revealDisappearing(message)">
                   <strong>♨ 阅后即焚消息</strong>
@@ -401,6 +401,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import { useRoute, useRouter } from "vue-router";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import DmAudioMessage from "@/components/DmAudioMessage.vue";
+import DmBurnCountdown from "@/components/DmBurnCountdown.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import MentionText from "@/components/MentionText.vue";
@@ -458,6 +459,7 @@ const messages = computed(() => {
   const peer = peerPubkey.value;
   const existing = directMessages.mergePeerHistory(peer, historyMessages.value);
   const results = new Map(existing.map(message => [message.id, message]));
+  let added = false;
   // A tombstone is only metadata: do not reconstruct decrypted content.
   for (const [id, info] of Object.entries(directMessages.burnedById)) {
     if (info.peerPubkey !== peer) continue;
@@ -470,9 +472,13 @@ const messages = computed(() => {
         conversationId: info.conversationId, created_at: info.createdAt, content: "",
         protocol: "nip17", transportKind: 1059, tags: [["t", DIRECT_MESSAGE_TYPE], ["t", DISAPPEARING_DM_TYPE]],
       });
+      added = true;
     }
   }
-  return [...results.values()].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+  // `existing` is already sorted; replacing content keeps that order. Only a
+  // reconstructed tombstone needs a new position.
+  const values = [...results.values()];
+  return added ? values.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)) : values;
 });
 async function fetchOlderPage(reset = false) {
   if (!reset && historyExhausted.value) return;
@@ -776,7 +782,13 @@ function startBurnClock() {
   clockNow.value = Date.now();
   burnTimerPeriod = period;
   burnTimer = window.setInterval(() => {
-    clockNow.value = Date.now();
+    const now = Date.now();
+    // The whole chat renders from clockNow. While a countdown runs, the label
+    // ticks inside DmBurnCountdown; advance clockNow only when a deadline is
+    // crossed, so the expired message hides without re-rendering every second.
+    if (period !== 1000 || Object.values(openedDeadlines.value).some(deadline => deadline > clockNow.value && deadline <= now)) {
+      clockNow.value = now;
+    }
     void checkBurnDeadlines();
   }, period);
 }
@@ -2031,10 +2043,17 @@ watch(() => route.query.focus, target => {
     sourceFocusReadSuppressed.value = false;
   }
 });
-watch(() => messages.value.map(message => message.id).join("\0"), async (nextSignature, previousSignature) => {
+function sameIds(left: string[], right: string[] | undefined) {
+  if (!right || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++) if (left[index] !== right[index]) return false;
+  return true;
+}
+// Compare id lists directly instead of joining thousands of 64-char ids into
+// one string (and splitting it again) on every recompute.
+watch(() => messages.value.map(message => message.id), async (nextIds, previousIdsOrUndefined) => {
+  if (sameIds(nextIds, previousIdsOrUndefined)) return;
   if (windowMutationInProgress) return;
-  const nextIds = nextSignature ? nextSignature.split("\0") : [];
-  const previousIds = previousSignature ? previousSignature.split("\0") : [];
+  const previousIds = previousIdsOrUndefined ?? [];
   if (loadingConversation) {
     resetMessageWindow();
     return;

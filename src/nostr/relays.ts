@@ -44,6 +44,8 @@ type RelayConn = {
   disposing: boolean;
   connectStartedAt: number;
   activePublishes: number;
+  /** Opened for the session's own relays (warmRelays/restore), not a one-off lookup. */
+  warm: boolean;
   idleTimer: ReturnType<typeof setTimeout> | null;
   idleSince: number | null;
   idleExpiresAt: number | null;
@@ -239,6 +241,9 @@ function renewRelayIdleLease(conn: RelayConn) {
 export function releaseUnusedRelayConnections() {
   for (const conn of Object.values(relaysMap)) {
     if (!hasRelayDemand(conn)) releaseRelayConnection(conn, "manual");
+    // A socket kept alive by in-flight work no longer belongs to the new
+    // session's warm set; close it as soon as that work finishes.
+    else conn.warm = false;
   }
 }
 
@@ -388,6 +393,7 @@ function ensureRelayConn(url: string): RelayConn {
     generation: 0,
     reconnectAttempts: 0,
     activePublishes: 0,
+    warm: false,
     idleTimer: null,
     idleSince: null,
     idleExpiresAt: null,
@@ -663,6 +669,7 @@ export function warmRelays(relays: string[]) {
   for (const url of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
     const existing = relaysMap[url];
     const conn = existing || ensureRelayConn(url);
+    conn.warm = true;
     renewRelayIdleLease(conn);
     if (!existing || conn.ready || conn.connecting || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
@@ -760,11 +767,13 @@ export function subscribe(relays: string[], filtersArray: any[]) {
         }
         debugLog("subscription", "subscription_closed", subscriptionDiagnostic(conn, subId), "info");
         conn.subs.delete(subId);
-        if (!hasRelayDemand(conn)) {
+        if (!hasRelayDemand(conn) && !conn.warm) {
           // Directory queries and completed one-off subscriptions close
           // immediately. The next lookup creates a fresh temporary socket.
           releaseRelayConnection(conn, "manual");
         } else {
+          // A warmed session relay keeps its idle lease, so the next query
+          // reuses the open socket instead of paying a new TLS handshake.
           updateRelayIdleLease(conn);
         }
       }
@@ -1026,6 +1035,7 @@ export function restoreRelayConnections(relays = getRelaysFromStorage("read")) {
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
   for (const url of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
     const conn = relaysMap[url] || ensureRelayConn(url);
+    conn.warm = true;
     renewRelayIdleLease(conn);
     if (conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) {
       // OPEN after a suspension is not proof of a live socket.
