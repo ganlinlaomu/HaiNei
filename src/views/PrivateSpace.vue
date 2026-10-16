@@ -48,8 +48,7 @@
         <button type="button" @click="selectFilter('note')">返回笔记</button>
       </div>
       <div class="toolbar">
-        <input v-model="query" type="search" :aria-label="'搜索' + (filter === 'saved' ? '收藏' : '私人笔记')"
-          :placeholder="filter === 'saved' ? '搜索收藏' : '搜索笔记和待办'" />
+        <input v-model="query" type="search" :aria-label="searchLabel" :placeholder="searchLabel" />
         <button v-if="filter === 'note'" type="button" class="primary"
           :disabled="backupBusy || loading || editorTransitionBusy" @click="create('note')">＋ 笔记</button>
         <button v-if="filter === 'todo'" type="button" class="primary"
@@ -65,7 +64,7 @@
       </div>
       <SavedPosts v-if="filter === 'saved'" :query="query" />
       <p v-else-if="loading" class="empty-state">正在读取本地笔记…</p>
-      <div v-else-if="!filtered.length" class="empty-state">这里还没有内容。可以新建一条笔记或待办。</div>
+      <div v-else-if="!filtered.length" class="empty-state" role="status">{{ emptyMessage }}</div>
       <ul v-else class="items">
         <li v-for="note in filtered" :key="note.id" class="private-space-row"
           :class="{ 'swipe-enabled': canSwipeNote(note) }"
@@ -166,6 +165,7 @@ import { getPrivateSpaceTab, rememberPrivateSpaceTab } from "@/services/privateS
 import { useSwipeActions } from "@/composables/useSwipeActions";
 import { vAutoGrow } from "@/directives/autoGrowTextarea";
 import { shouldSubmitTaskOnEnter } from "@/utils/taskInput";
+import { privateSpaceSearchLabel, privateSpaceEmptyMessage, type SpaceFilter } from "@/utils/privateSpacePresentation";
 import {
   syncPrivateSpace, notePrivateSpaceMutation, setPrivateSpaceEditing,
 } from "@/services/privateSpaceSync";
@@ -372,8 +372,9 @@ const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, o
 let swipeStart: { id: string; x: number; y: number } | null = null;
 let handlingQuickCreate = false;
 const query = ref("");
-type SpaceFilter = "saved" | "all" | "note" | "todo" | "archived" | "trash";
 const filter = ref<SpaceFilter>(route.query.new === "note" ? "note" : route.query.new === "todo" ? "todo" : route.query.tab === "saved" ? "saved" : getPrivateSpaceTab(keys.pkHex));
+const searchLabel = computed(() => privateSpaceSearchLabel(filter.value));
+const emptyMessage = computed(() => privateSpaceEmptyMessage(filter.value, query.value));
 const moreOpen = ref(false);
 const loading = ref(false);
 const error = ref("");
@@ -783,8 +784,10 @@ onBeforeUnmount(() => {
 <style scoped>
 .private-space-page{min-height:100%;background:var(--bg-fff);color:var(--fg-172033);padding-bottom:calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
 .error-line{margin:8px 16px;padding:10px;border-radius:8px;background:var(--bg-fef2f2);color:var(--fg-b91c1c);font-size:13px}
-.toolbar{display:flex;gap:8px;align-items:center;padding:14px 14px 10px}
-.toolbar input{min-width:0;flex:1;border:1px solid var(--bd-e2e8f0);border-radius:11px;padding:10px;font:inherit;font-size:14px}
+.toolbar{display:flex;min-width:0;box-sizing:border-box;gap:8px;align-items:center;padding:14px 14px 10px}
+/* Keep iOS focus from auto-zooming; fix dimensions across focus/search states. */
+.toolbar input{appearance:none;-webkit-appearance:none;box-sizing:border-box;min-width:0;width:0;max-width:100%;height:44px;flex:1 1 0;border:1px solid var(--bd-e2e8f0);border-radius:11px;padding:0 10px;font:inherit;font-size:16px;line-height:normal;color:inherit;background:var(--bg-fff)}
+.toolbar button{flex-shrink:0}
 button{font:inherit;cursor:pointer}
 .primary{padding:10px;border:0;border-radius:11px;background:#172033;color:#fff;white-space:nowrap;font-size:13px}
 .tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:12px 14px;border-bottom:1px solid var(--bd-f1f3f5)}
