@@ -50,9 +50,9 @@
       <div class="toolbar">
         <input v-model="query" type="search" :aria-label="'搜索' + (filter === 'saved' ? '收藏' : '私人笔记')"
           :placeholder="filter === 'saved' ? '搜索收藏' : '搜索笔记和待办'" />
-        <button v-if="filter !== 'saved'" type="button" class="primary"
+        <button v-if="filter === 'note'" type="button" class="primary"
           :disabled="backupBusy || loading || editorTransitionBusy" @click="create('note')">＋ 笔记</button>
-        <button v-if="filter !== 'saved'" type="button" class="primary secondary"
+        <button v-if="filter === 'todo'" type="button" class="primary"
           :disabled="backupBusy || loading || editorTransitionBusy" @click="create('todo')">＋ 待办</button>
         <button type="button" class="more-action" :disabled="backupBusy" :aria-expanded="moreOpen"
           aria-label="更多私人空间操作" @click="moreOpen = !moreOpen">•••</button>
@@ -86,7 +86,7 @@
             <button type="button" class="item"
               :disabled="backupBusy || editorTransitionBusy || !!rowActionBusyId || !!note.archivedAt || !!note.deletedAt"
               @click="openFromList(note)">
-              <span class="item-top"><strong>{{ label(note) }}</strong><span v-if="note.pinned">📌</span></span>
+              <span class="item-top"><strong :class="{ 'todo-title': note.kind === 'todo' }">{{ label(note) }}</strong><span v-if="note.pinned">📌</span></span>
               <span class="preview">{{ note.kind === 'todo' ? progress(note) : privateSpaceDisplay(note).text || (privateSpaceDisplay(note).attachments.length ? '媒体摘录' : '空白笔记') }}</span>
               <span class="date">{{ note.kind === 'todo' ? '待办' : '笔记' }} · {{ formatted(note.updatedAt) }}</span>
             </button>
@@ -113,16 +113,16 @@
       </template>
       <template v-else>
         <div class="tasks">
-          <label v-for="(task, index) in editor.tasks" :key="task.id" class="task">
-            <input type="checkbox" v-model="task.done" @change="queueSave" />
-            <input type="text" v-model="task.text" maxlength="2000" aria-label="待办内容"
-              :class="{ done: task.done }" placeholder="待办事项" @input="queueSave" />
+          <div v-for="(task, index) in editor.tasks" :key="task.id" class="task">
+            <input type="checkbox" v-model="task.done" :aria-label="'完成第 ' + (index + 1) + ' 项'" @change="queueSave" />
+            <textarea v-model="task.text" v-auto-grow="task.text" rows="1" maxlength="2000" aria-label="待办内容"
+              :class="{ done: task.done }" placeholder="待办事项" @input="queueSave"></textarea>
             <button type="button" :aria-label="'删除第 ' + (index + 1) + ' 项'"
               @click.prevent="removeTask(index)">×</button>
-          </label>
+          </div>
           <div class="add-task">
-            <input v-model="newTaskText" type="text" maxlength="2000" placeholder="添加待办事项"
-              aria-label="新的待办事项" @input="pendingTaskInput" @blur="addTask" @keydown.enter.prevent="addTask" />
+            <textarea v-model="newTaskText" v-auto-grow="newTaskText" rows="1" maxlength="2000" placeholder="添加待办事项"
+              aria-label="新的待办事项" @input="pendingTaskInput" @blur="addTask" @keydown.enter="onNewTaskEnter"></textarea>
             <button type="button" @click="addTask">添加</button>
           </div>
           <p class="task-counter">{{ progress(editor) }}</p>
@@ -164,6 +164,8 @@ import { privateNoteSource } from "@/services/privateSpaceSource";
 import { privateSpaceDisplay } from "@/services/privateSpaceContent";
 import { getPrivateSpaceTab, rememberPrivateSpaceTab } from "@/services/privateSpaceNavigation";
 import { useSwipeActions } from "@/composables/useSwipeActions";
+import { vAutoGrow } from "@/directives/autoGrowTextarea";
+import { shouldSubmitTaskOnEnter } from "@/utils/taskInput";
 import {
   syncPrivateSpace, notePrivateSpaceMutation, setPrivateSpaceEditing,
 } from "@/services/privateSpaceSync";
@@ -626,6 +628,11 @@ function pendingTaskInput() {
 function addTask() {
   if (commitPendingTaskInput()) queueSave();
 }
+function onNewTaskEnter(event: KeyboardEvent) {
+  if (!shouldSubmitTaskOnEnter(event)) return;
+  event.preventDefault();
+  addTask();
+}
 async function flush() {
   const committed = commitPendingTaskInput();
   // A full todo list must block navigation rather than silently discard typed input.
@@ -780,7 +787,6 @@ onBeforeUnmount(() => {
 .toolbar input{min-width:0;flex:1;border:1px solid var(--bd-e2e8f0);border-radius:11px;padding:10px;font:inherit;font-size:14px}
 button{font:inherit;cursor:pointer}
 .primary{padding:10px;border:0;border-radius:11px;background:#172033;color:#fff;white-space:nowrap;font-size:13px}
-.primary.secondary{background:var(--bg-e9edf3);color:var(--fg-172033)}
 .tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:12px 14px;border-bottom:1px solid var(--bd-f1f3f5)}
 .tabs button{display:flex;align-items:center;justify-content:center;width:100%;height:42px;min-height:42px;box-sizing:border-box;border:0;border-radius:9px;background:var(--bg-f1f5f9);padding:0 8px;color:var(--fg-64748b);font-size:13px;line-height:1}
 .tabs button.selected{color:var(--fg-0f172a);background:var(--bg-dfe8f4);font-weight:650}
@@ -806,6 +812,7 @@ button{font:inherit;cursor:pointer}
 .item{width:100%;display:flex;flex-direction:column;gap:6px;border:0;background:var(--bg-fff);text-align:left;padding:17px 4px}
 .item-top{display:flex;justify-content:space-between;gap:8px}
 .item-top strong{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item-top strong.todo-title{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}
 .preview{font-size:13px;color:var(--fg-64748b);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .date{font-size:11px;color:var(--fg-94a3b8)}
 .empty-state{text-align:center;padding:65px 20px;color:var(--fg-94a3b8);font-size:13px}
@@ -818,10 +825,10 @@ button{font:inherit;cursor:pointer}
 .tasks{margin-top:24px}
 .task{display:flex;align-items:center;gap:10px;min-height:48px;border-bottom:1px solid var(--bd-f1f3f5)}
 .task input[type="checkbox"]{width:19px;height:19px;accent-color:var(--fg-334155);flex:0 0 auto}
-.task input[type="text"],.add-task input{min-width:0;flex:1;border:0;background:transparent;font:inherit;outline:none;padding:10px 0}
+.task textarea,.add-task textarea{display:block;box-sizing:border-box;min-width:0;width:0;flex:1;min-height:44px;border:0;background:transparent;color:inherit;font:inherit;font-size:16px;line-height:24px;outline:none;padding:10px 0;resize:none;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere}
 .task .done{text-decoration:line-through;color:var(--fg-94a3b8)}
-.task button,.add-task button{border:0;background:transparent;color:var(--fg-64748b);padding:8px}
-.add-task{display:flex;gap:8px;margin-top:12px}
+.task button,.add-task button{flex-shrink:0;border:0;background:transparent;color:var(--fg-64748b);padding:8px}
+.add-task{display:flex;align-items:center;gap:8px;margin-top:12px}
 .task-counter{font-size:12px;color:var(--fg-94a3b8)}
 .editor-footer{display:flex;justify-content:space-between;border-top:1px solid var(--bd-edf0f2);margin-top:25px;padding-top:12px}
 .editor-footer .delete-button{color:var(--fg-be123c)}
