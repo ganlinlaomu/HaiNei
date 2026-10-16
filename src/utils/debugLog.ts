@@ -17,7 +17,7 @@ export function debugLog(
   const safeData = sanitizeDebugData(data);
   try {
     if (getActivePinia()) {
-      useDebugLogsStore().add({ category, event, level, ...(safeData ? { data: safeData } : {}) });
+      useDebugLogsStore().addSanitized({ category, event, level, ...(safeData ? { data: safeData } : {}) });
     }
   } catch {
     // Diagnostics must never affect the application path being observed.

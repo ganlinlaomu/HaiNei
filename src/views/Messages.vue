@@ -416,7 +416,7 @@ import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
-import { useMessagesStore, type InboxItem } from "@/stores/messages";
+import { useMessagesStore, type InboxItem, type InboxMutation } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import {
   focusBoundedMessageWindow,
@@ -1450,10 +1450,40 @@ function markVisibleMessagesRead() {
   const latest = windowMessages.value.filter(message => !hasDisappearingMarker(message.tags)
     && (!message.outgoing || message.outgoing.state === "sent")).at(-1);
   if (!latest) return Promise.resolve();
-  return directMessages.markPeerRead(peerPubkey.value, latest);
+  // Scrolling at the tail calls this many times per second, and each
+  // markPeerRead rescans the whole inbox. Skip a target already marked or in flight.
+  const key = `${keys.pkHex}:${peerPubkey.value}:${latest.id}`;
+  if (key === markedReadKey) return Promise.resolve();
+  if (markReadFlight && markReadFlightKey === key) return markReadFlight;
+  const flight: Promise<void> = directMessages.markPeerRead(peerPubkey.value, latest)
+    .then(() => { markedReadKey = key; })
+    .finally(() => {
+      if (markReadFlight === flight) {
+        markReadFlight = null;
+        markReadFlightKey = "";
+      }
+    });
+  markReadFlight = flight;
+  markReadFlightKey = key;
+  return flight;
 }
 
+let markedReadKey = "";
+let markReadFlight: Promise<void> | null = null;
+let markReadFlightKey = "";
+let messageScrollFrame: number | null = null;
+
+/** Scroll events fire many times per frame on iOS momentum scrolling; the
+ * layout reads and window updates below only need to run once per frame. */
 function handleMessageScroll() {
+  if (messageScrollFrame !== null) return;
+  messageScrollFrame = requestAnimationFrame(() => {
+    messageScrollFrame = null;
+    if (!disposed) processMessageScroll();
+  });
+}
+
+function processMessageScroll() {
   const list = messageList.value;
   if (!list) return;
   if (actionMenuMessageId.value) closeMessageActionMenu();
@@ -1899,13 +1929,23 @@ function submitMessage() {
   }
 }
 
+let appliedInboxRevision = messageStore.inboxRevision;
 function applyLatestInboxMutation() {
-  const mutation = messageStore.lastInboxMutation;
+  // The watcher can coalesce several revisions into one run; replay each one
+  // so a message that arrived between two flushes is not lost from this chat.
+  const since = appliedInboxRevision;
+  appliedInboxRevision = messageStore.inboxRevision;
+  const mutations = messageStore.inboxMutationsSince(since)
+    ?? (messageStore.lastInboxMutation ? [messageStore.lastInboxMutation] : []);
+  for (const mutation of mutations) applyInboxMutation(mutation);
+}
+
+function applyInboxMutation(mutation: InboxMutation) {
   const account = keys.pkHex.toLowerCase();
   const peer = peerPubkey.value;
   if (!account || !peer || messageStore.loadedFor.toLowerCase() !== account) return;
 
-  if (mutation?.type === "insert" || mutation?.type === "update") {
+  if (mutation.type === "insert" || mutation.type === "update") {
     // An older history item may already be evicted from the bounded inbox;
     // the mutation still carries it for an open chat that has paged that far.
     const item = mutation.itemId
@@ -1925,7 +1965,7 @@ function applyLatestInboxMutation() {
     return;
   }
 
-  if (mutation?.type === "reset") {
+  if (mutation.type === "reset") {
     historyMessages.value = [];
     historyCursor.value = undefined;
     historyExhausted.value = false;
@@ -2075,6 +2115,8 @@ onBeforeUnmount(() => {
   handleComposerBlur();
   loadGeneration += 1;
   if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
+  if (messageScrollFrame !== null) cancelAnimationFrame(messageScrollFrame);
+  messageScrollFrame = null;
   if (replyHighlightTimer !== null) window.clearTimeout(replyHighlightTimer);
   replyHighlightTimer = null;
   closeMessageActionMenu();
