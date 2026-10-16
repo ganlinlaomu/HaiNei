@@ -15,7 +15,10 @@ describe("Android Capacitor build", () => {
 
   it("builds Android in GitHub Actions and patches the native updater", () => {
     const workflow = readFileSync(join(process.cwd(), ".github/workflows/android.yml"), "utf8");
-    expect(workflow).toContain("node-version: 22");
+    // Capacitor 8 needs Node 22+; the version comes from the shared .node-version.
+    expect(workflow).toContain("node-version-file: .node-version");
+    const nodeMajor = Number(readFileSync(join(process.cwd(), ".node-version"), "utf8").trim().split(".")[0]);
+    expect(nodeMajor).toBeGreaterThanOrEqual(22);
     expect(workflow).toContain('java-version: "21"');
     expect(workflow).toContain("@capacitor/core@8");
     expect(workflow).toContain("@capacitor/android@8");
@@ -24,7 +27,7 @@ describe("Android Capacitor build", () => {
     expect(workflow).toContain("node scripts/patch-android-update.mjs");
     expect(workflow).toContain("./gradlew assembleDebug --no-daemon");
     expect(workflow).toContain("./gradlew assembleRelease --no-daemon");
-    expect(workflow).toContain("actions/upload-artifact@v4");
+    expect(workflow).toContain("actions/upload-artifact@v6");
   });
 
   it("publishes only signed main builds as the rolling update release", () => {
