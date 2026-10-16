@@ -156,7 +156,7 @@ export default defineComponent({
     function refreshVisibleInbox(force = false): {
       changed: boolean;
       mode: "none" | "incremental" | "rebuild";
-      inserted?: InboxItem;
+      inserted?: InboxItem[];
     } {
       const messageRevision = msgs.inboxRevision;
       const preferenceRevision = feedPreferences.revision;
@@ -166,32 +166,37 @@ export default defineComponent({
         return { changed: false, mode: "none" };
       }
 
-      const mutation = msgs.lastInboxMutation;
-      const canApplySingleInsert = !force
-        && preferenceRevision === visibleInboxPreferenceRevision
-        && messageRevision === visibleInboxMessageRevision + 1
-        && mutation?.revision === messageRevision
-        && mutation.type === "insert"
-        && !!mutation.itemId;
+      // Several arrivals can land between two watcher runs. As long as every
+      // one of them is a plain insert, apply them incrementally as well.
+      const mutations = !force && preferenceRevision === visibleInboxPreferenceRevision
+        ? msgs.inboxMutationsSince(visibleInboxMessageRevision)
+        : null;
+      const canApplyInserts = !!mutations?.length
+        && mutations.every(mutation => mutation.type === "insert" && !!mutation.itemId);
 
-      let insertedVisible: InboxItem | undefined;
-      if (canApplySingleInsert) {
+      const insertedVisible: InboxItem[] = [];
+      if (canApplyInserts) {
         let next = messagesRef.value;
-        if (mutation.evictedId) next = next.filter(message => message.id !== mutation.evictedId);
-        const inserted = msgs.inbox[0]?.id === mutation.itemId
-          ? msgs.inbox[0]
-          : msgs.inbox.find(message => message.id === mutation.itemId);
-        if (inserted
-          && isHomeRenderable(inserted)
-          && feedPreferences.isVisible(inserted)
-          && !next.some(message => message.id === inserted.id)) {
-          next = insertSortedHomeMessage(next, inserted);
-          insertedVisible = inserted;
+        const evicted = new Set(mutations!.map(mutation => mutation.evictedId).filter((id): id is string => !!id));
+        if (evicted.size) next = next.filter(message => !evicted.has(message.id));
+        const present = new Set(next.map(message => message.id));
+        for (const mutation of mutations!) {
+          const inserted = msgs.inbox[0]?.id === mutation.itemId
+            ? msgs.inbox[0]
+            : msgs.inbox.find(message => message.id === mutation.itemId);
+          if (inserted
+            && !present.has(inserted.id)
+            && isHomeRenderable(inserted)
+            && feedPreferences.isVisible(inserted)) {
+            next = insertSortedHomeMessage(next, inserted);
+            present.add(inserted.id);
+            insertedVisible.push(inserted);
+          }
         }
         messagesRef.value = next;
       } else {
-        // Multiple arrivals, reloads, metadata replacements and preference
-        // changes intentionally fall back to the proven full rebuild path.
+        // Reloads, metadata replacements, preference changes and a mutation
+        // log gap intentionally fall back to the proven full rebuild path.
         rebuildVisibleInbox();
       }
 
@@ -199,7 +204,7 @@ export default defineComponent({
       visibleInboxPreferenceRevision = preferenceRevision;
       return {
         changed: true,
-        mode: canApplySingleInsert ? "incremental" : "rebuild",
+        mode: canApplyInserts ? "incremental" : "rebuild",
         inserted: insertedVisible,
       };
     }
@@ -530,9 +535,7 @@ export default defineComponent({
   // ⭐ ② 真正的“新消息”定义：只看时间。常见的单条实时新增
   // 直接判断这一条；只有 rebuild 才扫描当前 Home 列表。
   const newMessages = refreshResult.mode === "incremental"
-    ? (refreshResult.inserted && (refreshResult.inserted.created_at || 0) > lastSeen
-      ? [refreshResult.inserted]
-      : [])
+    ? (refreshResult.inserted || []).filter(m => (m.created_at || 0) > lastSeen)
     : refreshResult.mode === "none"
       ? []
       : messagesRef.value.filter(m => (m.created_at || 0) > lastSeen);

@@ -485,16 +485,17 @@ describe("direct-message navigation and UI contract", () => {
     expect(worker).toContain("event.respondWith(fetch(request))");
   });
 
-  it("uses revisions and a safe single-insert fast path for Home reconciliation", () => {
+  it("uses revisions and a safe insert-only fast path for Home reconciliation", () => {
     const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
     const messages = readThemedSource(join(process.cwd(), "src/stores/messages.ts"), "utf8");
     const preferences = readThemedSource(join(process.cwd(), "src/stores/feedPreferences.ts"), "utf8");
     expect(home).toContain("lastReconciledSnapshot");
     expect(home).toContain("msgs.inboxRevision");
     expect(home).toContain("feedPreferences.revision");
-    expect(home).toContain("canApplySingleInsert");
+    expect(home).toContain("canApplyInserts");
+    expect(home).toContain("msgs.inboxMutationsSince(visibleInboxMessageRevision)");
     expect(home).toContain('mutation.type === "insert"');
-    expect(home).toContain('mode: canApplySingleInsert ? "incremental" : "rebuild"');
+    expect(home).toContain('mode: canApplyInserts ? "incremental" : "rebuild"');
     expect(home).toContain('refreshResult.mode === "incremental"');
     expect(home).toContain("rebuildVisibleInbox()");
     expect(home).not.toContain("[...feedPreferences.hiddenMessageIds].sort()");

@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import { markRaw, toRaw } from "vue";
 import { deviceStorage } from "@/services/deviceStorage";
 import { useKeyStore } from "./keys";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -26,6 +27,22 @@ export type InboxMutation = {
 };
 
 const MAX_INBOX_ITEMS = 1000;
+/** Mutations kept so watchers that coalesce several revisions can replay them. */
+const MAX_MUTATION_LOG = 64;
+
+// addInbox runs once per received message. Looking ids up with findIndex walks
+// up to 1000 reactive proxies each time; keep an id set for the raw array and
+// rebuild it whenever the array was replaced or changed behind our back.
+let indexedInbox: InboxItem[] | null = null;
+let indexedIds = new Set<string>();
+function inboxIdSet(inbox: InboxItem[]) {
+  const raw = toRaw(inbox);
+  if (raw !== indexedInbox || indexedIds.size !== raw.length) {
+    indexedIds = new Set(raw.map(item => item.id));
+    indexedInbox = raw;
+  }
+  return indexedIds;
+}
 
 /** Inbox order is newest-first; ties keep the same id order as load(). */
 function inboxInsertIndex(inbox: InboxItem[], item: InboxItem) {
@@ -85,12 +102,26 @@ export const useMessagesStore = defineStore("messages", {
     outbox: [] as OutboxItem[],
     loadedFor: "" as string,
     inboxRevision: 0,
-    lastInboxMutation: null as InboxMutation | null
+    lastInboxMutation: null as InboxMutation | null,
+    // Not reactive: consumers are woken by inboxRevision and read it on demand.
+    inboxMutationLog: markRaw([] as InboxMutation[]),
   }),
   actions: {
     recordInboxMutation(type: InboxMutation["type"], itemId?: string, evictedId?: string, item?: InboxItem) {
       this.inboxRevision += 1;
-      this.lastInboxMutation = { revision: this.inboxRevision, type, itemId, evictedId, ...(item ? { item } : {}) };
+      const mutation: InboxMutation = { revision: this.inboxRevision, type, itemId, evictedId, ...(item ? { item } : {}) };
+      this.lastInboxMutation = mutation;
+      const log = toRaw(this.inboxMutationLog);
+      log.push(mutation);
+      if (log.length > MAX_MUTATION_LOG) log.splice(0, log.length - MAX_MUTATION_LOG);
+    },
+
+    /** Every mutation after `revision`, oldest first; null if some were dropped. */
+    inboxMutationsSince(revision: number): InboxMutation[] | null {
+      if (revision >= this.inboxRevision) return [];
+      const log = toRaw(this.inboxMutationLog);
+      const pending = log.filter(mutation => mutation.revision > revision);
+      return pending.length === this.inboxRevision - revision ? pending : null;
     },
 
     async load(pk?: string) {
@@ -209,17 +240,23 @@ export const useMessagesStore = defineStore("messages", {
     scheduleOutboxSave() {},
 
     removeInboxMessage(messageId: string) {
-      const index = this.inbox.findIndex(item => item.id === messageId);
+      const index = toRaw(this.inbox).findIndex(item => item.id === messageId);
       if (index < 0) return;
       this.inbox.splice(index, 1);
+      inboxIdSet(this.inbox).delete(messageId);
       this.recordInboxMutation("replace");
     },
 
     addInbox(item: InboxItem) {
       if (!item || !item.id || isHomeControl(item.tags, item.content)) return;
       
-      // Check if message already exists
-      const existingIndex = this.inbox.findIndex((m) => m.id === item.id);
+      let ids = inboxIdSet(this.inbox);
+      const existingIndex = ids.has(item.id) ? toRaw(this.inbox).findIndex((m) => m.id === item.id) : -1;
+      if (ids.has(item.id) && existingIndex < 0) {
+        // An item was replaced in place under another id; resync the index.
+        indexedInbox = null;
+        ids = inboxIdSet(this.inbox);
+      }
       if (existingIndex !== -1) {
         // Message already exists - handle _localMeta intelligently:
         // - If new item has _localMeta but existing doesn't: add it (relay echo arrived first)
@@ -245,9 +282,13 @@ export const useMessagesStore = defineStore("messages", {
       // Insert at its sorted position and evict the OLDEST entry. Relay
       // catch-up delivers history newest-first; prepending it would push the
       // newest messages (conversation heads) out of the bounded window.
-      this.inbox.splice(inboxInsertIndex(this.inbox, item), 0, item);
-      const evictedId = this.inbox.length > MAX_INBOX_ITEMS ? this.inbox[MAX_INBOX_ITEMS]?.id : undefined;
-      if (this.inbox.length > MAX_INBOX_ITEMS) this.inbox.splice(MAX_INBOX_ITEMS);
+      this.inbox.splice(inboxInsertIndex(toRaw(this.inbox), item), 0, item);
+      ids.add(item.id);
+      const evictedId = this.inbox.length > MAX_INBOX_ITEMS ? toRaw(this.inbox)[MAX_INBOX_ITEMS]?.id : undefined;
+      if (this.inbox.length > MAX_INBOX_ITEMS) {
+        for (const evicted of toRaw(this.inbox).slice(MAX_INBOX_ITEMS)) ids.delete(evicted.id);
+        this.inbox.splice(MAX_INBOX_ITEMS);
+      }
       this.recordInboxMutation("insert", item.id, evictedId, item);
       this.scheduleInboxSave();
       notifyCanonicalMessageAdded(this.loadedFor, item);
