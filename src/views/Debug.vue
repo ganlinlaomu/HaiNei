@@ -19,6 +19,7 @@
       <div><span>登录方式</span><strong>{{ keys.loginMethod || "—" }}</strong></div>
       <div><span>当前时间</span><strong>{{ currentTime }}</strong></div>
       <div><span>App / DB</span><strong>{{ APP_VERSION }} / v{{ DB_VERSION }}</strong></div>
+      <div><span>持久化存储</span><strong>{{ persistentStorageLabel }}</strong></div>
     </section>
 
     <section class="summary-grid">
@@ -101,6 +102,7 @@ import { getRelayPerformanceDiagnostics, inspectRelays, reconnectRelay, type Rel
 import { useDebugLogsStore, type DebugLogCategory, type DebugLogEntry, type DebugLogLevel } from "@/stores/debugLogs";
 import { useKeyStore } from "@/stores/keys";
 import { getDeliveryStats } from "@/services/dmDeliveryStats";
+import { persistentStorageState, type PersistentStorageState } from "@/services/persistentStorage";
 
 type RelayStatus = RelayRuntimeStatus;
 type LastSend = { ts: number; logicalMessageId: string; recipients: number; giftWraps: number; copies: Array<{ eventId: string; target: string; role: string; relays: Array<{ relay: string; status: string; reason?: string }> }> };
@@ -117,6 +119,13 @@ const search = ref("");
 let timer: ReturnType<typeof setInterval> | undefined;
 
 const accountPrefix = computed(() => keys.pkHex.slice(0, 12));
+const persistentStorage = ref<PersistentStorageState | "">("");
+const persistentStorageLabel = computed(() => ({
+  persisted: "已授予",
+  "best-effort": "未授予（可能被浏览器清理）",
+  unsupported: "不支持",
+  "": "检查中…",
+})[persistentStorage.value]);
 const currentTime = computed(() => new Date(now.value).toLocaleString());
 
 function refreshRelayStatus() {
@@ -188,7 +197,7 @@ const lastSend = computed<LastSend | null>(() => {
 
 function exportLogs() {
   refreshRelayStatus();
-  const payload = { appVersion: APP_VERSION, dbVersion: DB_VERSION, account: accountPrefix.value, relayStatus: relayStatus.value, logs: logs.entries };
+  const payload = { appVersion: APP_VERSION, dbVersion: DB_VERSION, account: accountPrefix.value, persistentStorage: persistentStorage.value, relayStatus: relayStatus.value, logs: logs.entries };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -196,7 +205,7 @@ function exportLogs() {
   URL.revokeObjectURL(url);
 }
 
-onMounted(() => { refreshRelayStatus(); timer = window.setInterval(() => { now.value = Date.now(); refreshRelayStatus(); }, 2000); });
+onMounted(() => { void persistentStorageState().then(state => { persistentStorage.value = state; }); refreshRelayStatus(); timer = window.setInterval(() => { now.value = Date.now(); refreshRelayStatus(); }, 2000); });
 onBeforeUnmount(() => { if (timer) clearInterval(timer); });
 </script>
 

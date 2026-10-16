@@ -14,6 +14,8 @@ const PUSH_HINT_TTL_MS = 24 * 60 * 60 * 1000;
 const PUSH_HINT_MAX_ITEMS = 32;
 // One replaceable DM notification instead of one per message.
 const DM_NOTIFICATION_TAG = 'hainei-dm';
+// Lie-fi (signal but no throughput) must not hold the app shell hostage.
+const NAVIGATION_TIMEOUT_MS = 3000;
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', VERSION, BUILD_ID);
@@ -246,6 +248,32 @@ self.addEventListener('message', (event) => {
   }
 });
 
+// Network first, but fall back to the cached shell after NAVIGATION_TIMEOUT_MS.
+// The network response still refreshes the cache for the next launch. Without
+// a cached shell, keep waiting for the network as before.
+async function navigationResponse(event, request) {
+  let storeCopy = Promise.resolve();
+  const network = fetch(request).then((response) => {
+    // Only a real page may replace the cached shell, never a 404/500.
+    if (response.ok && response.type === 'basic') {
+      const copy = response.clone();
+      storeCopy = caches.open(HTML_CACHE).then((cache) => cache.put(request, copy)).catch(() => {});
+    }
+    return response;
+  });
+  // Registered now, while the event is active; it may outlive respondWith.
+  event.waitUntil(network.then(() => storeCopy, () => {}));
+
+  let timer;
+  const timedOut = new Promise((resolve) => { timer = setTimeout(() => resolve('timeout'), NAVIGATION_TIMEOUT_MS); });
+  const first = await Promise.race([network.catch(() => 'error'), timedOut]);
+  clearTimeout(timer);
+  if (first !== 'timeout' && first !== 'error') return first;
+  const cached = await caches.match(request);
+  if (cached) return cached;
+  return network;
+}
+
 // Fetch 拦截：确保不缓存 API 请求
 self.addEventListener('fetch', (event) => {
   const { request } = event;
@@ -257,17 +285,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(HTML_CACHE).then((cache) => {
-            cache.put(request, copy);
-          });
-          return response;
-        })
-        .catch(() => caches.match(request))
-    );
+    event.respondWith(navigationResponse(event, request));
     return;
   }
 
@@ -298,7 +316,14 @@ self.addEventListener('push', (event) => {
   try { payload = JSON.parse(event.data?.text() || '{}'); } catch {}
   event.waitUntil((async () => {
     badgeUpdateQueue = badgeUpdateQueue.catch(() => undefined).then(async () => {
-      const acknowledge = await scopedPushHint(payload);
+      let acknowledge;
+      try {
+        acknowledge = await scopedPushHint(payload);
+      } catch {
+        // Unreadable push state (CacheStorage failure) must not drop the push
+        // silently: WebKit revokes subscriptions whose pushes show nothing.
+        acknowledge = async () => {};
+      }
       if (!acknowledge) return;
       const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       const appVisible = windows.some(client => client.visibilityState === 'visible');

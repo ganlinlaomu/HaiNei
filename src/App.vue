@@ -60,6 +60,7 @@ import AndroidUpdateNotification from "@/components/AndroidUpdateNotification.vu
 import { useUIStore } from "@/stores/ui";
 import { loadPostEditor, preloadPostEditor } from "@/components/postEditorLoader";
 import { isChunkLoadError, reloadForStaleChunk } from "@/utils/chunkLoadRecovery";
+import { requestPersistentStorage } from "@/services/persistentStorage";
 import { useKeyStore } from "@/stores/keys";
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { preloadBottomTabViews } from "@/router/lazyViews";
@@ -221,7 +222,10 @@ export default defineComponent({
       () => [keys.isLoggedIn, keys.isUnlocked] as const,
       ([isLoggedIn, isUnlocked]) => {
         warmReadRelaysForSession({ isLoggedIn, isUnlocked });
-        if (isLoggedIn && isUnlocked) scheduleBottomTabWarmup();
+        if (isLoggedIn && isUnlocked) {
+          scheduleBottomTabWarmup();
+          void requestPersistentStorage();
+        }
       },
       { immediate: true }
     );
