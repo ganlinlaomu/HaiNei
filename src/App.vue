@@ -39,7 +39,7 @@
       <div class="composer-loading-card" :role="postEditorLoadError ? 'alert' : undefined">
         <template v-if="postEditorLoadError">
           <span>发帖页面加载失败</span>
-          <button type="button" class="composer-retry-button" @click="preparePostEditor">重试</button>
+          <button type="button" class="composer-retry-button" @click="retryPostEditor">重试</button>
         </template>
         <template v-else>
           <span class="composer-loading-spinner" aria-hidden="true"></span>
@@ -59,6 +59,7 @@ import UpdateNotification from "@/components/UpdateNotification.vue";
 import AndroidUpdateNotification from "@/components/AndroidUpdateNotification.vue";
 import { useUIStore } from "@/stores/ui";
 import { loadPostEditor, preloadPostEditor } from "@/components/postEditorLoader";
+import { isChunkLoadError, reloadForStaleChunk } from "@/utils/chunkLoadRecovery";
 import { useKeyStore } from "@/stores/keys";
 import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { preloadBottomTabViews } from "@/router/lazyViews";
@@ -102,14 +103,22 @@ export default defineComponent({
     let disposed = false;
     let bottomTabsPreloaded = false;
 
+    let postEditorChunkStale = false;
     async function preparePostEditor() {
       postEditorLoadError.value = false;
       try {
         await loadPostEditor();
         if (!disposed) postEditorReady.value = true;
-      } catch {
+      } catch (error) {
+        postEditorChunkStale = isChunkLoadError(error);
         if (!disposed) postEditorLoadError.value = true;
       }
+    }
+
+    function retryPostEditor() {
+      // A chunk from a replaced deploy never loads again; only a reload helps.
+      if (postEditorChunkStale && reloadForStaleChunk()) return;
+      void preparePostEditor();
     }
 
     function schedulePostEditorWarmup() {
@@ -257,6 +266,7 @@ export default defineComponent({
       postEditorReady,
       postEditorLoadError,
       preparePostEditor,
+      retryPostEditor,
       handleFabIntent,
       handleFabClick,
     };

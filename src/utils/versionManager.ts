@@ -4,7 +4,7 @@
  */
 
 import { APP_VERSION } from "@/db/dexie";
-import { deviceStorage } from "@/services/deviceStorage";
+import { deviceStorage, flushDeviceWrites } from "@/services/deviceStorage";
 
 const VERSION_KEY = "app_version";
 const LAST_UPDATE_CHECK_KEY = "last_update_check";
@@ -62,6 +62,8 @@ export async function handleVersionUpdate(): Promise<void> {
     // 💡 关键改动：不再执行 clearAllAppData()
     // 仅仅更新版本记录，保持本地数据（Nostr 私钥、好友列表等）完好无损
     storeCurrentVersion();
+    // deviceStorage writes are asynchronous; make the new marker durable.
+    await flushDeviceWrites();
     console.log("[VersionManager] Version update handled safely (data preserved)");
   } catch (e) {
     console.error("[VersionManager] Error handling version update", e);

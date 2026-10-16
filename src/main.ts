@@ -10,6 +10,7 @@ import { clearExpiredCache } from "@/utils/imageCache";
 import { initVersionTracking, handleVersionUpdate } from "@/utils/versionManager";
 import { migrateLegacyLocalStorage } from "@/services/legacyLocalStorageMigration";
 import { initTheme } from "@/services/theme";
+import { installChunkLoadRecovery } from "@/utils/chunkLoadRecovery";
 
 let serviceWorkerRegistration: Promise<ServiceWorkerRegistration> | null = null;
 let serviceWorkerLoadListenerAttached = false;
@@ -73,22 +74,16 @@ async function bootstrap() {
 
   const versionChanged = initVersionTracking();
   if (versionChanged) {
-  // Version changed - handle update and reload
-  console.log("[main] Version changed detected, handling update...");
-  
-  handleVersionUpdate().then(() => {
-    console.log("[main] Update complete, reloading...");
-    window.location.reload();
-  }).catch((e) => {
-    console.error("[main] Failed to handle version update", e);
-    // Force reload anyway - better to try than to leave broken state
-    alert("检测到应用更新，正在刷新页面...");
-    window.location.reload();
-  });
-  
-  // Don't continue with app initialization
-  // The page will reload after cleanup
-    return;
+    // The running bundle is already the new version and no data is cleared, so
+    // only the marker needs updating. Reloading here used to race the async
+    // IndexedDB write: an aborted write left the old marker and caused another
+    // reload on the next start.
+    console.log("[main] Version changed detected, updating marker...");
+    try {
+      await handleVersionUpdate();
+    } catch (e) {
+      console.error("[main] Failed to handle version update", e);
+    }
   }
   // Normal app initialization
   const app = createApp(App);
@@ -96,6 +91,7 @@ async function bootstrap() {
 
   app.use(pinia);
   app.use(router);
+  installChunkLoadRecovery(router);
 
   // 🚀 优先渲染：先 mount，再恢复会话（避免首屏白屏）
   app.mount("#app");

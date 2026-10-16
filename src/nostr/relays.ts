@@ -48,6 +48,10 @@ type RelayConn = {
   idleSince: number | null;
   idleExpiresAt: number | null;
   retryAt: number | null;
+  /** Last frame of any kind received on the current socket. */
+  lastInboundAt: number;
+  probeTimer: ReturnType<typeof setTimeout> | null;
+  probeSubId: string | null;
   pendingCloseReason: "timeout" | "session-refresh" | null;
   lastDisconnectReason: "closed" | "timeout" | "session-refresh" | "manual" | "settings" | "idle-ttl" | null;
   connect: () => void;
@@ -60,6 +64,10 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_CAP_MS = 60_000;
 const RECONNECT_STABLE_MS = 30_000;
 const EOSE_TIMEOUT = 8_000;
+// A suspended iOS PWA or a Wi-Fi/cellular switch can leave a socket reporting
+// OPEN while it is dead. A quiet socket is probed before it is trusted again.
+export const LIVENESS_QUIET_MS = 15_000;
+export const LIVENESS_PROBE_TIMEOUT_MS = 4_000;
 // Only preconnected/temporary sockets without subscribers or pending sends
 // expire. Active NIP-17 receive points have no TTL and remain connected.
 export const IDLE_RELAY_TTL_MS = 20_000;
@@ -130,6 +138,37 @@ function failRelayAcknowledgements(conn: RelayConn, reason: string) {
   }
 }
 
+function clearLivenessProbe(conn: RelayConn) {
+  if (conn.probeTimer !== null) clearTimeout(conn.probeTimer);
+  conn.probeTimer = null;
+  conn.probeSubId = null;
+}
+
+/** Send a REQ that any live relay answers at once (EOSE, CLOSED or NOTICE).
+ * If nothing at all arrives before the deadline, the socket is replaced. */
+function probeRelayLiveness(conn: RelayConn, force = false) {
+  if (relaysMap[conn.url] !== conn || conn.disposing || !conn.ready || !conn.ws || conn.probeTimer !== null) return;
+  if (!force && Date.now() - conn.lastInboundAt < LIVENESS_QUIET_MS) return;
+  const ws = conn.ws;
+  const startedAt = Date.now();
+  const subId = "probe_" + Math.random().toString(36).slice(2, 10);
+  conn.probeSubId = subId;
+  try {
+    ws.send(JSON.stringify(["REQ", subId, { kinds: [0], limit: 0 }]));
+  } catch {
+    // A failed send is itself a dead-socket signal; let the deadline decide.
+  }
+  debugLog("relay", "relay_liveness_probe", { relay: conn.url, force }, "info");
+  conn.probeTimer = setTimeout(() => {
+    conn.probeTimer = null;
+    conn.probeSubId = null;
+    if (relaysMap[conn.url] !== conn || conn.ws !== ws || conn.lastInboundAt >= startedAt) return;
+    debugLog("relay", "relay_liveness_timeout", { relay: conn.url, timeoutMs: LIVENESS_PROBE_TIMEOUT_MS }, "warn");
+    reconnectRelay(conn.url);
+  }, LIVENESS_PROBE_TIMEOUT_MS);
+  (conn.probeTimer as any).unref?.();
+}
+
 function releaseRelayConnection(conn: RelayConn, reason: "idle-ttl" | "settings" | "manual") {
   if (relaysMap[conn.url] !== conn || conn.disposing) return false;
   if (reason === "idle-ttl" && hasRelayDemand(conn)) return false;
@@ -148,6 +187,7 @@ function releaseRelayConnection(conn: RelayConn, reason: "idle-ttl" | "settings"
   conn.connectTimer = null;
   conn.sessionRefreshTimer = null;
   conn.connecting = false;
+  clearLivenessProbe(conn);
   for (const subId of conn.subs.keys()) {
     settleSubscription(conn, subId, "failure", "disconnected");
     const timer = conn.subs.get(subId)?.eoseTimer;
@@ -222,6 +262,8 @@ function settleSubscription(
     for (const handler of sub.failureHandlers) {
       try { handler(conn.url, reason); } catch (error) { logger.warn("subscription failure handler error", error); }
     }
+    // No EOSE on an apparently open socket: verify the socket itself.
+    if (reason === "timeout") probeRelayLiveness(conn, true);
   }
   return true;
 }
@@ -350,6 +392,9 @@ function ensureRelayConn(url: string): RelayConn {
     idleSince: null,
     idleExpiresAt: null,
     retryAt: null,
+    lastInboundAt: 0,
+    probeTimer: null,
+    probeSubId: null,
     pendingCloseReason: null,
     lastDisconnectReason: null,
     hasConnected: false,
@@ -427,6 +472,8 @@ function ensureRelayConn(url: string): RelayConn {
         conn.ready = true;
         conn.hasConnected = true;
         conn.connectedAt = Date.now();
+        conn.lastInboundAt = conn.connectedAt;
+        clearLivenessProbe(conn);
         if (conn.sessionRefreshTimer) window.clearTimeout(conn.sessionRefreshTimer);
         conn.sessionRefreshTimer = null;
         if (managedSession) {
@@ -473,10 +520,23 @@ function ensureRelayConn(url: string): RelayConn {
 
       const onMessage = (ev: MessageEvent) => {
         if (conn.ws !== ws || generation !== conn.generation) return;
+        // Any frame, even malformed, proves the socket is alive.
+        conn.lastInboundAt = Date.now();
+        if (conn.probeTimer !== null) {
+          clearTimeout(conn.probeTimer);
+          conn.probeTimer = null;
+        }
         let data: any;
         try { data = JSON.parse(ev.data); } catch { return; }
         if (!Array.isArray(data) || data.length === 0) return;
         const t = data[0];
+        if (conn.probeSubId && data[1] === conn.probeSubId && (t === "EOSE" || t === "CLOSED")) {
+          if (t === "EOSE") {
+            try { ws.send(JSON.stringify(["CLOSE", conn.probeSubId])); } catch {}
+          }
+          conn.probeSubId = null;
+          return;
+        }
         if (t === "EVENT") {
           const subId = data[1];
           const event = data[2];
@@ -534,6 +594,7 @@ function ensureRelayConn(url: string): RelayConn {
         conn.ready = false;
         conn.ws = null;
         conn.connecting = false;
+        clearLivenessProbe(conn);
         // A socket that flaps immediately after OPEN must not reset backoff.
         // Reset only after a stable connection, limiting rapid battery-draining loops.
         if (conn.connectedAt && Date.now() - conn.connectedAt >= RECONNECT_STABLE_MS) {
@@ -898,6 +959,7 @@ export function reconnectRelay(url: string) {
     conn.connectTimer = null;
     conn.sessionRefreshTimer = null;
     conn.connecting = false;
+    clearLivenessProbe(conn);
     const socket = conn.ws;
     const wasReady = conn.ready;
     conn.ws = null;
@@ -958,13 +1020,18 @@ export const pool = {
   }
 };
 
-/** Reset foreground retry exhaustion and immediately reconnect active read relays. */
+/** Reset foreground retry exhaustion, immediately reconnect active read relays,
+ * and probe quiet "connected" sockets that may have died while suspended. */
 export function restoreRelayConnections(relays = getRelaysFromStorage("read")) {
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
   for (const url of [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))]) {
     const conn = relaysMap[url] || ensureRelayConn(url);
     renewRelayIdleLease(conn);
-    if (conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) continue;
+    if (conn.ready || conn.ws?.readyState === 1 || conn.ws?.readyState === 0) {
+      // OPEN after a suspension is not proof of a live socket.
+      if (conn.ready) probeRelayLiveness(conn);
+      continue;
+    }
     if (conn.reconnectTimer) window.clearTimeout(conn.reconnectTimer);
     conn.reconnectTimer = null;
     conn.retryAt = null;

@@ -15,7 +15,14 @@ class MockWebSocket {
     (this.listeners[name] ||= []).push(callback);
   }
 
-  send(payload: string) { this.sent.push(payload); }
+  send(payload: string) {
+    this.sent.push(payload);
+    // A live relay answers the liveness probe (REQ with limit 0) right away.
+    const frame = JSON.parse(payload);
+    if (frame[0] === "REQ" && String(frame[1]).startsWith("probe_")) {
+      queueMicrotask(() => { if (this.readyState === 1) this.emit("message", { data: JSON.stringify(["EOSE", frame[1]]) }); });
+    }
+  }
   close() { this.emit("close", {}); }
   emit(name: string, event: any) {
     if (name === "open") this.readyState = 1;
