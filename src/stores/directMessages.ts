@@ -444,10 +444,15 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const outgoing = tasks
         .filter(task => !matches.matchedLocalIds.has(task.localId))
         .map(taskInboxItem);
-      return [...canonical.map(item => {
+      const merged = [...canonical.map(item => {
         const task = matches.taskByMessageId.get(item.id);
         return task ? { ...item, outgoing: taskInboxItem(task).outgoing } : item;
-      }), ...outgoing].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+      }), ...outgoing];
+      // directMessagesForPeer already returns canonical items sorted; only
+      // unmatched optimistic tasks need to be merged into that order.
+      return outgoing.length
+        ? merged.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id))
+        : merged;
     },
     conversationItems() {
       const canonical = useMessagesStore().inbox;
