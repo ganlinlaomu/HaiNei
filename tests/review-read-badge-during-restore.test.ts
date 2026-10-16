@@ -1,6 +1,6 @@
 // Review finding #1 (badge half, store side): markPeerRead synced the masked
 // restoring count straight to the OS badge.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import type { FriendshipRecord } from "@/db/dexie";
 import type { InboxItem } from "@/stores/messages";
@@ -57,7 +57,13 @@ async function setup(phase: "ready" | "restoring") {
   return direct;
 }
 
-beforeEach(() => setActivePinia(createPinia()));
+beforeEach(() => {
+  setActivePinia(createPinia());
+  // The badge path only runs in a browser (typeof navigator). Node 21+ has a
+  // global navigator but Node 20 (CI) does not; stub it so both behave alike.
+  vi.stubGlobal("navigator", { onLine: true });
+});
+afterEach(() => vi.unstubAllGlobals());
 
 describe("review #1: badge writes from a foreground read", () => {
   it("does not push the masked count to the OS badge while unread is restoring", async () => {
