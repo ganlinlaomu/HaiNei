@@ -1,7 +1,10 @@
 <template>
   <main class="conversations-page app-page">
     <header class="page-header">
-      <h1>私信</h1>
+      <div class="page-title">
+        <h1>私信</h1>
+        <span v-if="syncLabel" class="sync-label" role="status" aria-live="polite">{{ syncLabel }}</span>
+      </div>
       <button
         class="conversation-filter"
         type="button"
@@ -76,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import NewConversationSheet from "@/components/NewConversationSheet.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
@@ -94,6 +97,12 @@ import { loadAccountStoresOnce, runAfterFirstPaint, runWhenIdle } from "@/utils/
 import { loadMessagesView } from "@/router/lazyViews";
 import { useSwipeActions } from "@/composables/useSwipeActions";
 import { sortConversationRows } from "@/utils/conversationOrder";
+import {
+  getAccountMessageSyncStatus,
+  messageSyncPhase,
+  onAccountMessageSyncStatus,
+  type AccountMessageSyncSnapshot,
+} from "@/services/accountMessageSync";
 
 const router = useRouter();
 const keys = useKeyStore();
@@ -104,6 +113,14 @@ const friends = useFriendsStore();
 const profiles = useProfilesStore();
 const ui = useUIStore();
 const searchQuery = ref("");
+const syncSnapshot = ref<AccountMessageSyncSnapshot>(getAccountMessageSyncStatus());
+const syncLabel = computed(() => {
+  const snapshot = syncSnapshot.value;
+  if (!keys.pkHex || snapshot.accountPubkey !== keys.pkHex.toLowerCase()) return "";
+  const phase = messageSyncPhase(snapshot, directMessages.historyHydrationPhase === "hydrating");
+  return phase === "connecting" ? "连接中…" : phase === "syncing" ? "同步中…" : "";
+});
+const stopSyncStatusListener = onAccountMessageSyncStatus(snapshot => { syncSnapshot.value = snapshot; });
 const filterMode = ref<"all" | "unread">("all");
 // Four 64px actions: pin, mute, hide, delete.
 const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions({ actionWidth: 256 });
@@ -256,6 +273,9 @@ onActivated(() => {
   void load();
   scheduleConversationWarmup();
 });
+onBeforeUnmount(() => {
+  stopSyncStatusListener();
+});
 onDeactivated(() => {
   closeOtherSwipes();
   ui.closeNewConversation();
@@ -264,7 +284,7 @@ onDeactivated(() => {
 
 <style scoped>
 .conversations-page{width:100%;min-height:100%;margin:0 auto;box-sizing:border-box;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 28px);background:var(--bg-fff);color:var(--fg-0f1419)}
-.page-header{position:sticky;top:0;z-index:4;display:flex;align-items:center;justify-content:space-between;min-height:54px;padding:0 16px;background:var(--bg-rgba-255-255-255-97)}.page-header h1{margin:0;font-size:21px;font-weight:750}.conversation-filter{display:flex;min-height:36px;align-items:center;gap:2px;padding:0 2px 0 10px;border:0;border-radius:999px;background:transparent;color:var(--fg-536471);font-size:14px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}.conversation-filter:active{background:var(--bg-f1f5f9)}.conversation-filter span{font-size:16px;line-height:1;transform:translateY(-1px)}
+.page-header{position:sticky;top:0;z-index:4;display:flex;align-items:center;justify-content:space-between;min-height:54px;padding:0 16px;background:var(--bg-rgba-255-255-255-97)}.page-title{display:flex;align-items:baseline;gap:8px}.page-header h1{margin:0;font-size:21px;font-weight:750}.sync-label{color:var(--fg-64748b);font-size:13px;font-weight:500}.conversation-filter{display:flex;min-height:36px;align-items:center;gap:2px;padding:0 2px 0 10px;border:0;border-radius:999px;background:transparent;color:var(--fg-536471);font-size:14px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}.conversation-filter:active{background:var(--bg-f1f5f9)}.conversation-filter span{font-size:16px;line-height:1;transform:translateY(-1px)}
 .conversation-search{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:9px;margin:4px 16px 10px;padding:0 13px;border-radius:999px;background:var(--bg-eff3f4);color:var(--fg-536471)}.conversation-search svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}.conversation-search input{width:100%;height:42px;padding:0;border:0;outline:0;background:transparent;color:var(--fg-0f1419);font-size:16px}.conversation-search input::placeholder{color:var(--fg-536471)}
 .conversation-list{display:flex;width:100%;flex-direction:column;border-top:1px solid var(--bd-eff1f3)}.conversation-row{position:relative;width:100%;min-height:72px;overflow:hidden;border-bottom:1px solid var(--bd-eff1f3);background:var(--bg-fff);color:var(--fg-0f1419);touch-action:pan-y}.swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:256px}.action{width:64px;padding:0 2px;border:0;color:#fff;font-size:11px;font-weight:650;line-height:1.25;white-space:nowrap}.action.pin{background:#1d9bf0}.action.mute{background:#f59e0b}.action.hide{background:#536471}.action.delete{background:#f4212e}.conversation-main{position:relative;z-index:1;display:grid;width:100%;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:12px;min-width:0;min-height:72px;padding:11px 16px;border:0;background:var(--bg-fff);color:inherit;text-align:left;cursor:pointer;transition:transform .2s ease}.conversation-main:active{background:var(--bg-f7f9f9)}.conversation-copy{display:flex;min-width:0;flex-direction:column;gap:4px}.conversation-copy strong,.preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.conversation-copy strong{display:flex;min-width:0;align-items:center;gap:4px;font-size:15px}.conversation-row.pinned .conversation-main{background:var(--bg-f7f9f9)}.row-flag{width:14px;height:14px;flex:0 0 14px;fill:none;stroke:var(--fg-536471);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.unread-dot{width:9px;height:9px;margin:4px 4px 5px;border-radius:50%;background:var(--fg-94a3b8)}.preview{color:var(--fg-536471);font-size:13px}.conversation-meta{display:flex;align-items:flex-end;gap:7px;flex-direction:column;color:var(--fg-536471);font-size:11px}.unread-badge{display:grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#1d9bf0;color:#fff;font-size:10px;font-weight:700}
 .empty-state{display:flex;min-height:44vh;align-items:center;justify-content:center;flex-direction:column;gap:7px;padding:24px;color:var(--fg-536471);text-align:center}.empty-state strong{color:var(--fg-0f1419);font-size:19px}.empty-state span{font-size:14px}.empty-action{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:var(--bg-0f1419);color:#fff;font-size:14px;font-weight:650}.search-empty{padding:48px 20px;color:var(--fg-536471);font-size:14px;text-align:center}
