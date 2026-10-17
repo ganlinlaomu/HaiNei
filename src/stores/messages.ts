@@ -139,7 +139,18 @@ export const useMessagesStore = defineStore("messages", {
       }
       if (this.loadedFor === targetPk) return;
       this.loadedFor = targetPk;
+      try {
+        await this.loadDurableInbox(targetPk);
+      } catch (error) {
+        // Never leave the store marked as loaded with an empty inbox (for
+        // example when the local vault was not unlocked yet); a later load
+        // for this account must retry.
+        if (this.loadedFor === targetPk) this.loadedFor = "";
+        throw error;
+      }
+    },
 
+    async loadDurableInbox(targetPk: string) {
       // One-time, account-scoped import of the migrated legacy mirror.
       try {
         const ik = inboxKeyFor(targetPk);
