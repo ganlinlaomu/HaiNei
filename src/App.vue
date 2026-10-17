@@ -281,7 +281,7 @@ export default defineComponent({
 <style>
 body.login-page {
   padding-bottom: 0;
-  background: var(--bg-0b1017);
+  background: var(--hn-bg);
 }
 
 body.login-page > #app {

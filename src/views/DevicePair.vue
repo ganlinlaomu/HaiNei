@@ -1,8 +1,8 @@
 <template>
   <main class="pair-page">
     <header class="pair-header">
-      <button type="button" class="back" :disabled="busy" @click="router.push(keys.isLoggedIn ? '/settings/system' : '/login')">‹ 返回</button>
-      <h1>扫描登录新设备</h1>
+      <button type="button" class="back" :disabled="busy" @click="goBack">‹ 返回</button>
+      <h1>{{ mode === 'send' ? '添加设备' : '扫码登录' }}</h1>
     </header>
     <p class="description">只在两台设备都由你本人操作时使用。私钥在设备之间端对端加密传送，不会以明文存放在服务器。</p>
 
@@ -238,9 +238,15 @@ async function approveTransfer() {
   } catch (error) { errorMessage.value = message(error); }
   finally { busy.value = false; }
 }
+function goBack() {
+  const previous = router.options.history.state.back;
+  if (typeof previous === "string" && previous) router.back();
+  else void router.push(keys.isLoggedIn ? "/settings/system" : "/login");
+}
 onMounted(() => {
   const incoming = typeof route.query.pair === "string" ? route.query.pair : "";
-  if (keys.isLoggedIn) {
+  // role=receive: adding another account on a phone that is already signed in.
+  if (keys.isLoggedIn && route.query.role !== "receive") {
     mode.value = "send";
     if (incoming) {
       const url = `${window.location.origin}${window.location.pathname}#/device-pair?pair=${incoming}`;

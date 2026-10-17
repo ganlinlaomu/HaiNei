@@ -11,6 +11,29 @@
   --main-content-max-width: var(--app-page-max-width);
   /* Increased padding to ensure load-more button is always above bottom bar */
   --load-more-padding: 40px;
+
+  /* HaiNei visual language (login flow first, then the rest of the app). */
+  --hn-bg: #F6F4EF;
+  --hn-primary: #22304F;
+  --hn-on-primary: #FFFFFF;
+  --hn-secondary-bg: #E8E5DD;
+  --hn-card: #FFFFFF;
+  --hn-text: #1C1C1E;
+  --hn-text-2: #55555B;
+  --hn-text-3: #6B6B70;
+  --hn-border: rgba(28, 28, 30, 0.1);
+  --hn-focus-ring: rgba(34, 48, 79, 0.18);
+  --hn-danger: #9B2C1F;
+  --hn-danger-bg: #F6E3DF;
+  --hn-success: #2E7D5B;
+  --hn-font-brand: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", serif;
+  --hn-font-sans: "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, sans-serif;
+  --hn-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --hn-control-height: 54px;
+  --hn-radius-btn: 16px;
+  --hn-radius-input: 14px;
+  --hn-radius-card: 20px;
+  --hn-gutter: 24px;
   color-scheme: light;
 }
 
@@ -21,6 +44,19 @@
   --card: #16181c;
   --primary: #e7e9ea;
   --accent: #4b9bec;
+  --hn-bg: #13161D;
+  --hn-primary: #C9D3EA;
+  --hn-on-primary: #151B2B;
+  --hn-secondary-bg: #262A33;
+  --hn-card: #1C2029;
+  --hn-text: #EDEDF0;
+  --hn-text-2: #B4B4BB;
+  --hn-text-3: #9898A0;
+  --hn-border: rgba(255, 255, 255, 0.1);
+  --hn-focus-ring: rgba(201, 211, 234, 0.22);
+  --hn-danger: #F0A194;
+  --hn-danger-bg: #3A211D;
+  --hn-success: #6CC79E;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -29,6 +65,19 @@
     --card: #16181c;
     --primary: #e7e9ea;
     --accent: #4b9bec;
+    --hn-bg: #13161D;
+    --hn-primary: #C9D3EA;
+    --hn-on-primary: #151B2B;
+    --hn-secondary-bg: #262A33;
+    --hn-card: #1C2029;
+    --hn-text: #EDEDF0;
+    --hn-text-2: #B4B4BB;
+    --hn-text-3: #9898A0;
+    --hn-border: rgba(255, 255, 255, 0.1);
+    --hn-focus-ring: rgba(201, 211, 234, 0.22);
+    --hn-danger: #F0A194;
+    --hn-danger-bg: #3A211D;
+    --hn-success: #6CC79E;
     color-scheme: dark;
   }
 }

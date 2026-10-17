@@ -27,7 +27,7 @@ describe("public branding and legal pages", () => {
   });
 
   it("links the public pages from the unauthenticated login surface", () => {
-    const login = source("src/views/Login.vue");
+    const login = source("src/components/login/WelcomeScreen.vue");
     expect(login).toContain('href="/about"');
     expect(login).toContain('href="/privacy"');
     expect(login).toContain('href="/terms"');

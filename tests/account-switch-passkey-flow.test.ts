@@ -25,9 +25,10 @@ describe("account switch passkey flow", () => {
     expect(login).toContain("await presentUnlockMethod()");
   });
 
-  it("returns account switches to Home while add-account can return to settings", () => {
+  it("returns account switches to Home and lets passkey accounts unlock on the login page", () => {
     const settings = source("src/views/SystemSettings.vue");
 
-    expect(settings).toContain('redirect: mode === "switch" ? "/" : "/settings/system"');
+    expect(settings).toContain('await router.replace("/")');
+    expect(settings).toContain('await router.replace({ path: "/login", query: { redirect: "/" } })');
   });
 });

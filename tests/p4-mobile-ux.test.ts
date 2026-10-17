@@ -58,8 +58,11 @@ describe("P4 mobile UX regression contract", () => {
 
   it("visually separates forget-account from destructive local-data deletion", () => {
     const login = readThemedSource("src/views/Login.vue", "utf8");
-    expect(login).toContain('class="account-device-actions"');
-    expect(login).toContain("account-device-action-danger");
+    const list = readThemedSource("src/components/login/AccountListScreen.vue", "utf8");
+    // Both actions stay behind the "⋯" menu so a stray tap cannot delete anything.
+    expect(list).toContain('aria-label="更多操作"');
+    expect(list).toContain('v-if="menuFor === account.pubkey"');
+    expect(list).toContain('class="menu-action danger"');
     expect(login).toContain("保留本机历史数据");
     expect(login).toContain("全部本机资料");
   });

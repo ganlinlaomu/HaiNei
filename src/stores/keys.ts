@@ -42,7 +42,9 @@ import {
   forgetDeviceAccount,
   listDeviceAccounts,
   rememberDeviceAccount,
-  type DeviceAccount
+  updateDeviceAccountPresentation,
+  type DeviceAccount,
+  type DeviceAccountPresentation
 } from "@/services/accountRegistry";
 import {
   enrollBiometricUnlock,
@@ -388,6 +390,57 @@ export const useKeyStore = defineStore("keys", {
         credentialMode: this.credentialMode,
         lastUsedAt: Date.now(),
       });
+    },
+
+    async setAccountPresentation(pubkey: string, presentation: Partial<DeviceAccountPresentation>) {
+      this.accounts = await updateDeviceAccountPresentation(pubkey, presentation);
+    },
+
+    /** Re-protect the unlocked account with a local password (settings › 账号安全). */
+    async protectWithLocalPassword(password: string) {
+      if (this.loginMethod !== "private-key" || !this.pkHex || !this.skHex || !this.isUnlocked) {
+        throw new Error("请先用私钥解锁当前账号");
+      }
+      if (password.length < 8) throw new Error("本地保护密码至少需要 8 位");
+      const account = this.pkHex;
+      const encrypted = await encryptPrivateKey(this.skHex, password);
+      await storeEncryptedKey(account, encrypted);
+      await Promise.all([removeDevicePrivateKey(account), removeBiometricUnlock(account)]);
+      this.isEncrypted = true;
+      this.credentialMode = "password";
+      await this.persistActiveSession();
+      await this.rememberCurrentAccount();
+    },
+
+    /** Keep the unlocked account signed in on this device without a password. */
+    async keepSignedInOnDevice() {
+      if (this.loginMethod !== "private-key" || !this.pkHex || !this.skHex || !this.isUnlocked) {
+        throw new Error("请先用私钥解锁当前账号");
+      }
+      const account = this.pkHex;
+      await storeDevicePrivateKey(account, this.skHex);
+      await Promise.all([removeEncryptedKey(account), removeBiometricUnlock(account)]);
+      this.isEncrypted = true;
+      this.credentialMode = "device";
+      await this.persistActiveSession();
+      await this.rememberCurrentAccount();
+    },
+
+    /** Drop every stored credential; the key stays in memory until the app closes. */
+    async useSessionOnlyLogin() {
+      if (this.loginMethod !== "private-key" || !this.pkHex || !this.skHex || !this.isUnlocked) {
+        throw new Error("请先用私钥解锁当前账号");
+      }
+      const account = this.pkHex;
+      await Promise.all([
+        removeEncryptedKey(account),
+        removeBiometricUnlock(account),
+        removeDevicePrivateKey(account),
+      ]);
+      this.accounts = await forgetDeviceAccount(account);
+      this.isEncrypted = false;
+      this.credentialMode = "session";
+      await this.clearPersistedSession();
     },
 
     async clearActiveSession() {
