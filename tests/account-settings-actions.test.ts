@@ -16,23 +16,53 @@ describe("account actions in Settings", () => {
     expect(settings).toContain('@click="doLogout"');
     expect(settings).toContain("退出登录");
     expect(settings).toContain("<p>{{ nickname }} · {{ shortPk }} · {{ accountProtectionText }}</p>");
-    expect(settings).toContain('goToAccountLogin("switch")');
-    expect(settings).toContain('goToAccountLogin("add")');
-    expect(settings).toContain('redirect: mode === "switch" ? "/" : "/settings/system"');
-    expect(settings).toContain("await keyStore.clearActiveSession()");
+    expect(settings).toContain("<AccountSwitcherSheet");
     expect(settings).toContain("keyStore.refreshAccounts()");
+    expect(settings).toContain("await keyStore.selectRememberedAccount(pubkey)");
     expect(settings).toContain("await keyStore.logout()");
   });
 
-  it("uses the existing secure login UI while keeping add-account separate from switching", () => {
+  it("switches between remembered accounts without signing out first", () => {
+    const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    const switcher = settings.slice(settings.indexOf("async function switchToAccount"), settings.indexOf("function addAccount"));
+    // The old flow cleared the session before an account was chosen, so backing
+    // out of the login page left the user signed out.
+    expect(switcher).not.toContain("clearActiveSession");
+    expect(switcher).toContain('if (result === "connected")');
+    expect(switcher).toContain('await router.replace({ path: "/login", query: { redirect: "/" } })');
+  });
+
+  it("adds an account while staying signed in until the new one is ready", () => {
+    const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    const add = settings.slice(settings.indexOf("function addAccount"), settings.indexOf("async function beginGoogleBackup"));
+    expect(add).not.toContain("clearActiveSession");
+    expect(add).toContain('query: { mode: "add", redirect: "/" }');
+
+    const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
+    expect(router).toContain('keyStore.isLoggedIn && keyStore.isUnlocked && to.query.mode !== "add"');
+
     const login = readFileSync(join(process.cwd(), "src/views/Login.vue"), "utf8");
     expect(login).toContain('const addingAccount = computed(() => route.query.mode === "add")');
-    expect(login).toContain('v-if="!addingAccount && ks.accounts.length"');
-    expect(login).toContain("添加其他账号");
-    expect(login).toContain('addingAccount ? "创建新账号" : "还没有账号？注册"');
-    expect(login).toContain("使用私钥登录");
-    expect(login).toContain("在此设备保持登录（推荐）");
-    expect(login).toContain("使用本地保护密码");
-    expect(login).toContain("仅此次登录");
+    expect(login).toContain('if (addingAccount.value) return "methods";');
+    expect(login).toContain('{ path: "/device-pair", query: { role: "receive" } }');
+
+    const pair = readFileSync(join(process.cwd(), "src/views/DevicePair.vue"), "utf8");
+    expect(pair).toContain('keys.isLoggedIn && route.query.role !== "receive"');
+  });
+
+  it("moves local password and session-only login out of the login page into 账号安全", () => {
+    const login = readFileSync(join(process.cwd(), "src/views/Login.vue"), "utf8");
+    expect(login).not.toContain("loginStorageMode");
+    expect(login).not.toContain("仅此次登录");
+    expect(login).toContain("await ks.loginWithNsec(privateKey);");
+
+    const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    expect(settings).toContain("<h3>账号安全</h3>");
+    expect(settings).toContain("使用本地保护密码");
+    expect(settings).toContain("仅此次登录");
+    expect(settings).toContain("keyStore.protectWithLocalPassword(password)");
+    expect(settings).toContain("keyStore.useSessionOnlyLogin()");
+    expect(settings).toContain("keyStore.keepSignedInOnDevice()");
+    expect(settings).toContain('mode="backup"');
   });
 });

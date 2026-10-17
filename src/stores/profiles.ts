@@ -19,6 +19,16 @@ import { scheduleAccountStateSync } from "@/services/accountStateSync";
 
 function normalized(value: string) { return value.trim().toLowerCase(); }
 
+/** Mirror the own nickname into the device account list shown before unlock. */
+function rememberOwnName(account: string, nickname: string | undefined) {
+  const name = nickname?.trim();
+  if (!name) return;
+  const keys = useKeyStore();
+  const known = keys.accounts?.find(item => item.pubkey === account);
+  if (!known || known.displayName === name || typeof keys.setAccountPresentation !== "function") return;
+  void keys.setAccountPresentation(account, { displayName: name }).catch(() => undefined);
+}
+
 export const useProfilesStore = defineStore("profiles", {
   state: () => ({ records: [] as HaiNeiProfile[], loadedFor: "", loading: false }),
   getters: {
@@ -35,7 +45,10 @@ export const useProfilesStore = defineStore("profiles", {
       this.loading = true;
       try {
         const records = await profileRepository.list(account);
-        if (this.loadedFor === account) this.records = records.map(({ accountPubkey: _account, ...profile }) => profile);
+        if (this.loadedFor === account) {
+          this.records = records.map(({ accountPubkey: _account, ...profile }) => profile);
+          rememberOwnName(account, this.getProfile(account)?.nickname);
+        }
       } finally {
         if (this.loadedFor === account) this.loading = false;
       }
@@ -72,6 +85,7 @@ export const useProfilesStore = defineStore("profiles", {
         updatedAt
       };
       await this.putLatest(profile);
+      rememberOwnName(account, profile.nickname);
       scheduleAccountStateSync(keys, "own_profile");
       return profile;
     },
@@ -132,7 +146,8 @@ export const useProfilesStore = defineStore("profiles", {
       }
       const profile = validatedProfileForAccount(message, account, isAccepted);
       if (!profile) return false;
-      await this.putLatest(profile);
+      const stored = await this.putLatest(profile);
+      if (stored && profile.ownerPubkey === account) rememberOwnName(account, profile.nickname);
       return true;
     }
   }

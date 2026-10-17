@@ -275,6 +275,82 @@
         </div>
       </details>
 
+      <details v-if="keyStore.loginMethod === 'private-key'" class="technical-section account-section security-section">
+        <summary class="section-heading account-heading">
+          <div class="account-heading-main">
+            <span class="account-heading-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+            </span>
+            <div>
+              <h3>账号安全</h3>
+              <p>{{ accountProtectionText }}</p>
+            </div>
+          </div>
+        </summary>
+        <div class="account-panel">
+          <div class="account-control-card">
+            <div v-if="keyStore.isEncrypted" class="account-setting-row biometric-row">
+              <div class="privacy-copy">
+                <strong>{{ biometricLabel }} 登录保护</strong>
+                <span class="small">{{ biometricEnabled ? "已开启，重新打开时需验证后进入海内" : biometricSupported ? `开启后用 ${biometricLabel}、设备锁或通行密钥保护登录` : "当前环境未通过预检，仍可尝试启用" }}</span>
+              </div>
+              <button
+                class="account-inline-action"
+                type="button"
+                :disabled="biometricBusy || securityBusy"
+                @click="toggleBiometricUnlock"
+              >
+                {{ biometricBusy ? "处理中…" : biometricEnabled ? "关闭" : "启用" }}
+              </button>
+            </div>
+
+            <div v-if="googleBackupAvailable" class="account-setting-row">
+              <div class="privacy-copy">
+                <strong>备份到 Google 账号</strong>
+                <span class="small">先在手机上加密再保存，Google 和海内都看不到内容。换手机时登录同一个 Google 账号即可恢复。</span>
+              </div>
+              <button class="account-inline-action" type="button" :disabled="securityBusy" @click="beginGoogleBackup">备份</button>
+            </div>
+
+            <div class="account-setting-row key-row">
+              <div class="privacy-copy">
+                <strong>私钥（高级）</strong>
+                <span class="small">任何人拿到私钥都能读你的消息、冒充你。只在需要自己保存时查看。</span>
+                <code v-if="revealedNsec" class="revealed-key">{{ revealedNsec }}</code>
+              </div>
+              <div class="key-row-actions">
+                <button v-if="!revealedNsec" class="account-inline-action" type="button" :disabled="securityBusy" @click="revealPrivateKey">查看</button>
+                <template v-else>
+                  <button class="account-inline-action" type="button" @click="copyPrivateKey">复制</button>
+                  <button class="account-inline-action" type="button" @click="revealedNsec = ''">隐藏</button>
+                </template>
+              </div>
+            </div>
+
+            <fieldset class="protection-modes" :disabled="securityBusy">
+              <legend>登录保护方式</legend>
+              <label class="protection-mode">
+                <input type="radio" name="login-protection" :checked="protectionChoice === 'device'" @change="chooseProtection('device')" />
+                <span><strong>在这台手机上保持登录</strong><small>打开即可进入，可再叠加 {{ biometricLabel }} 保护（推荐）</small></span>
+              </label>
+              <label class="protection-mode">
+                <input type="radio" name="login-protection" :checked="protectionChoice === 'password'" @change="chooseProtection('password')" />
+                <span><strong>使用本地保护密码</strong><small>每次打开都要输入密码；密码只用于本机加密，不会上传</small></span>
+              </label>
+              <form v-if="protectionChoice === 'password' && keyStore.credentialMode !== 'password'" class="password-setup" @submit.prevent="applyLocalPassword">
+                <input v-model="newLocalPassword" class="input" type="password" autocomplete="new-password" placeholder="至少 8 位" aria-label="本地保护密码" />
+                <input v-model="confirmLocalPassword" class="input" type="password" autocomplete="new-password" placeholder="再次输入密码" aria-label="确认本地保护密码" />
+                <button class="btn btn-primary" type="submit">{{ securityBusy ? "保存中…" : "使用此密码" }}</button>
+              </form>
+              <label class="protection-mode">
+                <input type="radio" name="login-protection" :checked="protectionChoice === 'session'" @change="chooseProtection('session')" />
+                <span><strong>仅此次登录</strong><small>不在这台手机上保存登录凭证，关闭应用后需要重新输入私钥</small></span>
+              </label>
+            </fieldset>
+          </div>
+        </div>
+      </details>
+
       <details class="technical-section account-section identity-section">
         <summary class="section-heading account-heading">
           <div class="account-heading-main">
@@ -303,25 +379,11 @@
                 {{ remoteSignerBusy ? "连接中…" : keyStore.remoteSignerConnected ? "已连接" : "重新连接" }}
               </button>
             </div>
-            <div v-if="keyStore.loginMethod === 'private-key' && keyStore.isEncrypted" class="account-setting-row biometric-row">
-              <div class="privacy-copy">
-                <strong>{{ biometricLabel }} 登录保护</strong>
-                <span class="small">{{ biometricEnabled ? "已开启，重新打开时需验证后进入海内" : biometricSupported ? "开启后用 Face ID、指纹或设备锁保护登录" : "当前环境未通过预检，仍可尝试启用" }}</span>
-              </div>
-              <button
-                class="account-inline-action"
-                type="button"
-                :disabled="biometricBusy"
-                @click="toggleBiometricUnlock"
-              >
-                {{ biometricBusy ? "处理中…" : biometricEnabled ? "关闭" : "启用" }}
-              </button>
-            </div>
 
             <div v-if="keyStore.loginMethod === 'private-key' && keyStore.isUnlocked" class="account-setting-row biometric-row">
               <div class="privacy-copy">
-                <strong>扫描登录新设备</strong>
-                <span class="small">扫描新设备二维码，核对验证码后安全交接账号</span>
+                <strong>添加设备</strong>
+                <span class="small">在新手机上选「我已有账号 › 用另一台手机扫码」，再用这台手机扫描它的二维码</span>
               </div>
               <button type="button" class="account-inline-action" @click="router.push('/device-pair')">开始扫码</button>
             </div>
@@ -346,6 +408,27 @@
 
     </section>
 
+    <AccountSwitcherSheet
+      :open="showAccountSwitcher"
+      :accounts="keyStore.accounts"
+      :current-pubkey="keyStore.pkHex"
+      :busy-pubkey="switchingTo"
+      @close="showAccountSwitcher = false"
+      @select="switchToAccount"
+      @add="addAccount"
+    />
+    <GoogleRecoveryPanel
+      v-if="googleBackupAvailable && googleBackupMounted"
+      ref="googleBackupPanel"
+      :client-id="googleClientId"
+      mode="backup"
+      :backup-secret-hex="keyStore.skHex"
+      backup-action-label="完成备份"
+      hide-trigger
+      @backed-up="ui.addToast('已备份到 Google 账号', 2_200, 'success')"
+      @error="message => ui.addToast(message, 2_500, 'error')"
+    />
+
     <footer class="version-footer" aria-label="当前应用版本">
       HaiNei v{{ APP_VERSION }} · {{ APP_UPDATE_SUMMARY }}
     </footer>
@@ -358,7 +441,13 @@ import { APP_VERSION } from "@/db/dexie";
 import { APP_UPDATE_SUMMARY } from "@/appRelease";
 import { autoLockKey } from "@/services/autoLock";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
+import AccountSwitcherSheet from "@/components/AccountSwitcherSheet.vue";
+import { computed, defineAsyncComponent, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
+import { nip19 } from "nostr-tools";
+import { hexToBytes } from "nostr-tools/utils";
+import { accountDisplayName } from "@/services/accountRegistry";
+import { biometricMethodLabel } from "@/utils/biometricLabel";
+const GoogleRecoveryPanel = defineAsyncComponent(() => import("@/components/GoogleRecoveryPanel.vue"));
 import { useRouter } from "vue-router";
 
 const themeLabel = computed(() => ({ system: "跟随系统", light: "浅色", dark: "深色" })[themePreference.value]);
@@ -460,7 +549,25 @@ const biometricEnabled = computed(() => {
   void biometricRevision.value;
   return keyStore.hasBiometricUnlock();
 });
-const biometricLabel = computed(() => "通行密钥");
+const biometricLabel = computed(() => biometricMethodLabel());
+const googleClientId = (import.meta.env.VITE_GOOGLE_WEB_CLIENT_ID || "").trim();
+const googleBackupAvailable = computed(() =>
+  !!googleClientId && !isNativeApp && keyStore.loginMethod === "private-key" && !!keyStore.skHex
+);
+const googleBackupMounted = ref(false);
+const googleBackupPanel = ref<{ begin?: () => Promise<void> } | null>(null);
+const showAccountSwitcher = ref(false);
+const switchingTo = ref("");
+const securityBusy = ref(false);
+const revealedNsec = ref("");
+const protectionChoice = ref<"device" | "password" | "session">("device");
+const newLocalPassword = ref("");
+const confirmLocalPassword = ref("");
+function currentProtection(): "device" | "password" | "session" {
+  if (keyStore.credentialMode === "password") return "password";
+  if (keyStore.credentialMode === "session") return "session";
+  return "device";
+}
 const accountProtectionText = computed(() => {
   if (keyStore.loginMethod === "nip46") {
     return keyStore.remoteSignerConnected ? "远程签名器 · 已连接" : "远程签名器 · 离线";
@@ -810,21 +917,119 @@ async function toggleBiometricUnlock() {
   }
 }
 
-async function goToAccountLogin(mode: "switch" | "add") {
-  await keyStore.clearActiveSession();
+function switchAccount() {
   keyStore.refreshAccounts();
-  await router.push({
-    path: "/login",
-    query: { mode, redirect: mode === "switch" ? "/" : "/settings/system" },
-  });
+  showAccountSwitcher.value = true;
 }
 
-function switchAccount() {
-  void goToAccountLogin("switch");
+async function switchToAccount(pubkey: string) {
+  if (switchingTo.value) return;
+  if (pubkey === keyStore.pkHex) {
+    showAccountSwitcher.value = false;
+    return;
+  }
+  const target = keyStore.accounts.find(account => account.pubkey === pubkey);
+  switchingTo.value = pubkey;
+  try {
+    // Credentials are checked before the current account is locked, so a
+    // failure leaves the user signed in where they were.
+    const result = await keyStore.selectRememberedAccount(pubkey);
+    showAccountSwitcher.value = false;
+    if (result === "connected") {
+      await router.replace("/");
+      if (target) ui.addToast(`已切换到 ${accountDisplayName(target)}`, 1_800, "success");
+    } else {
+      await router.replace({ path: "/login", query: { redirect: "/" } });
+    }
+  } catch (error) {
+    ui.addToast(error instanceof Error ? error.message : "切换账号失败", 2_500, "error");
+  } finally {
+    switchingTo.value = "";
+  }
 }
 
 function addAccount() {
-  void goToAccountLogin("add");
+  showAccountSwitcher.value = false;
+  // Stay signed in until another account actually signs in; backing out returns here.
+  void router.push({ path: "/login", query: { mode: "add", redirect: "/" } });
+}
+
+async function beginGoogleBackup() {
+  if (!googleBackupAvailable.value) return;
+  googleBackupMounted.value = true;
+  await nextTick();
+  if (!googleBackupPanel.value?.begin) {
+    ui.addToast("Google 备份正在加载，请稍后再试", 2_000, "info");
+    return;
+  }
+  await googleBackupPanel.value.begin();
+}
+
+function revealPrivateKey() {
+  if (!keyStore.skHex || !confirm("确定显示私钥？请确认身边没有人看你的屏幕。")) return;
+  revealedNsec.value = nip19.nsecEncode(hexToBytes(keyStore.skHex));
+}
+
+async function copyPrivateKey() {
+  try {
+    await navigator.clipboard.writeText(revealedNsec.value);
+    ui.addToast("已复制私钥，请尽快存进密码管理器", 2_400, "success");
+  } catch {
+    ui.addToast("无法自动复制，请长按私钥手动复制", 2_400, "error");
+  }
+}
+
+async function runSecurityChange(task: () => Promise<void>, success: string) {
+  if (securityBusy.value) return;
+  securityBusy.value = true;
+  try {
+    await task();
+    biometricRevision.value += 1;
+    ui.addToast(success, 2_000, "success");
+  } catch (error) {
+    ui.addToast(error instanceof Error ? error.message : "设置失败，请重试", 2_500, "error");
+  } finally {
+    securityBusy.value = false;
+    protectionChoice.value = currentProtection();
+  }
+}
+
+function chooseProtection(choice: "device" | "password" | "session") {
+  protectionChoice.value = choice;
+  if (choice === currentProtection() && !(choice === "device" && keyStore.credentialMode === "passkey")) return;
+  if (choice === "password") return; // wait for the password form
+  newLocalPassword.value = "";
+  confirmLocalPassword.value = "";
+  if (choice === "device") {
+    if (biometricEnabled.value && !confirm(`将关闭 ${biometricLabel.value} 保护，打开应用即可直接进入。继续？`)) {
+      protectionChoice.value = currentProtection();
+      return;
+    }
+    void runSecurityChange(() => keyStore.keepSignedInOnDevice(), "已改为在这台手机上保持登录");
+    return;
+  }
+  if (!confirm("改为仅此次登录后，这台手机不再保存登录凭证，关闭应用后需要重新输入私钥。请先确认已备份私钥。继续？")) {
+    protectionChoice.value = currentProtection();
+    return;
+  }
+  void runSecurityChange(() => keyStore.useSessionOnlyLogin(), "已改为仅此次登录");
+}
+
+function applyLocalPassword() {
+  if (newLocalPassword.value.length < 8) {
+    ui.addToast("本地保护密码至少需要 8 位", 2_000, "error");
+    return;
+  }
+  if (newLocalPassword.value !== confirmLocalPassword.value) {
+    ui.addToast("两次输入的密码不一致", 2_000, "error");
+    return;
+  }
+  const password = newLocalPassword.value;
+  void runSecurityChange(async () => {
+    await keyStore.protectWithLocalPassword(password);
+    newLocalPassword.value = "";
+    confirmLocalPassword.value = "";
+  }, "已开启本地密码保护");
 }
 
 async function doLogout() {
@@ -934,6 +1139,8 @@ watch(() => keyStore.pkHex, async pk => {
     return;
   }
   if (cacheStatsAccount !== pk) Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
+  revealedNsec.value = "";
+  protectionChoice.value = currentProtection();
   backgroundLock.value = deviceStorage.getItem(autoLockKey(pk)) === "1";
   pushEnabled.value = pushEnabledForAccount(pk);
   if (settings.loadedFor !== pk) await settings.load(pk);
@@ -1076,6 +1283,16 @@ h3 {
 .account-action-secondary{border:1px solid var(--bd-d7dee7);background:var(--bg-f8fafc);color:var(--fg-334155)}
 .account-action-primary{border:1px solid #475569;background:#475569;color:#fff}
 .account-danger-row{padding:0 15px 14px}
+.account-setting-row+.account-setting-row,.account-control-card>.protection-modes{border-top:1px solid var(--bd-eef2f6)}
+.key-row{align-items:flex-start}.key-row-actions{display:flex;flex:0 0 auto;flex-direction:column;gap:8px}
+.revealed-key{display:block;margin-top:6px;padding:10px;border-radius:10px;background:var(--bg-f8fafc);color:var(--fg-0f1419);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;user-select:all}
+.protection-modes{display:grid;gap:4px;margin:0;padding:12px 15px 14px;border:0;border-top:1px solid var(--bd-eef2f6)}
+.protection-modes legend{float:left;width:100%;margin-bottom:6px;color:var(--fg-334155);font-size:.9rem;font-weight:600}
+.protection-mode{display:flex;min-height:52px;align-items:flex-start;gap:10px;padding:6px 0;cursor:pointer}
+.protection-mode input{width:20px;height:20px;margin:2px 0 0;flex:0 0 20px;accent-color:#22304F}
+.protection-mode span{display:grid;gap:2px}.protection-mode strong{font-size:.9rem}.protection-mode small{color:var(--fg-64748b);font-size:.78rem;line-height:1.45}
+.password-setup{display:grid;gap:8px;padding:2px 0 8px 30px}
+.protection-modes:disabled{opacity:.6}
 .account-danger-button{width:100%;min-height:46px;border:1px solid var(--bd-fecaca);border-radius:13px;background:var(--bg-fff7f7);color:var(--fg-dc2626);font-size:.93rem;font-weight:600;cursor:pointer}
 @media(max-width:520px){.account-panel{padding-left:0}.account-actions-row{gap:8px}.account-action-button{min-height:46px}}
 .diagnostics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0 0 14px}
