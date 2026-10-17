@@ -1,5 +1,6 @@
 import { db } from "@/db/dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
+import { isLocalVaultLocked } from "@/services/localVault";
 
 const values = new Map<string, string>();
 let hydrated = false;
@@ -58,6 +59,9 @@ export async function putDeviceValue(key: string, value: string) {
   if (import.meta.env.MODE === "test") legacyBrowserStorageForMigration()?.setItem(key, serialized);
   if (typeof indexedDB !== "undefined") {
     const account=privateAccount(key);
+    // A late write for an account that was just locked/switched cannot be
+    // encrypted; its in-memory copy is cleared with the account anyway.
+    if(account && isLocalVaultLocked(account)) return;
     if(account) await db.accountMeta.put({accountPubkey:account,key:`private-device:${key}`,value:serialized});
     else await db.deviceKeyValues.put({ key, value: serialized, updatedAt: Date.now() });
   }

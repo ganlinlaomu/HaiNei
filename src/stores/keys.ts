@@ -108,6 +108,8 @@ export const useKeyStore = defineStore("keys", {
     remoteSignerConnected: false as boolean,
     accounts: listDeviceAccounts() as DeviceAccount[],
     sessionGeneration: 0,
+    /** Account whose vault is unlocked and local stores are loaded; views wait for it. */
+    accountStoresReadyFor: "" as string,
     loginTimestamp: 0 as number, // Unix timestamp when user logged in
     isEncrypted: false as boolean, // Whether the current login uses encrypted storage
     credentialMode: "session" as AccountCredentialMode,
@@ -202,6 +204,7 @@ export const useKeyStore = defineStore("keys", {
         }
       }));
       if (!isCurrent()) return;
+      this.accountStoresReadyFor = pk;
       // Start note sync independently; never delay DM read-state recovery or first paint.
       void import("@/services/privateSpaceSync").then(({ schedulePrivateSpaceSync }) => {
         if (isCurrent()) schedulePrivateSpaceSync(this, 3_000);
@@ -294,6 +297,7 @@ export const useKeyStore = defineStore("keys", {
 
     resetAccountStores(currentPk: string) {
       this.sessionGeneration++;
+      this.accountStoresReadyFor = "";
       clearRelaySessionSigner(currentPk);
       void import("@/services/privateSpaceSync").then(({ cancelPrivateSpaceSync }) => {
         cancelPrivateSpaceSync(currentPk.toLowerCase());

@@ -35,6 +35,11 @@ export function isLocalVaultUnlocked(account: string) {
   return keys.has(account);
 }
 
+/** A vault-protected account whose key was dropped (locked or switched away). */
+export function isLocalVaultLocked(account: string) {
+  return protectedAccounts.has(account) && !keys.has(account);
+}
+
 function binaryAssociated(
   purpose: string,
   account: string,

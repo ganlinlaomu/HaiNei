@@ -757,19 +757,34 @@ async function safeUpdateLocalRefs() {
   }
 
 
-   onMounted(async () => {
-     stopSyncStatusListener = onAccountMessageSyncStatus(applyAccountSyncStatus);
-     applyAccountSyncStatus();
-     attachVirtualScroll();
-     if (!keys.pkHex || homeAccountPk === keys.pkHex) return;
+   // Home can mount (cold start, account switch) before keys.loadAccountStores
+   // has unlocked the local vault. Reading then fails with local_vault_locked
+   // and the feed stayed blank, so only initialize once the account's local
+   // stores are ready; the watcher below retries when readiness arrives.
+   let homeInitializing = "";
+   async function initializeHomeWhenReady() {
+     const accountPk = keys.pkHex;
+     if (!accountPk || homeAccountPk === accountPk || homeInitializing === accountPk) return;
+     if (keys.accountStoresReadyFor !== accountPk) return;
+     homeInitializing = accountPk;
      try {
-       const initialized = await initializeHomeRuntime(keys.pkHex);
+       const initialized = await initializeHomeRuntime(accountPk);
        if (initialized) await nextTick(attachLoadMoreObserver);
        await restoreCurrentHomeScroll();
      } catch (err) {
        logger.error("[account] Home initialization failed", err);
+     } finally {
+       if (homeInitializing === accountPk) homeInitializing = "";
      }
+   }
+
+   onMounted(() => {
+     stopSyncStatusListener = onAccountMessageSyncStatus(applyAccountSyncStatus);
+     applyAccountSyncStatus();
+     attachVirtualScroll();
+     void initializeHomeWhenReady();
    });
+   watch(() => keys.accountStoresReadyFor, () => { void initializeHomeWhenReady(); });
 
    onBeforeUnmount(() => {
      saveCurrentHomeScroll();
@@ -816,12 +831,7 @@ async function safeUpdateLocalRefs() {
        startupSyncing.value = false;
        applyAccountSyncStatus();
        logger.info(`[account] Home account switch ${previousPk?.slice(0, 8) || "none"} -> ${accountPk.slice(0, 8)}`);
-       try {
-         await initializeHomeRuntime(accountPk);
-         await restoreCurrentHomeScroll();
-       } catch (e) {
-         logger.error("[account] switched account initialization failed", e);
-       }
+       await initializeHomeWhenReady();
      }
    );
    watch(
