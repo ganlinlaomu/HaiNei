@@ -1,4 +1,5 @@
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
+import { messageOrderAt, normalizeMillis } from "@/nostr/messaging/sync/sorting";
 
 export const DM_RECEIPT_TYPE = "hainei-dm-receipt";
 export type DmReceiptStatus = "delivered" | "read";
@@ -6,6 +7,8 @@ export type DmReceiptStatus = "delivered" | "read";
 export type DmReceiptCursor = {
   createdAt: number;
   messageId: string;
+  /** Sub-second part of the acknowledged message's order key; absent from older clients. */
+  ms?: number;
 };
 
 export type DmReceiptPayload = {
@@ -39,10 +42,11 @@ export function decodeDmReceiptPayload(plaintext: string | undefined): DmReceipt
     const createdAt = Number(parsed.upTo?.createdAt);
     const messageId = String(parsed.upTo?.messageId || "").toLowerCase();
     if (!Number.isSafeInteger(createdAt) || createdAt <= 0 || !EVENT_ID_RE.test(messageId)) return null;
+    const ms = normalizeMillis(parsed.upTo?.ms);
     return {
       type: DM_RECEIPT_TYPE,
       status: parsed.status,
-      upTo: { createdAt, messageId },
+      upTo: { createdAt, messageId, ...(ms === undefined ? {} : { ms }) },
       ...(parsed.exact === true ? { exact: true as const } : {}),
       ...(parsed.deadlineAt === undefined ? {} : { deadlineAt: Number(parsed.deadlineAt) }),
     };
@@ -62,13 +66,22 @@ export function decodeDmReceipt(message: Pick<CanonicalMessage, "plaintext" | "t
 
 export function cursorAfter(next: DmReceiptCursor, current?: DmReceiptCursor | null) {
   if (!current) return true;
-  if (next.createdAt !== current.createdAt) return next.createdAt > current.createdAt;
+  const precise = next.ms !== undefined && current.ms !== undefined;
+  const nextOrder = precise ? next.createdAt * 1000 + next.ms! : next.createdAt;
+  const currentOrder = precise ? current.createdAt * 1000 + current.ms! : current.createdAt;
+  if (nextOrder !== currentOrder) return nextOrder > currentOrder;
   return next.messageId.localeCompare(current.messageId) > 0;
 }
 
-export function cursorCovers(cursor: DmReceiptCursor | undefined, message: { id: string; created_at: number }) {
+/** Whether a receipt cursor acknowledges `message`, using the same (orderAt, id) key as display order. */
+export function cursorCovers(
+  cursor: DmReceiptCursor | undefined,
+  message: { id: string; created_at: number; tags?: string[][] },
+) {
   if (!cursor || !EVENT_ID_RE.test(message.id)) return false;
-  if (message.created_at !== cursor.createdAt) return message.created_at < cursor.createdAt;
+  const messageOrder = cursor.ms === undefined ? message.created_at : messageOrderAt(message.created_at, message.tags);
+  const cursorOrder = cursor.ms === undefined ? cursor.createdAt : cursor.createdAt * 1000 + cursor.ms;
+  if (messageOrder !== cursorOrder) return messageOrder < cursorOrder;
   return message.id.localeCompare(cursor.messageId) <= 0;
 }
 

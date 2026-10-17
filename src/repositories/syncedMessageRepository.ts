@@ -13,7 +13,7 @@ import {
 } from "@/db/dexie";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { normalizeAccountPubkey } from "@/repositories/accountScope";
-import { isMessageAfter } from "@/nostr/messaging/sync/sorting";
+import { compareMessages, isCursorAfter, isMessageAfter, messageMillis, type ReadCursor } from "@/nostr/messaging/sync/sorting";
 import { MAX_FUTURE_SKEW_SECONDS, type SyncStatus } from "@/nostr/messaging/sync/types";
 import { performanceCounters } from "@/services/nostrCache";
 
@@ -163,16 +163,19 @@ export class SyncedMessageRepository {
         const conversationKey: [string, string] = [account, incoming.conversationId];
         const current = await this.database.conversationStates.get(conversationKey);
         const read = await this.getReadState(account,incoming.conversationId);
-        const cursorKey = JSON.stringify([read?.lastReadCreatedAt || 0,read?.lastReadMessageId || ""]);
-        const unread = incoming.senderPubkey !== account && isMessageAfter({id:incoming.id,createdAt:incoming.createdAt},read);
+        const cursorKey = readCursorKey(read);
+        const unread = incoming.senderPubkey !== account && isMessageAfter(incoming,read);
         const previousCache = current?.unreadCache?.cursor === cursorKey ? current.unreadCache : !current ? {cursor:cursorKey,count:0,directCount:0} : undefined;
         const visiblePolicy = this.visiblePolicies.get(JSON.stringify(conversationKey));
         const visibleUnreadCache = current?.visibleUnreadCache && visiblePolicy?.policy === current.visibleUnreadCache.policy
           ? { policy: visiblePolicy.policy, count: current.visibleUnreadCache.count + Number(incoming.senderPubkey !== account && isConversationMessage(incoming) && visiblePolicy.test(incoming)) }
           : undefined;
         const unreadCache = previousCache ? {...previousCache,count:previousCache.count + Number(unread),directCount:previousCache.directCount + Number(unread && isConversationMessage(incoming))} : undefined;
-        if (!current || incoming.createdAt > current.lastMessageAt ||
-          (incoming.createdAt === current.lastMessageAt && incoming.id.localeCompare(current.lastMessageId) > 0)) {
+        if (!current || isMessageAfter(incoming, {
+          lastReadCreatedAt: current.lastMessageAt,
+          lastReadMessageId: current.lastMessageId,
+          lastReadMs: current.lastMessageMs,
+        })) {
           await this.database.conversationStates.put({
             accountPubkey: account,
             conversationId: incoming.conversationId,
@@ -180,6 +183,7 @@ export class SyncedMessageRepository {
             visibleUnreadCache,
             lastMessageId: incoming.id,
             lastMessageAt: incoming.createdAt,
+            lastMessageMs: messageMillis(incoming.tags),
             lastMessageSenderPubkey: incoming.senderPubkey,
             updatedAt: nowMs
           });
@@ -585,7 +589,7 @@ export class SyncedMessageRepository {
         .toArray(),
     ]);
     const byId = new Map([...before, ...sameTimestamp, ...sameTimestampAfter, ...after].map(record => [record.id, record]));
-    const ordered = [...byId.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    const ordered = [...byId.values()].sort(compareMessages);
     const targetIndex = ordered.findIndex(record => record.id === messageId);
     if (targetIndex < 0) return [] as SyncedMessageRecord[];
     return ordered.slice(Math.max(0, targetIndex - radius), targetIndex + radius + 1);
@@ -734,17 +738,14 @@ export class SyncedMessageRepository {
   async advanceReadStateResult(
     accountPubkey: string,
     conversationId: string,
-    cursor: { lastReadCreatedAt: number; lastReadMessageId: string },
+    cursor: { lastReadCreatedAt: number; lastReadMessageId: string; lastReadMs?: number },
   ): Promise<AdvanceReadStateResult> {
     const account = normalizeAccountPubkey(accountPubkey);
     // The repository arbitrates monotonic cursor ownership and returns the
     // durable winner so UI state can recover from concurrent remote restores.
     return this.database.transaction("rw", this.database.conversationReadStates, async () => {
       const current = await this.database.conversationReadStates.get([account, conversationId]);
-      if (current && !isMessageAfter(
-        { id: cursor.lastReadMessageId, createdAt: cursor.lastReadCreatedAt },
-        current,
-      )) {
+      if (current && !isCursorAfter(cursor, current)) {
         return { advanced: false, state: current };
       }
       const state: ConversationReadStateRecord = {
@@ -752,6 +753,7 @@ export class SyncedMessageRepository {
         conversationId,
         lastReadMessageId: cursor.lastReadMessageId,
         lastReadCreatedAt: cursor.lastReadCreatedAt,
+        ...(cursor.lastReadMs === undefined ? {} : { lastReadMs: cursor.lastReadMs }),
         updatedAt: Date.now(),
       };
       await this.database.conversationReadStates.put(state);
@@ -762,25 +764,32 @@ export class SyncedMessageRepository {
   async advanceReadState(
     accountPubkey: string,
     conversationId: string,
-    cursor: { lastReadCreatedAt: number; lastReadMessageId: string },
+    cursor: { lastReadCreatedAt: number; lastReadMessageId: string; lastReadMs?: number },
   ) {
     return (await this.advanceReadStateResult(accountPubkey, conversationId, cursor)).advanced;
   }
 
   async markRead(accountPubkey: string, conversationId: string, message?: SyncedMessageRecord) {
     const account = normalizeAccountPubkey(accountPubkey);
-    const messages = message ? [message] : await this.database.syncedMessages
+    // The index orders by (createdAt, id); several incoming messages in the
+    // newest second may still differ in ms, so load that whole second.
+    const newest = message ? [message] : await this.database.syncedMessages
       .where("[accountPubkey+conversationId+createdAt+id]")
       .between([account, conversationId, 0, ""], [account, conversationId, Number.MAX_SAFE_INTEGER, "\uffff"])
       .reverse().filter(item => item.senderPubkey !== account).limit(1).toArray();
+    const messages = message || !newest[0] ? newest : await this.database.syncedMessages
+      .where("[accountPubkey+conversationId+createdAt+id]")
+      .between([account, conversationId, newest[0].createdAt, ""], [account, conversationId, newest[0].createdAt, "\uffff"])
+      .toArray();
     const latestIncoming = messages
       .filter(item => item.senderPubkey !== account)
-      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+      .sort(compareMessages)
       .at(-1);
     if (!latestIncoming) return false;
     return this.advanceReadState(account, conversationId, {
       lastReadCreatedAt: latestIncoming.createdAt,
       lastReadMessageId: latestIncoming.id,
+      lastReadMs: messageMillis(latestIncoming.tags),
     });
   }
 
@@ -798,14 +807,15 @@ export class SyncedMessageRepository {
       const cursor = await this.getReadState(account,conversationId);
       const key:[string,string]=[account,conversationId];
       const summary=await this.database.conversationStates.get(key);
-      const cursorKey=JSON.stringify([cursor?.lastReadCreatedAt || 0,cursor?.lastReadMessageId || ""]);
+      const cursorKey=readCursorKey(cursor);
       if(summary?.unreadCache?.cursor === cursorKey) return directOnly ? summary.unreadCache.directCount : summary.unreadCache.count;
       let count=0,directCount=0;
+      // Start at the cursor's whole second: within it, ms (not id) decides order.
       await this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
-        .between([account,conversationId,cursor?.lastReadCreatedAt || 0,cursor?.lastReadMessageId || ""],
-          [account,conversationId,Number.MAX_SAFE_INTEGER,"\uffff"],false,true)
+        .between([account,conversationId,cursor?.lastReadCreatedAt || 0,""],
+          [account,conversationId,Number.MAX_SAFE_INTEGER,"\uffff"],true,true)
         .each(message=>{
-          if(message.senderPubkey !== account && isMessageAfter({id:message.id,createdAt:message.createdAt},cursor)) {
+          if(message.senderPubkey !== account && isMessageAfter(message,cursor)) {
             count++;if(isConversationMessage(message))directCount++;
           }
         });
@@ -815,12 +825,12 @@ export class SyncedMessageRepository {
   }
 
   async getVisibleUnreadCount(accountPubkey: string, conversationId: string, policy: string,
-    cursor: { lastReadCreatedAt?: number; lastReadMessageId?: string } | undefined,
+    cursor: ReadCursor | undefined,
     visible: (message: SyncedMessageRecord) => boolean) {
     const account = normalizeAccountPubkey(accountPubkey);
     const token = JSON.stringify([account, conversationId]);
     this.visiblePolicies.delete(token);
-    this.visiblePolicies.set(token, { policy, test: message => isMessageAfter({ id: message.id, createdAt: message.createdAt }, cursor) && visible(message) });
+    this.visiblePolicies.set(token, { policy, test: message => isMessageAfter(message, cursor) && visible(message) });
     if (this.visiblePolicies.size > 512) this.visiblePolicies.delete(this.visiblePolicies.keys().next().value!);
     const key: [string, string] = [account, conversationId];
     // Cache hits are the common case during full reconciliation. A plain read
@@ -832,9 +842,11 @@ export class SyncedMessageRepository {
       if (summary?.visibleUnreadCache?.policy === policy) return summary.visibleUnreadCache.count;
       let count = 0;
       await this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
-        .between([account, conversationId, cursor?.lastReadCreatedAt || 0, cursor?.lastReadMessageId || ""],
-          [account, conversationId, Number.MAX_SAFE_INTEGER, "\uffff"], false, true)
-        .each(message => { if (message.senderPubkey !== account && isConversationMessage(message) && visible(message)) count++; });
+        .between([account, conversationId, cursor?.lastReadCreatedAt || 0, ""],
+          [account, conversationId, Number.MAX_SAFE_INTEGER, "\uffff"], true, true)
+        .each(message => {
+          if (message.senderPubkey !== account && isConversationMessage(message) && isMessageAfter(message, cursor) && visible(message)) count++;
+        });
       if (summary) await this.database.conversationStates.update(key, { visibleUnreadCache: { policy, count } });
       return count;
     });
@@ -853,10 +865,7 @@ export class SyncedMessageRepository {
     const latest = new Map<string, SyncedMessageRecord>();
     for (const message of messages) {
       const current = latest.get(message.conversationId);
-      if (!current || message.createdAt > current.createdAt ||
-        (message.createdAt === current.createdAt && message.id.localeCompare(current.id) > 0)) {
-        latest.set(message.conversationId, message);
-      }
+      if (!current || compareMessages(message, current) > 0) latest.set(message.conversationId, message);
     }
     await this.database.transaction("rw", this.database.conversationStates, async () => {
       await this.database.conversationStates.where("accountPubkey").equals(account).delete();
@@ -866,6 +875,7 @@ export class SyncedMessageRepository {
         conversationId: message.conversationId,
         lastMessageId: message.id,
         lastMessageAt: message.createdAt,
+        lastMessageMs: messageMillis(message.tags),
         lastMessageSenderPubkey: message.senderPubkey,
         updatedAt: now
       }));
@@ -875,6 +885,13 @@ export class SyncedMessageRepository {
 }
 
 export const syncedMessageRepository = new SyncedMessageRepository();
+
+/** Unread-cache key; changes whenever any part of the (orderAt, id) cursor changes. */
+function readCursorKey(cursor: ReadCursor | null | undefined) {
+  const base: Array<string | number> = [cursor?.lastReadCreatedAt || 0, cursor?.lastReadMessageId || ""];
+  if (cursor?.lastReadMs !== undefined) base.push(cursor.lastReadMs);
+  return JSON.stringify(base);
+}
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   const flushPendingMessages = () => { void syncedMessageRepository.flushWriteQueue(); };

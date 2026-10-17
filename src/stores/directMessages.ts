@@ -19,7 +19,16 @@ import { burnControlTags, parseBurnControl, serializeBurnControl } from "@/nostr
 import { BURN_DURATIONS, DISAPPEARING_DM_TYPE, hasDisappearingMarker, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
 import { decryptedEventCache, eventCache, scopedKey } from "@/services/nostrCache";
 import { publishQueuedOutgoing, registerOutgoingPushSigner, sendDirectMessage, type PublishedMessage } from "@/nostr/messaging/service";
-import { isMessageAfter } from "@/nostr/messaging/sync/sorting";
+import {
+  compareInboxItems,
+  isCursorAfter,
+  isMessageAfter,
+  MESSAGE_MS_TAG,
+  messageMillis,
+  nextMessageClock,
+  readCursorFor,
+  type ReadCursor,
+} from "@/nostr/messaging/sync/sorting";
 import { metaRepository } from "@/repositories/metaRepository";
 import { outgoingDmTaskRepository } from "@/repositories/outgoingDmTaskRepository";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
@@ -41,8 +50,8 @@ import { registerDirectMessageStateOwner } from "@/services/directMessageStateEv
 import { onAppResume } from "@/services/appResumeCoordinator";
 import { scanMessageSearchPages } from "@/utils/messageSearch";
 
-type MessageCursor = { lastReadCreatedAt: number; lastReadMessageId: string };
-type StartupFreshUnread = { id: string; createdAt: number; peer: string };
+type MessageCursor = { lastReadCreatedAt: number; lastReadMessageId: string; lastReadMs?: number };
+type StartupFreshUnread = { id: string; createdAt: number; peer: string; tags?: string[][] };
 // This overlay contains ONLY messages inserted by the active session's live
 // subscription while the historical unread projection is intentionally hidden.
 function freshUnreadCounts(state: {
@@ -59,9 +68,9 @@ function freshUnreadCounts(state: {
       return !preference?.hidden
         && friendships.isAccepted(item.peer)
         && isFriendshipAcceptedAt(friendships.getRecord(item.peer), item.createdAt)
-        && isMessageAfter({ id: item.id, createdAt: item.createdAt }, read)
-        && isMessageAfter({ id: item.id, createdAt: item.createdAt },
-          cursor(preference?.deletedThroughCreatedAt, preference?.deletedThroughMessageId));
+        && isMessageAfter(item, read)
+        && isMessageAfter(item,
+          cursor(preference?.deletedThroughCreatedAt, preference?.deletedThroughMessageId, preference?.deletedThroughMs));
     }).length;
     if (count) counts[conversationId] = count;
   }
@@ -96,8 +105,10 @@ export type ConversationPreference = {
   hiddenMode?: "hidden" | "deleted";
   hiddenThroughCreatedAt?: number;
   hiddenThroughMessageId?: string;
+  hiddenThroughMs?: number;
   deletedThroughCreatedAt?: number;
   deletedThroughMessageId?: string;
+  deletedThroughMs?: number;
 };
 
 function preferenceKey(peerPubkey: string) { return `dm-conversation:${peerPubkey}`; }
@@ -155,7 +166,7 @@ function readReceiptsEnabledForAccount(accountPubkey: string) {
   }
 }
 export function receiptStatusForMessage(
-  message: Pick<InboxItem, "id" | "created_at">,
+  message: Pick<InboxItem, "id" | "created_at"> & Partial<Pick<InboxItem, "tags">>,
   state?: PeerReceiptState,
 ): "sent" | "delivered" | "read" {
   if (cursorCovers(state?.read, message)) return "read";
@@ -214,7 +225,11 @@ function taskInboxItem(task: OutgoingDmTaskRecord): InboxItem {
     replyTo: task.replyTo,
     protocol: "nip17",
     transportKind: 1059,
-    tags: [["t", DIRECT_MESSAGE_TYPE], ...(task.burnAfterSeconds ? [["t", DISAPPEARING_DM_TYPE], ["burn-after", String(task.burnAfterSeconds)], ["expiration", String(task.createdAt + 48 * 3600)]] : [])],
+    tags: [
+      ["t", DIRECT_MESSAGE_TYPE],
+      ...(task.burnAfterSeconds ? [["t", DISAPPEARING_DM_TYPE], ["burn-after", String(task.burnAfterSeconds)], ["expiration", String(task.createdAt + 48 * 3600)]] : []),
+      ...(task.createdMs === undefined ? [] : [[MESSAGE_MS_TAG, String(task.createdMs)]]),
+    ],
     outgoing: {
       localId: task.localId,
       state: task.state,
@@ -247,7 +262,7 @@ export function matchOutgoingTasksToCanonical(
 
   const unmatchedTasks = tasks
     .filter(task => !matchedLocalIds.has(task.localId))
-    .sort((a, b) => a.createdAt - b.createdAt || a.localId.localeCompare(b.localId));
+    .sort((a, b) => a.createdAt - b.createdAt || (a.createdMs || 0) - (b.createdMs || 0) || a.localId.localeCompare(b.localId));
   for (const message of canonical) {
     if (message.pubkey !== accountPubkey || !isDirectMessageTags(message.tags) || taskByMessageId.has(message.id)) continue;
     const peer = directMessagePeer({ senderPubkey: message.pubkey, recipientPubkeys: message.recipientPubkeys || [] }, accountPubkey);
@@ -282,11 +297,18 @@ function ensureResumeListeners() {
     });
   });
 }
-function cursor(createdAt?: number, messageId?: string) {
-  return createdAt === undefined ? undefined : { lastReadCreatedAt: createdAt, lastReadMessageId: messageId || "" };
+function cursor(createdAt?: number, messageId?: string, ms?: number): ReadCursor | undefined {
+  return createdAt === undefined ? undefined : {
+    lastReadCreatedAt: createdAt,
+    lastReadMessageId: messageId || "",
+    ...(ms === undefined ? {} : { lastReadMs: ms }),
+  };
 }
-function afterCursor(item: InboxItem, createdAt?: number, messageId?: string) {
-  return isMessageAfter({ id: item.id, createdAt: item.created_at }, cursor(createdAt, messageId));
+function inboxComparable(item: Pick<InboxItem, "id" | "created_at" | "tags">) {
+  return { id: item.id, createdAt: item.created_at, tags: item.tags };
+}
+function afterCursor(item: InboxItem, createdAt?: number, messageId?: string, ms?: number) {
+  return isMessageAfter(inboxComparable(item), cursor(createdAt, messageId, ms));
 }
 
 export function isAuthorizedDirectMessage(
@@ -311,7 +333,7 @@ export function isAuthorizedCanonicalDirectMessage(
 }
 
 function afterDeletion(item: InboxItem, preference?: ConversationPreference) {
-  return afterCursor(item, preference?.deletedThroughCreatedAt, preference?.deletedThroughMessageId);
+  return afterCursor(item, preference?.deletedThroughCreatedAt, preference?.deletedThroughMessageId, preference?.deletedThroughMs);
 }
 
 export function directMessagesForPeer(
@@ -325,7 +347,7 @@ export function directMessagesForPeer(
     && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, accountPubkey) === peer
     && (!options.enforceAuthorization || isAuthorizedDirectMessage(item, accountPubkey, options.friendship))
     && afterDeletion(item, options.preference))
-    .sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+    .sort(compareInboxItems);
 }
 
 export function buildDirectConversationSummaries(
@@ -451,7 +473,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // directMessagesForPeer already returns canonical items sorted; only
       // unmatched optimistic tasks need to be merged into that order.
       return outgoing.length
-        ? merged.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id))
+        ? merged.sort(compareInboxItems)
         : merged;
     },
     conversationItems() {
@@ -624,7 +646,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           && directMessagePeer({ senderPubkey: item.pubkey, recipientPubkeys: item.recipientPubkeys || [] }, account) === peer
           && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
           && afterDeletion(item, this.preferencesByPeer[peer]))
-        .sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+        .sort(compareInboxItems);
     },
     outgoingReceiptStatus(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey"> & Partial<Pick<InboxItem, "tags">>) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
@@ -945,7 +967,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!friendships.isAccepted(peer)) return;
       if (this.loadedFor !== account) await this.refresh(account);
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
-      this.scheduleReceipt(peer, "delivered", { createdAt: message.createdAt, messageId: message.id });
+      this.scheduleReceipt(peer, "delivered", { createdAt: message.createdAt, messageId: message.id, ms: messageMillis(message.tags) });
     },
     rememberConversationPeer(conversationId: string, peer: string) {
       if (this.peerByConversation[conversationId] === peer) return;
@@ -983,7 +1005,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         this.rememberConversationPeer(id, peer);
         next[id] = friendships.isAccepted(peer)
           ? conversation.filter(item => item.pubkey !== account
-              && isMessageAfter({ id: item.id, createdAt: item.created_at }, read)).length
+              && isMessageAfter(inboxComparable(item), read)).length
           : 0;
       }
       this.unreadByConversation = next;
@@ -1066,6 +1088,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         const read = synced?.lastReadCreatedAt === undefined ? undefined : {
           lastReadCreatedAt: synced.lastReadCreatedAt,
           lastReadMessageId: synced.lastReadMessageId || "",
+          ...(synced.lastReadMs === undefined ? {} : { lastReadMs: synced.lastReadMs }),
         };
         this.readCursors = { ...this.readCursors, [conversationId]: read };
       }
@@ -1078,7 +1101,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         preference,
         enforceAuthorization: true,
       });
-      const newer = authorized.some(item => afterCursor(item, preference.hiddenThroughCreatedAt, preference.hiddenThroughMessageId)
+      const newer = authorized.some(item => afterCursor(item, preference.hiddenThroughCreatedAt, preference.hiddenThroughMessageId, preference.hiddenThroughMs)
         && (preference.hiddenMode === "deleted" || item.pubkey !== account));
       if (!newer) return;
       const visiblePreference = { ...preference, hidden: false };
@@ -1145,7 +1168,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const friendships = useFriendshipsStore();
       const friendship = friendships.getRecord(peer);
       if (!friendships.isAccepted(peer) || !isFriendshipAcceptedAt(friendship, message.createdAt)
-        || !isMessageAfter({ id: message.id, createdAt: message.createdAt }, this.readCursors[message.conversationId])) return;
+        || !isMessageAfter(message, this.readCursors[message.conversationId])) return;
       if (this.readStateRestorePhase === "ready") {
         // Relay manager may restart without a new cloud-cursor restore. Do not
         // freeze already-authoritative unread simply because history is active.
@@ -1160,7 +1183,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // can bypass the historical unread mask; keep this memory-only.
       this.freshUnreadDuringRestore = {
         ...this.freshUnreadDuringRestore,
-        [message.conversationId]: [...current, { id: message.id, createdAt: message.createdAt, peer }],
+        [message.conversationId]: [...current, { id: message.id, createdAt: message.createdAt, peer, tags: message.tags }],
       };
       this.rememberConversationPeer(message.conversationId, peer);
     },
@@ -1264,7 +1287,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         mergedById.set(current.localId, loaded ? mergeTaskVersions(loaded, current) : current);
       }
       outgoingTasks = [...mergedById.values()];
-      this.outgoingTasks = outgoingTasks.sort((a, b) => a.createdAt - b.createdAt || a.localId.localeCompare(b.localId));
+      this.outgoingTasks = outgoingTasks.sort((a, b) => a.createdAt - b.createdAt || (a.createdMs || 0) - (b.createdMs || 0) || a.localId.localeCompare(b.localId));
       for (const task of outgoingTasks) {
         const key = taskKey(account, task.localId);
         const previewBytes = task.preparedImage?.previewBytes || task.imageBytes;
@@ -1319,7 +1342,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         if (!preference?.hidden) continue;
         const friendship = friendships.getRecord(peer);
         const authorized = directMessagesForPeer(direct, account, peer, { friendship, preference, enforceAuthorization: true });
-        const newer = authorized.some(item => afterCursor(item, preference.hiddenThroughCreatedAt, preference.hiddenThroughMessageId)
+        const newer = authorized.some(item => afterCursor(item, preference.hiddenThroughCreatedAt, preference.hiddenThroughMessageId, preference.hiddenThroughMs)
           && (preference.hiddenMode === "deleted" || item.pubkey !== account));
         if (newer) {
           preferences[peer] = { ...preference, hidden: false };
@@ -1340,6 +1363,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         const read = synced?.lastReadCreatedAt === undefined ? undefined : {
           lastReadCreatedAt: synced.lastReadCreatedAt,
           lastReadMessageId: synced.lastReadMessageId || "",
+          ...(synced.lastReadMs === undefined ? {} : { lastReadMs: synced.lastReadMs }),
         };
         return [conversationId, read] as const;
       }));
@@ -1354,7 +1378,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const restoredCursors = Object.fromEntries(cursors);
       if (this.loadedFor === account) {
         for (const [id, current] of Object.entries(this.readCursors)) {
-          if (current && isMessageAfter({ id: current.lastReadMessageId, createdAt: current.lastReadCreatedAt }, restoredCursors[id])) {
+          if (current && isCursorAfter(current, restoredCursors[id])) {
             restoredCursors[id] = current;
           }
         }
@@ -1408,8 +1432,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!latest?.conversationId) return;
       const conversationId = latest.conversationId;
       const previous = this.readCursors[conversationId];
-      const candidate = { lastReadCreatedAt: latest.created_at, lastReadMessageId: latest.id };
-      const advanced = isMessageAfter({ id: candidate.lastReadMessageId, createdAt: candidate.lastReadCreatedAt }, previous);
+      const candidate: MessageCursor = readCursorFor(inboxComparable(latest));
+      const advanced = isCursorAfter(candidate, previous);
 
       // A new device can restore a read cursor that is newer than the subset of
       // Relay history currently available locally. Never rewind that cursor to
@@ -1423,7 +1447,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const sealedUnread = items.filter(item => item.pubkey !== account
         && hasDisappearingMarker(item.tags)
         && item.conversationId === conversationId
-        && isMessageAfter({ id: item.id, createdAt: item.created_at }, read)).length;
+        && isMessageAfter(inboxComparable(item), read)).length;
       this.unreadByConversation = { ...this.unreadByConversation, [conversationId]: sealedUnread };
       // A masked (restoring) count is not authoritative; App.vue syncs the
       // badge once the durable projection is ready.
@@ -1455,6 +1479,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
             durableWinner = {
               lastReadCreatedAt: durableCreatedAt,
               lastReadMessageId: result.state.lastReadMessageId || "",
+              ...(result.state.lastReadMs === undefined ? {} : { lastReadMs: result.state.lastReadMs }),
             };
           }
         } catch (error) {
@@ -1462,10 +1487,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         }
       }
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
-      if (durableWinner && isMessageAfter(
-        { id: durableWinner.lastReadMessageId, createdAt: durableWinner.lastReadCreatedAt },
-        this.readCursors[conversationId],
-      )) {
+      if (durableWinner && isCursorAfter(durableWinner, this.readCursors[conversationId])) {
         this.readCursors = { ...this.readCursors, [conversationId]: durableWinner };
       }
       if (durableReady && durableAdvanced) scheduleAccountStateSync(useKeyStore(), "read_state");
@@ -1475,13 +1497,14 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const latestIncoming = [...items, ...(readThrough ? [readThrough] : [])]
         .filter(item => item.pubkey !== account && readable(item)
           && item.conversationId === conversationId
-          && !isMessageAfter({ id: item.id, createdAt: item.created_at }, candidate))
-        .sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)).at(-1);
+          && !isMessageAfter(inboxComparable(item), candidate))
+        .sort(compareInboxItems).at(-1);
       if (emitReceipt && latestIncoming && /^[0-9a-f]{64}$/i.test(latestIncoming.id)
-        && isMessageAfter({ id: latestIncoming.id, createdAt: latestIncoming.created_at }, previous)) {
+        && isMessageAfter(inboxComparable(latestIncoming), previous)) {
         this.scheduleReceipt(peer, "read", {
           createdAt: latestIncoming.created_at,
           messageId: latestIncoming.id,
+          ms: messageMillis(latestIncoming.tags),
         });
       }
     },
@@ -1496,6 +1519,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         hiddenMode: "hidden",
         hiddenThroughCreatedAt: latest?.created_at,
         hiddenThroughMessageId: latest?.id,
+        hiddenThroughMs: latest ? messageMillis(latest.tags) : undefined,
       };
       await metaRepository.put(this.loadedFor, preferenceKey(peer), preference);
       this.preferencesByPeer = { ...this.preferencesByPeer, [peer]: preference };
@@ -1509,14 +1533,18 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const latest = items.at(-1);
       const existing = this.preferencesByPeer[peer];
       const cutoffMessageId = latest?.outgoing ? "\uffff" : latest?.id;
+      // An unsent local item has no final id; cover the rest of its second.
+      const cutoffMs = latest ? (latest.outgoing ? 999 : messageMillis(latest.tags)) : undefined;
       const preference: ConversationPreference = {
         ...existing,
         hidden: true,
         hiddenMode: "deleted",
         hiddenThroughCreatedAt: latest?.created_at ?? existing?.hiddenThroughCreatedAt,
         hiddenThroughMessageId: cutoffMessageId ?? existing?.hiddenThroughMessageId,
+        hiddenThroughMs: latest ? cutoffMs : existing?.hiddenThroughMs,
         deletedThroughCreatedAt: latest?.created_at ?? existing?.deletedThroughCreatedAt,
         deletedThroughMessageId: cutoffMessageId ?? existing?.deletedThroughMessageId,
+        deletedThroughMs: latest ? cutoffMs : existing?.deletedThroughMs,
       };
       await metaRepository.put(this.loadedFor, preferenceKey(peer), preference);
       this.preferencesByPeer = { ...this.preferencesByPeer, [peer]: preference };
@@ -1535,6 +1563,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         throw new Error("阅后即焚目前仅支持不带引用或图片的文字消息");
       }
       const now = Date.now();
+      const clock = nextMessageClock(now);
       const task: OutgoingDmTaskRecord = {
         accountPubkey: account,
         localId: createLocalId(),
@@ -1544,7 +1573,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         ...(replyTo ? { replyTo } : {}),
         ...(image ? { imageName: image.name, imageType: image.type } : {}),
         state: image ? "uploading" : "sending",
-        createdAt: Math.floor(now / 1000),
+        createdAt: clock.createdAt,
+        createdMs: clock.ms,
         updatedAt: now,
       };
       if (image && typeof URL?.createObjectURL === "function") {
@@ -1594,6 +1624,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         throw new Error("语音消息无效");
       }
       const now = Date.now();
+      const clock = nextMessageClock(now);
       const task: OutgoingDmTaskRecord = {
         accountPubkey: account,
         localId: createLocalId(),
@@ -1605,7 +1636,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         audioDuration: recording.duration,
         audioSize: recording.blob.size,
         state: "uploading",
-        createdAt: Math.floor(now / 1000),
+        createdAt: clock.createdAt,
+        createdMs: clock.ms,
         updatedAt: now,
       };
       if (typeof URL?.createObjectURL === "function") {
@@ -1772,7 +1804,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           const result = task.outgoingId
             ? await publishQueuedOutgoing(account, task.outgoingId, "message")
             : await sendDirectMessage({
-              recipientPubkeys: [task.peerPubkey], content, createdAt: task.createdAt,
+              recipientPubkeys: [task.peerPubkey], content, createdAt: task.createdAt, createdMs: task.createdMs,
               replyTo: task.replyTo,
               burnAfterSeconds: task.burnAfterSeconds,
               tags: [["t", DIRECT_MESSAGE_TYPE]], relays: getRelaysFromStorage("write"), pushCategory: "message",

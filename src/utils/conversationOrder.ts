@@ -1,4 +1,6 @@
-type OrderableRow = { peerPubkey: string; latest: { id: string; created_at: number } };
+import { messageOrderAt } from "@/nostr/messaging/sync/sorting";
+
+type OrderableRow = { peerPubkey: string; latest: { id: string; created_at: number; tags?: string[][] } };
 
 /** Pinned conversations first (most recently pinned on top), then newest message first. */
 export function sortConversationRows<T extends OrderableRow>(rows: T[], pinnedAt: (peerPubkey: string) => number) {
@@ -10,6 +12,7 @@ export function sortConversationRows<T extends OrderableRow>(rows: T[], pinnedAt
       if (!pinB) return -1;
       if (pinA !== pinB) return pinB - pinA;
     }
-    return b.latest.created_at - a.latest.created_at || a.latest.id.localeCompare(b.latest.id);
+    return messageOrderAt(b.latest.created_at, b.latest.tags) - messageOrderAt(a.latest.created_at, a.latest.tags)
+      || a.latest.id.localeCompare(b.latest.id);
   });
 }

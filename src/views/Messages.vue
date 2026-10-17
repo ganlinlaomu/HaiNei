@@ -396,6 +396,7 @@
 </template>
 
 <script setup lang="ts">
+import { compareInboxItems } from "@/nostr/messaging/sync/sorting";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -478,7 +479,7 @@ const messages = computed(() => {
   // `existing` is already sorted; replacing content keeps that order. Only a
   // reconstructed tombstone needs a new position.
   const values = [...results.values()];
-  return added ? values.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id)) : values;
+  return added ? values.sort(compareInboxItems) : values;
 });
 async function fetchOlderPage(reset = false) {
   if (!reset && historyExhausted.value) return;
@@ -1973,7 +1974,7 @@ function applyInboxMutation(mutation: InboxMutation) {
     if (!matched.length) return;
     const merged = new Map(historyMessages.value.map(message => [message.id, message]));
     for (const message of matched) merged.set(message.id, message);
-    historyMessages.value = [...merged.values()].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+    historyMessages.value = [...merged.values()].sort(compareInboxItems);
     return;
   }
 

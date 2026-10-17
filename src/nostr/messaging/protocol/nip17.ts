@@ -10,6 +10,7 @@ import {
 import { deriveConversationId, normalizePubkey, recipientPubkeys, replyReferences, verifySignedEvent } from "./common";
 import type { CanonicalMessage, EncodedMessage, MessageProtocolAdapter, OutgoingMessage, EncodeContext } from "./types";
 import { debugLog } from "@/utils/debugLog";
+import { MESSAGE_MS_TAG, nextMessageClock } from "../sync/sorting";
 import { DISAPPEARING_DM_TYPE, DISAPPEARING_DM_TTL_SECONDS, BURN_DURATIONS, disappearingMetadata, expirationFromTags, hasDisappearingMarker, isExpiredDisappearing } from "../disappearingMessages";
 
 export const GIFT_WRAP_KIND = 1059;
@@ -190,7 +191,7 @@ export async function buildNip17Message(message: OutgoingMessage, context: Encod
   if (message.rootId) tags.push(["e", message.rootId, "", "root"]);
   if (message.replyTo) tags.push(["e", message.replyTo, "", "reply"]);
   for (const tag of message.tags || []) {
-    if (!Array.isArray(tag) || tag.length === 0 || tag[0] === "p" || tag[0] === "e") continue;
+    if (!Array.isArray(tag) || tag.length === 0 || tag[0] === "p" || tag[0] === "e" || tag[0] === MESSAGE_MS_TAG) continue;
     // Temporary metadata is generated, never accepted as raw caller-supplied tags.
     if (tag[0] === "expiration" || tag[0] === "burn-after" || (tag[0] === "t" && tag[1] === DISAPPEARING_DM_TYPE)) continue;
     tags.push([...tag]);
@@ -204,10 +205,18 @@ export async function buildNip17Message(message: OutgoingMessage, context: Encod
     expiresAt = Math.floor(Date.now() / 1000) + DISAPPEARING_DM_TTL_SECONDS;
     tags.push(["t", DISAPPEARING_DM_TYPE], ["burn-after", String(message.burnAfterSeconds)], ["expiration", String(expiresAt)]);
   }
+  // Seconds alone cannot order several messages sent within one second.
+  // The ms tag comes from a monotonic local clock captured at send time.
+  const clock = message.createdAt === undefined ? nextMessageClock() : undefined;
+  const createdAt = message.createdAt ?? clock!.createdAt;
+  const createdMs = clock ? clock.ms : message.createdMs;
+  if (createdMs !== undefined && Number.isInteger(createdMs) && createdMs >= 0 && createdMs <= 999) {
+    tags.push([MESSAGE_MS_TAG, String(createdMs)]);
+  }
   const rumorBase: UnsignedEvent = {
     pubkey: sender,
     kind: RUMOR_KIND,
-    created_at: message.createdAt ?? Math.floor(Date.now() / 1000),
+    created_at: createdAt,
     tags,
     content: message.plaintext
   };

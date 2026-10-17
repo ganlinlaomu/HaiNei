@@ -35,6 +35,8 @@ export interface OutgoingMessage {
   recipientPubkeys: string[];
   plaintext: string;
   createdAt?: number;
+  /** Sub-second send time (0..999) paired with createdAt; becomes the rumor's ms tag. */
+  createdMs?: number;
   replyTo?: string;
   rootId?: string;
   tags?: string[][];
