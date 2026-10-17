@@ -259,7 +259,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(settings).not.toContain("getCacheStats");
     expect(settings).not.toContain("enablePushNotifications");
     expect(settings).not.toContain("startStatusPolling");
-    expect(system).toContain("连接 / Relay");
+    expect(system).toContain("<h3>连接</h3>");
     expect(system).toContain("图片与视频 / Media");
     expect(system).toContain("数据使用 / Data Saver");
     expect(system).toContain('后台推送 / {{ isNativeApp ? "Android Push" : "Web Push" }}');

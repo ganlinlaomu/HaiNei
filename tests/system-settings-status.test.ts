@@ -23,12 +23,20 @@ describe("System Settings status UX", () => {
     expect(source).toContain("void refreshDiagnostics()");
   });
 
-  it("shows automatic NIP-17 DM relay publication without per-contact connections", () => {
-    expect(source).toContain("私信 Relay / kind 10050");
+  it("explains the DM inbox in plain words and keeps protocol details on the Debug page", () => {
+    const settingsTemplate = source.slice(0, source.indexOf("</template>"));
+    expect(settingsTemplate).toContain("<div class=\"item-url\">收信地址</div>");
+    expect(settingsTemplate).toContain("好友会把私信送到这里，系统自动选择，一般不需要修改。");
     expect(source).toContain("getOwnDmRelayStatus(account)");
-    expect(source).toContain("当前已连接的读取 Relay 中选择最多 2 个接收点");
-    expect(source).toContain("未找到时兼容传统 Relay");
-    expect(source).toContain("不会为每位联系人保持额外长连接");
+    for (const jargon of ["kind 10050", "NIP-17", "NIP-65", "公共目录"]) {
+      expect(settingsTemplate.slice(0, settingsTemplate.indexOf("高级设置")), jargon).not.toContain(jargon);
+    }
+    const debug = readFileSync(join(process.cwd(), "src/views/Debug.vue"), "utf8");
+    expect(debug).toContain("私信收件 Relay（kind 10050 / NIP-17）");
+    expect(debug).toContain("当前已连接的读取 Relay 中选择最多 2 个接收点");
+    expect(debug).toContain("未找到时兼容传统 Relay");
+    expect(debug).toContain("不会为每位联系人保持额外长连接");
+    expect(debug).toContain("getOwnDmRelayStatus(account)");
   });
 
   it("does not present browser Web Push controls inside the Capacitor Android shell", () => {
