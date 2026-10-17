@@ -5,7 +5,7 @@ import { HaiNeiDatabase } from "@/db/dexie";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { MessageIngestionPipeline } from "@/nostr/messaging/sync/ingestion";
 import { calculateCatchupSince, compareMessages } from "@/nostr/messaging/sync/sorting";
-import { fetchCatchupPage, runPagedCatchup } from "@/nostr/messaging/sync/catchup";
+import { fetchCatchupPage, MAX_SAME_SECOND_PAGE_LIMIT, runPagedCatchup } from "@/nostr/messaging/sync/catchup";
 import {
   SyncedMessageRepository,
   UNSUPPORTED_MESSAGE_CLEANUP_VERSION,
@@ -520,11 +520,12 @@ describe("relay catch-up", () => {
       onEvent: async event => { ingested.push(event.id); }
     });
     expect(ingested).toEqual(["a", "b", "c"]);
-    expect(calls).toBe(2);
-    expect(result.incomplete).toBe(true);
-    expect(result.paginationStalled).toBe(true);
-    expect(result.exhaustedHistory).toBe(false);
-    expect(result.nextUntilByRelay["wss://a"]).toBe(100);
+    // The full same-second page is re-requested with a doubled limit; the
+    // relay then answers with fewer events than asked, so the second is done.
+    expect(calls).toBe(3);
+    expect(result.paginationStalled).toBe(false);
+    expect(result.incomplete).toBe(false);
+    expect(result.exhaustedHistory).toBe(true);
   });
 });
 
@@ -746,16 +747,18 @@ describe("PR4 durable per-Relay reconciliation", () => {
     }
   });
 
-  it("never declares a 500-event identical-second NIP-17 bucket exhausted", async () => {
-    let requests = 0;
-    const subscribeFake = () => {
-      requests++;
+  it("never declares an identical-second NIP-17 bucket larger than the page cap exhausted", async () => {
+    const limits: number[] = [];
+    const subscribeFake = (_relays: string[], filters: any[]) => {
+      const limit = Number(filters[0].limit);
+      limits.push(limit);
       const handlers: Record<string, Array<(...args: any[]) => void>> = {};
       return {
         on(name: string, callback: (...args: any[]) => void) {
           (handlers[name] ||= []).push(callback);
+          // Every request is answered with a full page from the same second.
           if (name === "eose") queueMicrotask(() => {
-            for (let i = 0; i < 500; i++) {
+            for (let i = 0; i < limit; i++) {
               handlers.event?.forEach(handler => handler({ id: `gift-wrap-${i}`, created_at: 100 }, "wss://a"));
             }
             callback("wss://a");
@@ -773,12 +776,58 @@ describe("PR4 durable per-Relay reconciliation", () => {
       isCurrent: () => true,
       onEvent: async event => { seen.add(event.id); },
     });
-    expect(seen.size).toBe(500);
-    expect(requests).toBe(2);
+    expect(limits).toEqual([500, 500, 1000, 2000, 3200]);
+    expect(seen.size).toBe(MAX_SAME_SECOND_PAGE_LIMIT);
     expect(result.paginationStalled).toBe(true);
     expect(result.incomplete).toBe(true);
     expect(result.exhaustedHistory).toBe(false);
     expect(result.nextUntilByRelay["wss://a"]).toBe(100);
+  });
+
+  it("pages through a crowded second by doubling the limit, then resumes the base limit", async () => {
+    // Two crowded seconds (1200 events at t=100, 1500 at t=50), then 100 at t=10.
+    const history = [
+      ...Array.from({ length: 1200 }, (_, i) => ({ id: `s100-${i}`, created_at: 100 })),
+      ...Array.from({ length: 1500 }, (_, i) => ({ id: `s50-${i}`, created_at: 50 })),
+      ...Array.from({ length: 100 }, (_, i) => ({ id: `s10-${i}`, created_at: 10 })),
+    ];
+    const requests: Array<{ until: number; limit: number }> = [];
+    const subscribeFake = (_relays: string[], filters: any[]) => {
+      const { until, limit } = filters[0];
+      requests.push({ until, limit });
+      const page = history.filter(event => event.created_at <= until).slice(0, limit);
+      const handlers: Record<string, Array<(...args: any[]) => void>> = {};
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          (handlers[name] ||= []).push(callback);
+          if (name === "eose") queueMicrotask(() => {
+            page.forEach(event => handlers.event?.forEach(handler => handler(event, "wss://a")));
+            callback("wss://a");
+          });
+        },
+        unsub() {},
+      };
+    };
+    const seen = new Set<string>();
+    const result = await runPagedCatchup({
+      relays: ["wss://a"],
+      filters: [{ since: 0, until: 100, limit: 500 }],
+      subscribeFn: subscribeFake,
+      isCurrent: () => true,
+      onEvent: async event => { seen.add(event.id); },
+    });
+    expect(requests).toEqual([
+      { until: 100, limit: 500 },
+      { until: 100, limit: 1000 },
+      { until: 100, limit: 2000 },
+      // Past the crowded second the base limit applies again.
+      { until: 50, limit: 500 },
+      { until: 50, limit: 1000 },
+      { until: 50, limit: 2000 },
+    ]);
+    expect(seen.size).toBe(2800);
+    expect(result.paginationStalled).toBe(false);
+    expect(result.exhaustedHistory).toBe(true);
   });
 });
 

@@ -60,6 +60,15 @@ function validatedCheckpoint(
 
 const RELAY_EVENT_FLUSH_MS = 5_000;
 
+export const RELAY_CATCHUP_RETRY_BASE_MS = 1_000;
+export const RELAY_CATCHUP_RETRY_MAX_MS = 60_000;
+
+/** 1s, 2s, 4s, … capped at 60s for the n-th consecutive failure of one Relay. */
+export function relayCatchupRetryDelayMs(attempt: number) {
+  const exponent = Math.max(0, Math.min(attempt - 1, 16));
+  return Math.min(RELAY_CATCHUP_RETRY_MAX_MS, RELAY_CATCHUP_RETRY_BASE_MS * 2 ** exponent);
+}
+
 export class MessageSyncManager {
   private readonly repository: SyncedMessageRepository;
   private readonly subscribeFn: SubscribeForCatchup;
@@ -88,6 +97,8 @@ export class MessageSyncManager {
   private removeBackgroundListener: (() => void) | null = null;
    private idleContinuationTimer: ReturnType<typeof setTimeout> | null = null;
   private cancelIdleContinuation: (() => void) | null = null;
+  private relayRetryAttempts = new Map<string, number>();
+  private relayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   // Realtime relay diagnostics are batched: a (re)subscription replays the
   // 48h NIP-17 window, and one write transaction per event contends with the
@@ -142,6 +153,45 @@ export class MessageSyncManager {
       }, { priority: "idle", timeoutMs: 60_000 });
     }, 30_000);
     (this.idleContinuationTimer as any).unref?.();
+  }
+
+  private clearRelayRetries() {
+    for (const timer of this.relayRetryTimers.values()) clearTimeout(timer);
+    this.relayRetryTimers.clear();
+    this.relayRetryAttempts.clear();
+  }
+
+  /**
+   * A failed Relay page used to wait for the next app resume or reconnect.
+   * Retry just that Relay with exponential backoff; success resets it.
+   */
+  private scheduleRelayRetries(
+    sessionId: string,
+    accountPubkey: string,
+    result: { failedRelays: Map<string, unknown>; relayProgress: Record<string, { incomplete: boolean; paginationStalled?: boolean }> },
+  ) {
+    for (const [url, progress] of Object.entries(result.relayProgress)) {
+      if (progress.incomplete || result.failedRelays.has(url)) continue;
+      this.relayRetryAttempts.delete(url);
+      const timer = this.relayRetryTimers.get(url);
+      if (timer) clearTimeout(timer);
+      this.relayRetryTimers.delete(url);
+    }
+    for (const url of result.failedRelays.keys()) {
+      // A bucket larger than the page cap will not succeed by retrying.
+      if (result.relayProgress[url]?.paginationStalled || this.relayRetryTimers.has(url)) continue;
+      const attempt = (this.relayRetryAttempts.get(url) || 0) + 1;
+      this.relayRetryAttempts.set(url, attempt);
+      const delay = relayCatchupRetryDelayMs(attempt);
+      debugLog("sync", "relay_catchup_retry_scheduled", { relay: url, attempt, delayMs: delay }, "info");
+      const timer = setTimeout(() => {
+        this.relayRetryTimers.delete(url);
+        if (!this.isCurrent(sessionId, accountPubkey) || !this.isForeground()) return;
+        void this.resume("reconnect", url);
+      }, delay);
+      (timer as any).unref?.();
+      this.relayRetryTimers.set(url, timer);
+    }
   }
 
   private isForeground() {
@@ -594,6 +644,7 @@ export class MessageSyncManager {
           await this.repository.commitCatchupProgress(options.accountPubkey, syncStatePatch, relayPatches);
         }
         options.onCatchupStatus?.(completedFreshHistory || fullAccountCoverage ? "settled" : "pending");
+        this.scheduleRelayRetries(sessionId, options.accountPubkey, result);
         if (result.incomplete) {
           logger.warn(`[message-sync] catch-up incomplete account=${options.accountPubkey.slice(0, 8)} phase=${activeSource} failed=${[...result.failedRelays.entries()].map(([url, reason]) => `${url}:${reason}`).join(",") || (result.paginationStalled ? "timestamp-pagination-stalled" : result.timedOut ? "timeout" : result.aborted ? "aborted" : "partial")}`);
         }
@@ -705,6 +756,7 @@ export class MessageSyncManager {
     this.catchupAbortController?.abort();
     this.catchupAbortController = null;
     this.clearIdleContinuation();
+    this.clearRelayRetries();
      this.removeBackgroundListener?.();
     this.removeBackgroundListener = null;
     closeSubscription(this.realtimeSubscription);
