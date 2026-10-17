@@ -99,6 +99,7 @@
                   <MentionText v-if="messageText(message.content)" class="bubble-text" :text="messageText(message.content)" />
                   <span v-else class="temporary-caption">临时消息</span>
                   <span class="temporary-caption">♨ 阅后即焚 · {{ burnDuration(message) }} 秒</span>
+                  <span v-if="burnFallbackNotice(message)" class="temporary-caption temporary-fallback">{{ burnFallbackNotice(message) }}</span>
                 </div>
                 <div v-else-if="canShowTemporaryText(message)" class="temporary-message">
                   <MentionText class="bubble-text" :text="messageText(message.content)" />
@@ -721,6 +722,17 @@ const isOwn = (message: InboxItem) => message.pubkey === keys.pkHex;
 const isFailed = (message: InboxItem) => message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed";
 function isDisappearing(message: InboxItem) {
   return hasDisappearingMarker(message.tags) || directMessages.burnedById[message.id]?.peerPubkey === peerPubkey.value;
+}
+// Re-evaluated when messages or receipts change; the 2-minute grace uses wall time.
+const readReceiptsHiddenReason = computed(() =>
+  directMessages.readReceiptsHiddenReason(peerPubkey.value, messages.value, Math.max(clockNow.value, Date.now())));
+/** Without an open confirmation the sender's copy lives until the 48h expiry. */
+function burnFallbackNotice(message: InboxItem) {
+  if (!isOwn(message) || isBurned(message) || message.outgoing) return "";
+  if (directMessages.outgoingReceiptStatus(peerPubkey.value, message) === "read") return "";
+  if (readReceiptsHiddenReason.value === "peer") return "对方关闭了已读回执，消息将在 48 小时后销毁";
+  if (readReceiptsHiddenReason.value === "self") return "你关闭了已读回执，看不到对方是否已查看；消息将在 48 小时后销毁";
+  return "";
 }
 function burnDuration(message: InboxItem) {
   return disappearingMetadata(message.tags)?.burnAfterSeconds || 10;
@@ -2206,7 +2218,7 @@ onBeforeUnmount(() => {
 .message-line .disappearing-bubble{min-width:154px;max-width:min(76vw,290px);border:1px solid var(--bd-eae2e0);background:var(--bg-fcf9f8);color:var(--fg-3b3030)}
 .message-line.own .disappearing-bubble{border-color:var(--bd-e9d0cd);background:var(--bg-fbebea)}
 .temporary-message{display:flex;min-width:0;flex-direction:column;gap:5px}
-.temporary-heading{font-size:13px;font-weight:650;color:var(--fg-995950)}.temporary-caption{font-size:11px;color:var(--fg-996b65)}
+.temporary-heading{font-size:13px;font-weight:650;color:var(--fg-995950)}.temporary-caption{font-size:11px;color:var(--fg-996b65)}.temporary-fallback{line-height:1.45}
 .temporary-countdown{display:block;padding-top:5px;border-top:1px solid var(--bd-e8dcd9);color:var(--fg-a55249);font-size:11px;font-variant-numeric:tabular-nums}
 .temporary-reveal{display:flex;width:100%;min-width:150px;flex-direction:column;gap:4px;padding:2px 0;border:0;background:transparent;color:var(--fg-6c403d);text-align:left;cursor:pointer}
 .temporary-reveal strong{font-size:13px;font-weight:650}.temporary-reveal>span{font-size:14px;color:var(--fg-bd584f)}.temporary-reveal small{font-size:11px;color:var(--fg-927370)}.temporary-reveal:disabled{opacity:.5}
