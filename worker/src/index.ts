@@ -11,6 +11,7 @@ import {
   testOwnPush,
 } from "./push";
 import { HttpError, integerSetting, type Env } from "./types";
+import { cleanupExpiredRecords } from "./cleanup";
 import { enforceChallengeRateLimit, readJsonBody } from "./requestGuards";
 import { AccountStateConflict, getAccountState, putAccountState } from "./accountState";
 import { PrivateSpaceConflict, listPrivateSpace, getPrivateSpace, putPrivateSpace } from "./privateSpace";
@@ -168,4 +169,11 @@ export async function handleRequest(request: Request, env: Env) {
   }
 }
 
-export default { fetch: handleRequest };
+type ScheduledController = { scheduledTime: number; cron: string };
+type ExecutionContext = { waitUntil(promise: Promise<unknown>): void };
+
+export function handleScheduled(controller: ScheduledController, env: Env, context: ExecutionContext) {
+  context.waitUntil(cleanupExpiredRecords(env, Math.floor(controller.scheduledTime / 1000)));
+}
+
+export default { fetch: handleRequest, scheduled: handleScheduled };

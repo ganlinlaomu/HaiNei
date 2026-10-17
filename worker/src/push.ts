@@ -616,9 +616,6 @@ async function deliverPushRows(
     }
   });
 
-  if ((now & 63) === 0) {
-    void env.DB.prepare("DELETE FROM hainei_push_deliveries WHERE updated_at <= ?")
-      .bind(now - 7 * 24 * 60 * 60).run().catch(() => {});
-  }
+  // Old delivery rows are removed by the daily scheduled cleanup.
   return diagnostics;
 }

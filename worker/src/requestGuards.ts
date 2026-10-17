@@ -42,11 +42,7 @@ export async function consumeRateLimit(
     WHERE hainei_rate_limits.count < ?
   `).bind(bucket, expiresAt, now, normalizedLimit).run();
   if (Number(result.meta?.changes || 0) !== 1) throw new HttpError(429, "rate_limited");
-
-  // Opportunistic cleanup is bounded by the indexed expires_at predicate.
-  if ((now & 31) === 0) {
-    void env.DB.prepare("DELETE FROM hainei_rate_limits WHERE expires_at <= ?").bind(now).run().catch(() => {});
-  }
+  // Expired buckets are removed by the daily scheduled cleanup.
 }
 
 export async function enforceChallengeRateLimit(env: Env, request: Request, now = Math.floor(Date.now() / 1000)) {

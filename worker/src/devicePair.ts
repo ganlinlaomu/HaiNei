@@ -39,9 +39,7 @@ async function publicLimit(env: Env, request: Request, action: string, limit: nu
 export async function createDevicePair(env: Env, request: Request, receiverKey: unknown) {
   await publicLimit(env, request, "create", 8);
   const receiver = read(receiverKey, PUBLIC_KEY, "receiver_key");
-  // Opportunistic bounded cleanup; abandoned sessions expire without background cron.
-  void env.DB.prepare("DELETE FROM hainei_device_pairs WHERE expires_at < ?")
-    .bind(now() - 300).run().catch(() => {});
+  // Abandoned sessions are removed by the daily scheduled cleanup.
   const id = random(16);
   const token = random(32);
   const expiresAt = now() + TTL;
