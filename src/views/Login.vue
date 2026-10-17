@@ -657,7 +657,7 @@ async function switchAccount() {
 }
 
 .unlock-title { margin-top: 20px; }
-.unlock-name { margin-top: 6px; font-size: 17px; font-weight: 600; color: var(--hn-text); }
+.unlock-name { margin-top: 6px; font-size: 16px; font-weight: 600; color: var(--hn-text); }
 
 .unlock-field {
   width: 100%;

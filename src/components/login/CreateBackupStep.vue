@@ -96,7 +96,7 @@ async function copyKey() {
 
 .backup-card-head strong {
   flex: 1;
-  font-size: 17px;
+  font-size: 16px;
 }
 
 .backup-icon {

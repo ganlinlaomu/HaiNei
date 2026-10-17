@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.47",
-  "releaseSummary": "修复私人空间搜索聚焦缩放，搜索与空白提示随分类切换",
+  "version": "0.1.48",
+  "releaseSummary": "统一登录、注册、账号选择和备份页面的背景、字体与字号",
   "private": true,
   "scripts": {
     "dev": "vite",

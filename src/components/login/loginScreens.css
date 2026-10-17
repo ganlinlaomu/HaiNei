@@ -80,16 +80,16 @@
 .hn-title {
   margin: 0;
   color: var(--hn-text);
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 700;
-  line-height: 36px;
+  line-height: 28px;
 }
 
 .hn-subtitle {
   margin: 8px 0 0;
   color: var(--hn-text-2);
-  font-size: 15px;
-  line-height: 23px;
+  font-size: 14px;
+  line-height: 21px;
 }
 
 .hn-note {
@@ -113,7 +113,7 @@
   border: 0;
   border-radius: var(--hn-radius-btn);
   font: inherit;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   cursor: pointer;
   transition: transform 120ms ease, opacity 120ms ease;
@@ -128,7 +128,7 @@
   min-height: 44px;
   background: transparent;
   color: var(--hn-text-2);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
 }
 
@@ -180,7 +180,7 @@
   background: var(--hn-card);
   color: var(--hn-text);
   font: inherit;
-  font-size: 17px;
+  font-size: 16px;
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 

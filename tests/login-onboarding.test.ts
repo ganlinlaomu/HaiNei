@@ -188,14 +188,15 @@ describe("multi-step sign-up flow", () => {
 });
 
 describe("shared visual tokens", () => {
-  it("defines the HaiNei palette and control sizes once in styles.css", () => {
+  it("reuses the app palette and system font while preserving control sizes", () => {
     const styles = source("src/styles.css");
     for (const token of [
-      "--hn-bg: #F6F4EF", "--hn-primary: #22304F", "--hn-secondary-bg: #E8E5DD", "--hn-card: #FFFFFF",
-      "--hn-text: #1C1C1E", "--hn-text-2: #55555B", "--hn-text-3: #6B6B70", "--hn-danger: #9B2C1F",
-      "--hn-danger-bg: #F6E3DF", "--hn-success: #2E7D5B", "--hn-control-height: 54px", "--hn-radius-btn: 16px",
+      "--hn-bg: var(--bg)", "--hn-primary: var(--accent)", "--hn-secondary-bg: var(--bg-f1f5f9)", "--hn-card: var(--card)",
+      "--hn-text: var(--primary)", "--hn-text-2: var(--fg-475569)", "--hn-text-3: var(--fg-64748b)", "--hn-danger: var(--fg-b91c1c)",
+      "--hn-danger-bg: var(--bg-fef2f2)", "--hn-success: var(--fg-16803c)", "--hn-control-height: 54px", "--hn-radius-btn: 16px",
       "--hn-radius-input: 14px", "--hn-gutter: 24px",
     ]) expect(styles).toContain(token);
-    expect(styles).toContain('"Noto Serif SC"');
+    expect(styles).toContain("--hn-font-sans: var(--font-sans)");
+    expect(styles).toContain("--hn-font-brand: var(--font-sans)");
   });
 });

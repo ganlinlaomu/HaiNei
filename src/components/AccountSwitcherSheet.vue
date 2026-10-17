@@ -72,7 +72,7 @@ useDialogFocus(dialog, () => props.open, close);
 .switcher-overlay{position:fixed;inset:0;z-index:13000;display:flex;align-items:flex-end;justify-content:center;background:rgba(18,22,32,.42)}
 .switcher-sheet{width:min(100%,480px);max-height:min(82dvh,640px);overflow-y:auto;box-sizing:border-box;padding:18px 20px calc(20px + env(safe-area-inset-bottom));border-radius:24px 24px 0 0;background:var(--hn-bg);color:var(--hn-text);font-family:var(--hn-font-sans);outline:none}
 .switcher-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.switcher-header h2{margin:0;font-size:19px;font-weight:700}
+.switcher-header h2{margin:0;font-size:20px;font-weight:700}
 .close-button{display:grid;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:var(--hn-secondary-bg);color:var(--hn-text-2);place-items:center;cursor:pointer}
 .close-button svg,.switcher-add svg,.check{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .switcher-list{display:grid;gap:8px;margin:0;padding:0;list-style:none}

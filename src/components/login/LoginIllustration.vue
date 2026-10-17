@@ -100,12 +100,12 @@
 .brand h1 {
   margin: 0;
   font-family: var(--hn-font-brand);
-  font-size: 48px;
-  font-weight: 600;
+  font-size: 2.75rem;
+  font-weight: 400;
   line-height: 1.2;
-  letter-spacing: 0.24em;
+  letter-spacing: 0.12em;
   /* letter-spacing also pads the last glyph; shift back to stay optically centered */
-  text-indent: 0.24em;
+  text-indent: 0.12em;
 }
 
 .brand p {
