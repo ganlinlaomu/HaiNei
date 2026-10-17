@@ -26,6 +26,13 @@ export type RelayCatchupProgress = {
 
 export type SubscribeForCatchup = (relays: string[], filters: any[]) => SubscriptionLike;
 
+/**
+ * Upper bound when a full page is a single second. NIP-01 `until` is
+ * inclusive with no id tie-breaker, so the only safe way through a crowded
+ * second is a bigger page for the same boundary.
+ */
+export const MAX_SAME_SECOND_PAGE_LIMIT = 3200;
+
 function normalizedRelaySet(relays: string[]) {
   return [...new Set(relays.map(normalizeRelayUrl).filter(Boolean))];
 }
@@ -167,13 +174,16 @@ export async function runPagedCatchup(options: {
     let batches = 0;
     let relayIncomplete = false;
     let relayPaginationStalled = false;
+    // Raised only while one second fills a whole page; reset once past it.
+    let limitOverride: number | undefined;
 
     for (let batch = 0; batch < maxBatches && canContinue(); batch++) {
       batches++;
       const pageUntil = currentUntil;
       const pageFilters = options.filters.map(filter => ({
         ...filter,
-        ...(pageUntil === undefined ? {} : { until: pageUntil })
+        ...(pageUntil === undefined ? {} : { until: pageUntil }),
+        ...(limitOverride === undefined ? {} : { limit: limitOverride }),
       }));
       const page = await fetchCatchupPage(
         [relay],
@@ -232,12 +242,22 @@ export async function runPagedCatchup(options: {
       // from that very second. Never interpret this as history completion or
       // skip to until-1 (which would silently lose those events).
       if (fullPage && currentUntil !== undefined && oldest >= currentUntil) {
+        if (pageLimit < MAX_SAME_SECOND_PAGE_LIMIT) {
+          // Re-request the same second with a doubled limit; the extra page
+          // does not count against the batch budget.
+          limitOverride = Math.min(pageLimit * 2, MAX_SAME_SECOND_PAGE_LIMIT);
+          logger.debug(`[message-sync] same-second page relay=${relay} until=${currentUntil} retry limit=${limitOverride}`);
+          batch--;
+          batches--;
+          continue;
+        }
         relayIncomplete = true;
         relayPaginationStalled = true;
         paginationStalled = true;
-        logger.warn(`[message-sync] timestamp pagination stalled relay=${relay} until=${currentUntil}`);
+        logger.warn(`[message-sync] timestamp pagination stalled relay=${relay} until=${currentUntil} limit=${pageLimit}`);
         break;
       }
+      limitOverride = undefined;
       if (currentUntil !== undefined && oldest === currentUntil && newUnique === 0) {
         naturalEnd = true;
         break;
