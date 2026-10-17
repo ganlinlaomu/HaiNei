@@ -3,7 +3,7 @@
     <LoginIllustration />
     <section class="welcome-actions">
       <p class="tagline">只给家人和朋友的地方</p>
-      <button class="hn-btn hn-btn-primary" type="button" @click="emit('start')">开始使用</button>
+      <button class="hn-btn hn-btn-primary" type="button" @click="emit('start')">注册</button>
       <button class="hn-btn hn-btn-secondary" type="button" @click="emit('have-account')">我已有账号</button>
       <slot name="notice" />
       <footer class="public-links" aria-label="海内公开信息">

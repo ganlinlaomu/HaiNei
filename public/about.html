@@ -12,8 +12,11 @@
     .lang{color:var(--muted);font-size:.85rem;text-transform:uppercase;letter-spacing:.08em}.notice{padding:16px;border:1px solid var(--line);background:var(--panel);border-radius:12px}
     footer{padding:24px 0 40px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
     @media(max-width:600px){header{padding-top:28px}header h1{font-size:1.8rem}main{padding-top:18px}section{padding:20px 0}}
+.back-to-login{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;margin:0 0 12px -10px;border-radius:50%;color:var(--link);text-decoration:none}
+    .back-to-login:hover,.back-to-login:active{background:var(--panel)}.back-to-login:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+    .back-to-login svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 </style></head><body>
-<header><h1>HaiNei</h1><p>A Nostr-based social client focused on privacy and user control.</p>
+<header><a class="back-to-login" href="/#/login" aria-label="返回登录页面" title="返回登录页面"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></a><h1>HaiNei</h1><p>A Nostr-based social client focused on privacy and user control.</p>
 <nav><a href="/">Open HaiNei</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a><a href="mailto:kudos-zap-citrus@duck.com">Contact</a></nav></header>
 <main>
 <section><div class="lang">English</div><h2>About HaiNei</h2>
