@@ -2,8 +2,8 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.5"; // ⚠️ 更新代码时同步修改此版本号
-const BUILD_ID = "2026-09-30T14:03:38.501Z"; // Replaced by scripts/update-sw-version.js on every production build
+const VERSION = "0.1.48"; // ⚠️ 更新代码时同步修改此版本号
+const BUILD_ID = "source-cccdf3c174dd446f"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
 const HTML_CACHE = `${CACHE_PREFIX}-html-${VERSION}-${BUILD_ID}`;

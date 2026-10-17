@@ -377,6 +377,7 @@ defineExpose({ begin: beginGoogle, supported: googleWebSupported });
 </script>
 
 <style scoped>
+.google-login-button, .recovery-sheet button, .recovery-sheet input { font-family: var(--hn-font-sans); }
 .google-login-button{display:flex;width:100%;min-height:54px;align-items:center;justify-content:center;gap:10px;padding:0 18px;border:1px solid var(--hn-border);border-radius:var(--hn-radius-btn);background:var(--hn-card);color:var(--hn-text);font-size:16px;font-weight:600;cursor:pointer}
 .google-login-button:active{transform:scale(.99)}
 .google-login-button:disabled{opacity:.55;cursor:not-allowed}
@@ -387,16 +388,16 @@ defineExpose({ begin: beginGoogle, supported: googleWebSupported });
 .recovery-sheet{position:relative;width:min(100%,460px);max-height:min(88dvh,720px);box-sizing:border-box;overflow-y:auto;padding:26px 24px calc(24px + env(safe-area-inset-bottom));border-radius:24px 24px 0 0;background:var(--hn-bg);color:var(--hn-text);font-family:var(--hn-font-sans);box-shadow:0 -18px 50px rgba(0,0,0,.18)}
 .close-button{position:absolute;top:12px;right:14px;width:44px;height:44px;border:0;border-radius:50%;background:var(--hn-secondary-bg);color:var(--hn-text-2);font-size:24px;line-height:1;cursor:pointer}
 .provider-heading{display:flex;align-items:flex-start;gap:12px;padding:4px 48px 20px 0}
-.provider-heading h2{margin:0;color:var(--hn-text);font-size:19px;line-height:26px}
+.provider-heading h2{margin:0;color:var(--hn-text);font-size:20px;line-height:26px}
 .provider-heading p{margin:6px 0 0;color:var(--hn-text-2);font-size:13px;line-height:1.55}
 .working-state{display:grid;min-height:170px;place-items:center;align-content:center;gap:14px;color:var(--hn-text-2);text-align:center}
 .spinner{width:28px;height:28px;border:3px solid var(--hn-secondary-bg);border-top-color:var(--hn-primary);border-radius:50%;animation:spin .8s linear infinite}
 .recovery-form,.choose-state{display:grid;gap:12px}
-.recovery-form h3,.choose-state h3{margin:0;color:var(--hn-text);font-size:17px}
+.recovery-form h3,.choose-state h3{margin:0;color:var(--hn-text);font-size:16px}
 .recovery-form p{margin:0;color:var(--hn-text-2);font-size:14px;line-height:1.55}
 .recovery-form .recovery-hint{padding:10px 12px;border-radius:12px;background:var(--hn-card);color:var(--hn-text-3);font-size:13px}
 .recovery-form label{color:var(--hn-text-2);font-size:14px}
-.recovery-input{width:100%;min-height:54px;box-sizing:border-box;padding:0 16px;border:1px solid var(--hn-border);border-radius:var(--hn-radius-input);outline:none;background:var(--hn-card);color:var(--hn-text);font-size:17px;letter-spacing:.08em}
+.recovery-input{width:100%;min-height:54px;box-sizing:border-box;padding:0 16px;border:1px solid var(--hn-border);border-radius:var(--hn-radius-input);outline:none;background:var(--hn-card);color:var(--hn-text);font-size:16px;letter-spacing:.08em}
 .recovery-input:focus{border-color:var(--hn-primary);box-shadow:0 0 0 3px var(--hn-focus-ring)}
 .primary-action,.secondary-action{width:100%;min-height:54px;border-radius:var(--hn-radius-btn);font-size:16px;font-weight:600;cursor:pointer}
 .primary-action{border:0;background:var(--hn-primary);color:var(--hn-on-primary)}

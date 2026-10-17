@@ -135,7 +135,7 @@ function enter() {
 
 .mini-brand span {
   font-family: var(--hn-font-brand);
-  font-size: 26px;
+  font-size: 20px;
   font-weight: 600;
   letter-spacing: 0.16em;
 }
@@ -191,7 +191,7 @@ function enter() {
 
 .account-text strong {
   overflow: hidden;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
