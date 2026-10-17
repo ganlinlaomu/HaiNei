@@ -47,11 +47,7 @@ export type WorkerAuthBinding = {
 };
 
 export async function createChallenge(env: Env, now = Math.floor(Date.now() / 1000)) {
-  // Keep the challenge table bounded even when clients abandon handshakes.
-  void env.DB.prepare(`
-    DELETE FROM hainei_auth_challenges
-    WHERE expires_at <= ? OR (used_at IS NOT NULL AND used_at <= ?)
-  `).bind(now, now - 3600).run().catch(() => {});
+  // Expired and used challenges are removed by the daily scheduled cleanup.
   const challenge = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
   const expiresAt = now + integerSetting(env.AUTH_CHALLENGE_TTL_SECONDS, 300, 60, 600);
   await env.DB.prepare(`
