@@ -46,6 +46,25 @@ export type AccountMessageSyncSnapshot = {
   catchup: "idle" | "running" | "pending" | "settled" | "error";
 };
 
+/** What the conversation list title shows: 连接中… / 同步中… / nothing. */
+export type MessageSyncPhase = "connecting" | "syncing" | "idle";
+
+export function messageSyncPhase(snapshot: AccountMessageSyncSnapshot, startupHydrating: boolean): MessageSyncPhase {
+  if (snapshot.status === "connecting") return "connecting";
+  if (snapshot.status === "offline" && snapshot.relay !== "connected") return "connecting";
+  if (snapshot.status === "catching-up" || snapshot.catchup === "running") return "syncing";
+  // Startup history that is still paging in keeps the unread count provisional.
+  if (snapshot.catchup === "pending" && startupHydrating) return "syncing";
+  return "idle";
+}
+
+/**
+ * Upper bound for holding the startup unread barrier while catch-up stays
+ * pending (e.g. one Relay keeps failing). Fresh realtime messages still
+ * surface during the wait; after it the durable projection is shown.
+ */
+export const STARTUP_UNREAD_PENDING_GRACE_MS = 60_000;
+
 // The account service is the sole owner of the MessageSyncManager lifecycle.
 // UI layers may request resume/read operations through the functions below,
 // but they never receive the manager instance or start/stop subscriptions.
@@ -55,6 +74,12 @@ let accountSyncGeneration = 0;
 let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle", relay: "idle", live: "idle", catchup: "idle" };
 let removeAccountRelayObserver: (() => void) | null = null;
 const accountSyncStatusListeners = new Set<(snapshot: AccountMessageSyncSnapshot) => void>();
+let startupUnreadGraceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearStartupUnreadGraceTimer() {
+  if (startupUnreadGraceTimer) clearTimeout(startupUnreadGraceTimer);
+  startupUnreadGraceTimer = null;
+}
 let dmRelayHealthUnsubscribe: (() => void) | null = null;
 const DM_RELAY_FAILURE_THRESHOLD = 3;
 const DM_RELAY_FAILURE_GRACE_MS = 5 * 60_000;
@@ -202,6 +227,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
   if (!account || !keys.isLoggedIn || !keys.supportsNip44) return false;
 
   const generation = ++accountSyncGeneration;
+  clearStartupUnreadGraceTimer();
   stopDmRelayHealthWatch();
   removeAccountRelayObserver?.();
   removeAccountRelayObserver = null;
@@ -283,6 +309,24 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       // an incomplete reconciliation; retry on the next status transition.
       console.warn("[dm] startup unread reconciliation failed", error instanceof Error ? error.message : "unknown");
     });
+  };
+  // Latest bounded catch-up outcome. "live" only means the realtime
+  // subscription is up; history may still be paging in ("pending").
+  let latestCatchup: "unknown" | "pending" | "settled" = "unknown";
+  const settleStartupUnreadWhenHistoryComplete = () => {
+    if (latestCatchup !== "pending") {
+      clearStartupUnreadGraceTimer();
+      settleStartupUnread("live");
+      return;
+    }
+    if (startupUnreadGraceTimer || directMessages.historyHydrationPhase !== "hydrating") return;
+    startupUnreadGraceTimer = setTimeout(() => {
+      startupUnreadGraceTimer = null;
+      if (!isCurrent() || directMessages.historyHydrationPhase !== "hydrating") return;
+      debugLog("sync", "startup_unread_pending_grace_elapsed", { pubkeyPrefix: account }, "warn");
+      settleStartupUnread("live");
+    }, STARTUP_UNREAD_PENDING_GRACE_MS);
+    (startupUnreadGraceTimer as any).unref?.();
   };
   const accepted = friendships.records
     .filter(record => record.state === "accepted")
@@ -434,6 +478,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
       },
       onCatchupStatus: catchup => {
         if (!isCurrent()) return;
+        latestCatchup = catchup;
         setAccountMessageSyncStatus(account, accountSyncSnapshot.status, { catchup });
       },
       onStatus: status => {
@@ -443,7 +488,9 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
           catchup: status === "catching-up" ? "running" : status === "error" ? "error" : accountSyncSnapshot.catchup,
         });
         if (status === "live") {
-          settleStartupUnread("live");
+          // Finalize the startup unread count only once history has settled;
+          // an idle continuation reports live again after the next page.
+          settleStartupUnreadWhenHistoryComplete();
           debugLog("sync", "dm_delivery_stats", deliveryStatsLogData(), "info");
         }
         // Terminal startup outcomes that never become live: a failed catch-up,
@@ -452,6 +499,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
         // barrier for it. Read cursors were restored before sync started, so
         // the durable local projection is safe to show.
         else if (status === "error" || (status === "offline" && messageRelays.length === 0)) {
+          clearStartupUnreadGraceTimer();
           settleStartupUnread("error");
         }
         if (status !== "live" || friendshipHistoryComplete) return;
@@ -502,6 +550,7 @@ export async function markAccountConversationRead(conversationId: string) {
 export function stopAccountMessageSync() {
   const account = activeKeys?.pkHex.toLowerCase() || accountSyncSnapshot.accountPubkey;
   accountSyncGeneration++;
+  clearStartupUnreadGraceTimer();
   stopDmRelayHealthWatch();
   removeAccountRelayObserver?.();
   removeAccountRelayObserver = null;
