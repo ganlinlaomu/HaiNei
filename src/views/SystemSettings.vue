@@ -10,28 +10,23 @@
       <details class="technical-section" open>
         <summary class="section-heading">
           <div>
-            <h3>连接 / Relay</h3>
-            <p>{{ relayList.filter(relay => relay.enabled).length }} 个已启用 · 用户、NIP-65 与 fallback</p>
+            <h3>连接</h3>
+            <p>{{ relayList.filter(relay => relay.enabled).length }} 个服务器已启用</p>
           </div>
         </summary>
-        <p class="section-detail">HaiNei System Relay 固定保持读取/写入，确保用户之间至少有共同投递点；自定义 Relay 作为额外冗余。</p>
+        <p class="section-detail">海内自带的服务器始终开启，保证你和好友之间至少有一条共同的通道；也可以添加自己的服务器作为备用。</p>
 
         <article class="item-card dm-relay-card">
           <div class="item-header">
             <div class="item-main">
-              <div class="item-url">私信 Relay / kind 10050</div>
+              <div class="item-url">收信地址</div>
               <div class="meta-row">
-                <span class="pill">NIP-17</span>
                 <span class="pill" :class="dmRelayStatusTone">{{ dmRelayStatusLabel }}</span>
-                <span class="pill">最多 2 个接收点</span>
               </div>
             </div>
           </div>
-          <p class="dm-relay-copy">自动从当前已连接的读取 Relay 中选择最多 2 个接收点，并将 kind 10050 发布到公共目录。发信时优先使用对方列表；未找到时兼容传统 Relay。公共目录仅用于列表发现，不传送私信；不会为每位联系人保持额外长连接。</p>
-          <div class="dm-relay-list">
-            <span v-for="relay in dmRelayStatus.relays" :key="relay">{{ relay }}</span>
-            <span v-if="!dmRelayStatus.relays.length">等待已连接的安全 Relay</span>
-          </div>
+          <p class="dm-relay-copy">好友会把私信送到这里，系统自动选择，一般不需要修改。</p>
+          <button class="text-button" type="button" @click="router.push('/debug')">查看技术详情</button>
         </article>
 
         <form class="add-form" @submit.prevent="addRelay">
@@ -595,10 +590,10 @@ const dmRelayStatus = reactive<{
 }>({ relays: [], pending: false, attempts: 0 });
 const dmRelayStatusLabel = computed(() =>
   dmRelayStatus.pending
-    ? "等待发布重试"
+    ? "稍后自动重试"
     : dmRelayStatus.publishedAt
-      ? "已发布"
-      : "自动配置中"
+      ? "已就绪"
+      : "正在设置"
 );
 const dmRelayStatusTone = computed(() => ({
   healthy: !!dmRelayStatus.publishedAt && !dmRelayStatus.pending,
@@ -633,7 +628,7 @@ let viewActive = false;
 const CACHE_STATS_MAX_AGE_MS = 5 * 60_000;
 
 function relaySourceLabel(source: RelaySource) {
-  return source === "user" ? "用户" : source === "nip65" ? "NIP-65" : "默认";
+  return source === "user" ? "自己添加" : source === "nip65" ? "公开列表" : "默认";
 }
 
 function mediaTypeLabel(type: MediaServerType) {

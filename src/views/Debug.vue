@@ -49,6 +49,22 @@
       <p v-else class="empty">尚未建立 relay 连接。</p>
     </section>
 
+    <section class="card-panel dm-inbox-panel">
+      <div class="section-title"><h3>私信收件 Relay（kind 10050 / NIP-17）</h3><span>{{ dmInboxStatusLabel }}</span></div>
+      <p class="empty">自动从当前已连接的读取 Relay 中选择最多 2 个接收点，并将 kind 10050 发布到公共目录。发信时优先使用对方列表；未找到时兼容传统 Relay。公共目录仅用于列表发现，不传送私信；不会为每位联系人保持额外长连接。设置页对用户显示为「收信地址」。</p>
+      <div class="send-meta">
+        <span v-for="relay in dmInbox.relays" :key="relay">{{ relay }}</span>
+        <span v-if="!dmInbox.relays.length">等待已连接的安全 Relay</span>
+      </div>
+      <div class="send-meta dm-inbox-meta">
+        <span v-if="dmInbox.publishedAt">发布于 {{ formatTime(dmInbox.publishedAt) }}</span>
+        <span v-if="dmInbox.eventId">event {{ dmInbox.eventId.slice(0, 12) }}…</span>
+        <span v-if="dmInbox.pending">待重试 · 第 {{ dmInbox.attempts }} 次</span>
+        <span v-if="dmInbox.nextAttemptAt">下次 {{ remainingSeconds(dmInbox.nextAttemptAt) }}s</span>
+        <span v-if="dmInbox.lastError">上次错误 {{ dmInbox.lastError }}</span>
+      </div>
+    </section>
+
     <section v-if="lastSend" class="card-panel">
       <div class="section-title"><h3>最近一次发送</h3><span>{{ formatTime(lastSend.ts) }}</span></div>
       <div class="send-meta">
@@ -103,6 +119,7 @@ import { useDebugLogsStore, type DebugLogCategory, type DebugLogEntry, type Debu
 import { useKeyStore } from "@/stores/keys";
 import { getDeliveryStats } from "@/services/dmDeliveryStats";
 import { persistentStorageState, type PersistentStorageState } from "@/services/persistentStorage";
+import { getOwnDmRelayStatus } from "@/services/dmRelayDirectory";
 
 type RelayStatus = RelayRuntimeStatus;
 type LastSend = { ts: number; logicalMessageId: string; recipients: number; giftWraps: number; copies: Array<{ eventId: string; target: string; role: string; relays: Array<{ relay: string; status: string; reason?: string }> }> };
@@ -127,6 +144,14 @@ const persistentStorageLabel = computed(() => ({
   "": "检查中…",
 })[persistentStorage.value]);
 const currentTime = computed(() => new Date(now.value).toLocaleString());
+const dmInbox = ref<{ relays: string[]; eventId?: string; publishedAt?: number; pending: boolean; attempts: number; nextAttemptAt?: number; lastError?: string }>({ relays: [], pending: false, attempts: 0 });
+const dmInboxStatusLabel = computed(() => dmInbox.value.pending ? "等待发布重试" : dmInbox.value.publishedAt ? "已发布" : "自动配置中");
+async function refreshDmInbox() {
+  const account = keys.pkHex;
+  if (!account) return;
+  const status = await getOwnDmRelayStatus(account).catch(() => null);
+  if (status && keys.pkHex === account) dmInbox.value = status;
+}
 
 function refreshRelayStatus() {
   relayStatus.value = inspectRelays();
@@ -205,11 +230,11 @@ function exportLogs() {
   URL.revokeObjectURL(url);
 }
 
-onMounted(() => { void persistentStorageState().then(state => { persistentStorage.value = state; }); refreshRelayStatus(); timer = window.setInterval(() => { now.value = Date.now(); refreshRelayStatus(); }, 2000); });
+onMounted(() => { void refreshDmInbox(); void persistentStorageState().then(state => { persistentStorage.value = state; }); refreshRelayStatus(); timer = window.setInterval(() => { now.value = Date.now(); refreshRelayStatus(); }, 2000); });
 onBeforeUnmount(() => { if (timer) clearInterval(timer); });
 </script>
 
 <style scoped>
 .debug-page-shell{min-height:100dvh;background:var(--bg-f8fafc)}
-.debug-page{display:grid;gap:16px;padding:16px 16px calc(var(--bottom-nav-height) + 24px);max-width:1180px;margin:auto;color:var(--fg-172033)}.page-header,.section-title,.header-actions,.filters,.relay-row,.relay-metrics,.send-meta{display:flex;align-items:center}.page-header,.section-title{justify-content:space-between;gap:12px}.page-header h2,.section-title h3{margin:0}.eyebrow{margin:0 0 4px;color:var(--fg-64748b);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.header-actions,.filters,.relay-metrics,.send-meta{gap:8px;flex-wrap:wrap}.card-panel,.summary-card{background:var(--bg-fff);border:1px solid var(--bd-e2e8f0);border-radius:12px;padding:16px}.meta-grid,.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.meta-grid div,.summary-card{display:flex;flex-direction:column;gap:5px}.meta-grid span,.summary-card span,.section-title span,.empty{font-size:12px;color:var(--fg-64748b)}.summary-card strong{font-size:24px}.summary-card small{line-height:1.5}.relay-list{display:grid;margin-top:12px}.relay-row{display:grid;grid-template-columns:minmax(240px,1fr) 1fr auto;gap:12px;padding:12px 0;border-top:1px solid var(--bd-eef2f7)}.relay-name{overflow-wrap:anywhere}.relay-name i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px}.ready{background:#22c55e}.offline{background:#ef4444}.relay-metrics span,.send-meta span{font-size:12px;color:var(--fg-475569);background:var(--bg-f8fafc);padding:4px 7px;border-radius:6px}.compact-button{border:1px solid var(--bd-cbd5e1);border-radius:7px;background:var(--bg-fff);padding:6px 10px;cursor:pointer}.copy-block{display:grid;grid-template-columns:120px 110px 1fr;gap:10px;padding:11px 0;border-top:1px solid var(--bd-eef2f7)}.copy-results{display:flex;flex-direction:column;font-size:12px}.copy-results em{color:var(--fg-64748b)}.filters{margin:12px 0}.filters select,.filters input{border:1px solid var(--bd-cbd5e1);border-radius:8px;padding:8px 10px;background:var(--bg-fff)}.filters input{flex:1;min-width:220px}.log-list{max-height:620px;overflow:auto;border:1px solid var(--bd-e2e8f0);border-radius:8px;background:#0f172a}.log-row{display:grid;grid-template-columns:105px 110px minmax(180px,auto) 1fr;gap:8px;padding:8px 10px;border-bottom:1px solid #25324a;color:#e2e8f0;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}.log-row time{color:var(--fg-94a3b8)}.log-row .category{color:#60a5fa}.log-row pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--fg-cbd5e1)}.level-warn{border-left:3px solid #f59e0b}.level-error{border-left:3px solid #ef4444}.log-list .empty{padding:20px}.btn{cursor:pointer}@media(max-width:760px){.page-header{align-items:flex-start;flex-direction:column}.meta-grid,.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.relay-row{grid-template-columns:1fr}.copy-block,.log-row{grid-template-columns:1fr}.log-row{gap:2px}.log-row pre{margin-top:4px}}
+.debug-page{display:grid;gap:16px;padding:16px 16px calc(var(--bottom-nav-height) + 24px);max-width:1180px;margin:auto;color:var(--fg-172033)}.page-header,.section-title,.header-actions,.filters,.relay-row,.relay-metrics,.send-meta{display:flex;align-items:center}.page-header,.section-title{justify-content:space-between;gap:12px}.page-header h2,.section-title h3{margin:0}.eyebrow{margin:0 0 4px;color:var(--fg-64748b);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.header-actions,.filters,.relay-metrics,.send-meta{gap:8px;flex-wrap:wrap}.card-panel,.summary-card{background:var(--bg-fff);border:1px solid var(--bd-e2e8f0);border-radius:12px;padding:16px}.meta-grid,.summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.meta-grid div,.summary-card{display:flex;flex-direction:column;gap:5px}.meta-grid span,.summary-card span,.section-title span,.empty{font-size:12px;color:var(--fg-64748b)}.summary-card strong{font-size:24px}.summary-card small{line-height:1.5}.relay-list{display:grid;margin-top:12px}.relay-row{display:grid;grid-template-columns:minmax(240px,1fr) 1fr auto;gap:12px;padding:12px 0;border-top:1px solid var(--bd-eef2f7)}.relay-name{overflow-wrap:anywhere}.relay-name i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px}.ready{background:#22c55e}.offline{background:#ef4444}.relay-metrics span,.send-meta span{font-size:12px;color:var(--fg-475569);background:var(--bg-f8fafc);padding:4px 7px;border-radius:6px}.compact-button{border:1px solid var(--bd-cbd5e1);border-radius:7px;background:var(--bg-fff);padding:6px 10px;cursor:pointer}.copy-block{display:grid;grid-template-columns:120px 110px 1fr;gap:10px;padding:11px 0;border-top:1px solid var(--bd-eef2f7)}.copy-results{display:flex;flex-direction:column;font-size:12px}.copy-results em{color:var(--fg-64748b)}.filters{margin:12px 0}.filters select,.filters input{border:1px solid var(--bd-cbd5e1);border-radius:8px;padding:8px 10px;background:var(--bg-fff)}.filters input{flex:1;min-width:220px}.log-list{max-height:620px;overflow:auto;border:1px solid var(--bd-e2e8f0);border-radius:8px;background:#0f172a}.log-row{display:grid;grid-template-columns:105px 110px minmax(180px,auto) 1fr;gap:8px;padding:8px 10px;border-bottom:1px solid #25324a;color:#e2e8f0;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}.log-row time{color:var(--fg-94a3b8)}.log-row .category{color:#60a5fa}.log-row pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--fg-cbd5e1)}.level-warn{border-left:3px solid #f59e0b}.level-error{border-left:3px solid #ef4444}.log-list .empty{padding:20px}.btn{cursor:pointer}.dm-inbox-panel .empty{margin:10px 0;line-height:1.6}.dm-inbox-meta{margin-top:8px}@media(max-width:760px){.page-header{align-items:flex-start;flex-direction:column}.meta-grid,.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.relay-row{grid-template-columns:1fr}.copy-block,.log-row{grid-template-columns:1fr}.log-row{gap:2px}.log-row pre{margin-top:4px}}
 </style>
