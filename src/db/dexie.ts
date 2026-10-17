@@ -87,6 +87,7 @@ export type ConversationStateRecord = {
   conversationId: string;
   lastMessageId: string;
   lastMessageAt: number;
+  lastMessageMs?: number;
   lastMessageSenderPubkey: string;
   updatedAt: number;
 };
@@ -96,6 +97,8 @@ export type ConversationReadStateRecord = {
   conversationId: string;
   lastReadMessageId?: string;
   lastReadCreatedAt?: number;
+  /** Sub-second part of the read cursor's (orderAt, id) key. */
+  lastReadMs?: number;
   updatedAt: number;
 };
 
@@ -278,6 +281,8 @@ export type OutgoingDmTaskRecord = {
   outgoingId?: string;
   canonicalMessageId?: string;
   createdAt: number;
+  /** Sub-second part of the send time; sent as the rumor's ms tag. */
+  createdMs?: number;
   updatedAt: number;
   lastError?: string;
 };

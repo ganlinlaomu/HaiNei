@@ -1,3 +1,4 @@
+import { messageOrderAt } from "@/nostr/messaging/sync/sorting";
 import { defineStore } from "pinia";
 import { markRaw, toRaw } from "vue";
 import { deviceStorage } from "@/services/deviceStorage";
@@ -51,8 +52,10 @@ function inboxInsertIndex(inbox: InboxItem[], item: InboxItem) {
   while (low < high) {
     const middle = (low + high) >> 1;
     const current = inbox[middle];
-    const before = current.created_at > item.created_at
-      || (current.created_at === item.created_at && current.id.localeCompare(item.id) < 0);
+    const currentOrder = messageOrderAt(current.created_at, current.tags);
+    const itemOrder = messageOrderAt(item.created_at, item.tags);
+    const before = currentOrder > itemOrder
+      || (currentOrder === itemOrder && current.id.localeCompare(item.id) < 0);
     if (before) low = middle + 1;
     else high = middle;
   }
@@ -217,7 +220,8 @@ export const useMessagesStore = defineStore("messages", {
           outgoing: outgoingState,
         });
       }
-      this.inbox = [...inboxById.values()].sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id));
+      this.inbox = [...inboxById.values()].sort((a, b) =>
+        messageOrderAt(b.created_at, b.tags) - messageOrderAt(a.created_at, a.tags) || a.id.localeCompare(b.id));
       this.recordInboxMutation("replace");
       this.outbox = outgoing.filter(item => item.state === "sent").map(item => {
         const message = item.message as CanonicalMessage;

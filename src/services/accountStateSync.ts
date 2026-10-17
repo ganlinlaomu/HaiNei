@@ -1,4 +1,5 @@
 import { timedJsonFetch } from "@/utils/timedFetch";
+import { isCursorAfter, normalizeMillis, type ReadCursor } from "@/nostr/messaging/sync/sorting";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import {
   db,
@@ -102,13 +103,21 @@ function mergeByKey<T extends { updatedAt?: number }>(left: T[], right: T[], key
   return [...merged.values()];
 }
 
+function readStateCursor(item: any): ReadCursor {
+  const ms = normalizeMillis(item?.lastReadMs);
+  return {
+    lastReadCreatedAt: Number(item?.lastReadCreatedAt || 0),
+    lastReadMessageId: String(item?.lastReadMessageId || ""),
+    ...(ms === undefined ? {} : { lastReadMs: ms }),
+  };
+}
+
 function mergeReadState(left: any[] = [], right: any[] = []) {
   const merged = new Map<string, any>();
   for (const item of [...left, ...right]) {
     const current = merged.get(item.conversationId);
-    const nextTuple = [Number(item.lastReadCreatedAt || 0), String(item.lastReadMessageId || "")];
-    const currentTuple = [Number(current?.lastReadCreatedAt || 0), String(current?.lastReadMessageId || "")];
-    if (!current || nextTuple[0] > currentTuple[0] || (nextTuple[0] === currentTuple[0] && nextTuple[1] > currentTuple[1])) {
+    // Same (orderAt, id) key as the conversation view and unread counts.
+    if (!current || isCursorAfter(readStateCursor(item), readStateCursor(current))) {
       merged.set(item.conversationId, item);
     }
   }

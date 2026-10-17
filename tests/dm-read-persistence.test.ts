@@ -133,7 +133,7 @@ describe("reading paged DM history with an encrypted database", () => {
     expect((await syncedMessageRepository.getReadState(ACCOUNT, CONVERSATION))?.lastReadCreatedAt).toBe(151);
     await direct.reconcileDurableUnread();
     expect(direct.unreadCount).toBe(0);
-    expect(direct.scheduleReceipt).toHaveBeenCalledWith(PEER, "read", { createdAt: 151, messageId: item(151).id });
+    expect(direct.scheduleReceipt).toHaveBeenCalledWith(PEER, "read", { createdAt: 151, messageId: item(151).id, ms: 0 });
   });
 
   it("never replaces the durable unread total with the bounded memory subset", async () => {
