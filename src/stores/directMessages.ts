@@ -153,6 +153,8 @@ function clearReceiptTimers() {
 function mergeReceiptCursor(current: DmReceiptCursor | undefined, next: DmReceiptCursor) {
   return receiptCursorAfter(next, current) ? next : current;
 }
+/** A peer's client sends its read receipt within seconds of replying. */
+const READ_RECEIPT_SETTLE_SECONDS = 120;
 function readReceiptsEnabledForAccount(accountPubkey: string) {
   const account = accountPubkey.toLowerCase();
   const settings = useSettingsStore();
@@ -647,6 +649,32 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
           && afterDeletion(item, this.preferencesByPeer[peer]))
         .sort(compareInboxItems);
+    },
+    /**
+     * Why an open confirmation for our disappearing messages may never arrive
+     * (acknowledgeOpenedDisappearing only runs with read receipts on). The
+     * protocol does not announce the peer's setting, so "peer" is inferred:
+     * they replied after one of our regular messages, but no read receipt
+     * ever covered it.
+     */
+    readReceiptsHiddenReason(peerPubkey: string, items: InboxItem[], nowMs = Date.now()): "self" | "peer" | null {
+      const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
+      if (!account) return null;
+      if (!readReceiptsEnabledForAccount(account)) return "self";
+      const peer = peerPubkey.toLowerCase();
+      const settledBefore = Math.floor(nowMs / 1000) - READ_RECEIPT_SETTLE_SECONDS;
+      let replyIndex = -1;
+      for (let index = items.length - 1; index >= 0; index--) {
+        const item = items[index];
+        if (item.pubkey.toLowerCase() === peer && item.created_at <= settledBefore) { replyIndex = index; break; }
+      }
+      if (replyIndex < 0) return null;
+      for (let index = replyIndex - 1; index >= 0; index--) {
+        const item = items[index];
+        if (item.pubkey.toLowerCase() !== account || item.outgoing || hasDisappearingMarker(item.tags)) continue;
+        return cursorCovers(this.receiptStateByPeer[peer]?.read, item) ? null : "peer";
+      }
+      return null;
     },
     outgoingReceiptStatus(peerPubkey: string, message: Pick<InboxItem, "id" | "created_at" | "pubkey"> & Partial<Pick<InboxItem, "tags">>) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
