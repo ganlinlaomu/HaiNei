@@ -14,7 +14,11 @@
         </li>
       </ul>
       <p v-else class="nearby-empty">{{ ownStatus }}</p>
-      <button class="link-button" type="button" @click="searchAgain">{{ searching ? "正在重新搜索…" : "重新搜索" }}</button>
+      <button class="link-button" type="button" :disabled="searching || requestingCamera" @click="searchAgain">{{ searching ? "正在重新搜索…" : "重新搜索" }}</button>
+      <div v-if="showCameraRetry" class="camera-retry">
+        <p class="nearby-hint">iPhone / iPad 的浏览器可能限制局域网直连。可短暂启用相机后重试，相机会立即关闭，不拍照、不录音、不上传。</p>
+        <button class="pair-button" type="button" :disabled="searching || requestingCamera" @click="retryWithCamera">{{ requestingCamera ? "正在启用并重新连接…" : "启用相机并重试" }}</button>
+      </div>
     </section>
     <section v-else-if="keys.isLoggedIn" class="nearby-card">
       <h2>我的设备</h2>
@@ -136,6 +140,7 @@ import {
   nearbyDiagnostics,
   nearbyState,
   refreshNearbyDiscovery,
+  retryNearbyWithCamera,
   sendNearbyFiles,
   startPairRoom,
   stopPairRoom,
@@ -155,6 +160,8 @@ const activeSend = ref<{ kind: RoomKind; peerId: string } | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const objectUrls = new WeakMap<File, string>();
 const searching = ref(false);
+const requestingCamera = ref(false);
+let cameraRequest: AbortController | null = null;
 const diagnostics = ref<Awaited<ReturnType<typeof nearbyDiagnostics>> | null>(null);
 let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -173,6 +180,7 @@ function onDiagnosticsToggle(event: Event) {
 
 /** Check relay liveness, then rebuild failed rooms without disturbing live peers. */
 async function searchAgain() {
+  if (searching.value || requestingCamera.value) return;
   searching.value = true;
   try {
     await joinOwnRoom();
@@ -185,7 +193,23 @@ async function searchAgain() {
   }
 }
 
+async function retryWithCamera() {
+  if (searching.value || requestingCamera.value) return;
+  const request = new AbortController();
+  cameraRequest = request;
+  requestingCamera.value = true;
+  try {
+    if (await retryNearbyWithCamera(request.signal)) await loadDiagnostics();
+  } catch {
+    if (!request.signal.aborted) ui.addToast("无法启用相机并重试，请检查海内的相机权限和网络", 3_000, "error");
+  } finally {
+    requestingCamera.value = false;
+    if (cameraRequest === request) cameraRequest = null;
+  }
+}
+
 onBeforeUnmount(() => {
+  cameraRequest?.abort();
   if (diagnosticsTimer) clearInterval(diagnosticsTimer);
 });
 
@@ -194,6 +218,8 @@ const pendingOffer = computed(() => nearbyState.pendingOffer);
 const transfers = computed(() => nearbyState.transfers);
 const ownDevicesAvailable = computed(() => keys.isLoggedIn && keys.loginMethod === "private-key" && /^[0-9a-f]{64}$/.test(keys.skHex));
 const ownPeerList = computed(() => Object.entries(nearbyState.ownPeers).map(([id, name]) => ({ id, name })));
+const showCameraRetry = computed(() => ["iPhone", "iPad"].includes(deviceName)
+  && !ownPeerList.value.length && nearbyState.ownError.includes("could not connect to peer"));
 const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).map(([id, name]) => ({ id, name })));
 function joinErrorText(error: string) {
   if (error.includes("incorrect room password")) return "已发现设备，但房间密码不一致";

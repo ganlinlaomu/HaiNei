@@ -1,6 +1,7 @@
 import { reactive } from "vue";
 import { useUIStore } from "@/stores/ui";
 import { onAppResume } from "@/services/appResumeCoordinator";
+import { requestNearbyCameraAccess } from "@/services/nearbyCameraAccess";
 import {
   NEARBY_MAX_BATCH_BYTES,
   NEARBY_OFFER_TIMEOUT_MS,
@@ -57,7 +58,20 @@ let pairGeneration = 0;
 let stopResumeWatch: (() => void) | null = null;
 let discoveryRefresh: Promise<void> | null = null;
 
-export function refreshNearbyDiscovery() {
+/** Only called by the explicitly labelled camera-permission button. */
+export async function retryNearbyWithCamera(signal: AbortSignal) {
+  const current = { ...rooms };
+  if (!current.own && !current.pair) return false;
+  if (!await requestNearbyCameraAccess(signal)) return false;
+  // An earlier search may already be rebuilding a PC with the pre-permission
+  // candidate policy. Finish it before creating a fresh post-permission PC.
+  if (discoveryRefresh) await discoveryRefresh;
+  if (signal.aborted || rooms.own !== current.own || rooms.pair !== current.pair) return false;
+  await refreshNearbyDiscovery(true);
+  return true;
+}
+
+export function refreshNearbyDiscovery(restartUnconnected = false) {
   if (!rooms.own && !rooms.pair) return Promise.resolve();
   if (discoveryRefresh) return discoveryRefresh;
   lastRefreshAt = Date.now();
@@ -67,7 +81,7 @@ export function refreshNearbyDiscovery() {
     for (const kind of ["own", "pair"] as const) {
       const room = current[kind];
       const error = kind === "own" ? nearbyState.ownError : nearbyState.pairError;
-      if (!room || rooms[kind] !== room || !error.includes("could not connect to peer") || Object.keys(peersFor(kind)).length) continue;
+      if (!room || rooms[kind] !== room || (!restartUnconnected && !error.includes("could not connect to peer")) || Object.keys(peersFor(kind)).length) continue;
       if (kind === "own") nearbyState.ownError = "";
       else nearbyState.pairError = "";
       await room.restart();
