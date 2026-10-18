@@ -30,10 +30,6 @@ export type InboxItem = {
     hasAudio?: boolean;
     lastError?: string;
   };
-  _localMeta?: {
-    groupCount: number;
-    groups: Array<{ name: string; count: number }>;
-  };
 };
 
 export function syncedMessageRecordToInboxItem(record: SyncedMessageRecord): InboxItem {

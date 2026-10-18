@@ -250,7 +250,6 @@ import {
 import { canStartPostEditorDrag, shouldDismissPostEditor } from "@/utils/postEditorGesture";
 import {
   audienceGroupCounts,
-  audienceGroupsMeta,
   audienceRecipients,
   isExcludedPostRecipient,
   normalizeSelectedAudienceGroups,
@@ -292,7 +291,7 @@ export default defineComponent({
     const content = ref("");
     const sending = ref(false);
     const error = ref<string | null>(null);
-    const pendingPostRetry = ref<{ outgoingId: string; groupsMeta: Array<{ name: string; count: number }> } | null>(null);
+    const pendingPostRetry = ref<{ outgoingId: string } | null>(null);
     const textarea = ref<HTMLTextAreaElement | null>(null);
     const overlay = ref<HTMLElement | null>(null);
     const editorCard = ref<HTMLElement | null>(null);
@@ -1163,10 +1162,6 @@ export default defineComponent({
             recipientPubkeys: message.recipientPubkeys,
             conversationId: message.conversationId,
             tags: message.tags,
-            _localMeta: {
-              groupCount: retry.groupsMeta.length,
-              groups: retry.groupsMeta
-            }
           });
           pendingPostRetry.value = null;
           ui.addToast("已发布", 1_400, "success");
@@ -1189,12 +1184,6 @@ export default defineComponent({
       recips = Array.from(new Set(recips.filter(Boolean)));
 
       if (recips.length === 0) { error.value = "未指定收件人"; sending.value = false; return; }
-
-      const groupsMeta = audienceGroupsMeta(
-        postAudienceFriends.value,
-        allFriends.value,
-        selectedGroups.value
-      );
 
       try {
         // Build content with uploaded images appended
@@ -1286,10 +1275,6 @@ export default defineComponent({
             state: "sending",
             hasImage: uploadedImages.length > 0,
           },
-          _localMeta: {
-            groupCount: groupsMeta.length,
-            groups: groupsMeta
-          }
         });
 
         clearPersistentDraft(accountAtSend);
@@ -1301,7 +1286,7 @@ export default defineComponent({
       } catch (e:any) {
         console.error("publish error", e);
         if (e?.outgoingId) {
-          pendingPostRetry.value = { outgoingId: String(e.outgoingId), groupsMeta };
+          pendingPostRetry.value = { outgoingId: String(e.outgoingId) };
         }
         error.value = e && e.message ? e.message : "发送失败";
         ui.addToast(e?.outgoingId ? "发送未完成，可重新发送" : "发送失败", 2200, "error");

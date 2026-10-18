@@ -64,3 +64,41 @@ export function audienceGroupsMeta(
     .map(name => ({ name, count: counts[name] || 0 }))
     .filter(group => group.count > 0);
 }
+
+export type PostAudienceSummary = {
+  label: string;
+  recipientCount: number;
+  groups: Array<{ name: string; count: number }>;
+};
+
+export const FORMER_FRIEND_LABEL = "已不在好友列表";
+
+/**
+ * Who an own post was sent to, derived from the stored NIP-17 recipients.
+ * Groups reflect the friend list as it is now, not a snapshot from posting.
+ */
+export function postAudienceSummary(
+  recipientPubkeys: string[] | undefined,
+  accountPubkey: string,
+  friends: AudienceFriend[],
+): PostAudienceSummary | null {
+  if (!Array.isArray(recipientPubkeys) || !recipientPubkeys.length) return null;
+  const account = accountPubkey.toLowerCase();
+  const recipients = [...new Set(recipientPubkeys.map(value => String(value || "").toLowerCase()))]
+    .filter(pubkey => pubkey && pubkey !== account && !isExcludedPostRecipient(pubkey));
+  if (!recipients.length) return { label: "仅自己可见", recipientCount: 0, groups: [] };
+
+  const byPubkey = new Map(friends.map(friend => [String(friend.pubkey || "").toLowerCase(), friend]));
+  const { order } = audienceGroupCounts(friends);
+  const counts: Record<string, number> = {};
+  for (const pubkey of recipients) {
+    const friend = byPubkey.get(pubkey);
+    for (const group of friend ? friendGroupTags(friend) : [FORMER_FRIEND_LABEL]) counts[group] = (counts[group] || 0) + 1;
+  }
+  const groups = [...order, FORMER_FRIEND_LABEL]
+    .filter(name => counts[name])
+    .map(name => ({ name, count: counts[name] }));
+  const currentFriends = friends.filter(friend => !isExcludedPostRecipient(String(friend.pubkey || "").toLowerCase()));
+  const everyone = currentFriends.length > 0 && currentFriends.every(friend => recipients.includes(String(friend.pubkey).toLowerCase()));
+  return { label: everyone ? "全部好友" : `${recipients.length} 位好友`, recipientCount: recipients.length, groups };
+}

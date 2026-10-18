@@ -272,27 +272,8 @@ export const useMessagesStore = defineStore("messages", {
         indexedInbox = null;
         ids = inboxIdSet(this.inbox);
       }
-      if (existingIndex !== -1) {
-        // Message already exists - handle _localMeta intelligently:
-        // - If new item has _localMeta but existing doesn't: add it (relay echo arrived first)
-        // - If both have _localMeta: keep existing (already correct, locally created version)
-        // - If only existing has _localMeta: keep existing (preserve local metadata)
-        // - If neither has _localMeta: no update needed
-        const existing = this.inbox[existingIndex];
-        
-        if (item._localMeta && !existing._localMeta) {
-          // Only case where we update: new has metadata but existing doesn't
-          // Create a new object to ensure Vue reactivity
-          this.inbox[existingIndex] = {
-            ...existing,
-            _localMeta: item._localMeta
-          };
-          this.recordInboxMutation("update", item.id);
-          this.scheduleInboxSave();
-        }
-        // All other cases: keep existing as-is
-        return;
-      }
+      // Already present (e.g. the relay echo arrived first): keep it as-is.
+      if (existingIndex !== -1) return;
       
       // Insert at its sorted position and evict the OLDEST entry. Relay
       // catch-up delivers history newest-first; prepending it would push the

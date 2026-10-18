@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.48",
-  "releaseSummary": "统一登录、注册、账号选择和备份页面的背景、字体与字号",
+  "version": "0.1.49",
+  "releaseSummary": "通知打开更快显示新消息，修复首页空白，动态的可见范围刷新后仍显示",
   "private": true,
   "scripts": {
     "dev": "vite",

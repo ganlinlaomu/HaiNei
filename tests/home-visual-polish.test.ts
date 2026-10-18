@@ -22,7 +22,7 @@ describe("Home visual polish contract", () => {
     const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     expect(card).toContain('class="author-meta"');
     expect(card).toContain('class="audience-link"');
-    expect(card).toContain('return "仅自己可见"');
+    expect(card).toContain("postAudienceSummary(props.message.recipientPubkeys");
     expect(card).not.toContain('class="action visibility"');
     expect(card).toContain('class="action icon-action bookmark"');
   });

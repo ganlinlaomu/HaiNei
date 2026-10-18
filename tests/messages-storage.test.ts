@@ -53,18 +53,14 @@ describe("Home Dexie restoration", () => {
     expect(setItem).not.toHaveBeenCalled();
   });
 
-  it("marks metadata replacement separately so Home falls back to a full rebuild", async () => {
+  it("ignores a duplicate arrival of the same message", async () => {
     const messages = useMessagesStore();
     await messages.load(ACCOUNT);
     messages.addInbox({ id: "own", pubkey: ACCOUNT, created_at: 20, content: "hello" });
     const insertedRevision = messages.inboxRevision;
-    messages.addInbox({
-      id: "own", pubkey: ACCOUNT, created_at: 20, content: "hello",
-      _localMeta: { groupCount: 1, groups: [{ name: "好友", count: 1 }] }
-    });
-    expect(messages.inboxRevision).toBe(insertedRevision + 1);
-    expect(messages.lastInboxMutation).toMatchObject({ type: "update", itemId: "own" });
-    expect(messages.inbox[0]._localMeta?.groupCount).toBe(1);
+    messages.addInbox({ id: "own", pubkey: ACCOUNT, created_at: 20, content: "hello" });
+    expect(messages.inboxRevision).toBe(insertedRevision);
+    expect(messages.inbox.filter(item => item.id === "own")).toHaveLength(1);
   });
 
   it("does not restore private controls as Home items", async () => {

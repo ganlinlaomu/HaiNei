@@ -3,6 +3,7 @@ import {
   HAINEI_BOT_PUBKEY_HEX,
   audienceGroupCounts,
   audienceGroupsMeta,
+  postAudienceSummary,
   audienceRecipients,
   friendGroupTags,
   isExcludedPostRecipient,
@@ -91,5 +92,37 @@ describe("friend audience selection", () => {
     expect(audienceGroupsMeta(friends, false, ["家人", "不存在"])).toEqual([
       { name: "家人", count: 2 },
     ]);
+  });
+});
+
+describe("own post audience from stored recipients", () => {
+  const me = "a".repeat(64);
+  const mom = "1".repeat(64);
+  const dad = "2".repeat(64);
+  const classmate = "3".repeat(64);
+  const formerFriend = "4".repeat(64);
+  const friends = [
+    { pubkey: mom, groups: ["家人"] },
+    { pubkey: dad, groups: ["家人"] },
+    { pubkey: classmate, groups: ["同学"] },
+  ];
+
+  it("labels self-only, all friends and partial audiences", () => {
+    expect(postAudienceSummary([me], me, friends)).toEqual({ label: "仅自己可见", recipientCount: 0, groups: [] });
+    expect(postAudienceSummary([mom, dad, classmate, me], me, friends)?.label).toBe("全部好友");
+    expect(postAudienceSummary([mom, dad, me], me, friends)).toEqual({
+      label: "2 位好友", recipientCount: 2, groups: [{ name: "家人", count: 2 }],
+    });
+  });
+
+  it("groups by today's friend list and keeps people who are no longer friends visible", () => {
+    expect(postAudienceSummary([mom, classmate, formerFriend], me, friends)?.groups).toEqual([
+      { name: "家人", count: 1 }, { name: "同学", count: 1 }, { name: "已不在好友列表", count: 1 },
+    ]);
+  });
+
+  it("returns nothing for items without stored recipients", () => {
+    expect(postAudienceSummary(undefined, me, friends)).toBeNull();
+    expect(postAudienceSummary([], me, friends)).toBeNull();
   });
 });
