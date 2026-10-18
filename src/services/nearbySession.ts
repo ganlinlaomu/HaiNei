@@ -7,8 +7,10 @@ import {
   NearbyRoom,
   batchBytes,
   defaultDeviceName,
+  nearbyRelayStates,
   ownDevicesRoom,
   refreshNearbyRelaySockets,
+  roomFingerprint,
   type NearbyFileMeta,
   type NearbyOffer,
   type NearbyRoomKey,
@@ -55,6 +57,7 @@ let stopResumeWatch: (() => void) | null = null;
 
 export function refreshNearbyDiscovery() {
   if (!rooms.own && !rooms.pair) return;
+  lastRefreshAt = Date.now();
   void refreshNearbyRelaySockets().catch(() => undefined);
 }
 
@@ -151,7 +154,9 @@ export async function ensureOwnDevicesRoom(account: string, privateKeyHex: strin
   rooms.own = room;
   nearbyState.ownAccount = normalized;
   try {
-    await room.join(await ownDevicesRoom(privateKeyHex));
+    const key = await ownDevicesRoom(privateKeyHex);
+    ownRoomId = key.roomId;
+    await room.join(key);
     if (rooms.own === room) nearbyState.ownJoined = true;
     updateRelayWatchdog();
   } catch (error) {
@@ -169,6 +174,7 @@ export async function leaveOwnDevicesRoom() {
   nearbyState.ownAccount = "";
   nearbyState.ownJoined = false;
   nearbyState.ownPeers = {};
+  ownRoomId = "";
   updateRelayWatchdog();
   if (room) await room.leave();
 }
@@ -204,6 +210,24 @@ export async function resetNearby() {
   nearbyState.pendingOffer = null;
   nearbyState.transfers = [];
   await Promise.all([leaveOwnDevicesRoom(), stopPairRoom()]);
+}
+
+let ownRoomId = "";
+let lastRefreshAt = 0;
+
+/** Everything needed to compare two devices from screenshots. */
+export async function nearbyDiagnostics() {
+  const relay = await nearbyRelayStates().catch(() => ({ selfId: "", relays: [] as Array<{ host: string; state: string }> }));
+  return {
+    account: nearbyState.ownAccount,
+    ownRoom: ownRoomId ? await roomFingerprint(ownRoomId) : "",
+    ownJoined: nearbyState.ownJoined,
+    selfId: relay.selfId,
+    relays: relay.relays,
+    ownPeers: rooms.own?.peerConnections() || {},
+    pairPeers: rooms.pair?.peerConnections() || {},
+    lastRefreshAt,
+  };
 }
 
 export function answerPendingOffer(accept: boolean) {

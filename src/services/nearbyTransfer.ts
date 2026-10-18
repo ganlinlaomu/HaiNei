@@ -77,6 +77,25 @@ export async function refreshNearbyRelaySockets() {
   return refreshed;
 }
 
+/** Short, non-reversible label so two devices can compare rooms on screen. */
+export async function roomFingerprint(roomId: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`fingerprint:${roomId}`));
+  return Array.from(new Uint8Array(digest).slice(0, 3), byte => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+export async function nearbyRelayStates() {
+  const { getRelaySockets, selfId } = await import("trystero");
+  const names = ["连接中", "已连接", "关闭中", "已断开"];
+  const sockets = (getRelaySockets() || {}) as Record<string, WebSocket | undefined>;
+  return {
+    selfId: String(selfId || "").slice(0, 6),
+    relays: Object.entries(sockets).map(([url, socket]) => ({
+      host: url.replace(/^wss?:\/\//, "").replace(/\/$/, ""),
+      state: socket ? names[socket.readyState] || "未知" : "无",
+    })),
+  };
+}
+
 export function defaultDeviceName(
   userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent,
   maxTouchPoints = typeof navigator === "undefined" ? 0 : navigator.maxTouchPoints || 0,
@@ -224,6 +243,12 @@ export class NearbyRoom {
       await this.sendFile(files[index], peerId, { offerId: id, index }, percent => onProgress(index, percent));
     }
     return true;
+  }
+
+  /** WebRTC state per joined peer, for the diagnostics panel. */
+  peerConnections(): Record<string, string> {
+    const peers = this.room?.getPeers() || {};
+    return Object.fromEntries(Object.entries(peers).map(([id, pc]) => [id, pc?.connectionState || "unknown"]));
   }
 
   async leave() {
