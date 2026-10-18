@@ -222,7 +222,7 @@ export function onAccountMessageSyncStatus(listener: (snapshot: AccountMessageSy
   return () => accountSyncStatusListeners.delete(listener);
 }
 
-export async function startAccountMessageSync(keys: AccountSyncKeys) {
+export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { historyGate?: Promise<unknown> } = {}) {
   const account = keys.pkHex.toLowerCase();
   if (!account || !keys.isLoggedIn || !keys.supportsNip44) return false;
 
@@ -369,6 +369,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys) {
     // because they appear early in configuration order.
     await accountMessageSyncManager.start({
       accountPubkey: account,
+      historyGate: startup.historyGate,
       relays: messageRelays,
       authors: [...new Set([...accepted, account])],
       decodeContext: {

@@ -55,7 +55,9 @@ describe("account relay startup ordering", () => {
     const remoteWait = source.indexOf("const criticalState = await criticalStateRestore");
     const authoritativeRefresh = source.indexOf("await directMessages.refresh(pk)", localRefresh + 1);
     const notificationRefresh = source.indexOf("await useNotificationsStore().refreshSyncedState(pk)");
-    const relayStart = source.indexOf("await startAccountMessageSync(this)");
+    // Sync starts early (push inbox), but Relay history waits for historyGate,
+    // which is released only after the authoritative restore below.
+    const relayStart = source.indexOf("releaseHistory();");
     const vaultUnlock = source.indexOf("await unlockLocalVault(pk, vaultSecretHex, isCurrent)");
     const service = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
     const historyReconcile = service.indexOf("directMessages.finishHistoryHydration(account, outcome).then(");
@@ -76,7 +78,8 @@ describe("account relay startup ordering", () => {
     expect(authoritativeRefresh).toBeGreaterThan(remoteWait);
     // Critical cloud state completion does NOT authorize showing the badge.
     expect(source).not.toContain("directMessages.finishReadStateRestore(pk)");
-    expect(relayStart).toBeGreaterThan(authoritativeRefresh);
+    expect(source).toContain("startAccountMessageSync(this, { historyGate })");
+    expect(source.indexOf("await this.restoreCriticalAccountState(pk, criticalStateRestore, isCurrent)")).toBeLessThan(relayStart);
     expect(historyReconcile).toBeGreaterThan(-1);
     expect(finishUnread).toBeGreaterThan(historyReconcile);
 

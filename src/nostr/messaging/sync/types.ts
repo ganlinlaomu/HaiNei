@@ -34,4 +34,10 @@ export type MessageSyncOptions = {
   onStatus?: (status: SyncStatus) => void;
   /** Distinct from a working realtime connection: history may be incomplete. */
   onCatchupStatus?: (status: "settled" | "pending") => void;
+  /**
+   * Relay work (realtime replay window and history catch-up) waits for this.
+   * Push-delivered messages and the local replay do not, so a notification
+   * opened on a cold start shows immediately.
+   */
+  historyGate?: Promise<unknown>;
 };

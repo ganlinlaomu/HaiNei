@@ -371,6 +371,17 @@ export class MessageSyncManager {
     await this.pipeline.retryDeferredAuthorization();
     if (!isCurrent()) return;
 
+    if (options.historyGate) {
+      // Cloud read state / friendships are still being restored. Push hints
+      // above are already shown; Relay streams must not race that restore.
+      this.listenForPushHints(sessionId, accountPubkey);
+      await options.historyGate;
+      if (!isCurrent()) return;
+      this.drainEncryptedPushInbox(sessionId, accountPubkey);
+      await this.pipeline.retryDeferredAuthorization();
+      if (!isCurrent()) return;
+    }
+
     let state = await this.repository.getSyncState(accountPubkey);
     // Existing local messages do not prove that older Relay history was ever
     // repaired. Upgraded devices without explicit completion state must enter
@@ -706,6 +717,22 @@ export class MessageSyncManager {
     return this.repository.getTotalUnread(this.options.accountPubkey);
   }
 
+  /** The service worker can receive a Push while this tab is already visible. */
+  private listenForPushHints(sessionId: string, accountPubkey: string) {
+    this.removePushInboxListener?.();
+    this.removePushInboxListener = null;
+    if (typeof navigator === "undefined" || !navigator.serviceWorker
+      || typeof navigator.serviceWorker.addEventListener !== "function"
+      || typeof navigator.serviceWorker.removeEventListener !== "function") return;
+    const onPushHint = (event: MessageEvent) => {
+      if (event.data?.type === "ENCRYPTED_PUSH_HINT_AVAILABLE" && this.isCurrent(sessionId, accountPubkey)) {
+        this.drainEncryptedPushInbox(sessionId, accountPubkey);
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", onPushHint);
+    this.removePushInboxListener = () => navigator.serviceWorker.removeEventListener("message", onPushHint);
+  }
+
   private installForegroundHandlers() {
     this.removeForegroundResume?.();
     this.removeBackgroundListener?.();
@@ -721,19 +748,7 @@ export class MessageSyncManager {
       document.addEventListener("visibilitychange", onVisibilityChange);
       this.removeBackgroundListener = () => document.removeEventListener("visibilitychange", onVisibilityChange);
     }
-    // The service worker can receive a Push while this tab is already visible.
-    this.removePushInboxListener?.();
-    if (typeof navigator !== "undefined" && navigator.serviceWorker
-      && typeof navigator.serviceWorker.addEventListener === "function"
-      && typeof navigator.serviceWorker.removeEventListener === "function") {
-      const onPushHint = (event: MessageEvent) => {
-        if (event.data?.type === "ENCRYPTED_PUSH_HINT_AVAILABLE" && this.options && this.sessionId) {
-          this.drainEncryptedPushInbox(this.sessionId, this.options.accountPubkey);
-        }
-      };
-      navigator.serviceWorker.addEventListener("message", onPushHint);
-      this.removePushInboxListener = () => navigator.serviceWorker.removeEventListener("message", onPushHint);
-    }
+    if (this.options && this.sessionId) this.listenForPushHints(this.sessionId, this.options.accountPubkey);
     this.removeForegroundResume = onAppResume(() => {
       const options = this.options;
       if (!options || !this.sessionId) return;
