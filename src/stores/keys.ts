@@ -239,48 +239,24 @@ export const useKeyStore = defineStore("keys", {
       const directMessages = useDirectMessagesStore();
       await directMessages.refresh(pk);
       if (!isCurrent()) return;
-      // Network phase: runs after local login has completed. Relay history must
-      // still wait for this phase so historical events cannot race an older
-      // read cursor or stale friendship authorization.
+      // Start message sync now so messages already delivered by Push (stored
+      // encrypted by the service worker) appear without waiting for the Worker
+      // round trips below. Relay streams wait on historyGate: history must not
+      // race an older read cursor or stale friendship authorization.
+      let releaseHistory: () => void = () => undefined;
+      const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
+      const messageSyncStart = startAccountMessageSync(this, { historyGate });
+      void messageSyncStart.catch(() => undefined);
+      // Network phase: runs after local login has completed.
       void (async () => {
-        const criticalState = await criticalStateRestore;
+        try {
+          await this.restoreCriticalAccountState(pk, criticalStateRestore, isCurrent);
+        } finally {
+          // Never strand the Relay subscription, even if the restore failed.
+          releaseHistory();
+        }
         if (!isCurrent()) return;
-
-        if (criticalState.restored.includes("friendships")) {
-          await useFriendshipsStore().reloadFromStorage(pk);
-          if (!isCurrent()) return;
-        }
-        if (criticalState.restored.includes("notification_state")) {
-          await useNotificationsStore().refreshSyncedState(pk);
-          if (!isCurrent()) return;
-        }
-        await directMessages.refresh(pk);
-        if (!isCurrent()) return;
-        // Keep the initial unread badge suppressed through the first NIP-17
-        // history reconciliation. Merely loading the cloud read_state does
-        // not mean the startup message/authorization pipeline is settled.
-        // accountMessageSync releases this barrier after durable hydration.
-
-        if (this.supportsNip44) {
-          const backgroundNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
-            namespace => namespace !== "bookmarks" && !criticalStateNamespaces.includes(namespace)
-          );
-
-          void fetchAndMaterializeAccountState(this, backgroundNamespaces, { onlyNewer: true, isCurrent })
-            .then(async () => {
-              if (!isCurrent()) return;
-              await useSettingsStore().load(pk, true);
-              if (!isCurrent()) return;
-              await Promise.all([useFriendsStore().reloadFromStorage(pk), useProfilesStore().load(pk, true)]);
-              if (!isCurrent()) return;
-              const { pushEnabledForAccount, syncPushAuthorizationPolicy } = await import("@/services/pushNotifications");
-              if (pushEnabledForAccount(pk)) await syncPushAuthorizationPolicy(pk, useFriendshipsStore().records.filter(r => r.state === "accepted").map(r => r.peerPubkey), this.signEvent.bind(this));
-            }).catch(() => {
-              debugLog("account", "background_restore_unavailable", {}, "warn");
-            });
-        }
-
-        await startAccountMessageSync(this);
+        await messageSyncStart;
         if (!isCurrent() || !this.supportsNip44) return;
         const syncState = await syncedMessageRepository.getSyncState(pk);
         const namespaces = ACCOUNT_STATE_NAMESPACES.filter(namespace =>
@@ -293,6 +269,51 @@ export const useKeyStore = defineStore("keys", {
         // Remain in restoring state until a successful sync reconciliation.
         console.warn(`[account] background account bootstrap unavailable account=${account}`, error instanceof Error ? error.message : "unknown");
       });
+    },
+
+    async restoreCriticalAccountState(
+      pk: string,
+      criticalStateRestore: Promise<{ available: boolean; restored: AccountStateNamespace[] }>,
+      isCurrent: () => boolean,
+    ) {
+      const criticalStateNamespaces: AccountStateNamespace[] = ["read_state", "notification_state", "friendships"];
+      const directMessages = useDirectMessagesStore();
+      const criticalState = await criticalStateRestore;
+      if (!isCurrent()) return;
+
+      if (criticalState.restored.includes("friendships")) {
+        await useFriendshipsStore().reloadFromStorage(pk);
+        if (!isCurrent()) return;
+      }
+      if (criticalState.restored.includes("notification_state")) {
+        await useNotificationsStore().refreshSyncedState(pk);
+        if (!isCurrent()) return;
+      }
+      await directMessages.refresh(pk);
+      if (!isCurrent()) return;
+      // Keep the initial unread badge suppressed through the first NIP-17
+      // history reconciliation. Merely loading the cloud read_state does
+      // not mean the startup message/authorization pipeline is settled.
+      // accountMessageSync releases this barrier after durable hydration.
+
+      if (this.supportsNip44) {
+        const backgroundNamespaces = ACCOUNT_STATE_NAMESPACES.filter(
+          namespace => namespace !== "bookmarks" && !criticalStateNamespaces.includes(namespace)
+        );
+
+        void fetchAndMaterializeAccountState(this, backgroundNamespaces, { onlyNewer: true, isCurrent })
+          .then(async () => {
+            if (!isCurrent()) return;
+            await useSettingsStore().load(pk, true);
+            if (!isCurrent()) return;
+            await Promise.all([useFriendsStore().reloadFromStorage(pk), useProfilesStore().load(pk, true)]);
+            if (!isCurrent()) return;
+            const { pushEnabledForAccount, syncPushAuthorizationPolicy } = await import("@/services/pushNotifications");
+            if (pushEnabledForAccount(pk)) await syncPushAuthorizationPolicy(pk, useFriendshipsStore().records.filter(r => r.state === "accepted").map(r => r.peerPubkey), this.signEvent.bind(this));
+          }).catch(() => {
+            debugLog("account", "background_restore_unavailable", {}, "warn");
+          });
+      }
     },
 
     resetAccountStores(currentPk: string) {
