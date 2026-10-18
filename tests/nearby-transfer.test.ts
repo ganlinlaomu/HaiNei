@@ -105,3 +105,17 @@ describe("rediscovery after leaving and coming back", () => {
     expect(session).toContain("想发送 ${pending.offer.files.length} 个文件，请打开「我的 › 附近传输」确认");
   });
 });
+
+describe("half-open relay sockets", () => {
+  it("recycles Trystero's relay sockets so a silently dead one cannot hide devices", () => {
+    const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");
+    expect(service).toContain("const { getRelaySockets } = await import(\"trystero\");");
+    expect(service).toContain("socket.close();");
+    const session = readFileSync("src/services/nearbySession.ts", "utf8");
+    expect(session).toContain("export const NEARBY_RELAY_REFRESH_MS = 30_000;");
+    expect(session).toContain("stopResumeWatch = onAppResume(() => refreshNearbyDiscovery());");
+    expect(session).toContain('document.visibilityState === "visible") refreshNearbyDiscovery();');
+    // Entering the page announces this visit on fresh sockets.
+    expect(readFileSync("src/views/NearbyTransfer.vue", "utf8")).toMatch(/onMounted\(\(\) => \{[\s\S]{0,140}refreshNearbyDiscovery\(\);/);
+  });
+});
