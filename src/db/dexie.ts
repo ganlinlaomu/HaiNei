@@ -3,7 +3,7 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.51";
+export const APP_VERSION = "0.1.52";
 export const DB_VERSION = 19;
 export const DATABASE_NAME = "closed_community_db";
 

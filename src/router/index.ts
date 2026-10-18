@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory, RouteRecordRaw } from "vue-router";
 import { nextTick } from "vue";
 import Login from "@/views/Login.vue";
 const DevicePair = () => import("@/views/DevicePair.vue");
+const NearbyTransfer = () => import("@/views/NearbyTransfer.vue");
 import Home from "@/views/Home.vue";
 import {
   loadConversationsView,
@@ -44,6 +45,13 @@ const routes: Array<RouteRecordRaw> = [
     name: "DevicePair",
     component: DevicePair,
     meta: { requiresAuth: false, hideHeader: true, hideBottomNav: true }
+  },
+  {
+    // Works without an account so any browser can pair by QR code.
+    path: "/nearby",
+    name: "NearbyTransfer",
+    component: NearbyTransfer,
+    meta: { requiresAuth: false, hideBottomNav: true }
   },
   {
     path: "/",
