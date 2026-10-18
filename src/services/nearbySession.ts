@@ -53,17 +53,31 @@ export const nearbyState = reactive({
 
 const rooms: Partial<Record<RoomKind, NearbyRoom>> = {};
 let stopResumeWatch: (() => void) | null = null;
+let discoveryRefresh: Promise<void> | null = null;
 
 export function refreshNearbyDiscovery() {
-  if (!rooms.own && !rooms.pair) return;
+  if (!rooms.own && !rooms.pair) return Promise.resolve();
+  if (discoveryRefresh) return discoveryRefresh;
   lastRefreshAt = Date.now();
-  void refreshNearbyRelaySockets().catch(() => undefined);
+  const current = { ...rooms };
+  discoveryRefresh = (async () => {
+    await refreshNearbyRelaySockets();
+    for (const kind of ["own", "pair"] as const) {
+      const room = current[kind];
+      const error = kind === "own" ? nearbyState.ownError : nearbyState.pairError;
+      if (!room || rooms[kind] !== room || !error.includes("could not connect to peer") || Object.keys(peersFor(kind)).length) continue;
+      if (kind === "own") nearbyState.ownError = "";
+      else nearbyState.pairError = "";
+      await room.restart();
+    }
+  })().finally(() => { discoveryRefresh = null; });
+  return discoveryRefresh;
 }
 
 function updateRelayResumeWatch() {
   const active = !!(rooms.own || rooms.pair);
   if (active && !stopResumeWatch) {
-    stopResumeWatch = onAppResume(() => refreshNearbyDiscovery());
+    stopResumeWatch = onAppResume(() => refreshNearbyDiscovery().catch(() => undefined));
   } else if (!active && stopResumeWatch) {
     stopResumeWatch?.();
     stopResumeWatch = null;
@@ -219,7 +233,7 @@ let lastRefreshAt = 0;
 
 /** Everything needed to compare two devices from screenshots. */
 export async function nearbyDiagnostics() {
-  const relay = await nearbyRelayStates().catch(() => ({ selfId: "", relays: [] as Array<{ host: string; state: string }> }));
+  const relay = await nearbyRelayStates().catch(() => ({ selfId: "", relays: [] as Array<{ host: string; state: string; rejection: string }> }));
   return {
     account: nearbyState.ownAccount,
     ownRoom: ownRoomId ? await roomFingerprint(ownRoomId) : "",
@@ -227,6 +241,7 @@ export async function nearbyDiagnostics() {
     selfId: relay.selfId,
     relays: relay.relays,
     ownPeers: rooms.own?.peerConnections() || {},
+    negotiations: rooms.own?.negotiations() || [],
     pairPeers: rooms.pair?.peerConnections() || {},
     ownError: nearbyState.ownError,
     pairError: nearbyState.pairError,

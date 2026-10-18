@@ -75,10 +75,20 @@
         <dt>账号</dt><dd>{{ diagnostics.account ? `${diagnostics.account.slice(0, 6)}…${diagnostics.account.slice(-6)}` : "未登录" }}</dd>
         <dt>房间指纹</dt><dd>{{ diagnostics.ownRoom || "—" }}（两台设备应一致）</dd>
         <dt>房间状态</dt><dd>{{ diagnostics.ownJoined ? "已加入" : "未加入" }} · 本机 ID {{ diagnostics.selfId || "—" }}</dd>
-        <dt>Relay</dt><dd><span v-for="relay in diagnostics.relays" :key="relay.host" class="diag-item">{{ relay.host }}：{{ relay.state }}</span><span v-if="!diagnostics.relays.length">尚未连接</span></dd>
+        <dt>Relay</dt><dd><span v-for="relay in diagnostics.relays" :key="relay.host" class="diag-item">{{ relay.host }}：{{ relay.state }}<span v-if="relay.rejection">（{{ relay.rejection }}）</span></span><span v-if="!diagnostics.relays.length">尚未连接</span></dd>
         <dt>设备连接</dt><dd><span v-for="(state, id) in diagnostics.ownPeers" :key="id" class="diag-item">{{ String(id).slice(0, 6) }} {{ nearbyState.ownPeers[id] || "" }}：{{ state }}</span><span v-if="!Object.keys(diagnostics.ownPeers).length">无</span></dd>
         <dt v-if="diagnostics.ownError">连接错误</dt><dd v-if="diagnostics.ownError">{{ joinErrorText(diagnostics.ownError) }}</dd>
-        <dt>上次重连</dt><dd>{{ diagnostics.lastRefreshAt ? `${Math.round((Date.now() - diagnostics.lastRefreshAt) / 1000)} 秒前` : "—" }}</dd>
+        <dt v-if="diagnostics.ownError">原始错误</dt><dd v-if="diagnostics.ownError">{{ diagnostics.ownError }}</dd>
+        <template v-for="attempt in diagnostics.negotiations" :key="attempt.id">
+          <dt>协商 {{ attempt.id }}</dt>
+          <dd>
+            SDP：{{ attempt.localDescription }} / {{ attempt.remoteDescription }}；
+            ICE：{{ attempt.ice }}；连接：{{ attempt.connection }}；收集：{{ attempt.gathering }}<br />
+            本机候选：{{ attempt.localCandidates }}（{{ attempt.candidateTypes.join(", ") || "无" }}）；远端候选处理：{{ attempt.remoteCandidates }}
+            <span v-if="attempt.iceErrors.length">；STUN 错误：{{ attempt.iceErrors.join(", ") }}</span>
+          </dd>
+        </template>
+        <dt>上次搜索</dt><dd>{{ diagnostics.lastRefreshAt ? `${Math.round((Date.now() - diagnostics.lastRefreshAt) / 1000)} 秒前` : "—" }}</dd>
       </dl>
     </details>
 
@@ -161,12 +171,18 @@ function onDiagnosticsToggle(event: Event) {
   diagnosticsTimer = setInterval(() => { void loadDiagnostics(); }, 2_000);
 }
 
-/** Manual escape hatch: reconnect to the relays and announce again. */
-function searchAgain() {
+/** Check relay liveness, then rebuild failed rooms without disturbing live peers. */
+async function searchAgain() {
   searching.value = true;
-  refreshNearbyDiscovery();
-  void joinOwnRoom();
-  setTimeout(() => { searching.value = false; }, 3_000);
+  try {
+    await joinOwnRoom();
+    await refreshNearbyDiscovery();
+    await loadDiagnostics();
+  } catch {
+    ui.addToast("无法重新搜索附近设备，请检查网络", 2_400, "error");
+  } finally {
+    searching.value = false;
+  }
 }
 
 onBeforeUnmount(() => {
@@ -311,8 +327,7 @@ async function shareFiles(files: File[]) {
 }
 
 onMounted(() => {
-  // Rooms persist across visits; make sure this visit is announced on fresh sockets.
-  refreshNearbyDiscovery();
+  // A page visit must not cut off an in-flight offer/answer/candidate exchange.
   void joinOwnRoom();
   const pair = typeof route.query.pair === "string" ? parsePairing(route.query.pair) : null;
   if (pair) void joinPairRoom(pair, false);

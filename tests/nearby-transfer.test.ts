@@ -114,11 +114,12 @@ describe("half-open relay sockets", () => {
     expect(service).toContain("const { getRelaySockets } = await import(\"trystero\");");
     expect(service).toContain("socket.close();");
     const session = readFileSync("src/services/nearbySession.ts", "utf8");
-    expect(session).toContain("stopResumeWatch = onAppResume(() => refreshNearbyDiscovery());");
+    expect(session).toContain("stopResumeWatch = onAppResume(() => refreshNearbyDiscovery().catch(() => undefined));");
     expect(session).not.toContain("NEARBY_RELAY_REFRESH_MS");
     expect(session).not.toMatch(/setInterval\([\s\S]{0,160}refreshNearbyDiscovery/);
-    // Entering the page announces this visit on fresh sockets.
-    expect(readFileSync("src/views/NearbyTransfer.vue", "utf8")).toMatch(/onMounted\(\(\) => \{[\s\S]{0,140}refreshNearbyDiscovery\(\);/);
+    // Entering the page must preserve ongoing negotiation on shared sockets.
+    const mounted = readFileSync("src/views/NearbyTransfer.vue", "utf8").split("onMounted(() => {")[1].split("});")[0];
+    expect(mounted).not.toContain("refreshNearbyDiscovery()");
   });
 });
 
@@ -130,7 +131,9 @@ describe("diagnostics", () => {
     expect(page).toContain('"重新搜索"');
     const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");
     expect(service).toContain("export async function roomFingerprint(roomId: string)");
-    expect(service).toContain("onJoinError: ({ error }) => this.handlers.onError(error)");
+    expect(service).toContain("if (active()) this.handlers.onError(error)");
+    expect(page).toContain("原始错误");
+    expect(page).toContain("attempt.localCandidates");
     expect(page).toContain("连接错误");
     expect(page).toContain("本次连接协商未完成");
     expect(page).not.toContain("当前网络可能需要 TURN 中继");
