@@ -43,8 +43,10 @@ export const nearbyState = reactive({
   ownAccount: "",
   ownJoined: false,
   ownPeers: {} as Record<string, string>,
+  ownError: "",
   pairKey: null as NearbyRoomKey | null,
   pairPeers: {} as Record<string, string>,
+  pairError: "",
   transfers: [] as NearbyTransferRecord[],
   pendingOffer: null as PendingOffer | null,
 });
@@ -106,6 +108,10 @@ function makeRoom(kind: RoomKind) {
       if (kind === "own") nearbyState.ownPeers = next;
       else nearbyState.pairPeers = next;
     },
+    onError: message => {
+      if (kind === "own") nearbyState.ownError = message;
+      else nearbyState.pairError = message;
+    },
     onOffer: offer => new Promise<boolean>(resolve => {
       const peerName = peersFor(kind)[offer.from] || "附近的设备";
       const transfer: NearbyTransferRecord = {
@@ -153,6 +159,7 @@ export async function ensureOwnDevicesRoom(account: string, privateKeyHex: strin
   const room = makeRoom("own");
   rooms.own = room;
   nearbyState.ownAccount = normalized;
+  nearbyState.ownError = "";
   try {
     const key = await ownDevicesRoom(privateKeyHex);
     ownRoomId = key.roomId;
@@ -174,6 +181,7 @@ export async function leaveOwnDevicesRoom() {
   nearbyState.ownAccount = "";
   nearbyState.ownJoined = false;
   nearbyState.ownPeers = {};
+  nearbyState.ownError = "";
   ownRoomId = "";
   updateRelayWatchdog();
   if (room) await room.leave();
@@ -185,6 +193,7 @@ export async function startPairRoom(key: NearbyRoomKey) {
   const room = makeRoom("pair");
   rooms.pair = room;
   nearbyState.pairKey = key;
+  nearbyState.pairError = "";
   try {
     await room.join(key);
     updateRelayWatchdog();
@@ -199,6 +208,7 @@ export async function stopPairRoom() {
   rooms.pair = undefined;
   nearbyState.pairKey = null;
   nearbyState.pairPeers = {};
+  nearbyState.pairError = "";
   updateRelayWatchdog();
   if (room) await room.leave();
 }
@@ -226,6 +236,8 @@ export async function nearbyDiagnostics() {
     relays: relay.relays,
     ownPeers: rooms.own?.peerConnections() || {},
     pairPeers: rooms.pair?.peerConnections() || {},
+    ownError: nearbyState.ownError,
+    pairError: nearbyState.pairError,
     lastRefreshAt,
   };
 }

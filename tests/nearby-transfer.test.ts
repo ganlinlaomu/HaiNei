@@ -130,5 +130,22 @@ describe("diagnostics", () => {
     expect(page).toContain('"重新搜索"');
     const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");
     expect(service).toContain("export async function roomFingerprint(roomId: string)");
+    expect(service).toContain("onJoinError: ({ error }) => this.handlers.onError(error)");
+    expect(page).toContain("连接错误");
+    expect(page).toContain("WebRTC 直连失败");
+  });
+});
+
+describe("clock-skew tolerant discovery", () => {
+  it("patches Trystero Nostr subscriptions with a 60-second lookback after install", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+    const patcher = readFileSync("scripts/patch-trystero-nostr.js", "utf8");
+    expect(packageJson.scripts.postinstall).toBe("node scripts/patch-trystero-nostr.js");
+    expect(patcher).toContain("const subscriptionLookbackSec = 60;");
+    expect(patcher).toContain("since: now() - subscriptionLookbackSec,");
+    expect(patcher).toContain("const since = now() - subscriptionLookbackSec;");
+    const installedNostr = readFileSync("node_modules/@trystero-p2p/nostr/dist/index.mjs", "utf8");
+    expect(installedNostr).toContain("since: now() - subscriptionLookbackSec,");
+    expect(installedNostr).toContain("const since = now() - subscriptionLookbackSec;");
   });
 });

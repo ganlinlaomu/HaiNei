@@ -138,6 +138,7 @@ export function formatBytes(bytes: number) {
 
 export type NearbyRoomHandlers = {
   onPeers: (peers: Record<string, string>) => void;
+  onError: (message: string) => void;
   /** Resolve true to accept. Called before any file bytes are sent. */
   onOffer: (offer: NearbyOffer) => Promise<boolean>;
   onReceiveProgress: (offerId: string, index: number, percent: number) => void;
@@ -164,7 +165,9 @@ export class NearbyRoom {
       maxReceiveBytes: NEARBY_MAX_BATCH_BYTES,
       relayConfig: { urls: [...DEFAULT_RELAY_URLS], redundancy: DEFAULT_RELAY_URLS.length },
       rtcConfig: { iceServers: ICE_SERVERS },
-    }, key.roomId);
+    }, key.roomId, {
+      onJoinError: ({ error }) => this.handlers.onError(error),
+    });
     this.room = room;
 
     // Names are exchanged both ways: a peer that rejoined (or missed our
@@ -215,6 +218,7 @@ export class NearbyRoom {
       file.send(data, { target, metadata, onProgress: progress => onProgress(progress) });
 
     room.onPeerJoin = peerId => {
+      this.handlers.onError("");
       if (!this.names[peerId]) this.names[peerId] = NEARBY_UNNAMED_PEER;
       this.handlers.onPeers({ ...this.names });
       void this.sendHello?.(false, peerId);
