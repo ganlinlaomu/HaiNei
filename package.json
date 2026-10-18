@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.53",
-  "releaseSummary": "修复附近传输离开页面再回来后发现不了自己的设备",
+  "version": "0.1.54",
+  "releaseSummary": "修复附近传输中自己的设备长时间后互相发现不了",
   "private": true,
   "scripts": {
     "dev": "vite",

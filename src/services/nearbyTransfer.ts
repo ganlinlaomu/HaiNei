@@ -57,6 +57,26 @@ export function parsePairing(value: string): NearbyRoomKey | null {
   return match ? { roomId: match[1].toLowerCase(), password: match[2].toLowerCase() } : null;
 }
 
+/**
+ * Re-open Trystero's relay sockets. iOS suspension and idle proxies (e.g.
+ * Tailscale Funnel) can leave a socket half-open: the browser still reports
+ * OPEN, so Trystero neither reconnects nor resubscribes, and announcements
+ * vanish. Closing it runs Trystero's normal reconnect, which resubscribes
+ * and re-announces. Established peer connections are unaffected.
+ */
+export async function refreshNearbyRelaySockets() {
+  const { getRelaySockets } = await import("trystero");
+  const sockets = (getRelaySockets() || {}) as Record<string, WebSocket | undefined>;
+  let refreshed = 0;
+  for (const socket of Object.values(sockets)) {
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+      socket.close();
+      refreshed++;
+    }
+  }
+  return refreshed;
+}
+
 export function defaultDeviceName(
   userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent,
   maxTouchPoints = typeof navigator === "undefined" ? 0 : navigator.maxTouchPoints || 0,

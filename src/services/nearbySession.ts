@@ -1,5 +1,6 @@
 import { reactive } from "vue";
 import { useUIStore } from "@/stores/ui";
+import { onAppResume } from "@/services/appResumeCoordinator";
 import {
   NEARBY_MAX_BATCH_BYTES,
   NEARBY_OFFER_TIMEOUT_MS,
@@ -7,6 +8,7 @@ import {
   batchBytes,
   defaultDeviceName,
   ownDevicesRoom,
+  refreshNearbyRelaySockets,
   type NearbyFileMeta,
   type NearbyOffer,
   type NearbyRoomKey,
@@ -46,6 +48,30 @@ export const nearbyState = reactive({
 });
 
 const rooms: Partial<Record<RoomKind, NearbyRoom>> = {};
+/** While visible, recycle relay sockets so a silently dead one cannot hide devices. */
+export const NEARBY_RELAY_REFRESH_MS = 30_000;
+let relayWatchdog: ReturnType<typeof setInterval> | null = null;
+let stopResumeWatch: (() => void) | null = null;
+
+export function refreshNearbyDiscovery() {
+  if (!rooms.own && !rooms.pair) return;
+  void refreshNearbyRelaySockets().catch(() => undefined);
+}
+
+function updateRelayWatchdog() {
+  const active = !!(rooms.own || rooms.pair);
+  if (active && !relayWatchdog) {
+    relayWatchdog = setInterval(() => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") refreshNearbyDiscovery();
+    }, NEARBY_RELAY_REFRESH_MS);
+    stopResumeWatch = onAppResume(() => refreshNearbyDiscovery());
+  } else if (!active && relayWatchdog) {
+    clearInterval(relayWatchdog);
+    relayWatchdog = null;
+    stopResumeWatch?.();
+    stopResumeWatch = null;
+  }
+}
 const offerQueue: PendingOffer[] = [];
 let offerListener: ((offer: PendingOffer) => void) | null = pending => {
   // Rooms stay joined after leaving the page; point people back to it.
@@ -127,6 +153,7 @@ export async function ensureOwnDevicesRoom(account: string, privateKeyHex: strin
   try {
     await room.join(await ownDevicesRoom(privateKeyHex));
     if (rooms.own === room) nearbyState.ownJoined = true;
+    updateRelayWatchdog();
   } catch (error) {
     if (rooms.own === room) {
       rooms.own = undefined;
@@ -142,6 +169,7 @@ export async function leaveOwnDevicesRoom() {
   nearbyState.ownAccount = "";
   nearbyState.ownJoined = false;
   nearbyState.ownPeers = {};
+  updateRelayWatchdog();
   if (room) await room.leave();
 }
 
@@ -153,6 +181,7 @@ export async function startPairRoom(key: NearbyRoomKey) {
   nearbyState.pairKey = key;
   try {
     await room.join(key);
+    updateRelayWatchdog();
   } catch (error) {
     await stopPairRoom();
     throw error;
@@ -164,6 +193,7 @@ export async function stopPairRoom() {
   rooms.pair = undefined;
   nearbyState.pairKey = null;
   nearbyState.pairPeers = {};
+  updateRelayWatchdog();
   if (room) await room.leave();
 }
 

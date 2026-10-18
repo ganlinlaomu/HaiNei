@@ -107,6 +107,7 @@ import {
   answerPendingOffer,
   ensureOwnDevicesRoom,
   nearbyState,
+  refreshNearbyDiscovery,
   sendNearbyFiles,
   startPairRoom,
   stopPairRoom,
@@ -256,6 +257,8 @@ async function shareFiles(files: File[]) {
 }
 
 onMounted(() => {
+  // Rooms persist across visits; make sure this visit is announced on fresh sockets.
+  refreshNearbyDiscovery();
   void joinOwnRoom();
   const pair = typeof route.query.pair === "string" ? parsePairing(route.query.pair) : null;
   if (pair) void joinPairRoom(pair, false);
