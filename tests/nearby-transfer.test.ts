@@ -109,16 +109,30 @@ describe("rediscovery after leaving and coming back", () => {
 });
 
 describe("half-open relay sockets", () => {
-  it("recycles Trystero's relay sockets so a silently dead one cannot hide devices", () => {
+  it("recycles sockets on resume or explicit search without interrupting negotiation every 30 seconds", () => {
     const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");
     expect(service).toContain("const { getRelaySockets } = await import(\"trystero\");");
     expect(service).toContain("socket.close();");
     const session = readFileSync("src/services/nearbySession.ts", "utf8");
-    expect(session).toContain("export const NEARBY_RELAY_REFRESH_MS = 30_000;");
     expect(session).toContain("stopResumeWatch = onAppResume(() => refreshNearbyDiscovery());");
-    expect(session).toContain('document.visibilityState === "visible") refreshNearbyDiscovery();');
+    expect(session).not.toContain("NEARBY_RELAY_REFRESH_MS");
+    expect(session).not.toMatch(/setInterval\([\s\S]{0,160}refreshNearbyDiscovery/);
     // Entering the page announces this visit on fresh sockets.
     expect(readFileSync("src/views/NearbyTransfer.vue", "utf8")).toMatch(/onMounted\(\(\) => \{[\s\S]{0,140}refreshNearbyDiscovery\(\);/);
+  });
+});
+
+describe("failed automatic-room recovery", () => {
+  it("rebuilds failed own-device rooms automatically and when re-searching", () => {
+    const session = readFileSync("src/services/nearbySession.ts", "utf8");
+    const page = readFileSync("src/views/NearbyTransfer.vue", "utf8");
+    expect(session).toContain("const OWN_RESTART_DELAYS_MS = [1_500, 5_000, 15_000]");
+    expect(session).toContain('message.includes("could not connect to peer")');
+    expect(session).toContain("scheduleOwnRoomRestart();");
+    expect(session).toContain("export async function restartOwnDevicesRoom()");
+    expect(page).toContain("await restartOwnDevicesRoom();");
+    expect(page).toContain("正在自动重建房间并重试");
+    expect(page).not.toContain("当前网络可能需要 TURN 中继");
   });
 });
 
@@ -132,7 +146,7 @@ describe("diagnostics", () => {
     expect(service).toContain("export async function roomFingerprint(roomId: string)");
     expect(service).toContain("onJoinError: ({ error }) => this.handlers.onError(error)");
     expect(page).toContain("连接错误");
-    expect(page).toContain("WebRTC 直连失败");
+    expect(page).toContain("直连协商失败");
   });
 });
 
