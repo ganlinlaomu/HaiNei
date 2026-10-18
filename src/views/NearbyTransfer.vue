@@ -10,7 +10,7 @@
         <li v-for="peer in ownPeerList" :key="peer.id" class="peer-row">
           <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2.5" /><path d="M10.5 17.5h3" /></svg></span>
           <span class="peer-name">{{ peer.name }}</span>
-          <button class="peer-send" type="button" :disabled="!!activeSend" @click="pickFiles('own', peer.id, peer.name)">发送文件</button>
+          <button class="peer-send" type="button" :disabled="!!activeSend" @click="pickFiles('own', peer.id)">发送文件</button>
         </li>
       </ul>
       <p v-else class="nearby-empty">{{ ownStatus }}</p>
@@ -37,7 +37,7 @@
           <li v-for="peer in pairPeerList" :key="peer.id" class="peer-row">
             <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2" /><path d="M8 20h8" /></svg></span>
             <span class="peer-name">{{ peer.name }}</span>
-            <button class="peer-send" type="button" :disabled="!!activeSend" @click="pickFiles('pair', peer.id, peer.name)">发送文件</button>
+            <button class="peer-send" type="button" :disabled="!!activeSend" @click="pickFiles('pair', peer.id)">发送文件</button>
           </li>
         </ul>
         <p v-else-if="!pairQr" class="nearby-empty">正在连接…</p>
@@ -87,7 +87,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import qrcode from "qrcode-generator";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
@@ -96,143 +96,71 @@ import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import {
   NEARBY_MAX_BATCH_BYTES,
-  NEARBY_OFFER_TIMEOUT_MS,
-  NearbyRoom,
   batchBytes,
-  defaultDeviceName,
   formatBytes,
-  ownDevicesRoom,
   pairingLink,
   parsePairing,
   randomPairingRoom,
-  type NearbyFileMeta,
-  type NearbyOffer,
   type NearbyRoomKey,
 } from "@/services/nearbyTransfer";
-
-type RoomKind = "own" | "pair";
-type Transfer = {
-  id: string;
-  direction: "in" | "out";
-  peerName: string;
-  files: NearbyFileMeta[];
-  progress: number[];
-  received: (File | undefined)[];
-  state: "waiting" | "active" | "done" | "declined" | "failed";
-};
+import {
+  answerPendingOffer,
+  ensureOwnDevicesRoom,
+  nearbyState,
+  sendNearbyFiles,
+  startPairRoom,
+  stopPairRoom,
+  type NearbyTransferRecord,
+  type RoomKind,
+} from "@/services/nearbySession";
 
 const keys = useKeyStore();
 const ui = useUIStore();
 const route = useRoute();
-const deviceName = defaultDeviceName();
+const deviceName = nearbyState.deviceName;
 
-const rooms: Partial<Record<RoomKind, NearbyRoom>> = {};
-const ownPeers = ref<Record<string, string>>({});
-const pairPeers = ref<Record<string, string>>({});
-const ownJoined = ref(false);
-const pairKey = ref<NearbyRoomKey | null>(null);
 const pairQr = ref("");
 const copied = ref(false);
 const scannerOpen = ref(false);
-const transfers = ref<Transfer[]>([]);
-const pendingOffer = ref<{ offer: NearbyOffer; peerName: string; resolve: (ok: boolean) => void } | null>(null);
-const offerQueue: Array<{ offer: NearbyOffer; peerName: string; resolve: (ok: boolean) => void }> = [];
-const activeSend = ref<{ kind: RoomKind; peerId: string; peerName: string } | null>(null);
+const activeSend = ref<{ kind: RoomKind; peerId: string } | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
-const objectUrls = new Map<File, string>();
+const objectUrls = new WeakMap<File, string>();
 
+const pairKey = computed(() => nearbyState.pairKey);
+const pendingOffer = computed(() => nearbyState.pendingOffer);
+const transfers = computed(() => nearbyState.transfers);
 const ownDevicesAvailable = computed(() => keys.isLoggedIn && keys.loginMethod === "private-key" && /^[0-9a-f]{64}$/.test(keys.skHex));
-const ownPeerList = computed(() => Object.entries(ownPeers.value).map(([id, name]) => ({ id, name })));
-const pairPeerList = computed(() => Object.entries(pairPeers.value).map(([id, name]) => ({ id, name })));
-const ownStatus = computed(() => ownJoined.value
+const ownPeerList = computed(() => Object.entries(nearbyState.ownPeers).map(([id, name]) => ({ id, name })));
+const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).map(([id, name]) => ({ id, name })));
+const ownStatus = computed(() => nearbyState.ownJoined
   ? "在你的其他设备上打开「附近传输」，它们会出现在这里。"
   : "正在寻找你的其他设备…");
 
-function transferFor(kind: RoomKind, offer: NearbyOffer, peerName: string): Transfer {
-  const transfer: Transfer = {
-    id: `${kind}:${offer.id}`, direction: "in", peerName, files: offer.files,
-    progress: offer.files.map(() => 0), received: offer.files.map(() => undefined), state: "waiting",
-  };
-  transfers.value = [transfer, ...transfers.value];
-  return transfer;
-}
-
-function updateTransfer(id: string, patch: (transfer: Transfer) => void) {
-  const index = transfers.value.findIndex(item => item.id === id);
-  if (index < 0) return;
-  const next = { ...transfers.value[index], progress: [...transfers.value[index].progress], received: [...transfers.value[index].received] };
-  patch(next);
-  transfers.value.splice(index, 1, next);
-}
-
-function showNextOffer() {
-  if (!pendingOffer.value) pendingOffer.value = offerQueue.shift() || null;
-}
-
-function makeRoom(kind: RoomKind) {
-  const peers = kind === "own" ? ownPeers : pairPeers;
-  return new NearbyRoom(deviceName, {
-    onPeers: next => { peers.value = next; },
-    onOffer: offer => new Promise<boolean>(resolve => {
-      const peerName = peers.value[offer.from] || "附近的设备";
-      const transfer = transferFor(kind, offer, peerName);
-      let settled = false;
-      const finish = (ok: boolean) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        updateTransfer(transfer.id, item => { item.state = ok ? "active" : "declined"; });
-        if (pendingOffer.value?.offer.id === offer.id) pendingOffer.value = null;
-        showNextOffer();
-        resolve(ok);
-      };
-      // Answer before the sender's request times out.
-      const timer = setTimeout(() => finish(false), NEARBY_OFFER_TIMEOUT_MS - 5_000);
-      offerQueue.push({ offer, peerName, resolve: finish });
-      showNextOffer();
-    }),
-    onReceiveProgress: (offerId, index, percent) => {
-      updateTransfer(`${kind}:${offerId}`, item => { item.progress[index] = percent; });
-    },
-    onFile: (offerId, index, file) => {
-      updateTransfer(`${kind}:${offerId}`, item => {
-        item.received[index] = file;
-        item.progress[index] = 1;
-        if (item.received.every(Boolean)) item.state = "done";
-      });
-    },
-  });
-}
-
 async function joinOwnRoom() {
-  if (rooms.own || !ownDevicesAvailable.value) return;
-  const room = makeRoom("own");
-  rooms.own = room;
+  if (!ownDevicesAvailable.value) return;
   try {
-    await room.join(await ownDevicesRoom(keys.skHex));
-    ownJoined.value = true;
+    await ensureOwnDevicesRoom(keys.pkHex, keys.skHex);
   } catch {
-    rooms.own = undefined;
     ui.addToast("无法连接附近传输服务，请检查网络", 2_400, "error");
   }
+}
+
+function renderQr(key: NearbyRoomKey) {
+  const qr = qrcode(0, "M");
+  qr.addData(pairingLink(key, window.location.origin), "Byte");
+  qr.make();
+  pairQr.value = qr.createSvgTag({ cellSize: 5, margin: 2, scalable: true });
 }
 
 async function joinPairRoom(key: NearbyRoomKey, showQr: boolean) {
-  await stopPairing();
-  const room = makeRoom("pair");
-  rooms.pair = room;
-  pairKey.value = key;
-  if (showQr) {
-    const qr = qrcode(0, "M");
-    qr.addData(pairingLink(key, window.location.origin), "Byte");
-    qr.make();
-    pairQr.value = qr.createSvgTag({ cellSize: 5, margin: 2, scalable: true });
-  }
+  copied.value = false;
+  pairQr.value = "";
+  if (showQr) renderQr(key);
   try {
-    await room.join(key);
+    await startPairRoom(key);
   } catch {
     ui.addToast("无法连接附近传输服务，请检查网络", 2_400, "error");
-    await stopPairing();
+    pairQr.value = "";
   }
 }
 
@@ -241,13 +169,9 @@ function startPairing() {
 }
 
 async function stopPairing() {
-  const room = rooms.pair;
-  rooms.pair = undefined;
-  pairKey.value = null;
   pairQr.value = "";
-  pairPeers.value = {};
   copied.value = false;
-  if (room) await room.leave();
+  await stopPairRoom();
 }
 
 function onScanned(value: string) {
@@ -270,8 +194,8 @@ async function copyPairLink() {
   }
 }
 
-function pickFiles(kind: RoomKind, peerId: string, peerName: string) {
-  activeSend.value = { kind, peerId, peerName };
+function pickFiles(kind: RoomKind, peerId: string) {
+  activeSend.value = { kind, peerId };
   fileInput.value?.click();
 }
 
@@ -284,39 +208,23 @@ async function onFilesPicked(event: Event) {
     activeSend.value = null;
     return;
   }
-  const room = rooms[target.kind];
-  if (!room) {
-    activeSend.value = null;
-    return;
-  }
   if (batchBytes(files) > NEARBY_MAX_BATCH_BYTES) {
     ui.addToast(`一次最多发送 ${formatBytes(NEARBY_MAX_BATCH_BYTES)}，请分批发送`, 2_600, "error");
     activeSend.value = null;
     return;
   }
-  const transfer: Transfer = {
-    id: `out:${Date.now()}:${Math.random()}`, direction: "out", peerName: target.peerName,
-    files: files.map(file => ({ name: file.name, size: file.size, type: file.type })),
-    progress: files.map(() => 0), received: files.map(() => undefined), state: "waiting",
-  };
-  transfers.value = [transfer, ...transfers.value];
   try {
-    const accepted = await room.send(target.peerId, files, (index, percent) => {
-      updateTransfer(transfer.id, item => { item.state = "active"; item.progress[index] = percent; });
-    });
-    updateTransfer(transfer.id, item => { item.state = accepted ? "done" : "declined"; });
-  } catch {
-    updateTransfer(transfer.id, item => { item.state = "failed"; });
+    await sendNearbyFiles(target.kind, target.peerId, files);
   } finally {
     activeSend.value = null;
   }
 }
 
 function answerOffer(accept: boolean) {
-  pendingOffer.value?.resolve(accept);
+  answerPendingOffer(accept);
 }
 
-function transferStatus(transfer: Transfer) {
+function transferStatus(transfer: NearbyTransferRecord) {
   if (transfer.state === "waiting") return transfer.direction === "out" ? "等待对方接收…" : "等待你确认";
   if (transfer.state === "declined") return transfer.direction === "out" ? "对方已拒绝" : "已拒绝";
   if (transfer.state === "failed") return "传输中断";
@@ -351,17 +259,11 @@ onMounted(() => {
   void joinOwnRoom();
   const pair = typeof route.query.pair === "string" ? parsePairing(route.query.pair) : null;
   if (pair) void joinPairRoom(pair, false);
+  // Returning to the page while still pairing: show the same QR again.
+  else if (nearbyState.pairKey && Object.keys(nearbyState.pairPeers).length === 0) renderQr(nearbyState.pairKey);
 });
 
 watch(ownDevicesAvailable, available => { if (available) void joinOwnRoom(); });
-
-onBeforeUnmount(() => {
-  for (const item of [pendingOffer.value, ...offerQueue]) item?.resolve(false);
-  void rooms.own?.leave();
-  void rooms.pair?.leave();
-  for (const url of objectUrls.values()) URL.revokeObjectURL(url);
-  objectUrls.clear();
-});
 </script>
 
 <style scoped>

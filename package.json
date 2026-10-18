@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.52",
-  "releaseSummary": "新增附近传输：自己的设备之间在同一 Wi-Fi 下直接传文件，不经过服务器",
+  "version": "0.1.53",
+  "releaseSummary": "修复附近传输离开页面再回来后发现不了自己的设备",
   "private": true,
   "scripts": {
     "dev": "vite",

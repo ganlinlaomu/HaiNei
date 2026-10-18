@@ -323,6 +323,8 @@ export const useKeyStore = defineStore("keys", {
       void import("@/services/privateSpaceSync").then(({ cancelPrivateSpaceSync }) => {
         cancelPrivateSpaceSync(currentPk.toLowerCase());
       });
+      // 附近传输 keeps rooms joined for the app session; drop them with the account.
+      void import("@/services/nearbySession").then(({ resetNearby }) => resetNearby()).catch(() => undefined);
       stopAccountMessageSync();
       lockLocalVault(currentPk);
       clearPrivateDeviceValues(currentPk);

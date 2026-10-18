@@ -81,3 +81,27 @@ describe("integration", () => {
     expect(service).not.toMatch(/^import \{[^}]*\} from "trystero";/m);
   });
 });
+
+describe("rediscovery after leaving and coming back", () => {
+  it("keeps rooms joined for the app session instead of leaving with the page", () => {
+    const page = readFileSync("src/views/NearbyTransfer.vue", "utf8");
+    expect(page).not.toContain("onBeforeUnmount");
+    expect(page).not.toMatch(/\.leave\(\)/);
+    const session = readFileSync("src/services/nearbySession.ts", "utf8");
+    expect(session).toContain('if (rooms.own && nearbyState.ownAccount === normalized) return;');
+    // Rooms are dropped together with the account.
+    expect(readFileSync("src/stores/keys.ts", "utf8")).toContain('import("@/services/nearbySession").then(({ resetNearby }) => resetNearby())');
+  });
+
+  it("exchanges device names both ways and re-greets peers it cannot name yet", () => {
+    const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");
+    expect(service).toContain("if (!data?.reply || !wasKnown) void this.sendHello?.(true, peerId);");
+    expect(service).toContain("if (!this.names[peerId]) this.names[peerId] = NEARBY_UNNAMED_PEER;");
+    expect(service).toContain("if (name === NEARBY_UNNAMED_PEER) void this.sendHello?.(false, peerId);");
+  });
+
+  it("points people to the page when an offer arrives elsewhere", () => {
+    const session = readFileSync("src/services/nearbySession.ts", "utf8");
+    expect(session).toContain("想发送 ${pending.offer.files.length} 个文件，请打开「我的 › 附近传输」确认");
+  });
+});
