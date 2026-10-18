@@ -17,7 +17,7 @@ vi.mock("trystero", () => ({
 }));
 
 import { NearbyRoom, nearbyRelayStates, refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
-import { ensureOwnDevicesRoom, nearbyState, refreshNearbyDiscovery, resetNearby } from "@/services/nearbySession";
+import { ensureOwnDevicesRoom, nearbyState, refreshNearbyDiscovery, resetNearby, retryNearbyWithCamera } from "@/services/nearbySession";
 
 class Socket extends EventTarget {
   static OPEN = 1;
@@ -48,6 +48,55 @@ async function startProbe(socket: Socket) {
 }
 
 describe("nearby signaling recovery", () => {
+  it("closes camera capture before rebuilding the same automatic room with fresh ICE", async () => {
+    const stop = vi.fn();
+    const getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop }] }));
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    await ensureOwnDevicesRoom("account", "1".repeat(64));
+    const previous = trystero.rooms[0];
+    previous.leave.mockImplementation(async () => { expect(stop).toHaveBeenCalledOnce(); });
+    // The explicit camera retry must also replace a PC still checking with the
+    // old candidate policy; no need to wait for another 23-second timeout.
+    expect(await retryNearbyWithCamera(new AbortController().signal)).toBe(true);
+    expect(getUserMedia).toHaveBeenCalledExactlyOnceWith({ video: true, audio: false });
+    expect(trystero.rooms).toHaveLength(2);
+    expect(trystero.rooms[1].id).toBe(previous.id);
+    expect(trystero.rooms[1].config.password).toBe(previous.config.password);
+  });
+
+  it("never requests camera access during startup or an ordinary search", async () => {
+    const getUserMedia = vi.fn();
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    await ensureOwnDevicesRoom("account", "1".repeat(64));
+    await refreshNearbyDiscovery();
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("keeps the current room when camera permission is denied", async () => {
+    const getUserMedia = vi.fn().mockRejectedValue(new DOMException("Denied", "NotAllowedError"));
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    await ensureOwnDevicesRoom("account", "1".repeat(64));
+    await expect(retryNearbyWithCamera(new AbortController().signal)).rejects.toThrow("Denied");
+    expect(trystero.rooms[0].leave).not.toHaveBeenCalled();
+  });
+
+  it.each(["page closed", "account changed"])("releases a late camera grant without restarting after %s", async reason => {
+    let grant!: (stream: any) => void;
+    const getUserMedia = vi.fn(() => new Promise(resolve => { grant = resolve; }));
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    await ensureOwnDevicesRoom("account", "1".repeat(64));
+    const controller = new AbortController();
+    const pending = retryNearbyWithCamera(controller.signal);
+    if (reason === "page closed") controller.abort();
+    else await ensureOwnDevicesRoom("other-account", "2".repeat(64));
+    const roomCount = trystero.rooms.length;
+    const stop = vi.fn();
+    grant({ getTracks: () => [{ stop }] });
+    expect(await pending).toBe(false);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(trystero.rooms).toHaveLength(roomCount);
+  });
+
   it("creates only one automatic room when startup and page entry overlap", async () => {
     await Promise.all([
       ensureOwnDevicesRoom("account", "1".repeat(64)),
