@@ -17,11 +17,10 @@ import {
 } from "@/services/nearbyTransfer";
 
 /**
- * App-lifetime 附近传输 state. Rooms are joined once and kept while the app
- * runs: Trystero shares peer connections across rooms with a per-page peer
- * id, and leaving/rejoining the same room on every page visit left the other
- * device unable to see the one that came back. Rooms are left only on
- * 结束配对, account switch or logout.
+ * App-lifetime 附近传输 state. Healthy rooms stay joined while the app runs.
+ * A room whose WebRTC negotiation failed is rebuilt with bounded backoff so
+ * stale Trystero peer state cannot make QR pairing work while auto-discovery
+ * remains stuck.
  */
 
 export type RoomKind = "own" | "pair";
@@ -44,6 +43,7 @@ export const nearbyState = reactive({
   ownJoined: false,
   ownPeers: {} as Record<string, string>,
   ownError: "",
+  ownRetrying: false,
   pairKey: null as NearbyRoomKey | null,
   pairPeers: {} as Record<string, string>,
   pairError: "",
@@ -52,10 +52,13 @@ export const nearbyState = reactive({
 });
 
 const rooms: Partial<Record<RoomKind, NearbyRoom>> = {};
-/** While visible, recycle relay sockets so a silently dead one cannot hide devices. */
-export const NEARBY_RELAY_REFRESH_MS = 30_000;
-let relayWatchdog: ReturnType<typeof setInterval> | null = null;
+const OWN_RESTART_DELAYS_MS = [1_500, 5_000, 15_000] as const;
 let stopResumeWatch: (() => void) | null = null;
+let ownRoomKey: NearbyRoomKey | null = null;
+let ownRoomGeneration = 0;
+let ownRestartAttempts = 0;
+let ownRestartTimer: ReturnType<typeof setTimeout> | null = null;
+let ownRetryStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function refreshNearbyDiscovery() {
   if (!rooms.own && !rooms.pair) return;
@@ -63,19 +66,28 @@ export function refreshNearbyDiscovery() {
   void refreshNearbyRelaySockets().catch(() => undefined);
 }
 
-function updateRelayWatchdog() {
+function updateRelayResumeWatch() {
   const active = !!(rooms.own || rooms.pair);
-  if (active && !relayWatchdog) {
-    relayWatchdog = setInterval(() => {
-      if (typeof document === "undefined" || document.visibilityState === "visible") refreshNearbyDiscovery();
-    }, NEARBY_RELAY_REFRESH_MS);
+  if (active && !stopResumeWatch) {
     stopResumeWatch = onAppResume(() => refreshNearbyDiscovery());
-  } else if (!active && relayWatchdog) {
-    clearInterval(relayWatchdog);
-    relayWatchdog = null;
+  } else if (!active && stopResumeWatch) {
     stopResumeWatch?.();
     stopResumeWatch = null;
   }
+}
+
+function clearOwnRestartTimers() {
+  if (ownRestartTimer) clearTimeout(ownRestartTimer);
+  if (ownRetryStatusTimer) clearTimeout(ownRetryStatusTimer);
+  ownRestartTimer = null;
+  ownRetryStatusTimer = null;
+}
+
+function finishOwnRetryLater(generation: number) {
+  if (ownRetryStatusTimer) clearTimeout(ownRetryStatusTimer);
+  ownRetryStatusTimer = setTimeout(() => {
+    if (generation === ownRoomGeneration) nearbyState.ownRetrying = false;
+  }, 60_000);
 }
 const offerQueue: PendingOffer[] = [];
 let offerListener: ((offer: PendingOffer) => void) | null = pending => {
@@ -103,14 +115,24 @@ function peersFor(kind: RoomKind) {
 }
 
 function makeRoom(kind: RoomKind) {
-  return new NearbyRoom(nearbyState.deviceName, {
+  let room: NearbyRoom;
+  room = new NearbyRoom(nearbyState.deviceName, {
     onPeers: next => {
+      if (rooms[kind] !== room) return;
       if (kind === "own") nearbyState.ownPeers = next;
       else nearbyState.pairPeers = next;
+      if (kind === "own" && Object.keys(next).length) {
+        ownRestartAttempts = 0;
+        nearbyState.ownRetrying = false;
+        clearOwnRestartTimers();
+      }
     },
     onError: message => {
-      if (kind === "own") nearbyState.ownError = message;
-      else nearbyState.pairError = message;
+      if (rooms[kind] !== room) return;
+      if (kind === "own") {
+        nearbyState.ownError = message;
+        if (message.includes("could not connect to peer")) scheduleOwnRoomRestart();
+      } else nearbyState.pairError = message;
     },
     onOffer: offer => new Promise<boolean>(resolve => {
       const peerName = peersFor(kind)[offer.from] || "附近的设备";
@@ -149,6 +171,50 @@ function makeRoom(kind: RoomKind) {
       });
     },
   });
+  return room;
+}
+
+async function replaceOwnDevicesRoom(account: string, key: NearbyRoomKey, preserveError = false) {
+  const generation = ++ownRoomGeneration;
+  const previous = rooms.own;
+  rooms.own = undefined;
+  nearbyState.ownJoined = false;
+  nearbyState.ownPeers = {};
+  if (!preserveError) nearbyState.ownError = "";
+  if (previous) await previous.leave().catch(() => undefined);
+  if (generation !== ownRoomGeneration || ownRoomKey !== key || nearbyState.ownAccount !== account) return;
+
+  const room = makeRoom("own");
+  rooms.own = room;
+  try {
+    await room.join(key);
+    if (generation === ownRoomGeneration && rooms.own === room) {
+      nearbyState.ownJoined = true;
+      updateRelayResumeWatch();
+      if (nearbyState.ownRetrying) finishOwnRetryLater(generation);
+    }
+  } catch (error) {
+    if (generation === ownRoomGeneration && rooms.own === room) rooms.own = undefined;
+    throw error;
+  }
+}
+
+function scheduleOwnRoomRestart() {
+  if (ownRestartTimer || !ownRoomKey || !nearbyState.ownAccount) return;
+  const delay = OWN_RESTART_DELAYS_MS[ownRestartAttempts];
+  if (delay === undefined) {
+    nearbyState.ownRetrying = false;
+    return;
+  }
+  ownRestartAttempts++;
+  nearbyState.ownRetrying = true;
+  const jitteredDelay = delay + Math.floor(Math.random() * 750);
+  ownRestartTimer = setTimeout(() => {
+    ownRestartTimer = null;
+    const key = ownRoomKey;
+    const account = nearbyState.ownAccount;
+    if (key && account) void replaceOwnDevicesRoom(account, key, true).catch(() => undefined);
+  }, jitteredDelay);
 }
 
 /** Join (once) the room shared by every device of this account. */
@@ -156,34 +222,37 @@ export async function ensureOwnDevicesRoom(account: string, privateKeyHex: strin
   const normalized = account.toLowerCase();
   if (rooms.own && nearbyState.ownAccount === normalized) return;
   await leaveOwnDevicesRoom();
-  const room = makeRoom("own");
-  rooms.own = room;
+  const key = await ownDevicesRoom(privateKeyHex);
+  ownRoomKey = key;
+  ownRoomId = key.roomId;
   nearbyState.ownAccount = normalized;
   nearbyState.ownError = "";
-  try {
-    const key = await ownDevicesRoom(privateKeyHex);
-    ownRoomId = key.roomId;
-    await room.join(key);
-    if (rooms.own === room) nearbyState.ownJoined = true;
-    updateRelayWatchdog();
-  } catch (error) {
-    if (rooms.own === room) {
-      rooms.own = undefined;
-      nearbyState.ownAccount = "";
-    }
-    throw error;
-  }
+  await replaceOwnDevicesRoom(normalized, key);
+}
+
+/** Rebuild a failed long-lived room instead of reusing its stale peer state. */
+export async function restartOwnDevicesRoom() {
+  if (!ownRoomKey || !nearbyState.ownAccount) throw new Error("nearby_not_joined");
+  clearOwnRestartTimers();
+  ownRestartAttempts = 0;
+  nearbyState.ownRetrying = true;
+  await replaceOwnDevicesRoom(nearbyState.ownAccount, ownRoomKey);
 }
 
 export async function leaveOwnDevicesRoom() {
+  ownRoomGeneration++;
+  clearOwnRestartTimers();
+  ownRestartAttempts = 0;
+  ownRoomKey = null;
   const room = rooms.own;
   rooms.own = undefined;
   nearbyState.ownAccount = "";
   nearbyState.ownJoined = false;
   nearbyState.ownPeers = {};
   nearbyState.ownError = "";
+  nearbyState.ownRetrying = false;
   ownRoomId = "";
-  updateRelayWatchdog();
+  updateRelayResumeWatch();
   if (room) await room.leave();
 }
 
@@ -196,7 +265,7 @@ export async function startPairRoom(key: NearbyRoomKey) {
   nearbyState.pairError = "";
   try {
     await room.join(key);
-    updateRelayWatchdog();
+    updateRelayResumeWatch();
   } catch (error) {
     await stopPairRoom();
     throw error;
@@ -209,7 +278,7 @@ export async function stopPairRoom() {
   nearbyState.pairKey = null;
   nearbyState.pairPeers = {};
   nearbyState.pairError = "";
-  updateRelayWatchdog();
+  updateRelayResumeWatch();
   if (room) await room.leave();
 }
 
@@ -237,6 +306,7 @@ export async function nearbyDiagnostics() {
     ownPeers: rooms.own?.peerConnections() || {},
     pairPeers: rooms.pair?.peerConnections() || {},
     ownError: nearbyState.ownError,
+    ownRetrying: nearbyState.ownRetrying,
     pairError: nearbyState.pairError,
     lastRefreshAt,
   };
