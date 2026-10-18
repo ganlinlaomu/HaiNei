@@ -85,7 +85,9 @@ describe("integration", () => {
 describe("rediscovery after leaving and coming back", () => {
   it("keeps rooms joined for the app session instead of leaving with the page", () => {
     const page = readFileSync("src/views/NearbyTransfer.vue", "utf8");
-    expect(page).not.toContain("onBeforeUnmount");
+    // The page may clean up its own timers, but never leaves a room on unmount.
+    const unmount = page.slice(page.indexOf("onBeforeUnmount("), page.indexOf("});", page.indexOf("onBeforeUnmount(")));
+    expect(unmount).not.toMatch(/leave|stop/i);
     expect(page).not.toMatch(/\.leave\(\)/);
     const session = readFileSync("src/services/nearbySession.ts", "utf8");
     expect(session).toContain('if (rooms.own && nearbyState.ownAccount === normalized) return;');
@@ -117,5 +119,16 @@ describe("half-open relay sockets", () => {
     expect(session).toContain('document.visibilityState === "visible") refreshNearbyDiscovery();');
     // Entering the page announces this visit on fresh sockets.
     expect(readFileSync("src/views/NearbyTransfer.vue", "utf8")).toMatch(/onMounted\(\(\) => \{[\s\S]{0,140}refreshNearbyDiscovery\(\);/);
+  });
+});
+
+describe("diagnostics", () => {
+  it("shows comparable room fingerprints and connection states, plus a manual re-search", () => {
+    const page = readFileSync("src/views/NearbyTransfer.vue", "utf8");
+    expect(page).toContain("<summary>诊断信息</summary>");
+    expect(page).toContain("房间指纹");
+    expect(page).toContain('"重新搜索"');
+    const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");
+    expect(service).toContain("export async function roomFingerprint(roomId: string)");
   });
 });

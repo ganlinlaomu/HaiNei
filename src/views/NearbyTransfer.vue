@@ -14,6 +14,7 @@
         </li>
       </ul>
       <p v-else class="nearby-empty">{{ ownStatus }}</p>
+      <button class="link-button" type="button" @click="searchAgain">{{ searching ? "正在重新搜索…" : "重新搜索" }}</button>
     </section>
     <section v-else-if="keys.isLoggedIn" class="nearby-card">
       <h2>我的设备</h2>
@@ -66,6 +67,19 @@
       </ul>
     </section>
 
+    <details class="nearby-card diagnostics" @toggle="onDiagnosticsToggle">
+      <summary>诊断信息</summary>
+      <dl v-if="diagnostics" class="diag-list">
+        <dt>版本</dt><dd>v{{ APP_VERSION }} · {{ deviceName }}</dd>
+        <dt>账号</dt><dd>{{ diagnostics.account ? `${diagnostics.account.slice(0, 6)}…${diagnostics.account.slice(-6)}` : "未登录" }}</dd>
+        <dt>房间指纹</dt><dd>{{ diagnostics.ownRoom || "—" }}（两台设备应一致）</dd>
+        <dt>房间状态</dt><dd>{{ diagnostics.ownJoined ? "已加入" : "未加入" }} · 本机 ID {{ diagnostics.selfId || "—" }}</dd>
+        <dt>Relay</dt><dd><span v-for="relay in diagnostics.relays" :key="relay.host" class="diag-item">{{ relay.host }}：{{ relay.state }}</span><span v-if="!diagnostics.relays.length">尚未连接</span></dd>
+        <dt>设备连接</dt><dd><span v-for="(state, id) in diagnostics.ownPeers" :key="id" class="diag-item">{{ String(id).slice(0, 6) }} {{ nearbyState.ownPeers[id] || "" }}：{{ state }}</span><span v-if="!Object.keys(diagnostics.ownPeers).length">无</span></dd>
+        <dt>上次重连</dt><dd>{{ diagnostics.lastRefreshAt ? `${Math.round((Date.now() - diagnostics.lastRefreshAt) / 1000)} 秒前` : "—" }}</dd>
+      </dl>
+    </details>
+
     <input ref="fileInput" class="hidden-input" type="file" multiple @change="onFilesPicked" />
     <QrScannerSheet :open="scannerOpen" title="扫描配对二维码" @close="scannerOpen = false" @scanned="onScanned" />
 
@@ -87,7 +101,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { APP_VERSION } from "@/db/dexie";
 import { useRoute } from "vue-router";
 import qrcode from "qrcode-generator";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
@@ -106,6 +121,7 @@ import {
 import {
   answerPendingOffer,
   ensureOwnDevicesRoom,
+  nearbyDiagnostics,
   nearbyState,
   refreshNearbyDiscovery,
   sendNearbyFiles,
@@ -126,6 +142,34 @@ const scannerOpen = ref(false);
 const activeSend = ref<{ kind: RoomKind; peerId: string } | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const objectUrls = new WeakMap<File, string>();
+const searching = ref(false);
+const diagnostics = ref<Awaited<ReturnType<typeof nearbyDiagnostics>> | null>(null);
+let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
+
+async function loadDiagnostics() {
+  diagnostics.value = await nearbyDiagnostics();
+}
+
+function onDiagnosticsToggle(event: Event) {
+  const open = (event.target as HTMLDetailsElement).open;
+  if (diagnosticsTimer) clearInterval(diagnosticsTimer);
+  diagnosticsTimer = null;
+  if (!open) return;
+  void loadDiagnostics();
+  diagnosticsTimer = setInterval(() => { void loadDiagnostics(); }, 2_000);
+}
+
+/** Manual escape hatch: reconnect to the relays and announce again. */
+function searchAgain() {
+  searching.value = true;
+  refreshNearbyDiscovery();
+  void joinOwnRoom();
+  setTimeout(() => { searching.value = false; }, 3_000);
+}
+
+onBeforeUnmount(() => {
+  if (diagnosticsTimer) clearInterval(diagnosticsTimer);
+});
 
 const pairKey = computed(() => nearbyState.pairKey);
 const pendingOffer = computed(() => nearbyState.pendingOffer);
@@ -298,6 +342,11 @@ watch(ownDevicesAvailable, available => { if (available) void joinOwnRoom(); });
 .file-row progress{width:100%;height:6px}
 .file-action{display:inline-flex;min-height:36px;align-items:center;padding:0 12px;border:1px solid var(--bd-cbd5e1);border-radius:10px;background:var(--bg-fff);color:var(--fg-334155);font-size:13px;text-decoration:none;cursor:pointer}
 .hidden-input{display:none}
+.diagnostics summary{min-height:32px;color:var(--fg-64748b);font-size:14px;cursor:pointer}
+.diag-list{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:10px 0 0;font-size:12px;line-height:1.5}
+.diag-list dt{color:var(--fg-64748b)}
+.diag-list dd{margin:0;overflow-wrap:anywhere;color:var(--fg-334155)}
+.diag-item{display:block}
 .offer-overlay{position:fixed;inset:0;z-index:13000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.45)}
 .offer-sheet{width:min(100%,480px);box-sizing:border-box;padding:20px 20px calc(20px + env(safe-area-inset-bottom));border-radius:22px 22px 0 0;background:var(--bg-fff)}
 .offer-sheet h2{margin:0;font-size:18px}
