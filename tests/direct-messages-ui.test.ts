@@ -306,7 +306,9 @@ describe("direct-message navigation and UI contract", () => {
     const editor = readThemedSource(join(process.cwd(), "src/components/PostEditorModal.vue"), "utf8");
     const friends = readThemedSource(join(process.cwd(), "src/views/Friends.vue"), "utf8");
     expect(editor).toContain("audienceRecipients(");
-    expect(editor).toContain("audienceGroupsMeta(");
+    // The visibility label is derived from stored recipients, not memory-only metadata.
+    expect(editor).not.toContain("_localMeta");
+    expect(readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8")).toContain("postAudienceSummary(props.message.recipientPubkeys");
     expect(editor).toContain("normalizeSelectedAudienceGroups(");
     expect(editor).toContain("watch(groups, availableGroups =>");
     expect(editor).toContain("const recipientsCount = computed(() => recipients.value.length + Number(botMentioned.value))");

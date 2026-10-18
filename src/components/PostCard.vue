@@ -8,7 +8,7 @@
         <button class="profile-link name-link" type="button" @pointerdown="preloadProfile" @focus="preloadProfile" @click="openAuthor(message.pubkey, $event)">{{ displayName(message.pubkey) }}</button>
         <div class="author-meta">
           <time :datetime="new Date(message.created_at * 1000).toISOString()">{{ formatRelativeTime(message.created_at) }}</time>
-          <template v-if="isOwn && message._localMeta">
+          <template v-if="isOwn && audience">
             <span class="meta-separator" aria-hidden="true">·</span>
             <button class="audience-link" type="button" :aria-expanded="metaOpen" @click="toggleMeta">{{ visibilityLabel }}</button>
           </template>
@@ -62,7 +62,8 @@
     </div>
     <div v-if="metaOpen" class="panel">
       <div class="muted">对谁可见:</div>
-      <div v-for="group in message._localMeta?.groups || []" :key="group.name" class="meta-row"><span>{{ group.name }}</span><span>{{ group.count }} 人</span></div>
+      <div v-if="!audience?.groups.length" class="meta-row"><span>仅自己</span></div>
+      <div v-for="group in audience?.groups || []" :key="group.name" class="meta-row"><span>{{ group.name }}</span><span>{{ group.count }} 人</span></div>
     </div>
     <CommentSheet
       v-if="commentsOpen"
@@ -78,6 +79,8 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { InboxItem } from "@/stores/messages";
 import { useFriendsStore } from "@/stores/friends";
+import { useFriendshipsStore } from "@/stores/friendships";
+import { postAudienceSummary } from "@/utils/friendAudience";
 import { useInteractionsStore } from "@/stores/interactions";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
@@ -104,7 +107,7 @@ const CommentSheet = defineAsyncComponent(loadCommentSheet);
 
 const props = withDefaults(defineProps<{ message: InboxItem; openCommentId?: string; flat?: boolean }>(), { flat: false });
 const emit = defineEmits<{ height: [id: string, height: number] }>();
-const keys = useKeyStore(); const friends = useFriendsStore(); const interactions = useInteractionsStore(); const ui = useUIStore();
+const keys = useKeyStore(); const friends = useFriendsStore(); const friendships = useFriendshipsStore(); const interactions = useInteractionsStore(); const ui = useUIStore();
 const posts = usePostsStore();
 const profiles = useProfilesStore();
 const router = useRouter();
@@ -131,12 +134,11 @@ const isOwn = computed(() => props.message.pubkey === keys.pkHex);
 const deliveryState = computed(() => props.message.outgoing?.state);
 const retryingDelivery = ref(false);
 const bookmarked = computed(() => bookmarks.isBookmarked(props.message.id));
-const visibilityLabel = computed(() => {
-  const groups = props.message._localMeta?.groups || [];
-  if (groups.length === 0) return "仅自己可见";
-  if (groups.length === 1 && groups[0].name === "全部好友") return "全部好友";
-  return `${props.message._localMeta?.groupCount || groups.length} 个分组`;
-});
+// Derived from the recipients stored with the post, so it survives reloads.
+const audience = computed(() => isOwn.value
+  ? postAudienceSummary(props.message.recipientPubkeys, keys.pkHex, friends.getAcceptedList(friendships.isAccepted))
+  : null);
+const visibilityLabel = computed(() => audience.value?.label || "");
 function localName(pubkey: string) { if (pubkey === keys.pkHex) return "自己"; return friends.list.find(friend => friend.pubkey === pubkey)?.name; }
 function displayName(pubkey: string) { return privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localName(pubkey)); }
 function preloadProfile() { void loadProfileView(); }

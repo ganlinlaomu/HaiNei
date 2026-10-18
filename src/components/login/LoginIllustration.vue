@@ -2,7 +2,7 @@
   <div
     class="illustration"
     role="img"
-    aria-label="晴朗的蓝天下，一家人在开满小花的草坡上快乐地奔跑、放风筝"
+    aria-label="晴朗的蓝天下，一对年轻人在开满小花的草坡上张开手臂奔跑，远处是海湾小镇和火车"
   >
     <img
       class="artwork"
