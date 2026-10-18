@@ -52,18 +52,34 @@ export const nearbyState = reactive({
 });
 
 const rooms: Partial<Record<RoomKind, NearbyRoom>> = {};
+let ownGeneration = 0;
+let pairGeneration = 0;
 let stopResumeWatch: (() => void) | null = null;
+let discoveryRefresh: Promise<void> | null = null;
 
 export function refreshNearbyDiscovery() {
-  if (!rooms.own && !rooms.pair) return;
+  if (!rooms.own && !rooms.pair) return Promise.resolve();
+  if (discoveryRefresh) return discoveryRefresh;
   lastRefreshAt = Date.now();
-  void refreshNearbyRelaySockets().catch(() => undefined);
+  const current = { ...rooms };
+  discoveryRefresh = (async () => {
+    await refreshNearbyRelaySockets();
+    for (const kind of ["own", "pair"] as const) {
+      const room = current[kind];
+      const error = kind === "own" ? nearbyState.ownError : nearbyState.pairError;
+      if (!room || rooms[kind] !== room || !error.includes("could not connect to peer") || Object.keys(peersFor(kind)).length) continue;
+      if (kind === "own") nearbyState.ownError = "";
+      else nearbyState.pairError = "";
+      await room.restart();
+    }
+  })().finally(() => { discoveryRefresh = null; });
+  return discoveryRefresh;
 }
 
 function updateRelayResumeWatch() {
   const active = !!(rooms.own || rooms.pair);
   if (active && !stopResumeWatch) {
-    stopResumeWatch = onAppResume(() => refreshNearbyDiscovery());
+    stopResumeWatch = onAppResume(() => refreshNearbyDiscovery().catch(() => undefined));
   } else if (!active && stopResumeWatch) {
     stopResumeWatch?.();
     stopResumeWatch = null;
@@ -147,13 +163,17 @@ function makeRoom(kind: RoomKind) {
 export async function ensureOwnDevicesRoom(account: string, privateKeyHex: string) {
   const normalized = account.toLowerCase();
   if (rooms.own && nearbyState.ownAccount === normalized) return;
-  await leaveOwnDevicesRoom();
+  const leaving = leaveOwnDevicesRoom();
+  const generation = ownGeneration;
+  await leaving;
+  if (generation !== ownGeneration) return;
   const room = makeRoom("own");
   rooms.own = room;
   nearbyState.ownAccount = normalized;
   nearbyState.ownError = "";
   try {
     const key = await ownDevicesRoom(privateKeyHex);
+    if (generation !== ownGeneration || rooms.own !== room) return;
     ownRoomId = key.roomId;
     await room.join(key);
     if (rooms.own === room) nearbyState.ownJoined = true;
@@ -168,6 +188,7 @@ export async function ensureOwnDevicesRoom(account: string, privateKeyHex: strin
 }
 
 export async function leaveOwnDevicesRoom() {
+  ownGeneration++;
   const room = rooms.own;
   rooms.own = undefined;
   nearbyState.ownAccount = "";
@@ -181,7 +202,10 @@ export async function leaveOwnDevicesRoom() {
 
 export async function startPairRoom(key: NearbyRoomKey) {
   if (nearbyState.pairKey?.roomId === key.roomId && rooms.pair) return;
-  await stopPairRoom();
+  const leaving = stopPairRoom();
+  const generation = pairGeneration;
+  await leaving;
+  if (generation !== pairGeneration) return;
   const room = makeRoom("pair");
   rooms.pair = room;
   nearbyState.pairKey = key;
@@ -190,12 +214,13 @@ export async function startPairRoom(key: NearbyRoomKey) {
     await room.join(key);
     updateRelayResumeWatch();
   } catch (error) {
-    await stopPairRoom();
+    if (rooms.pair === room) await stopPairRoom();
     throw error;
   }
 }
 
 export async function stopPairRoom() {
+  pairGeneration++;
   const room = rooms.pair;
   rooms.pair = undefined;
   nearbyState.pairKey = null;
@@ -219,7 +244,7 @@ let lastRefreshAt = 0;
 
 /** Everything needed to compare two devices from screenshots. */
 export async function nearbyDiagnostics() {
-  const relay = await nearbyRelayStates().catch(() => ({ selfId: "", relays: [] as Array<{ host: string; state: string }> }));
+  const relay = await nearbyRelayStates().catch(() => ({ selfId: "", relays: [] as Array<{ host: string; state: string; rejection: string }> }));
   return {
     account: nearbyState.ownAccount,
     ownRoom: ownRoomId ? await roomFingerprint(ownRoomId) : "",
@@ -227,6 +252,7 @@ export async function nearbyDiagnostics() {
     selfId: relay.selfId,
     relays: relay.relays,
     ownPeers: rooms.own?.peerConnections() || {},
+    negotiations: rooms.own?.negotiations() || [],
     pairPeers: rooms.pair?.peerConnections() || {},
     ownError: nearbyState.ownError,
     pairError: nearbyState.pairError,

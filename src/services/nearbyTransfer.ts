@@ -1,5 +1,6 @@
 import type { Room } from "trystero";
 import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
+import { createNearbyRtcDiagnostics } from "@/services/nearbyRtcDiagnostics";
 
 /**
  * 附近传输 between a person's own devices (and QR-paired browsers).
@@ -57,24 +58,61 @@ export function parsePairing(value: string): NearbyRoomKey | null {
   return match ? { roomId: match[1].toLowerCase(), password: match[2].toLowerCase() } : null;
 }
 
-/**
- * Re-open Trystero's relay sockets. iOS suspension and idle proxies (e.g.
- * Tailscale Funnel) can leave a socket half-open: the browser still reports
- * OPEN, so Trystero neither reconnects nor resubscribes, and announcements
- * vanish. Closing it runs Trystero's normal reconnect, which resubscribes
- * and re-announces. Established peer connections are unaffected.
+const RELAY_PROBE_TIMEOUT_MS = 8_000;
+let relayRefresh: Promise<number> | null = null;
+
+/** Check application-level liveness before closing a possibly half-open socket.
+ * Closing a healthy signaling socket discards Trystero's in-flight candidates.
  */
-export async function refreshNearbyRelaySockets() {
+function probeNearbySocket(socket: WebSocket): Promise<boolean> {
+  return new Promise(resolve => {
+    let settled = false;
+    const id = `nearby-probe-${bytesToHex(crypto.getRandomValues(new Uint8Array(8)))}`;
+    const finish = (healthy: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.removeEventListener("message", onMessage);
+      socket.removeEventListener("close", onClose);
+      if (socket.readyState === WebSocket.OPEN) {
+        try { socket.send(JSON.stringify(["CLOSE", id])); } catch { /* suspension */ }
+      }
+      resolve(healthy);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (typeof event.data !== "string" || event.data.length > 1024 || !event.data.includes(id)) return;
+      try {
+        const [type, subscription] = JSON.parse(event.data);
+        if (subscription === id && (type === "EOSE" || type === "CLOSED")) finish(true);
+      } catch { /* not our response */ }
+    };
+    const onClose = () => finish(false);
+    const timer = setTimeout(() => finish(false), RELAY_PROBE_TIMEOUT_MS);
+    socket.addEventListener("message", onMessage);
+    socket.addEventListener("close", onClose);
+    try {
+      socket.send(JSON.stringify(["REQ", id, { kinds: [0], authors: ["0".repeat(64)], limit: 0 }]));
+    } catch { finish(false); }
+  });
+}
+
+async function checkNearbyRelaySockets() {
   const { getRelaySockets } = await import("trystero");
   const sockets = (getRelaySockets() || {}) as Record<string, WebSocket | undefined>;
   let refreshed = 0;
-  for (const socket of Object.values(sockets)) {
-    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+  await Promise.all(Object.values(sockets).map(async socket => {
+    // Let the library finish an existing connection attempt by itself.
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (!await probeNearbySocket(socket) && socket.readyState === WebSocket.OPEN) {
       socket.close();
       refreshed++;
     }
-  }
+  }));
   return refreshed;
+}
+
+export function refreshNearbyRelaySockets() {
+  return relayRefresh ??= checkNearbyRelaySockets().finally(() => { relayRefresh = null; });
 }
 
 /** Short, non-reversible label so two devices can compare rooms on screen. */
@@ -83,15 +121,37 @@ export async function roomFingerprint(roomId: string) {
   return Array.from(new Uint8Array(digest).slice(0, 3), byte => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
+const observedSockets = new WeakSet<WebSocket>();
+const relayRejections = new WeakMap<WebSocket, string>();
+
+function observeRelayRejections(socket: WebSocket) {
+  if (observedSockets.has(socket)) return;
+  observedSockets.add(socket);
+  socket.addEventListener("message", event => {
+    if (typeof event.data !== "string" || event.data.length > 2048) return;
+    try {
+      const [type, , payload, reason] = JSON.parse(event.data);
+      if (type === "OK" && payload === true) relayRejections.delete(socket);
+      const rejection = type === "CLOSED" ? payload : type === "OK" && payload === false ? reason : "";
+      if (typeof rejection !== "string") return;
+      if (rejection.startsWith("auth-required:")) relayRejections.set(socket, "Relay 要求认证，附近传输未认证");
+      else if (rejection.startsWith("rate-limited:")) relayRejections.set(socket, "Relay 限流");
+      else if (/^(blocked|restricted|pow):/.test(rejection)) relayRejections.set(socket, "Relay 拒绝访问");
+    } catch { /* unrelated frame */ }
+  });
+}
+
 export async function nearbyRelayStates() {
   const { getRelaySockets, selfId } = await import("trystero");
   const names = ["连接中", "已连接", "关闭中", "已断开"];
   const sockets = (getRelaySockets() || {}) as Record<string, WebSocket | undefined>;
+  for (const socket of Object.values(sockets)) if (socket) observeRelayRejections(socket);
   return {
     selfId: String(selfId || "").slice(0, 6),
     relays: Object.entries(sockets).map(([url, socket]) => ({
       host: url.replace(/^wss?:\/\//, "").replace(/\/$/, ""),
       state: socket ? names[socket.readyState] || "未知" : "无",
+      rejection: socket ? relayRejections.get(socket) || "" : "",
     })),
   };
 }
@@ -148,6 +208,9 @@ export type NearbyRoomHandlers = {
 /** One joined room: device names, offers that must be accepted, then files. */
 export class NearbyRoom {
   private room: Room | null = null;
+  private rtcDiagnostics: ReturnType<typeof createNearbyRtcDiagnostics> | null = null;
+  private key: NearbyRoomKey | null = null;
+  private generation = 0;
   private readonly names: Record<string, string> = {};
   private readonly accepted = new Map<string, { from: string; files: NearbyFileMeta[] }>();
   private sendHello: ((reply: boolean, target: string) => Promise<void>) | null = null;
@@ -158,22 +221,31 @@ export class NearbyRoom {
   constructor(private readonly deviceName: string, private readonly handlers: NearbyRoomHandlers) {}
 
   async join(key: NearbyRoomKey) {
-    const { joinRoom } = await import("trystero");
+    const generation = ++this.generation;
+    this.key = key;
+    const { joinRoom, getRelaySockets } = await import("trystero");
+    if (generation !== this.generation) return;
+    const active = () => generation === this.generation;
+    this.rtcDiagnostics = createNearbyRtcDiagnostics(RTCPeerConnection);
     const room = joinRoom({
       appId: NEARBY_APP_ID,
       password: key.password,
       maxReceiveBytes: NEARBY_MAX_BATCH_BYTES,
       relayConfig: { urls: [...DEFAULT_RELAY_URLS], redundancy: DEFAULT_RELAY_URLS.length },
       rtcConfig: { iceServers: ICE_SERVERS },
+      rtcPolyfill: this.rtcDiagnostics.PeerConnection,
     }, key.roomId, {
-      onJoinError: ({ error }) => this.handlers.onError(error),
+      onJoinError: ({ error }) => { if (active()) this.handlers.onError(error); },
     });
     this.room = room;
+    const sockets = getRelaySockets() as Record<string, WebSocket | undefined>;
+    for (const socket of Object.values(sockets)) if (socket) observeRelayRejections(socket);
 
     // Names are exchanged both ways: a peer that rejoined (or missed our
     // first hello) asks again, and unnamed peers are re-greeted until known.
     const hello = room.makeAction<{ name: string; reply: boolean }>("hello", {
       onMessage: (data, { peerId }) => {
+        if (!active()) return;
         const wasKnown = !!this.names[peerId] && this.names[peerId] !== NEARBY_UNNAMED_PEER;
         this.names[peerId] = String(data?.name || "附近的设备").slice(0, 40);
         this.handlers.onPeers({ ...this.names });
@@ -185,9 +257,11 @@ export class NearbyRoom {
     const offer = room.makeAction<any, boolean>("offer", {
       kind: "request",
       onRequest: async (data, { peerId }) => {
+        if (!active()) return false;
         const sanitized = sanitizeOffer(data, peerId);
         if (!sanitized || batchBytes(sanitized.files) > NEARBY_MAX_BATCH_BYTES) return false;
         const ok = await this.handlers.onOffer(sanitized);
+        if (!active()) return false;
         if (ok) this.accepted.set(sanitized.id, { from: peerId, files: sanitized.files });
         return ok;
       },
@@ -197,16 +271,19 @@ export class NearbyRoom {
     const file = room.makeAction<ArrayBuffer | Blob>("file", {
       // Refuse bytes nobody accepted, or larger than what was announced.
       onReceive: ({ peerId, metadata, byteLength }) => {
+        if (!active()) return false;
         const meta = (metadata || {}) as { offerId?: string; index?: number };
         const entry = this.accepted.get(String(meta.offerId));
         const announced = entry?.files[Number(meta.index)];
         return !!entry && entry.from === peerId && !!announced && byteLength <= announced.size + 1024;
       },
       onReceiveProgress: (percent, { metadata }) => {
+        if (!active()) return;
         const meta = (metadata || {}) as { offerId?: string; index?: number };
         this.handlers.onReceiveProgress(String(meta.offerId), Number(meta.index), percent);
       },
       onMessage: (data, { peerId, metadata }) => {
+        if (!active()) return;
         const meta = (metadata || {}) as { offerId?: string; index?: number };
         const entry = this.accepted.get(String(meta.offerId));
         const announced = entry?.files[Number(meta.index)];
@@ -218,12 +295,14 @@ export class NearbyRoom {
       file.send(data, { target, metadata, onProgress: progress => onProgress(progress) });
 
     room.onPeerJoin = peerId => {
+      if (!active()) return;
       this.handlers.onError("");
       if (!this.names[peerId]) this.names[peerId] = NEARBY_UNNAMED_PEER;
       this.handlers.onPeers({ ...this.names });
       void this.sendHello?.(false, peerId);
     };
     room.onPeerLeave = peerId => {
+      if (!active()) return;
       delete this.names[peerId];
       this.handlers.onPeers({ ...this.names });
     };
@@ -255,12 +334,36 @@ export class NearbyRoom {
     return Object.fromEntries(Object.entries(peers).map(([id, pc]) => [id, pc?.connectionState || "unknown"]));
   }
 
+  negotiations() {
+    return this.rtcDiagnostics?.snapshots() || [];
+  }
+
+  /** Fresh negotiation without reconnecting healthy shared relay sockets. */
+  async restart() {
+    const key = this.key;
+    if (!key) return;
+    const generation = this.generation + 1;
+    await this.leave();
+    // A simultaneous logout/account switch invalidates this restart.
+    if (generation !== this.generation) return;
+    await this.join(key);
+  }
+
   async leave() {
+    this.generation++;
+    this.key = null;
     const room = this.room;
+    const diagnostics = this.rtcDiagnostics;
+    this.rtcDiagnostics = null;
     this.room = null;
     if (this.helloTimer) clearInterval(this.helloTimer);
     this.helloTimer = null;
     this.accepted.clear();
+    this.requestOffer = null;
+    this.sendFile = null;
+    this.sendHello = null;
+    for (const peerId of Object.keys(this.names)) delete this.names[peerId];
     if (room) await room.leave().catch(() => undefined);
+    diagnostics?.clear();
   }
 }
