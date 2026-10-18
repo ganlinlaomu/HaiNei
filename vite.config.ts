@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import path from "path";
 import { cspMetaPlugin } from "./build-plugins/cspMeta";
+import { swPrecachePlugin } from "./build-plugins/swPrecache";
 
 const DEFAULT_PORT = 5173;
 
@@ -11,7 +12,7 @@ const ALLOWED_HOSTS = rawAllowed === "" ? [] : rawAllowed.split(",").map(s => s.
 
 export default defineConfig({
   // Dev server keeps no CSP so Vite HMR (ws://) keeps working.
-  plugins: [vue(), cspMetaPlugin(path.resolve(__dirname, "public/_headers"))],
+  plugins: [vue(), cspMetaPlugin(path.resolve(__dirname, "public/_headers")), swPrecachePlugin()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src")

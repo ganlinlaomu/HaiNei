@@ -16,17 +16,23 @@ const PUSH_HINT_MAX_ITEMS = 32;
 const DM_NOTIFICATION_TAG = 'hainei-dm';
 // Lie-fi (signal but no throughput) must not hold the app shell hostage.
 const NAVIGATION_TIMEOUT_MS = 3000;
+// Every built JS/CSS chunk, so lazily loaded pages open offline too.
+const PRECACHE_ASSETS = []; // filled in by build-plugins/swPrecache.ts
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', VERSION, BUILD_ID);
   event.waitUntil(
-    caches.open(ASSETS_CACHE).then((cache) =>
-      cache.addAll([
+    caches.open(ASSETS_CACHE).then(async (cache) => {
+      await cache.addAll([
         '/manifest.json',
         '/icon-192.png',
         '/icon-512.png'
-      ])
-    )
+      ]);
+      // One unreachable chunk must not abort the install; it is fetched on demand.
+      const results = await Promise.allSettled(PRECACHE_ASSETS.map((url) => cache.add(url)));
+      const failed = results.filter((result) => result.status === 'rejected').length;
+      console.log('[SW] precached', PRECACHE_ASSETS.length - failed, '/', PRECACHE_ASSETS.length);
+    })
   );
 });
 
