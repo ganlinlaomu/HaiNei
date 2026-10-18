@@ -41,7 +41,8 @@
             <button class="peer-send" type="button" :disabled="!!activeSend" @click="pickFiles('pair', peer.id)">发送文件</button>
           </li>
         </ul>
-        <p v-else-if="!pairQr" class="nearby-empty">正在连接…</p>
+        <p v-if="nearbyState.pairError" class="nearby-empty">{{ joinErrorText(nearbyState.pairError) }}</p>
+        <p v-else-if="!pairQr && !pairPeerList.length" class="nearby-empty">正在连接…</p>
         <button class="link-button" type="button" @click="stopPairing">结束配对</button>
       </template>
     </section>
@@ -76,6 +77,7 @@
         <dt>房间状态</dt><dd>{{ diagnostics.ownJoined ? "已加入" : "未加入" }} · 本机 ID {{ diagnostics.selfId || "—" }}</dd>
         <dt>Relay</dt><dd><span v-for="relay in diagnostics.relays" :key="relay.host" class="diag-item">{{ relay.host }}：{{ relay.state }}</span><span v-if="!diagnostics.relays.length">尚未连接</span></dd>
         <dt>设备连接</dt><dd><span v-for="(state, id) in diagnostics.ownPeers" :key="id" class="diag-item">{{ String(id).slice(0, 6) }} {{ nearbyState.ownPeers[id] || "" }}：{{ state }}</span><span v-if="!Object.keys(diagnostics.ownPeers).length">无</span></dd>
+        <dt v-if="diagnostics.ownError">连接错误</dt><dd v-if="diagnostics.ownError">{{ joinErrorText(diagnostics.ownError) }}</dd>
         <dt>上次重连</dt><dd>{{ diagnostics.lastRefreshAt ? `${Math.round((Date.now() - diagnostics.lastRefreshAt) / 1000)} 秒前` : "—" }}</dd>
       </dl>
     </details>
@@ -177,9 +179,17 @@ const transfers = computed(() => nearbyState.transfers);
 const ownDevicesAvailable = computed(() => keys.isLoggedIn && keys.loginMethod === "private-key" && /^[0-9a-f]{64}$/.test(keys.skHex));
 const ownPeerList = computed(() => Object.entries(nearbyState.ownPeers).map(([id, name]) => ({ id, name })));
 const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).map(([id, name]) => ({ id, name })));
-const ownStatus = computed(() => nearbyState.ownJoined
-  ? "在你的其他设备上打开「附近传输」，它们会出现在这里。"
-  : "正在寻找你的其他设备…");
+function joinErrorText(error: string) {
+  if (error.includes("incorrect room password")) return "已发现设备，但房间密码不一致";
+  if (error.includes("could not connect to peer")) return "已发现设备，但 WebRTC 直连失败；当前网络可能需要 TURN 中继";
+  return error;
+}
+
+const ownStatus = computed(() => nearbyState.ownError
+  ? joinErrorText(nearbyState.ownError)
+  : nearbyState.ownJoined
+    ? "在你的其他设备上打开「附近传输」，它们会出现在这里。"
+    : "正在寻找你的其他设备…");
 
 async function joinOwnRoom() {
   if (!ownDevicesAvailable.value) return;
