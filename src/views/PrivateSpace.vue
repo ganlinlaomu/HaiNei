@@ -563,7 +563,14 @@ watch(() => editor.value?.accountPubkey || "", (account, previousAccount) => {
   if (account) setPrivateSpaceEditing(account, true);
 }, { flush: "sync" });
 
-watch(() => [keys.pkHex, keys.isUnlocked] as const, ([account, unlocked]) => {
+// isUnlocked turns true before keys.loadAccountStores unlocks the local
+// vault; reading earlier fails with local_vault_locked (seen on a cold start
+// straight into 私人空间, e.g. offline). Wait until the account is ready.
+watch(() => [keys.pkHex, keys.isUnlocked, keys.accountStoresReadyFor] as const, ([account, unlocked, readyFor]) => {
+  if (unlocked && account && readyFor !== account) {
+    loading.value = true; // keep the loading state instead of a false "暂无"
+    return;
+  }
   void loadForAccount(unlocked ? account : "");
 }, { immediate: true });
 

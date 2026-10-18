@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.50",
-  "releaseSummary": "断网时立即提示离线，内容照常查看，发出的动态和私信联网后自动发送",
+  "version": "0.1.51",
+  "releaseSummary": "私人空间等所有页面都能离线打开，修复启动时偶发的读取失败",
   "private": true,
   "scripts": {
     "dev": "vite",

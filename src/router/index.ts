@@ -153,8 +153,12 @@ router.beforeEach(async (to, from, next) => {
       if (appContainer) saveHomeScroll(keyStore.pkHex, appContainer.scrollTop);
     }
     
-    // If the store has not loaded its IndexedDB session yet, restore it now.
-    if (!keyStore.pkHex && !keyStore.loginMethod) {
+    // Wait for session restoration to finish. main.ts starts it before the
+    // first navigation and it sets pkHex/loginMethod *before* unlocking the
+    // local vault, so checking pkHex alone let views read a locked vault
+    // (blank Home, 私人空间「保存失败：local_vault_locked」). restoreSession()
+    // joins the in-flight restore instead of starting another one.
+    if (!keyStore.isRestored) {
       try {
         await keyStore.restoreSession();
       } catch (e) {
