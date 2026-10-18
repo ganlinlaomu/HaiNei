@@ -122,20 +122,6 @@ describe("half-open relay sockets", () => {
   });
 });
 
-describe("failed automatic-room recovery", () => {
-  it("rebuilds failed own-device rooms automatically and when re-searching", () => {
-    const session = readFileSync("src/services/nearbySession.ts", "utf8");
-    const page = readFileSync("src/views/NearbyTransfer.vue", "utf8");
-    expect(session).toContain("const OWN_RESTART_DELAYS_MS = [1_500, 5_000, 15_000]");
-    expect(session).toContain('message.includes("could not connect to peer")');
-    expect(session).toContain("scheduleOwnRoomRestart();");
-    expect(session).toContain("export async function restartOwnDevicesRoom()");
-    expect(page).toContain("await restartOwnDevicesRoom();");
-    expect(page).toContain("正在自动重建房间并重试");
-    expect(page).not.toContain("当前网络可能需要 TURN 中继");
-  });
-});
-
 describe("diagnostics", () => {
   it("shows comparable room fingerprints and connection states, plus a manual re-search", () => {
     const page = readFileSync("src/views/NearbyTransfer.vue", "utf8");
@@ -146,12 +132,13 @@ describe("diagnostics", () => {
     expect(service).toContain("export async function roomFingerprint(roomId: string)");
     expect(service).toContain("onJoinError: ({ error }) => this.handlers.onError(error)");
     expect(page).toContain("连接错误");
-    expect(page).toContain("直连协商失败");
+    expect(page).toContain("本次连接协商未完成");
+    expect(page).not.toContain("当前网络可能需要 TURN 中继");
   });
 });
 
 describe("clock-skew tolerant discovery", () => {
-  it("patches Trystero Nostr subscriptions with a 60-second lookback after install", () => {
+  it("waits for relay catch-up before announcing or accepting signaling", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
     const patcher = readFileSync("scripts/patch-trystero-nostr.js", "utf8");
     expect(packageJson.scripts.postinstall).toBe("node scripts/patch-trystero-nostr.js");
@@ -161,5 +148,39 @@ describe("clock-skew tolerant discovery", () => {
     const installedNostr = readFileSync("node_modules/@trystero-p2p/nostr/dist/index.mjs", "utf8");
     expect(installedNostr).toContain("since: now() - subscriptionLookbackSec,");
     expect(installedNostr).toContain("const since = now() - subscriptionLookbackSec;");
+    expect(installedNostr).toContain("if (topicTag?.[1] && isSubscriptionLive(batcher, subId))");
+    expect(installedNostr).toContain("if (isAnnouncement && !canPublishAnnouncement(batchers[client.url]))");
+    expect(installedNostr).toContain("if (isAnnouncement && (!canPublishAnnouncement(batchers[client.url])");
+    expect(installedNostr).toContain("if (batcher && finishSubscriptionCatchup(batcher, subId))");
+    expect(installedNostr).toContain('batcher.subIds.forEach((subId) => client.send(toJson(["CLOSE", subId])));');
+    expect(installedNostr).toContain("const subId = batcher.subIds[i] = genId(64);");
+
+    const helpersSource = installedNostr.match(
+      /const isSubscriptionLive[^\n]+\nconst canPublishAnnouncement[^\n]+\nconst finishSubscriptionCatchup[^\n]+/,
+    )?.[0];
+    expect(helpersSource).toBeTruthy();
+    const helpers = Function(
+      `${helpersSource}; return { isSubscriptionLive, canPublishAnnouncement, finishSubscriptionCatchup };`,
+    )() as {
+      isSubscriptionLive: (batcher: { pendingEose: Set<string> }, subId: string) => boolean;
+      canPublishAnnouncement: (batcher?: { pendingEose: Set<string> }) => boolean;
+      finishSubscriptionCatchup: (batcher: { pendingEose: Set<string> }, subId: string) => boolean;
+    };
+
+    const batcher = { pendingEose: new Set(["root-sub", "signal-sub"]) };
+    // A replayed announcement and old SDP/ICE are all ignored before EOSE.
+    expect(helpers.isSubscriptionLive(batcher, "root-sub")).toBe(false);
+    expect(helpers.isSubscriptionLive(batcher, "signal-sub")).toBe(false);
+    expect(helpers.canPublishAnnouncement(batcher)).toBe(false);
+    // Announce only after every chunk in the batch has finished catch-up.
+    expect(helpers.finishSubscriptionCatchup(batcher, "root-sub")).toBe(false);
+    expect(helpers.canPublishAnnouncement(batcher)).toBe(false);
+    expect(helpers.finishSubscriptionCatchup(batcher, "signal-sub")).toBe(true);
+    expect(helpers.canPublishAnnouncement(batcher)).toBe(true);
+    expect(helpers.isSubscriptionLive(batcher, "signal-sub")).toBe(true);
+    // Reconnect starts a new catch-up boundary and blocks replay again.
+    batcher.pendingEose.add("signal-sub");
+    expect(helpers.isSubscriptionLive(batcher, "signal-sub")).toBe(false);
+    expect(helpers.canPublishAnnouncement(batcher)).toBe(false);
   });
 });

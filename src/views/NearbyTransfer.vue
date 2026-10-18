@@ -77,7 +77,7 @@
         <dt>房间状态</dt><dd>{{ diagnostics.ownJoined ? "已加入" : "未加入" }} · 本机 ID {{ diagnostics.selfId || "—" }}</dd>
         <dt>Relay</dt><dd><span v-for="relay in diagnostics.relays" :key="relay.host" class="diag-item">{{ relay.host }}：{{ relay.state }}</span><span v-if="!diagnostics.relays.length">尚未连接</span></dd>
         <dt>设备连接</dt><dd><span v-for="(state, id) in diagnostics.ownPeers" :key="id" class="diag-item">{{ String(id).slice(0, 6) }} {{ nearbyState.ownPeers[id] || "" }}：{{ state }}</span><span v-if="!Object.keys(diagnostics.ownPeers).length">无</span></dd>
-        <dt v-if="diagnostics.ownError">连接错误</dt><dd v-if="diagnostics.ownError">{{ joinErrorText(diagnostics.ownError, diagnostics.ownRetrying) }}</dd>
+        <dt v-if="diagnostics.ownError">连接错误</dt><dd v-if="diagnostics.ownError">{{ joinErrorText(diagnostics.ownError) }}</dd>
         <dt>上次重连</dt><dd>{{ diagnostics.lastRefreshAt ? `${Math.round((Date.now() - diagnostics.lastRefreshAt) / 1000)} 秒前` : "—" }}</dd>
       </dl>
     </details>
@@ -126,7 +126,6 @@ import {
   nearbyDiagnostics,
   nearbyState,
   refreshNearbyDiscovery,
-  restartOwnDevicesRoom,
   sendNearbyFiles,
   startPairRoom,
   stopPairRoom,
@@ -163,17 +162,11 @@ function onDiagnosticsToggle(event: Event) {
 }
 
 /** Manual escape hatch: reconnect to the relays and announce again. */
-async function searchAgain() {
+function searchAgain() {
   searching.value = true;
   refreshNearbyDiscovery();
-  try {
-    await ensureOwnDevicesRoom(keys.pkHex, keys.skHex);
-    await restartOwnDevicesRoom();
-  } catch {
-    ui.addToast("无法重新建立附近传输房间，请检查网络", 2_400, "error");
-  } finally {
-    setTimeout(() => { searching.value = false; }, 1_000);
-  }
+  void joinOwnRoom();
+  setTimeout(() => { searching.value = false; }, 3_000);
 }
 
 onBeforeUnmount(() => {
@@ -186,16 +179,14 @@ const transfers = computed(() => nearbyState.transfers);
 const ownDevicesAvailable = computed(() => keys.isLoggedIn && keys.loginMethod === "private-key" && /^[0-9a-f]{64}$/.test(keys.skHex));
 const ownPeerList = computed(() => Object.entries(nearbyState.ownPeers).map(([id, name]) => ({ id, name })));
 const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).map(([id, name]) => ({ id, name })));
-function joinErrorText(error: string, retrying = false) {
+function joinErrorText(error: string) {
   if (error.includes("incorrect room password")) return "已发现设备，但房间密码不一致";
-  if (error.includes("could not connect to peer")) return retrying
-    ? "已发现设备，本次直连协商失败；正在自动重建房间并重试"
-    : "已发现设备，但多次直连协商失败；请点「重新搜索」";
+  if (error.includes("could not connect to peer")) return "已发现设备，但本次连接协商未完成；请点「重新搜索」";
   return error;
 }
 
 const ownStatus = computed(() => nearbyState.ownError
-  ? joinErrorText(nearbyState.ownError, nearbyState.ownRetrying)
+  ? joinErrorText(nearbyState.ownError)
   : nearbyState.ownJoined
     ? "在你的其他设备上打开「附近传输」，它们会出现在这里。"
     : "正在寻找你的其他设备…");
