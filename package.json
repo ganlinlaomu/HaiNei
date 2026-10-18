@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.51",
-  "releaseSummary": "私人空间等所有页面都能离线打开，修复启动时偶发的读取失败",
+  "version": "0.1.52",
+  "releaseSummary": "新增附近传输：自己的设备之间在同一 Wi-Fi 下直接传文件，不经过服务器",
   "private": true,
   "scripts": {
     "dev": "vite",
@@ -20,6 +20,7 @@
     "nostr-tools": "2.18.2",
     "pinia": "^2.1.3",
     "qrcode-generator": "2.0.4",
+    "trystero": "0.26.0",
     "vue": "^3.3.4",
     "vue-router": "^4.6.3"
   },
