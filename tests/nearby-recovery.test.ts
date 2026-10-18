@@ -48,6 +48,30 @@ async function startProbe(socket: Socket) {
 }
 
 describe("nearby signaling recovery", () => {
+  it("creates only one automatic room when startup and page entry overlap", async () => {
+    await Promise.all([
+      ensureOwnDevicesRoom("account", "1".repeat(64)),
+      ensureOwnDevicesRoom("account", "1".repeat(64)),
+    ]);
+    expect(trystero.rooms).toHaveLength(1);
+  });
+
+  it("does not join after logout while the secret room key is being derived", async () => {
+    let finishDigest!: (value: ArrayBuffer) => void;
+    const digest = vi.spyOn(crypto.subtle, "digest").mockImplementationOnce(() => new Promise<ArrayBuffer>(resolve => { finishDigest = resolve; }));
+    try {
+      const joining = ensureOwnDevicesRoom("account", "1".repeat(64));
+      await vi.waitFor(() => expect(digest).toHaveBeenCalled());
+      await resetNearby();
+      finishDigest(new Uint8Array(32).buffer);
+      await joining;
+      expect(trystero.rooms).toHaveLength(0);
+      expect(nearbyState.ownAccount).toBe("");
+    } finally {
+      digest.mockRestore();
+    }
+  });
+
   it("shows an authentication rejection without retaining the relay payload", async () => {
     const socket = new Socket();
     trystero.sockets = { relay: socket };

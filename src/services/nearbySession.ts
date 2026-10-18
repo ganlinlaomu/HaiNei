@@ -52,6 +52,8 @@ export const nearbyState = reactive({
 });
 
 const rooms: Partial<Record<RoomKind, NearbyRoom>> = {};
+let ownGeneration = 0;
+let pairGeneration = 0;
 let stopResumeWatch: (() => void) | null = null;
 let discoveryRefresh: Promise<void> | null = null;
 
@@ -161,13 +163,17 @@ function makeRoom(kind: RoomKind) {
 export async function ensureOwnDevicesRoom(account: string, privateKeyHex: string) {
   const normalized = account.toLowerCase();
   if (rooms.own && nearbyState.ownAccount === normalized) return;
-  await leaveOwnDevicesRoom();
+  const leaving = leaveOwnDevicesRoom();
+  const generation = ownGeneration;
+  await leaving;
+  if (generation !== ownGeneration) return;
   const room = makeRoom("own");
   rooms.own = room;
   nearbyState.ownAccount = normalized;
   nearbyState.ownError = "";
   try {
     const key = await ownDevicesRoom(privateKeyHex);
+    if (generation !== ownGeneration || rooms.own !== room) return;
     ownRoomId = key.roomId;
     await room.join(key);
     if (rooms.own === room) nearbyState.ownJoined = true;
@@ -182,6 +188,7 @@ export async function ensureOwnDevicesRoom(account: string, privateKeyHex: strin
 }
 
 export async function leaveOwnDevicesRoom() {
+  ownGeneration++;
   const room = rooms.own;
   rooms.own = undefined;
   nearbyState.ownAccount = "";
@@ -195,7 +202,10 @@ export async function leaveOwnDevicesRoom() {
 
 export async function startPairRoom(key: NearbyRoomKey) {
   if (nearbyState.pairKey?.roomId === key.roomId && rooms.pair) return;
-  await stopPairRoom();
+  const leaving = stopPairRoom();
+  const generation = pairGeneration;
+  await leaving;
+  if (generation !== pairGeneration) return;
   const room = makeRoom("pair");
   rooms.pair = room;
   nearbyState.pairKey = key;
@@ -204,12 +214,13 @@ export async function startPairRoom(key: NearbyRoomKey) {
     await room.join(key);
     updateRelayResumeWatch();
   } catch (error) {
-    await stopPairRoom();
+    if (rooms.pair === room) await stopPairRoom();
     throw error;
   }
 }
 
 export async function stopPairRoom() {
+  pairGeneration++;
   const room = rooms.pair;
   rooms.pair = undefined;
   nearbyState.pairKey = null;
