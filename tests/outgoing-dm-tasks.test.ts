@@ -572,3 +572,48 @@ describe("optimistic outgoing DM tasks", () => {
     expect(direct.outgoingTasks[0].state).toBe("upload_failed");
   });
 });
+
+describe("offline DM sending", () => {
+  it("keeps a message sent while offline pending and delivers it when the network returns", async () => {
+    const network = { onLine: false };
+    vi.stubGlobal("navigator", network);
+    mocks.send.mockImplementation(async (options: any) => {
+      await options.onQueued("canonical-1");
+      if (navigator.onLine === false) throw new Error("网络不可用，消息将在联网后重试");
+      return canonical();
+    });
+    mocks.publish.mockImplementation(async () => canonical());
+    const { direct } = seed();
+    direct.send(PEER, "你好");
+
+    await vi.waitFor(() => expect(direct.outgoingTasks[0]?.lastError).toBe("waiting_network"));
+    // Not a failure: no "发送失败 · 重试", the bubble stays pending.
+    expect(direct.outgoingTasks[0].state).toBe("sending");
+    expect(direct.peerMessages(PEER)[0].outgoing).toMatchObject({ state: "sending", lastError: "waiting_network" });
+
+    network.onLine = true;
+    mocks.queueGet.mockResolvedValue({ state: "waiting_network" });
+    await direct.resumePending(true);
+    await vi.waitFor(() => expect(direct.outgoingTasks[0].state).toBe("sent"));
+    vi.unstubAllGlobals();
+  });
+
+  it("still reports a real relay rejection as a failure while online", async () => {
+    mocks.send.mockRejectedValue(new Error("relay rejected"));
+    const { direct } = seed();
+    direct.send(PEER, "你好");
+    await vi.waitFor(() => expect(direct.outgoingTasks[0].state).toBe("send_failed"));
+  });
+});
+
+describe("offline status in the UI", () => {
+  it("tells people they are offline right away instead of showing sending forever", async () => {
+    const { readFileSync } = await import("node:fs");
+    const home = readFileSync("src/views/Home.vue", "utf8");
+    expect(home).toContain('if (!networkOnline.value) return "离线中 · 已缓存内容可以查看，发出的内容会在联网后自动发送";');
+    expect(readFileSync("src/components/PostCard.vue", "utf8")).toContain('networkOnline ? "发送中…" : "等待联网后发送"');
+    const chat = readFileSync("src/views/Messages.vue", "utf8");
+    expect(chat).toContain('case "sending": return waitingForNetwork(message) ? "等待联网" : "发送中…";');
+    expect(readFileSync("src/views/Conversations.vue", "utf8")).toContain('if (!networkOnline.value) return "离线";');
+  });
+});

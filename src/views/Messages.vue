@@ -398,6 +398,7 @@
 
 <script setup lang="ts">
 import { compareInboxItems } from "@/nostr/messaging/sync/sorting";
+import { networkOnline } from "@/services/networkStatus";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -414,7 +415,7 @@ import { disappearingMetadata, hasDisappearingMarker, isExpiredDisappearing, DIS
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { canImportDirectMessage } from "@/services/privateSpaceImport";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
-import { directMessagesForPeer, useDirectMessagesStore, type DmSearchResult } from "@/stores/directMessages";
+import { directMessagesForPeer, useDirectMessagesStore, WAITING_NETWORK_ERROR, type DmSearchResult } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
@@ -1098,10 +1099,14 @@ function statusKind(message: InboxItem) {
     }
   }
 }
+/** Paused until connectivity returns; resent automatically, not a failure. */
+function waitingForNetwork(message: InboxItem) {
+  return !networkOnline.value || message.outgoing?.lastError === WAITING_NETWORK_ERROR;
+}
 function statusLabel(message: InboxItem) {
   switch (statusKind(message)) {
-    case "uploading": return "上传中…";
-    case "sending": return "发送中…";
+    case "uploading": return waitingForNetwork(message) ? "等待联网" : "上传中…";
+    case "sending": return waitingForNetwork(message) ? "等待联网" : "发送中…";
     case "sent": return "✓ Relay 已接受";
     case "delivered": return "✓✓ 已送达";
     case "read": return "✓✓ 已读";

@@ -21,7 +21,7 @@
               :disabled="retryingDelivery"
               @click="retryPostDelivery"
             >{{ retryingDelivery ? "重试中…" : "发送失败 · 重试" }}</button>
-            <span v-else class="delivery-status">发送中…</span>
+            <span v-else class="delivery-status">{{ networkOnline ? "发送中…" : "等待联网后发送" }}</span>
           </template>
         </div>
       </div>
@@ -78,6 +78,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { InboxItem } from "@/stores/messages";
+import { networkOnline } from "@/services/networkStatus";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { postAudienceSummary } from "@/utils/friendAudience";

@@ -48,6 +48,7 @@ import { useFriendsStore } from "@/stores/friends";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { registerDirectMessageStateOwner } from "@/services/directMessageStateEvents";
 import { onAppResume } from "@/services/appResumeCoordinator";
+import { isOfflineSendError } from "@/services/networkStatus";
 import { scanMessageSearchPages } from "@/utils/messageSearch";
 
 type MessageCursor = { lastReadCreatedAt: number; lastReadMessageId: string; lastReadMs?: number };
@@ -153,6 +154,8 @@ function clearReceiptTimers() {
 function mergeReceiptCursor(current: DmReceiptCursor | undefined, next: DmReceiptCursor) {
   return receiptCursorAfter(next, current) ? next : current;
 }
+/** lastError marker for outgoing tasks paused until the network returns. */
+export const WAITING_NETWORK_ERROR = "waiting_network";
 /** A peer's client sends its read receipt within seconds of replying. */
 const READ_RECEIPT_SETTLE_SECONDS = 120;
 function readReceiptsEnabledForAccount(accountPubkey: string) {
@@ -1843,6 +1846,15 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         } catch (error) {
           const current = this.outgoingTasks.find(item => item.accountPubkey === account && item.localId === localId) || task;
           const phase = typeof error === "object" && error && "phase" in error ? String(error.phase) : "";
+          if (phase !== "persist_failed" && isOfflineSendError(error)) {
+            // Offline is not a failure: keep the task pending. The online
+            // resume (resumePending) re-runs uploading/sending tasks.
+            await this.patchTask(localId, {
+              state: current.state === "uploading" && !current.uploadedRef && !current.outgoingId ? "uploading" : "sending",
+              lastError: WAITING_NETWORK_ERROR,
+            }).catch(() => undefined);
+            return;
+          }
           await this.failTask(localId, phase === "persist_failed"
             ? "send_failed"
             : (current.imageBytes || current.preparedAudio) && !current.uploadedRef && !current.outgoingId ? "upload_failed" : "send_failed", error);

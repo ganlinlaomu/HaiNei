@@ -97,6 +97,7 @@ import { loadAccountStoresOnce, runAfterFirstPaint, runWhenIdle } from "@/utils/
 import { loadMessagesView } from "@/router/lazyViews";
 import { useSwipeActions } from "@/composables/useSwipeActions";
 import { sortConversationRows } from "@/utils/conversationOrder";
+import { networkOnline } from "@/services/networkStatus";
 import {
   getAccountMessageSyncStatus,
   messageSyncPhase,
@@ -118,6 +119,7 @@ const syncLabel = computed(() => {
   const snapshot = syncSnapshot.value;
   if (!keys.pkHex || snapshot.accountPubkey !== keys.pkHex.toLowerCase()) return "";
   const phase = messageSyncPhase(snapshot, directMessages.historyHydrationPhase === "hydrating");
+  if (!networkOnline.value) return "离线";
   return phase === "connecting" ? "连接中…" : phase === "syncing" ? "同步中…" : "";
 });
 const stopSyncStatusListener = onAccountMessageSyncStatus(snapshot => { syncSnapshot.value = snapshot; });

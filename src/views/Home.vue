@@ -88,6 +88,7 @@ import {
 } from "@/nostr/messaging/messageViewModel";
 import { buildHeightPrefix, resolveVirtualRange, updateHeightPrefix } from "@/utils/virtualFeed";
 import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
+import { networkOnline } from "@/services/networkStatus";
 
 
 // Constants for scroll and layout calculations
@@ -350,11 +351,13 @@ export default defineComponent({
         }, 2000);
       }
     }
-    const connectionNotice = computed(() =>
-      showRelayDisconnect.value && homeRelayState.value === "offline"
+    const connectionNotice = computed(() => {
+      // The OS knows about lost connectivity long before a WebSocket times out.
+      if (!networkOnline.value) return "离线中 · 已缓存内容可以查看，发出的内容会在联网后自动发送";
+      return showRelayDisconnect.value && homeRelayState.value === "offline"
         ? "正在重新连接…已缓存内容仍可查看"
-        : ""
-    );
+        : "";
+    });
 
     function applyAccountSyncStatus(snapshot = getAccountMessageSyncStatus()) {
       if (!keys.pkHex || snapshot.accountPubkey !== keys.pkHex.toLowerCase()) return;
