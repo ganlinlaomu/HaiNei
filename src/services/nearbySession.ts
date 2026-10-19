@@ -52,8 +52,6 @@ export type NearbyTransferRecord = {
   received: (File | undefined)[];
   source?: File[];
   wireId?: string;
-  resumable?: boolean;
-  deliveryConfirmed?: boolean;
   /** Per file: a sealed copy exists in this account's history. */
   stored?: boolean[];
   /** Restored from history; the original send can no longer be retried. */
@@ -68,15 +66,14 @@ export const nearbyState = reactive({
   ownAccount: "",
   ownJoined: false,
   ownPeers: {} as Record<string, string>,
-  ownTextPeers: {} as Record<string, boolean>,
-  ownChunkPeers: {} as Record<string, boolean>,
+  /** Peers on 海内 0.1.66+; older ones are listed but cannot be used. */
+  ownCompatible: {} as Record<string, boolean>,
   /** Trystero peer id -> stable device id, own devices only. */
   ownDevices: {} as Record<string, string>,
   ownError: "",
   pairKey: null as NearbyRoomKey | null,
   pairPeers: {} as Record<string, string>,
-  pairTextPeers: {} as Record<string, boolean>,
-  pairChunkPeers: {} as Record<string, boolean>,
+  pairCompatible: {} as Record<string, boolean>,
   pairError: "",
   transfers: [] as NearbyTransferRecord[],
   pendingOffer: null as PendingOffer | null,
@@ -170,6 +167,10 @@ function peersFor(kind: RoomKind) {
   return kind === "own" ? nearbyState.ownPeers : nearbyState.pairPeers;
 }
 
+function compatibleFor(kind: RoomKind) {
+  return kind === "own" ? nearbyState.ownCompatible : nearbyState.pairCompatible;
+}
+
 /**
  * A reloaded own device comes back under a new peer id. Point unfinished
  * outgoing records at it, so they resume (or can be retried) automatically.
@@ -187,21 +188,21 @@ function rebindOwnDevices(next: Record<string, string>, devices: Record<string, 
 
 function makeRoom(kind: RoomKind, deviceId = "") {
   return new NearbyRoom(nearbyState.deviceName, {
-    onPeers: (next, textPeers = {}, chunkPeers = {}, devices = {}) => {
-      if (kind === "own") { nearbyState.ownPeers = next; nearbyState.ownTextPeers = textPeers; nearbyState.ownChunkPeers = chunkPeers; nearbyState.ownDevices = devices; }
-      else { nearbyState.pairPeers = next; nearbyState.pairTextPeers = textPeers; nearbyState.pairChunkPeers = chunkPeers; }
+    onPeers: (next, compatible = {}, devices = {}) => {
+      if (kind === "own") { nearbyState.ownPeers = next; nearbyState.ownCompatible = compatible; nearbyState.ownDevices = devices; }
+      else { nearbyState.pairPeers = next; nearbyState.pairCompatible = compatible; }
       for (const item of nearbyState.transfers) {
         if (item.kind === kind && !next[item.peerId] && inFlight(item.state)) {
           const pending = [nearbyState.pendingOffer, ...offerQueue].find(offer => offer?.transferId === item.id);
           pending?.resolve(false);
-          item.state = item.resumable && !pending ? "paused" : "failed";
+          item.state = pending ? "failed" : "paused";
           sendTasks.get(item.id)?.controller?.abort(new Error("nearby_disconnected"));
         }
       }
       if (kind === "own") rebindOwnDevices(next, devices);
       for (const task of sendTasks.values()) {
         const item = task.record;
-        if (item.kind === kind && item.state === "paused" && chunkPeers[item.peerId] && !task.controller && rooms[kind] === task.room) {
+        if (item.kind === kind && item.state === "paused" && compatible[item.peerId] && !task.controller && rooms[kind] === task.room) {
           item.state = "queued";
           if (!sendQueue.includes(task)) sendQueue.push(task);
         }
@@ -219,7 +220,7 @@ function makeRoom(kind: RoomKind, deviceId = "") {
       const reserved = nearbyState.transfers.reduce((sum, item) => {
         if (item.direction !== 'in') return sum;
         const keepsPartial = item.state === 'active' || item.state === 'waiting'
-          || (item.resumable && ['paused', 'failed'].includes(item.state));
+          || ['paused', 'failed'].includes(item.state);
         return sum + batchBytes(keepsPartial ? item.files : item.received.filter((file): file is File => !!file));
       }, 0);
       if (nearbyState.transfers.length >= 100 || nearbyState.transfers.some(item => item.id === id)
@@ -228,7 +229,7 @@ function makeRoom(kind: RoomKind, deviceId = "") {
       const transfer: NearbyTransferRecord = {
         id, kind, peerId: offer.from, direction: "in", peerName, files: offer.files, text: offer.text,
         localDeviceName: nearbyState.deviceName, createdAt: Date.now(),
-        wireId: offer.id, resumable: offer.protocol === 2,
+        wireId: offer.id,
         progress: offer.files.map(() => 0), received: offer.files.map(() => undefined), state: "waiting",
       };
       nearbyState.transfers.unshift(transfer);
@@ -329,8 +330,7 @@ export async function leaveOwnDevicesRoom() {
   nearbyState.ownAccount = "";
   nearbyState.ownJoined = false;
   nearbyState.ownPeers = {};
-  nearbyState.ownTextPeers = {};
-  nearbyState.ownChunkPeers = {};
+  nearbyState.ownCompatible = {};
   nearbyState.ownDevices = {};
   nearbyState.ownError = "";
   ownRoomId = "";
@@ -364,8 +364,7 @@ export async function stopPairRoom() {
   rooms.pair = undefined;
   nearbyState.pairKey = null;
   nearbyState.pairPeers = {};
-  nearbyState.pairTextPeers = {};
-  nearbyState.pairChunkPeers = {};
+  nearbyState.pairCompatible = {};
   nearbyState.pairError = "";
   failRoomTransfers("pair");
   updateRelayResumeWatch();
@@ -449,14 +448,13 @@ function createSendTask(kind: RoomKind, peerId: string, files: File[], text = ""
   if (!room) throw new Error("nearby_not_joined");
   text = text.trim();
   if ((!files.length && !text) || text.length > NEARBY_MAX_TEXT_LENGTH || files.length > 200 || !peersFor(kind)[peerId]) throw new Error("nearby_invalid_target_or_files");
-  if (text && !(kind === "own" ? nearbyState.ownTextPeers : nearbyState.pairTextPeers)[peerId]) throw new Error("nearby_text_unsupported");
+  if (!compatibleFor(kind)[peerId]) throw new Error("nearby_peer_outdated");
   if (batchBytes(files) > NEARBY_MAX_BATCH_BYTES) throw new Error("nearby_batch_too_large");
   if (nearbyState.transfers.length >= 100 || nearbyState.transfers.reduce((sum, item) => sum + batchBytes(item.source || []), 0) + batchBytes(files) > NEARBY_MAX_BATCH_BYTES) throw new Error('nearby_queue_full');
   const wireId = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
   const transfer: NearbyTransferRecord = {
     id: `out:${wireId}`, wireId, kind, peerId, direction: "out", peerName: peersFor(kind)[peerId] || "附近的设备",
     ...(kind === "own" && nearbyState.ownDevices[peerId] ? { peerDevice: nearbyState.ownDevices[peerId] } : {}),
-    resumable: (kind === 'own' ? nearbyState.ownChunkPeers : nearbyState.pairChunkPeers)[peerId] === true,
     localDeviceName: nearbyState.deviceName, createdAt: Date.now(),
     files: files.map(file => ({ name: file.name, size: file.size, type: file.type })), text,
     progress: files.map(() => 0), received: files.map(() => undefined), source: files.slice(), state: "queued",
@@ -491,8 +489,6 @@ async function pumpSendQueue() {
       const item = task.record;
       if (task.canceled || sendTasks.get(item.id) !== task || item.state !== 'queued') { task.finish(); continue; }
       if (rooms[item.kind] !== task.room || !peersFor(item.kind)[item.peerId]) { item.state = 'paused'; task.finish(); continue; }
-      const modern = (item.kind === 'own' ? nearbyState.ownChunkPeers : nearbyState.pairChunkPeers)[item.peerId] === true;
-      item.resumable = modern;
       item.state = 'waiting';
       task.controller = new AbortController();
       try {
@@ -501,15 +497,14 @@ async function pumpSendQueue() {
         }, item.text, { id: item.wireId, signal: task.controller.signal, onVerifying: () => { if (!task.canceled) item.state = 'verifying'; } });
         if (!task.canceled && !task.controller.signal.aborted) {
           item.state = accepted ? 'done' : 'declined';
-          item.deliveryConfirmed = accepted && (modern || !item.files.length);
         }
       } catch {
-        if (!task.canceled) item.state = modern && !peersFor(item.kind)[item.peerId] ? 'paused' : 'failed';
+        if (!task.canceled) item.state = peersFor(item.kind)[item.peerId] ? 'failed' : 'paused';
       } finally {
         task.controller = null; task.finish();
         // A peer can reconnect while the failed request is still unwinding.
         if (!task.canceled && item.state === 'paused' && rooms[item.kind] === task.room
-          && (item.kind === 'own' ? nearbyState.ownChunkPeers : nearbyState.pairChunkPeers)[item.peerId]) {
+          && compatibleFor(item.kind)[item.peerId]) {
           item.state = 'queued'; sendQueue.push(task);
         }
       }
@@ -522,7 +517,7 @@ export function retryNearbyTransfer(id: string) {
   if (!task || task.controller || task.canceled || !['failed', 'paused', 'declined'].includes(task.record.state)) return;
   const item = task.record;
   if (rooms[item.kind] !== task.room || !peersFor(item.kind)[item.peerId]) throw new Error('nearby_disconnected');
-  if (item.state === 'declined' || !item.resumable) {
+  if (item.state === 'declined') {
     if (item.wireId) task.room.forget(item.peerId, item.wireId);
     item.wireId = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
     item.progress = item.files.map(() => 0);
@@ -598,7 +593,7 @@ function flushHistory() {
 }
 
 // Progress ticks are excluded: only states and names are worth a write.
-watch(() => nearbyState.transfers.map(item => [item.id, item.state, item.saveState, item.peerName, item.deliveryConfirmed, item.stored?.join()].join("|")).join("\n"), () => {
+watch(() => nearbyState.transfers.map(item => [item.id, item.state, item.saveState, item.peerName, item.stored?.join()].join("|")).join("\n"), () => {
   if (!saveTimer) saveTimer = setTimeout(flushHistory, 800);
 });
 

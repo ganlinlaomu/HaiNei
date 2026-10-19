@@ -31,7 +31,7 @@ export async function validateTransferAssistant() {
     const files = [new File([png], "照片.png", { type: "image/png" }), new File(["pdf"], "文档.pdf", { type: "application/pdf" })];
     nearbyState.pairKey = { roomId: "preview", password: "preview" };
     nearbyState.pairPeers = { peer: "Linux 电脑" };
-    nearbyState.pairTextPeers = { peer: true };
+    nearbyState.pairCompatible = { peer: true };
     nearbyState.transfers.push({
       id: "fixture", kind: "pair", peerId: "peer", direction: "in", peerName: "Linux 电脑",
       localDeviceName: "iPhone", createdAt: Date.now(),
@@ -174,17 +174,17 @@ export async function validateTransferAssistant() {
     send.click();
     await settle();
     if (ui.toasts.length !== beforeText + 1 || textarea.value !== "第一行\n第二行") throw new Error("failed text submission must restore the draft");
-    nearbyState.pairTextPeers = {};
+    nearbyState.pairCompatible = {};
     await nextTick();
-    if (!send.disabled || !document.querySelector('.recipient-hint')) throw new Error('unsupported text must disable sending before submission');
-    nearbyState.pairTextPeers = { peer: true };
+    if (!send.disabled || !chip('需更新海内')?.disabled) throw new Error('outdated devices must be shown but not usable');
+    nearbyState.pairCompatible = { peer: true };
     await nextTick();
     const beforeSelection = ui.toasts.length;
     chip('Linux 电脑').click();
     await nextTick();
     if (ui.toasts.length !== beforeSelection || textarea.value !== '第一行\n第二行' || send.disabled) throw new Error('selecting a device must preserve the draft without sending');
     nearbyState.pairPeers = { peer: 'Linux 电脑', second: 'iPad' };
-    nearbyState.pairTextPeers = { peer: true, second: true };
+    nearbyState.pairCompatible = { peer: true, second: true };
     await nextTick();
     if (!selectedChip().includes('Linux 电脑') || !chip('iPad')) throw new Error('new peers must appear without changing the recipient');
     nearbyState.pairPeers = { second: 'iPad' };
@@ -225,14 +225,14 @@ export async function validateTransferAssistant() {
     deviceStorage.removeItem('hainei_nearby_last_device');
     nearbyState.ownPeers = { o1: 'MacBook', o2: 'iPad' };
     nearbyState.ownDevices = { o1: '1'.repeat(16), o2: '2'.repeat(16) };
-    nearbyState.ownTextPeers = { o1: true, o2: true };
+    nearbyState.ownCompatible = { o1: true, o2: true };
     await nextTick();
     if (selectedChip()) throw new Error('two devices must not be chosen automatically');
     chip('MacBook').click(); await nextTick();
     if (deviceStorage.getItem('hainei_nearby_last_device') !== '1'.repeat(16)) throw new Error('the chosen own device must be remembered');
     nearbyState.ownPeers = { o2: 'iPad', o3: 'MacBook' };
     nearbyState.ownDevices = { o2: '2'.repeat(16), o3: '1'.repeat(16) };
-    nearbyState.ownTextPeers = { o2: true, o3: true };
+    nearbyState.ownCompatible = { o2: true, o3: true };
     await nextTick();
     if (!selectedChip().includes('MacBook') || document.querySelector('.target-chip.lost')) throw new Error('a reloaded device must stay selected under its new connection');
     nearbyState.ownPeers = { o2: 'iPad', o4: 'MacBook' };
@@ -247,7 +247,7 @@ export async function validateTransferAssistant() {
     nameInput.form!.requestSubmit(); await nextTick();
     if (nearbyState.deviceName !== '测试 iPhone' || !document.querySelector('.device-name-row')?.textContent?.includes('测试 iPhone')) throw new Error('renaming must update this device name');
     click('[aria-label="关闭设备与连接"]'); await nextTick();
-    nearbyState.ownPeers = {}; nearbyState.ownDevices = {}; nearbyState.ownTextPeers = {};
+    nearbyState.ownPeers = {}; nearbyState.ownDevices = {}; nearbyState.ownCompatible = {};
     await nextTick();
     nearbyState.transfers.unshift({ id: "restored", kind: "own", peerId: "", direction: "in", peerName: "Mac", restored: true, stored: [true], createdAt: Date.now(),
       files: [{ name: "旧文件.pdf", size: 3, type: "application/pdf" }], progress: [1], received: [undefined], state: "done" });

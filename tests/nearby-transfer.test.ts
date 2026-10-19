@@ -75,7 +75,9 @@ describe("incoming offers", () => {
   it("asks before receiving and refuses bytes that were not accepted", () => {
     const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");
     expect(service).toContain('kind: "request"');
-    expect(service).toContain("return !!entry && entry.from === peerId && !!announced && byteLength === announced.size;");
+    expect(service).toContain("this.receiver.allows(peerId, metadata as ChunkMeta, byteLength)");
+    expect(service).toContain("sanitized.protocol !== 2");
+    expect(service).not.toContain('makeAction<ArrayBuffer | Blob>("file"');
   });
 });
 
