@@ -14,6 +14,9 @@ import {
   batchBytes,
   defaultDeviceName,
   nearbyDeviceId,
+  pairAccountTag,
+  pairDeviceTag,
+  pairIdentitySecret,
   saveDeviceName,
   savedDeviceName,
   nearbyRelayStates,
@@ -74,6 +77,10 @@ export const nearbyState = reactive({
   pairKey: null as NearbyRoomKey | null,
   pairPeers: {} as Record<string, string>,
   pairCompatible: {} as Record<string, boolean>,
+  /** QR peers proven to be this account's devices: peer id -> per-room device tag. */
+  pairDevices: {} as Record<string, string>,
+  /** QR peers that are already connected under 我的设备; hidden as duplicates. */
+  pairDuplicates: {} as Record<string, boolean>,
   pairError: "",
   transfers: [] as NearbyTransferRecord[],
   pendingOffer: null as PendingOffer | null,
@@ -186,11 +193,12 @@ function rebindOwnDevices(next: Record<string, string>, devices: Record<string, 
   }
 }
 
-function makeRoom(kind: RoomKind, deviceId = "") {
+function makeRoom(kind: RoomKind, deviceId = "", accountTag = "") {
   return new NearbyRoom(nearbyState.deviceName, {
     onPeers: (next, compatible = {}, devices = {}) => {
       if (kind === "own") { nearbyState.ownPeers = next; nearbyState.ownCompatible = compatible; nearbyState.ownDevices = devices; }
-      else { nearbyState.pairPeers = next; nearbyState.pairCompatible = compatible; }
+      else { nearbyState.pairPeers = next; nearbyState.pairCompatible = compatible; nearbyState.pairDevices = devices; }
+      void refreshPairDuplicates();
       for (const item of nearbyState.transfers) {
         if (item.kind === kind && !next[item.peerId] && inFlight(item.state)) {
           const pending = [nearbyState.pendingOffer, ...offerQueue].find(offer => offer?.transferId === item.id);
@@ -290,7 +298,7 @@ function makeRoom(kind: RoomKind, deviceId = "") {
       pending?.resolve(false);
       record.state = 'canceled';
     },
-  }, deviceId);
+  }, deviceId, accountTag);
 }
 
 /** Join (once) the room shared by every device of this account. */
@@ -301,8 +309,9 @@ export async function ensureOwnDevicesRoom(account: string, privateKeyHex: strin
   const generation = ownGeneration;
   await leaving;
   if (generation !== ownGeneration) return;
-  const deviceId = await nearbyDeviceId();
+  const [deviceId, identity] = await Promise.all([nearbyDeviceId(), pairIdentitySecret(privateKeyHex)]);
   if (generation !== ownGeneration || rooms.own) return;
+  pairSecret = identity;
   const room = makeRoom("own", deviceId);
   rooms.own = room;
   nearbyState.ownAccount = normalized;
@@ -332,6 +341,7 @@ export async function leaveOwnDevicesRoom() {
   nearbyState.ownPeers = {};
   nearbyState.ownCompatible = {};
   nearbyState.ownDevices = {};
+  pairSecret = "";
   nearbyState.ownError = "";
   ownRoomId = "";
   failRoomTransfers("own");
@@ -345,7 +355,12 @@ export async function startPairRoom(key: NearbyRoomKey) {
   const generation = pairGeneration;
   await leaving;
   if (generation !== pairGeneration) return;
-  const room = makeRoom("pair");
+  const secret = pairSecret;
+  const [deviceTag, accountTag] = secret
+    ? await Promise.all([nearbyDeviceId().then(id => pairDeviceTag(secret, key.roomId, id)), pairAccountTag(secret, key.roomId)])
+    : ["", ""];
+  if (generation !== pairGeneration) return;
+  const room = makeRoom("pair", deviceTag, accountTag);
   rooms.pair = room;
   nearbyState.pairKey = key;
   nearbyState.pairError = "";
@@ -365,6 +380,8 @@ export async function stopPairRoom() {
   nearbyState.pairKey = null;
   nearbyState.pairPeers = {};
   nearbyState.pairCompatible = {};
+  nearbyState.pairDevices = {};
+  nearbyState.pairDuplicates = {};
   nearbyState.pairError = "";
   failRoomTransfers("pair");
   updateRelayResumeWatch();
@@ -386,6 +403,35 @@ export async function resetNearby() {
 }
 
 let ownRoomId = "";
+/** Derived from the private key while the own room is joined; tags QR rooms. */
+let pairSecret = "";
+let duplicateCheck = 0;
+
+/**
+ * Scanning a QR shown by one of this account's devices that is already
+ * connected only duplicates it. Hide such peers, and end a QR session that
+ * holds nothing else (unless something is still being sent over it).
+ */
+async function refreshPairDuplicates() {
+  const roomId = nearbyState.pairKey?.roomId;
+  const secret = pairSecret;
+  const run = ++duplicateCheck;
+  if (!roomId || !secret || !Object.keys(nearbyState.pairDevices).length) {
+    if (Object.keys(nearbyState.pairDuplicates).length) nearbyState.pairDuplicates = {};
+    return;
+  }
+  const connected = Object.entries(nearbyState.ownDevices).filter(([peer]) => nearbyState.ownCompatible[peer]);
+  const ownTags = new Set(await Promise.all(connected.map(([, device]) => pairDeviceTag(secret, roomId, device))));
+  if (run !== duplicateCheck || nearbyState.pairKey?.roomId !== roomId) return;
+  const duplicates = Object.fromEntries(Object.entries(nearbyState.pairDevices).filter(([, tag]) => ownTags.has(tag)).map(([peer]) => [peer, true]));
+  nearbyState.pairDuplicates = duplicates;
+  const peers = Object.keys(nearbyState.pairPeers);
+  const busy = nearbyState.transfers.some(item => item.kind === "pair" && (inFlight(item.state) || item.state === "paused"));
+  if (peers.length && peers.every(peer => duplicates[peer]) && !busy) {
+    useUIStore().addToast("这台设备已在「我的设备」中，已结束扫码配对", 3_000, "info");
+    await stopPairRoom();
+  }
+}
 let lastRefreshAt = 0;
 
 /** Everything needed to compare two devices from screenshots. */

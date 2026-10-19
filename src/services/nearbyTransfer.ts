@@ -49,6 +49,23 @@ export async function ownDevicesRoom(privateKeyHex: string): Promise<NearbyRoomK
   return { roomId: await derive(secret, "own-room"), password: await derive(secret, "own-password") };
 }
 
+/**
+ * QR rooms never carry the stable device id. Devices of the same account
+ * instead exchange per-room tags derived from the private key, so they can
+ * recognise each other without telling anyone else who they are.
+ */
+export async function pairIdentitySecret(privateKeyHex: string) {
+  return derive(privateKeyHex.toLowerCase(), "pair-identity");
+}
+
+export async function pairAccountTag(secret: string, roomId: string) {
+  return (await derive(secret, `pair-account:${roomId}`)).slice(0, 32);
+}
+
+export async function pairDeviceTag(secret: string, roomId: string, deviceId: string) {
+  return (await derive(secret, `pair-device:${roomId}:${deviceId}`)).slice(0, 32);
+}
+
 export function randomPairingRoom(): NearbyRoomKey {
   const hex = (bytes: number) => bytesToHex(crypto.getRandomValues(new Uint8Array(bytes)));
   return { roomId: hex(16), password: hex(16) };
@@ -265,7 +282,8 @@ export class NearbyRoom {
   private helloTimer: ReturnType<typeof setInterval> | null = null;
   private requestOffer: ((offer: Omit<NearbyOffer, "from">, target: string, signal?: AbortSignal) => Promise<boolean>) | null = null;
 
-  constructor(private deviceName: string, private readonly handlers: NearbyRoomHandlers, private readonly deviceId = "") {}
+  /** `accountTag`: set in QR rooms; a peer's `device` is kept only if it proves the same account. */
+  constructor(private deviceName: string, private readonly handlers: NearbyRoomHandlers, private readonly deviceId = "", private readonly accountTag = "") {}
 
   private emitPeers() {
     this.handlers.onPeers({ ...this.names }, { ...this.compatible }, { ...this.devices });
@@ -307,13 +325,14 @@ export class NearbyRoom {
 
     // Names are exchanged both ways: a peer that rejoined (or missed our
     // first hello) asks again, and unnamed peers are re-greeted until known.
-    const hello = room.makeAction<{ name: string; reply: boolean; text?: boolean; protocol?: number; device?: string }>("hello", {
+    const hello = room.makeAction<{ name: string; reply: boolean; text?: boolean; protocol?: number; device?: string; account?: string }>("hello", {
       onMessage: (data, { peerId }) => {
         if (!active()) return;
         const wasKnown = !!this.names[peerId] && this.names[peerId] !== NEARBY_UNNAMED_PEER;
         this.names[peerId] = String(data?.name || "附近的设备").slice(0, 40);
         this.compatible[peerId] = data?.protocol === 2 && data?.text === true;
-        if (typeof data?.device === "string" && /^[0-9a-f]{16}$/.test(data.device)) this.devices[peerId] = data.device;
+        const sameAccount = !this.accountTag || data?.account === this.accountTag;
+        if (sameAccount && typeof data?.device === "string" && /^[0-9a-f]{16}(?:[0-9a-f]{16})?$/.test(data.device)) this.devices[peerId] = data.device;
         else delete this.devices[peerId];
         this.emitPeers();
         if (!data?.reply || !wasKnown) void this.sendHello?.(true, peerId);
@@ -322,6 +341,7 @@ export class NearbyRoom {
     // `text` and `protocol` stay on the wire so 0.1.66–0.1.71 peers accept us.
     this.sendHello = (reply, target) => hello.send({
       name: this.deviceName, reply, text: true, protocol: 2, ...(this.deviceId ? { device: this.deviceId } : {}),
+      ...(this.accountTag ? { account: this.accountTag } : {}),
     }, { target }).catch(() => undefined);
 
     const offer = room.makeAction<any, boolean>("offer", {
