@@ -124,7 +124,9 @@ export async function validateTransferAssistant() {
     nearbyState.pairRoutes = { peer: 'internet' }; await nextTick();
     if (!document.querySelector('.recipient-hint')?.textContent?.includes('互联网直连')) throw new Error('internet routes must be explained before sending');
     nearbyState.pairRoutes = { peer: 'lan' }; await nextTick();
-    if (document.querySelector('.recipient-hint')) throw new Error('same-network routes need no warning');
+    if (!document.querySelector('.recipient-hint')?.textContent?.includes('局域网直连')) throw new Error('same-network routes must keep the hint line so the layout does not jump');
+    nearbyState.pairRoutes = {}; await nextTick();
+    if (!document.querySelector('.recipient-hint')?.textContent?.includes('正在检测')) throw new Error('the hint line must be reserved while the route is unknown');
     nearbyState.pairRoutes = {};
     nearbyState.pairPeers = { peer: NEARBY_UNNAMED_PEER };
     typeText('pending connection'); await nextTick();
@@ -261,7 +263,7 @@ export async function validateTransferAssistant() {
     await nextTick();
     const restoredRow = [...document.querySelectorAll('.transfer-row')].find(row => row.textContent?.includes('旧文件.pdf'))!;
     if (!restoredRow.querySelector('.load-history') || restoredRow.querySelector('.batch-save')) throw new Error('restored files must be loaded before saving');
-    if (!restoredRow.querySelector('.save-hint')?.textContent?.includes('已加密保存在本机')) throw new Error('stored files must say they are kept encrypted on this device');
+    if (restoredRow.querySelector('.save-hint')) throw new Error('a stored copy must not read as if the files were saved');
     const restoredOut = [...document.querySelectorAll('.transfer-row')].find(row => row.textContent?.includes('发出.pdf'))!;
     if (restoredOut.querySelector('.retry-transfer')) throw new Error('restored sends cannot be retried without the original files');
     nearbyState.transfers.splice(0, 2);
