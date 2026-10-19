@@ -62,7 +62,7 @@
       <ul v-if="ownPeerList.length" class="peer-list">
         <li v-for="peer in ownPeerList" :key="peer.id" class="peer-row">
           <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2.5" /><path d="M10.5 17.5h3" /></svg></span>
-          <span class="peer-name">{{ peer.name }}<small>{{ peerStatus(peer, '可发送 · 同账号自动接收') }}</small></span>
+          <span class="peer-name">{{ peer.name }}<small>{{ peerStatus(peer, `可发送 · 同账号自动接收${routeSuffix(nearbyState.ownRoutes[peer.id])}`) }}</small></span>
           <button class="peer-send" type="button" :disabled="!peer.ready" @click="selectDevice('own', peer.id)">选择此设备</button>
         </li>
       </ul>
@@ -94,7 +94,7 @@
         <ul v-if="pairPeerList.length" class="peer-list">
           <li v-for="peer in pairPeerList" :key="peer.id" class="peer-row">
             <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2" /><path d="M8 20h8" /></svg></span>
-            <span class="peer-name">{{ peer.name }}<small>{{ peerStatus(peer, '可发送') }}</small></span>
+            <span class="peer-name">{{ peer.name }}<small>{{ peerStatus(peer, `可发送${routeSuffix(nearbyState.pairRoutes[peer.id])}`) }}</small></span>
             <button class="peer-send" type="button" :disabled="!peer.ready" @click="selectDevice('pair', peer.id)">选择此设备</button>
           </li>
         </ul>
@@ -116,6 +116,7 @@
       </div>
       <p v-if="!availableTargets.length" class="recipient-hint">{{ nearbyState.ownError || nearbyState.pairError ? '连接未完成，请检查设备与网络；点击「连接设备」重试' : ownDevicesAvailable ? '在另一台设备上打开海内并登录同一账号，它会出现在这里' : '点击「连接设备」显示或扫描配对二维码' }}</p>
       <p v-else-if="!selectedTarget" class="recipient-hint">选择要发送到的设备</p>
+      <p v-else-if="selectedPeer?.route === 'internet' || selectedPeer?.route === 'relay'" class="recipient-hint">{{ selectedPeer.route === 'relay' ? '经中继服务器连接' : '经互联网直连' }}，不在同一局域网，会使用移动数据流量</p>
       <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</span><button type="button" @click="removeStaged()">全部移除</button></div>
       <ul v-if="selectedFiles.length" class="staged-files" aria-label="待发送的文件">
         <li v-for="(file, index) in selectedFiles" :key="stagedKey(file)" class="staged-file">
@@ -185,6 +186,7 @@ import {
   parsePairing,
   randomPairingRoom,
   type NearbyRoomKey,
+  type NearbyRoute,
 } from "@/services/nearbyTransfer";
 import {
   answerPendingOffer,
@@ -197,6 +199,7 @@ import {
   retryNearbyWithCamera,
   queueNearbyFiles,
   loadNearbyHistoryFiles,
+  refreshNearbyRoutes,
   renameNearbyDevice,
   restoreNearbyHistory,
   retryNearbyTransfer,
@@ -321,10 +324,12 @@ const showCameraRetry = computed(() => ["iPhone", "iPad"].includes(platformName)
 // A QR peer that is already listed under 我的设备 is the same device: show it once.
 const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).filter(([id]) => !nearbyState.pairDuplicates[id]).map(([id, name]) => ({ id, name, ready: isReady(name, nearbyState.pairCompatible[id]) })));
 const availableTargets = computed(() => [
-  ...ownPeerList.value.map(peer => ({ ...peer, kind: "own" as const, device: nearbyState.ownDevices[peer.id] || "" })),
-  ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const, device: "" })),
+  ...ownPeerList.value.map(peer => ({ ...peer, kind: "own" as const, device: nearbyState.ownDevices[peer.id] || "", route: nearbyState.ownRoutes[peer.id] })),
+  ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const, device: "", route: nearbyState.pairRoutes[peer.id] })),
 ]);
 const selectedPeer = computed(() => availableTargets.value.find(peer => peer.kind === selectedTarget.value?.kind && peer.id === selectedTarget.value?.peerId));
+const ROUTE_LABELS: Record<NearbyRoute, string> = { lan: "局域网直连", internet: "互联网直连", relay: "经中继" };
+const routeSuffix = (route?: NearbyRoute) => route ? ` · ${ROUTE_LABELS[route]}` : "";
 function isReady(name: string, compatible?: boolean) { return name !== NEARBY_UNNAMED_PEER && compatible === true; }
 function peerStatus(peer: { name: string; ready: boolean }, ready: string) {
   return peer.ready ? ready : peer.name === NEARBY_UNNAMED_PEER ? '连接中…' : '版本过旧，请更新海内';
@@ -713,6 +718,7 @@ function download(url: string, name: string) {
 onMounted(() => {
   clearNearbyUnread();
   void restoreNearbyHistory().catch(() => undefined);
+  refreshNearbyRoutes();
   document.addEventListener("paste", onPaste);
   // A page visit must not cut off an in-flight offer/answer/candidate exchange.
   void joinOwnRoom();

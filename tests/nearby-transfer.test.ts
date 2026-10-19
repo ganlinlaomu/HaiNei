@@ -87,6 +87,7 @@ describe("integration", () => {
     expect(router).toContain('const NearbyTransfer = () => import("@/views/NearbyTransfer.vue");');
     expect(router).toMatch(/path: "\/nearby",[\s\S]{0,80}requiresAuth: false/);
     expect(readFileSync("src/views/Conversations.vue", "utf8")).toContain("router.push('/nearby')");
+    expect(readFileSync("src/views/Conversations.vue", "utf8")).toContain("{{ nearbyPresence.online }} 台设备在线");
     expect(readFileSync("src/views/Settings.vue", "utf8")).not.toContain("router.push('/nearby')");
     const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");
     expect(service).toContain('await import("trystero")');

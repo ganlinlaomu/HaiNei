@@ -14,3 +14,6 @@ export function markNearbyUnread() {
 export function clearNearbyUnread() {
   nearbyUnread.count = 0;
 }
+
+/** Usable 文件传输助手 devices right now, for the 私信 row subtitle. */
+export const nearbyPresence = reactive({ online: 0 });
