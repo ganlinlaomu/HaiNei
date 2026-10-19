@@ -42,6 +42,12 @@ migrations_dir = "migrations"
 binding = "BLOSSOM"
 service = "blossom-imgbed"
 
+# The managed relay (RELAY_APP_URL) runs on the same account, so it must be
+# reached through a binding: its workers.dev URL returns 404 to other Workers.
+[[services]]
+binding = "RELAY_SERVICE"
+service = "cloudflare-nostr-relay"
+
 # Set server-side only with:
 # npx wrangler secret put BLOSSOM_SERVICE_TOKEN --config worker/wrangler.toml
 # npx wrangler secret put RELAY_APP_TOKEN --config worker/wrangler.toml
