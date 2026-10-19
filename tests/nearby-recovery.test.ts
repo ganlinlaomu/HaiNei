@@ -104,14 +104,17 @@ describe("nearby signaling recovery", () => {
       throw new Error('connection lost after ack');
     });
     const id = queueNearbyFiles('own', 'peer', [new File([new Uint8Array(NEARBY_CHUNK_BYTES + 3)], 'large.bin')]);
+    const queued = queueNearbyFiles('own', 'peer', [], 'after reconnect');
     await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === id)?.state).toBe('paused'));
+    expect(nearbyState.transfers.find(item => item.id === queued)?.state).toBe('paused');
     expect(nearbyState.transfers.filter(item => item.direction === 'in')).toHaveLength(1);
     room.onPeerJoin('peer');
     room.actions.hello.handlers.onMessage({ name: 'PC', reply: true, text: true, protocol: 2 }, { peerId: 'peer' });
     await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === id)?.state).toBe('done'));
+    await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === queued)?.state).toBe('done'));
     expect(room.actions.chunk2.request).toHaveBeenCalledTimes(2);
     expect(room.actions.chunk2.request.mock.calls[1][1].metadata.offset).toBe(NEARBY_CHUNK_BYTES);
-    expect(nearbyState.transfers).toHaveLength(2);
+    expect(nearbyState.transfers).toHaveLength(4);
     expect(nearbyState.transfers.every(item => item.state === 'done')).toBe(true);
   });
 

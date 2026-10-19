@@ -399,6 +399,7 @@ function createSendTask(kind: RoomKind, peerId: string, files: File[], text = ""
   const wireId = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
   const transfer: NearbyTransferRecord = {
     id: `out:${wireId}`, wireId, kind, peerId, direction: "out", peerName: peersFor(kind)[peerId] || "附近的设备",
+    resumable: (kind === 'own' ? nearbyState.ownChunkPeers : nearbyState.pairChunkPeers)[peerId] === true,
     localDeviceName: nearbyState.deviceName, createdAt: Date.now(),
     files: files.map(file => ({ name: file.name, size: file.size, type: file.type })), text,
     progress: files.map(() => 0), received: files.map(() => undefined), source: files.slice(), state: "queued",
