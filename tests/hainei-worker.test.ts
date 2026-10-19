@@ -246,3 +246,13 @@ describe("HaiNei Worker authentication and quota", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 });
+
+describe("Worker deployment configuration", () => {
+  it("keeps the managed relay URL in wrangler.toml so deploys cannot drop it", () => {
+    const config = readFileSync("worker/wrangler.toml", "utf8");
+    const vars = config.slice(config.indexOf("[vars]"), config.indexOf("[triggers]"));
+    expect(vars).toMatch(/^RELAY_APP_URL = "wss:\/\/cloudflare-nostr-relay\.noster\.workers\.dev"$/m);
+    // The issuer token must stay a secret, never a plain variable.
+    expect(config).not.toMatch(/^RELAY_APP_TOKEN\s*=/m);
+  });
+});
