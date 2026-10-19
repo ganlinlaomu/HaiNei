@@ -137,9 +137,78 @@ if (source.includes("if (Date.now() - batcher.requestedAt >= 1e3) replayAnnounce
   throw new Error("Trystero Nostr EOSE target changed");
 }
 
+
+// NIP-42: a relay may demand proof of control of the signing key before it
+// accepts signaling events. Trystero creates a fresh per-session key already;
+// authenticate with that same key, without exposing any HaiNei account secret.
+const authHelpers = [
+  "const nearbyNip42Challenges = new WeakMap();",
+  "const nearbyNip42PendingAcks = new WeakMap();",
+  "const createNearbyNip42AuthEvent = async (challenge, relayUrl) => {",
+  "  const payload = {",
+  "    kind: 22242,",
+  "    tags: [['relay', relayUrl], ['challenge', challenge]],",
+  "    created_at: now(),",
+  "    content: '',",
+  "    pubkey",
+  "  };",
+  "  const hash = await hashWith('SHA-256', toJson([0, payload.pubkey, payload.created_at, payload.kind, payload.tags, payload.content]));",
+  "  return { ...payload, id: toHex(hash), sig: toHex(await schnorr.signAsync(hash, secretKey)) };",
+  "};",
+  "const handleNearbyNip42Challenge = async (client, challenge) => {",
+  "  if (!challenge || challenge.length > 512 || client.isClosed || client.socket.readyState !== 1) return;",
+  "  const socket = client.socket;",
+  "  const previous = nearbyNip42Challenges.get(client);",
+  "  if (previous?.socket === socket && previous.challenge === challenge) return;",
+  "  nearbyNip42Challenges.set(client, { socket, challenge });",
+  "  try {",
+  "    const event = await createNearbyNip42AuthEvent(challenge, client.url);",
+  "    if (client.isClosed || client.socket !== socket || socket.readyState !== 1) return;",
+  "    nearbyNip42PendingAcks.set(client, { socket, id: event.id });",
+  "    client.send(toJson(['AUTH', event]));",
+  "  } catch (error) {",
+  "    nearbyNip42Challenges.delete(client);",
+  "    console.warn('trystero: NIP-42 authentication signing failed', error);",
+  "  }",
+  "};"
+].join("\n");
+if (!source.includes("const nearbyNip42PendingAcks = new WeakMap();")) {
+  replaceRequired("const topicToKind =", authHelpers + "\nconst topicToKind =");
+}
+
+// AUTH frames precede normal EVENT handling. The ACK belongs to the auth
+// event, not an announcement, and must recreate REQ + current announcements.
+const authFrameHandler = [
+  "if (msgType === 'AUTH') {",
+  "  if (typeof subId === 'string') void handleNearbyNip42Challenge(client, subId);",
+  "  return;",
+  "}",
+  "const pendingAuth = nearbyNip42PendingAcks.get(client);",
+  "if (msgType === 'OK' && pendingAuth?.id === subId) {",
+  "  nearbyNip42PendingAcks.delete(client);",
+  "  if (payload === true && client.socket === pendingAuth.socket && !client.isClosed) {",
+  "    resubscribeOnReconnect(client);",
+  "  } else if (payload === false) {",
+  "    console.warn('trystero: NIP-42 authentication rejected by relay ' + client.url);",
+  "  }",
+  "  return;",
+  "}"
+].join("\n            ");
+if (!source.includes("const pendingAuth = nearbyNip42PendingAcks.get(client);")) {
+  replaceRequired("if (msgType !== eventMsgType) {", authFrameHandler + "\n            if (msgType !== eventMsgType) {");
+}
+
+// A pre-auth REQ/EVENT can be rejected before the AUTH frame is processed.
+// Don't permanently retire that socket: retry after successful NIP-42 ACK.
+if (source.includes("/^(blocked|restricted|auth-required|pow):/")) {
+  replaceRequired("/^(blocked|restricted|auth-required|pow):/", "/^(blocked|restricted|pow):/");
+} else if (!source.includes("/^(blocked|restricted|pow):/")) {
+  throw new Error("Trystero NIP-42 terminal rejection target changed");
+}
+
 if (changed) {
   fs.writeFileSync(nostrPath, source);
-  console.log("Applied Trystero Nostr clock-skew and replay-safety patch");
+  console.log("Applied Trystero Nostr clock-skew, replay-safety and NIP-42 patch");
 } else {
   console.log("Trystero Nostr clock-skew and replay-safety patch already applied");
 }
