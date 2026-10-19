@@ -22,7 +22,8 @@ vi.mock("trystero", () => ({
   }),
 }));
 
-import { NearbyRoom, nearbyDeviceId, nearbyRelayStates, refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
+import { NearbyRoom, nearbyDeviceId, nearbyRelayStates, pairAccountTag, pairDeviceTag, pairIdentitySecret, refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
+import { stopPairRoom } from "@/services/nearbySession";
 import { renameNearbyDevice, answerPendingOffer, cancelNearbyTransfer, clearNearbyTransfer, ensureOwnDevicesRoom, nearbyState, queueNearbyFiles, refreshNearbyDiscovery, resetNearby, retryNearbyTransfer, retryNearbyWithCamera, sendNearbyFiles, startPairRoom } from "@/services/nearbySession";
 import { NEARBY_CHUNK_BYTES, chunkDigest } from '@/services/nearbyChunks';
 
@@ -126,7 +127,9 @@ describe("nearby signaling recovery", () => {
     await startPairRoom({ roomId: 'a'.repeat(32), password: 'b'.repeat(32) });
     const pair = trystero.rooms.at(-1);
     pair.onPeerJoin('stranger');
-    expect(pair.actions.hello.send.mock.calls.at(-1)[0]).not.toHaveProperty('device');
+    // QR rooms get a per-room tag, never the stable id.
+    expect(pair.actions.hello.send.mock.calls.at(-1)[0].device).not.toBe(device);
+    expect(pair.actions.hello.send.mock.calls.at(-1)[0].device).toMatch(/^[0-9a-f]{32}$/);
     pair.actions.hello.handlers.onMessage({ name: 'PC', reply: true, device: 'f'.repeat(16) }, { peerId: 'stranger' });
     expect(nearbyState.ownDevices).not.toHaveProperty('stranger');
   });
@@ -150,6 +153,44 @@ describe("nearby signaling recovery", () => {
     expect(nearbyState.transfers.find(item => item.id === id)).toMatchObject({ peerId: 'reloaded', peerName: '书房电脑' });
     await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === id)?.state).toBe('done'));
     expect(room.actions.chunk2.request.mock.calls.at(-1)[1].target).toBe('reloaded');
+  });
+
+  it('recognises its own already-connected device in a QR room and ends the duplicate pairing', async () => {
+    const own = await modernRoom();
+    own.actions.hello.handlers.onMessage({ name: 'Mac', reply: true, text: true, protocol: 2, device: 'a'.repeat(16) }, { peerId: 'peer' });
+    const roomId = 'c'.repeat(32);
+    await startPairRoom({ roomId, password: 'd'.repeat(32) });
+    const pair = trystero.rooms.at(-1);
+    const secret = await pairIdentitySecret('1'.repeat(64));
+    const account = await pairAccountTag(secret, roomId);
+    pair.onPeerJoin('qr-peer');
+    // This device proves the account in QR rooms, without its stable id.
+    const sent = pair.actions.hello.send.mock.calls.at(-1)[0];
+    expect(sent.account).toBe(account);
+    expect(sent.device).toBe(await pairDeviceTag(secret, roomId, await nearbyDeviceId()));
+    pair.actions.hello.handlers.onMessage({ name: 'Mac', reply: true, text: true, protocol: 2, account, device: await pairDeviceTag(secret, roomId, 'a'.repeat(16)) }, { peerId: 'qr-peer' });
+    await vi.waitFor(() => expect(nearbyState.pairKey).toBeNull());
+    expect(trystero.rooms.at(-1).leave).toHaveBeenCalled();
+  });
+
+  it('keeps a QR link to its own device when that device is not connected otherwise, and ignores unproven claims', async () => {
+    await modernRoom();
+    const roomId = 'e'.repeat(32);
+    await startPairRoom({ roomId, password: 'f'.repeat(32) });
+    const pair = trystero.rooms.at(-1);
+    const secret = await pairIdentitySecret('1'.repeat(64));
+    const account = await pairAccountTag(secret, roomId);
+    pair.onPeerJoin('stranger');
+    pair.actions.hello.handlers.onMessage({ name: 'PC', reply: true, text: true, protocol: 2, account: '0'.repeat(32), device: '9'.repeat(32) }, { peerId: 'stranger' });
+    expect(nearbyState.pairDevices).toEqual({});
+    pair.onPeerJoin('offline-own');
+    const tag = await pairDeviceTag(secret, roomId, 'b'.repeat(16));
+    pair.actions.hello.handlers.onMessage({ name: 'iPad', reply: true, text: true, protocol: 2, account, device: tag }, { peerId: 'offline-own' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nearbyState.pairDevices).toEqual({ 'offline-own': tag });
+    expect(nearbyState.pairDuplicates).toEqual({});
+    expect(nearbyState.pairKey?.roomId).toBe(roomId);
+    await stopPairRoom();
   });
 
   it('renames this device and re-announces it without asking for replies', async () => {

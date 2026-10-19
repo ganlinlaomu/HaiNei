@@ -318,7 +318,8 @@ const ownDevicesAvailable = computed(() => keys.isLoggedIn && keys.loginMethod =
 const ownPeerList = computed(() => Object.entries(nearbyState.ownPeers).map(([id, name]) => ({ id, name, ready: isReady(name, nearbyState.ownCompatible[id]) })));
 const showCameraRetry = computed(() => ["iPhone", "iPad"].includes(platformName)
   && !ownPeerList.value.length && nearbyState.ownError.includes("could not connect to peer"));
-const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).map(([id, name]) => ({ id, name, ready: isReady(name, nearbyState.pairCompatible[id]) })));
+// A QR peer that is already listed under 我的设备 is the same device: show it once.
+const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).filter(([id]) => !nearbyState.pairDuplicates[id]).map(([id, name]) => ({ id, name, ready: isReady(name, nearbyState.pairCompatible[id]) })));
 const availableTargets = computed(() => [
   ...ownPeerList.value.map(peer => ({ ...peer, kind: "own" as const, device: nearbyState.ownDevices[peer.id] || "" })),
   ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const, device: "" })),
