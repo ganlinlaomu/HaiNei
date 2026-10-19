@@ -206,9 +206,28 @@ if (source.includes("/^(blocked|restricted|auth-required|pow):/")) {
   throw new Error("Trystero NIP-42 terminal rejection target changed");
 }
 
+// A relay that admits HaiNei by app session token (not NIP-42) answers
+// "restricted" once that token lapses. The app refreshes the token and
+// reconnects, so such a rejection must not retire the relay for the page.
+const terminalRejection = "const isTerminalRejection = rejectionReason && /^(blocked|restricted|pow):/.test(rejectionReason);";
+const recoverableRejection = "const isTerminalRejection = rejectionReason && /^(blocked|restricted|pow):/.test(rejectionReason) && !globalThis.__haineiRelayRecoverable?.(client.url);";
+if (!source.includes(recoverableRejection)) replaceRequired(terminalRejection, recoverableRejection);
+
 if (changed) {
   fs.writeFileSync(nostrPath, source);
   console.log("Applied Trystero Nostr clock-skew, replay-safety and NIP-42 patch");
 } else {
   console.log("Trystero Nostr clock-skew and replay-safety patch already applied");
+}
+
+// Sockets are created inside @trystero-p2p/core. Let the app attach its relay
+// session token as a WebSocket subprotocol, as the main relay client does.
+const corePath = path.join(__dirname, "..", "node_modules", "@trystero-p2p", "core", "dist", "utils.mjs");
+const plainSocket = "const socket = new WebSocket(url);";
+const sessionSocket = "const socket = new WebSocket(url, globalThis.__haineiRelaySocketProtocols?.(url));";
+const core = fs.readFileSync(corePath, "utf8");
+if (!core.includes(sessionSocket)) {
+  if (!core.includes(plainSocket)) throw new Error("Trystero socket creation target changed");
+  fs.writeFileSync(corePath, core.replace(plainSocket, sessionSocket));
+  console.log("Applied Trystero relay session subprotocol patch");
 }

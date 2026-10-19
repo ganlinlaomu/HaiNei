@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.76",
-  "releaseSummary": "私信列表显示在线设备数，文件传输标明局域网或互联网直连",
+  "version": "0.1.77",
+  "releaseSummary": "文件传输信令可使用海内自有 Relay",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
