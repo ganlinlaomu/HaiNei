@@ -38,10 +38,15 @@ export async function validateTransferAssistant() {
     const input = document.querySelector<HTMLInputElement>(".hidden-input")!;
     let pickerCalls = 0;
     input.click = () => { pickerCalls++; };
-    const selected = new DataTransfer();
-    files.forEach(file => selected.items.add(file));
-    input.files = selected.files;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
+    const pickBatch = () => {
+      // The input clears its FileList after change. Every native picker
+      // selection supplies a fresh list, so the fixture must do the same.
+      const selected = new DataTransfer();
+      files.forEach(file => selected.items.add(file));
+      input.files = selected.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    pickBatch();
     await nextTick();
     if (!document.querySelector("#target-title")?.textContent?.includes("发送到设备")) throw new Error("selection did not open device picker");
     if (!document.querySelector(".target-device")?.textContent?.includes("Linux 电脑")) throw new Error("online device missing from picker");
@@ -60,8 +65,7 @@ export async function validateTransferAssistant() {
     await nextTick();
     if (pickerCalls !== 1 || document.querySelector(".connection-sheet")) throw new Error("device-first selection must open the file picker and close the device sheet");
     const beforeDeviceFirst = ui.toasts.length;
-    input.files = selected.files;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
+    pickBatch();
     await settle();
     if (document.querySelector("#target-title") || ui.toasts.length !== beforeDeviceFirst + 1) throw new Error("device-first file selection must send without asking for the device again");
     document.querySelector<HTMLButtonElement>(".selected-batch button")!.click();
@@ -72,8 +76,7 @@ export async function validateTransferAssistant() {
     document.querySelector<HTMLButtonElement>(".peer-send")!.click();
     input.dispatchEvent(new Event("cancel"));
     document.querySelector<HTMLButtonElement>(".choose-files")!.click();
-    input.files = selected.files;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
+    pickBatch();
     await settle();
     if (!document.querySelector("#target-title")) throw new Error("cancelled picker must not reuse a previous target on the next file-first selection");
     document.querySelector<HTMLButtonElement>(".clear-transfer")!.click();
