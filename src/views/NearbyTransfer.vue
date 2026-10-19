@@ -1,5 +1,5 @@
 <template>
-  <main class="nearby-page">
+  <main class="nearby-page" @dragenter="onDragEnter" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
     <header class="assistant-header">
       <button type="button" class="header-icon" aria-label="返回私信列表" @click="router.push(keys.isLoggedIn ? '/conversations' : '/login')"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg></button>
       <span class="assistant-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z" /></svg></span>
@@ -133,7 +133,15 @@
       <p v-if="!availableTargets.length" class="recipient-hint">{{ nearbyState.ownError || nearbyState.pairError ? '连接未完成，请检查设备与网络；点击「连接设备」重试' : ownDevicesAvailable ? '在另一台设备上打开海内并登录同一账号，它会出现在这里' : '点击「连接设备」显示或扫描配对二维码' }}</p>
       <p v-else-if="!selectedTarget" class="recipient-hint">选择要发送到的设备</p>
       <p v-if="selectedPeer && draftText.trim() && !selectedPeer.supportsText" class="recipient-hint">请更新接收设备的海内以接收文字</p>
-      <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</span><button type="button" @click="selectedFiles = []">移除附件</button></div>
+      <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</span><button type="button" @click="removeStaged()">全部移除</button></div>
+      <ul v-if="selectedFiles.length" class="staged-files" aria-label="待发送的文件">
+        <li v-for="(file, index) in selectedFiles" :key="stagedKey(file)" class="staged-file">
+          <img v-if="canPreview(file)" :src="objectUrl(file)" alt="" />
+          <span v-else class="staged-symbol" aria-hidden="true">▤</span>
+          <span class="staged-name">{{ file.name }}</span>
+          <button type="button" class="staged-remove" :aria-label="`移除 ${file.name}`" @click="removeStaged(index)">×</button>
+        </li>
+      </ul>
       <div class="file-composer">
         <textarea ref="textInput" v-model="draftText" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="输入消息……" aria-label="输入消息" :maxlength="NEARBY_MAX_TEXT_LENGTH" @focus="resizeTextInput" @input="resizeTextInput"></textarea>
         <div class="composer-actions">
@@ -143,6 +151,7 @@
       </div>
     </footer>
 
+    <div v-if="dragActive" class="drop-overlay" aria-hidden="true"><span>松开以添加文件</span></div>
     <input ref="fileInput" class="hidden-input" type="file" multiple @change="onFilesPicked" @cancel="filePickerGeneration = -1" />
     <QrScannerSheet :open="scannerOpen" title="扫描配对二维码" @close="closeScanner" @scanned="onScanned" />
 
@@ -285,6 +294,7 @@ async function retryWithCamera() {
 }
 
 onBeforeUnmount(() => {
+  document.removeEventListener("paste", onPaste);
   pageActive = false;
   releaseUrls();
   cameraRequest?.abort();
@@ -417,14 +427,83 @@ function onFilesPicked(event: Event) {
   input.value = "";
   const current = filePickerGeneration === pickerGeneration;
   filePickerGeneration = -1;
-  if (!current) return;
-  if (!files.length) return;
-  if (files.length > 200) { ui.addToast("一次最多发送 200 个文件，请分批发送", 2_600, "error"); return; }
-  if (batchBytes(files) > NEARBY_MAX_BATCH_BYTES) {
+  if (current) addFiles(files);
+}
+
+const stagedKey = (file: File) => `${file.name}:${file.size}:${file.lastModified}`;
+
+/** Picking, dropping and pasting all add to one staged batch. */
+function addFiles(incoming: File[]) {
+  const known = new Set(selectedFiles.value.map(stagedKey));
+  const fresh = incoming.filter(file => !known.has(stagedKey(file)) && known.add(stagedKey(file)));
+  if (!fresh.length) return;
+  const next = [...selectedFiles.value, ...fresh];
+  if (next.length > 200) { ui.addToast("一次最多发送 200 个文件，请分批发送", 2_600, "error"); return; }
+  if (batchBytes(next) > NEARBY_MAX_BATCH_BYTES) {
     ui.addToast(`一次最多发送 ${formatBytes(NEARBY_MAX_BATCH_BYTES)}，请分批发送`, 2_600, "error");
     return;
   }
-  selectedFiles.value = files;
+  selectedFiles.value = next;
+}
+
+/** Without an index, drop the whole batch. */
+function removeStaged(index?: number) {
+  const removed = index === undefined ? selectedFiles.value : selectedFiles.value.slice(index, index + 1);
+  selectedFiles.value = index === undefined ? [] : selectedFiles.value.filter((_, item) => item !== index);
+  for (const file of removed) {
+    const url = objectUrls.get(file);
+    if (url) URL.revokeObjectURL(url);
+    objectUrls.delete(file);
+  }
+}
+
+const dragActive = ref(false);
+let dragDepth = 0;
+const acceptsDrop = (event: DragEvent) => !!event.dataTransfer?.types.includes("Files") && !pendingOffer.value && !scannerOpen.value;
+
+function onDragEnter(event: DragEvent) {
+  if (!acceptsDrop(event)) return;
+  event.preventDefault();
+  dragDepth++;
+  dragActive.value = true;
+}
+
+function onDragOver(event: DragEvent) {
+  if (!acceptsDrop(event)) return;
+  event.preventDefault();
+  event.dataTransfer!.dropEffect = "copy";
+}
+
+function onDragLeave() {
+  if (dragDepth && --dragDepth === 0) dragActive.value = false;
+}
+
+function onDrop(event: DragEvent) {
+  const accepted = acceptsDrop(event);
+  dragDepth = 0;
+  dragActive.value = false;
+  if (!accepted) return;
+  event.preventDefault();
+  const items = [...event.dataTransfer!.items].filter(item => item.kind === "file");
+  const files: File[] = [];
+  let folders = 0;
+  for (const item of items) {
+    if (item.webkitGetAsEntry?.()?.isDirectory) { folders++; continue; }
+    const file = item.getAsFile();
+    if (file) files.push(file);
+  }
+  if (!items.length) files.push(...event.dataTransfer!.files);
+  if (folders) ui.addToast("暂不支持发送文件夹，请压缩后发送或选择其中的文件", 2_600, "error");
+  addFiles(files);
+}
+
+/** Pasted images or copied files become attachments; plain text pastes as usual. */
+function onPaste(event: ClipboardEvent) {
+  if (pendingOffer.value || scannerOpen.value) return;
+  const files = [...(event.clipboardData?.files || [])];
+  if (!files.length) return;
+  event.preventDefault();
+  addFiles(files);
 }
 
 function resizeTextInput() {
@@ -572,6 +651,7 @@ function download(url: string, name: string) {
 
 onMounted(() => {
   clearNearbyUnread();
+  document.addEventListener("paste", onPaste);
   // A page visit must not cut off an in-flight offer/answer/candidate exchange.
   void joinOwnRoom();
   const pair = typeof route.query.pair === "string" ? parsePairing(route.query.pair) : null;
@@ -603,7 +683,7 @@ watch(() => nearbyState.transfers.length, async () => {
 </script>
 
 <style scoped>
-.nearby-page{position:fixed;inset:0;z-index:1000;display:grid;grid-template-rows:auto minmax(0,1fr) auto;box-sizing:border-box;width:100%;margin:0;background:var(--bg-fff);color:var(--fg-172033)}
+.nearby-page{position:fixed;inset:0;z-index:1000;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto;box-sizing:border-box;width:100%;margin:0;background:var(--bg-fff);color:var(--fg-172033)}
 .assistant-header{display:grid;grid-template-columns:38px 34px minmax(0,1fr) 38px;align-items:center;gap:8px;min-height:54px;padding:0 12px;border-bottom:1px solid var(--bd-eff1f3);background:var(--bg-fff)}
 .assistant-header strong{font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .header-icon{display:grid;width:38px;height:44px;padding:8px;place-items:center;border:0;background:transparent;color:inherit;cursor:pointer}
@@ -629,6 +709,12 @@ watch(() => nearbyState.transfers.length, async () => {
 .chip-dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:var(--fg-94a3b8)}.chip-dot.ready{background:#16a34a}.recipient-hint{margin:0 4px 8px;color:var(--fg-64748b);font-size:12px}
 .transfer-text{margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.5}.text-preview{max-height:120px;overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.5}
 .selected-batch{display:flex;align-items:center;gap:8px;padding:8px 0;font-size:13px;color:var(--fg-64748b)}
+.staged-files{display:flex;gap:8px;margin:0 -4px;padding:0 4px 10px;overflow-x:auto;list-style:none;scrollbar-width:none}.staged-files::-webkit-scrollbar{display:none}
+.staged-file{position:relative;display:flex;flex:0 0 auto;align-items:center;gap:6px;max-width:180px;height:48px;padding:4px 30px 4px 4px;box-sizing:border-box;border:1px solid var(--bd-e2e8f0);border-radius:12px;background:var(--bg-fff);font-size:12px}
+.staged-file img{width:38px;height:38px;flex:0 0 38px;border-radius:8px;object-fit:cover}.staged-symbol{display:grid;width:38px;height:38px;flex:0 0 38px;place-items:center;border-radius:8px;background:var(--bg-f1f5f9);color:var(--fg-64748b);font-size:20px}
+.staged-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.staged-remove{position:absolute;top:50%;right:2px;display:grid;width:28px;height:28px;padding:0;place-items:center;border:0;border-radius:50%;background:transparent;color:var(--fg-64748b);font-size:18px;transform:translateY(-50%);cursor:pointer}
+.drop-overlay{position:fixed;inset:12px;z-index:12000;display:grid;place-items:center;border:2px dashed #1687e8;border-radius:20px;background:rgba(22,135,232,.08);pointer-events:none}.drop-overlay span{padding:10px 18px;border-radius:999px;background:var(--bg-fff);color:var(--fg-1687e8);font-weight:650;box-shadow:0 4px 18px rgba(15,23,42,.12)}
 .selected-batch span{flex:1}.selected-batch button{min-height:36px;border:0;background:transparent;color:var(--fg-1687e8)}
 .peer-name small{display:block;margin-top:4px;color:var(--fg-64748b);font-size:11px;font-weight:400}
 .nearby-intro,.nearby-hint{margin:8px 0 0;color:var(--fg-64748b);font-size:14px;line-height:1.6}
