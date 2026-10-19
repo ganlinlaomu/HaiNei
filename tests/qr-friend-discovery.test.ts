@@ -37,10 +37,13 @@ describe("Nostr QR friend discovery", () => {
     expect(myQr).toContain("buildNostrProfileQrValue");
     expect(myQr).not.toContain("http://");
     expect(myQr).not.toContain("https://");
-    expect(scanner).toContain('import("@zxing/browser")');
-    expect(scanner).toContain("decodeFromVideoDevice");
-    expect(scanner).toContain("decodeFromImageUrl");
-    expect(scanner).toContain("controls?.stop?.()");
+    const decoder = readFileSync(join(process.cwd(), "src/utils/qrDecode.ts"), "utf8");
+    expect(scanner).toContain("loadQrDecoder()");
+    expect(scanner).toContain("createImageBitmap(file)");
+    expect(decoder).toContain('new Native({ formats: ["qr_code"] })');
+    // Only the QR reader is loaded, never the multi-format browser kit.
+    expect(decoder).toContain('import("@zxing/library/esm/core/qrcode/QRCodeReader")');
+    expect(decoder).not.toContain("@zxing/browser");
     expect(scanner).toContain("getTracks().forEach(track => track.stop())");
     expect(scanner).toContain('document.visibilityState === "hidden"');
   });
