@@ -7,6 +7,7 @@
   <script type="module">
     import { createApp, h, nextTick } from "vue";
     import EncryptedVideoPlayer from "/src/components/EncryptedVideoPlayer.vue";
+    import { validateTransferAssistant } from "/tests/browser/transfer-validation.ts";
     import {
       encryptVideoFile,
       exportKeyToBase64,
@@ -121,7 +122,8 @@
       if (!revoked.includes(blobUrl)) throw new Error("Blob URL was not released on unmount");
       if (fetchCount !== 2) throw new Error(`expected exactly two downloads, got ${fetchCount}`);
 
-      result.textContent = "PASS: encrypted video timeout retry, AES-GCM metadata load, Blob release";
+      await validateTransferAssistant();
+      result.textContent = "PASS: encrypted video timeout retry, AES-GCM metadata load, Blob release, transfer batch UI and save";
       document.title = "PASS";
     } catch (error) {
       result.textContent = "FAIL: " + (error?.stack || error);

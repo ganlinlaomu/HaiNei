@@ -29,6 +29,8 @@ export type RoomKind = "own" | "pair";
 
 export type NearbyTransferRecord = {
   id: string;
+  kind: RoomKind;
+  peerId: string;
   direction: "in" | "out";
   peerName: string;
   files: NearbyFileMeta[];
@@ -37,7 +39,7 @@ export type NearbyTransferRecord = {
   state: "waiting" | "active" | "done" | "declined" | "failed";
 };
 
-export type PendingOffer = { offer: NearbyOffer; peerName: string; resolve: (ok: boolean) => void };
+export type PendingOffer = { transferId: string; offer: NearbyOffer; peerName: string; resolve: (ok: boolean) => void };
 
 export const nearbyState = reactive({
   deviceName: defaultDeviceName(),
@@ -103,7 +105,7 @@ const offerQueue: PendingOffer[] = [];
 let offerListener: ((offer: PendingOffer) => void) | null = pending => {
   // Rooms stay joined after leaving the page; point people back to it.
   if (typeof location !== "undefined" && location.hash.startsWith("#/nearby")) return;
-  useUIStore().addToast(`${pending.peerName} 想发送 ${pending.offer.files.length} 个文件，请打开「我的 › 附近传输」确认`, 6_000, "info");
+  useUIStore().addToast(`${pending.peerName} 想发送 ${pending.offer.files.length} 个文件，请打开「私信 › 文件传输助手」确认`, 6_000, "info");
 };
 
 /** Lets the app tell people about an offer while they are on another page. */
@@ -127,6 +129,14 @@ function peersFor(kind: RoomKind) {
 function makeRoom(kind: RoomKind) {
   return new NearbyRoom(nearbyState.deviceName, {
     onPeers: next => {
+      for (const item of nearbyState.transfers) {
+        if (item.kind === kind && !next[item.peerId] && (item.state === "active" || item.state === "waiting")) {
+          item.state = "failed";
+          const pending = [nearbyState.pendingOffer, ...offerQueue].find(offer => offer?.transferId === item.id);
+          pending?.resolve(false);
+          item.state = "failed";
+        }
+      }
       if (kind === "own") nearbyState.ownPeers = next;
       else nearbyState.pairPeers = next;
     },
@@ -135,27 +145,43 @@ function makeRoom(kind: RoomKind) {
       else nearbyState.pairError = message;
     },
     onOffer: offer => new Promise<boolean>(resolve => {
+      const id = `${kind}:${offer.id}`;
+      // Reserve memory for the entire batch, including files not received yet.
+      // A trusted device must not fill the receiver with unlimited queued data.
+      const reserved = nearbyState.transfers.reduce((sum, item) => sum + (
+        item.direction !== "in" ? 0 : item.state === "active" || item.state === "waiting"
+          ? batchBytes(item.files) : batchBytes(item.received.filter((file): file is File => !!file))
+      ), 0);
+      if (nearbyState.transfers.length >= 100 || nearbyState.transfers.some(item => item.id === id)
+        || reserved + batchBytes(offer.files) > NEARBY_MAX_BATCH_BYTES) { resolve(false); return; }
       const peerName = peersFor(kind)[offer.from] || "附近的设备";
       const transfer: NearbyTransferRecord = {
-        id: `${kind}:${offer.id}`, direction: "in", peerName, files: offer.files,
+        id, kind, peerId: offer.from, direction: "in", peerName, files: offer.files,
         progress: offer.files.map(() => 0), received: offer.files.map(() => undefined), state: "waiting",
       };
       nearbyState.transfers.unshift(transfer);
+      // Only possession of this account's private key derives the own room's
+      // secret and encrypted signaling password. QR rooms never get this trust.
+      if (kind === "own") {
+        transfer.state = "active";
+        resolve(true);
+        return;
+      }
       let settled = false;
       const finish = (ok: boolean) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         updateTransfer(transfer.id, item => { item.state = ok ? "active" : "declined"; });
-        if (nearbyState.pendingOffer?.offer.id === offer.id) nearbyState.pendingOffer = null;
-        const queued = offerQueue.findIndex(item => item.offer.id === offer.id);
+        if (nearbyState.pendingOffer?.transferId === transfer.id) nearbyState.pendingOffer = null;
+        const queued = offerQueue.findIndex(item => item.transferId === transfer.id);
         if (queued >= 0) offerQueue.splice(queued, 1);
         showNextOffer();
         resolve(ok);
       };
       // Answer before the sender's request times out.
       const timer = setTimeout(() => finish(false), NEARBY_OFFER_TIMEOUT_MS - 5_000);
-      const pending: PendingOffer = { offer, peerName, resolve: finish };
+      const pending: PendingOffer = { transferId: transfer.id, offer, peerName, resolve: finish };
       offerQueue.push(pending);
       showNextOffer();
       offerListener?.(pending);
@@ -210,6 +236,7 @@ export async function leaveOwnDevicesRoom() {
   nearbyState.ownPeers = {};
   nearbyState.ownError = "";
   ownRoomId = "";
+  failRoomTransfers("own");
   updateRelayResumeWatch();
   if (room) await room.leave();
 }
@@ -240,6 +267,7 @@ export async function stopPairRoom() {
   nearbyState.pairKey = null;
   nearbyState.pairPeers = {};
   nearbyState.pairError = "";
+  failRoomTransfers("pair");
   updateRelayResumeWatch();
   if (room) await room.leave();
 }
@@ -278,12 +306,28 @@ export function answerPendingOffer(accept: boolean) {
   nearbyState.pendingOffer?.resolve(accept);
 }
 
+export function clearNearbyTransfer(id: string) {
+  const index = nearbyState.transfers.findIndex(item => item.id === id);
+  if (index < 0 || ["active", "waiting"].includes(nearbyState.transfers[index].state)) return;
+  nearbyState.transfers.splice(index, 1);
+}
+
+function failRoomTransfers(kind: RoomKind) {
+  for (const item of nearbyState.transfers) {
+    if (item.kind !== kind || !["active", "waiting"].includes(item.state)) continue;
+    const pending = [nearbyState.pendingOffer, ...offerQueue].find(offer => offer?.transferId === item.id);
+    pending?.resolve(false);
+    item.state = "failed";
+  }
+}
+
 export async function sendNearbyFiles(kind: RoomKind, peerId: string, files: File[]) {
   const room = rooms[kind];
   if (!room) throw new Error("nearby_not_joined");
+  if (!files.length || files.length > 200 || !peersFor(kind)[peerId]) throw new Error("nearby_invalid_target_or_files");
   if (batchBytes(files) > NEARBY_MAX_BATCH_BYTES) throw new Error("nearby_batch_too_large");
   const transfer: NearbyTransferRecord = {
-    id: `out:${Date.now()}:${Math.random()}`, direction: "out", peerName: peersFor(kind)[peerId] || "附近的设备",
+    id: `out:${Date.now()}:${Math.random()}`, kind, peerId, direction: "out", peerName: peersFor(kind)[peerId] || "附近的设备",
     files: files.map(file => ({ name: file.name, size: file.size, type: file.type })),
     progress: files.map(() => 0), received: files.map(() => undefined), state: "waiting",
   };
