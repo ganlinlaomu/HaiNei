@@ -46,6 +46,12 @@ function usable(session: ManagedRelaySession | null, now = Math.floor(Date.now()
   return !!session && session.scope === "relay" && session.expiresAt > now + EXPIRY_SKEW_SECONDS;
 }
 
+/** Synchronous read for socket factories; null unless a fresh token is cached. */
+export function cachedManagedRelaySession(url: string) {
+  const normalizedUrl = normalizeRelayUrl(url);
+  return usable(sessionCache) && sessionCache?.relayUrl === normalizedUrl && sessionCache.pubkey === identity?.pubkey ? sessionCache : null;
+}
+
 export function registerRelaySessionSigner(pubkey: string, signEvent: RelaySigner) {
   const normalized = String(pubkey || "").trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(normalized)) return false;

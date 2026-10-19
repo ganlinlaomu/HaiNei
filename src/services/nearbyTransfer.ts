@@ -1,6 +1,7 @@
 import type { Room } from "trystero";
 import { DEFAULT_RELAY_URLS, getOrCreateDeviceId } from "@/services/connectionSettings";
 import { deviceStorage } from "@/services/deviceStorage";
+import { cachedManagedRelaySession, getManagedRelaySessionForUrl, managedRelayUrlFromCache } from "@/services/relaySession";
 import { createNearbyRtcDiagnostics } from "@/services/nearbyRtcDiagnostics";
 import { NearbyChunkReceiver, NEARBY_CHUNK_BYTES, sendChunkedFiles, type ChunkMeta, type TransferControl } from "./nearbyChunks";
 
@@ -81,6 +82,59 @@ export function parsePairing(value: string): NearbyRoomKey | null {
   return match ? { roomId: match[1].toLowerCase(), password: match[2].toLowerCase() } : null;
 }
 
+/**
+ * HaiNei's own relay admits the app by session token (a WebSocket
+ * subprotocol), not by Trystero's throwaway NIP-42 key. Tokens last ~10
+ * minutes: refresh before expiry and reconnect so Trystero picks up the new one.
+ */
+const managedNearbyRelay = () => {
+  const url = managedRelayUrlFromCache();
+  return url && (DEFAULT_RELAY_URLS as readonly string[]).includes(url) ? url : "";
+};
+type RelayHooks = { __haineiRelaySocketProtocols?: (url: string) => string[] | undefined; __haineiRelayRecoverable?: (url: string) => boolean };
+(globalThis as RelayHooks).__haineiRelaySocketProtocols = url => {
+  const session = cachedManagedRelaySession(url);
+  return session ? ["nostr", `relay-app.${session.token}`] : undefined;
+};
+(globalThis as RelayHooks).__haineiRelayRecoverable = url => !!url && url.replace(/\/$/, "") === managedNearbyRelay().replace(/\/$/, "");
+
+const MANAGED_REFRESH_LEAD_MS = 60_000;
+let managedRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function managedSocket(url: string) {
+  const { getRelaySockets } = await import("trystero");
+  const sockets = (getRelaySockets() || {}) as Record<string, WebSocket | undefined>;
+  return Object.entries(sockets).find(([key]) => key.replace(/\/$/, "") === url.replace(/\/$/, ""))?.[1];
+}
+
+function scheduleManagedRefresh(url: string, expiresAt: number) {
+  if (managedRefreshTimer) clearTimeout(managedRefreshTimer);
+  managedRefreshTimer = setTimeout(async () => {
+    managedRefreshTimer = null;
+    const socket = await managedSocket(url);
+    // No nearby room uses it any more; the next join prepares a session again.
+    if (!socket) return;
+    const next = await getManagedRelaySessionForUrl(url, true).catch(() => null);
+    if (!next) return;
+    socket.close();
+    scheduleManagedRefresh(url, next.expiresAt);
+  }, Math.max(5_000, expiresAt * 1000 - Date.now() - MANAGED_REFRESH_LEAD_MS));
+}
+
+/**
+ * Make sure a token is cached before Trystero opens (or reopens) the socket.
+ * `reconnect`: an existing socket opened without a valid token is recycled.
+ */
+export async function prepareNearbyRelaySession(reconnect = false) {
+  const url = managedNearbyRelay();
+  if (!url) return;
+  const hadToken = !!cachedManagedRelaySession(url);
+  const session = await getManagedRelaySessionForUrl(url).catch(() => null);
+  if (!session) return;
+  scheduleManagedRefresh(url, session.expiresAt);
+  if (reconnect && !hadToken) (await managedSocket(url))?.close();
+}
+
 const RELAY_PROBE_TIMEOUT_MS = 8_000;
 let relayRefresh: Promise<number> | null = null;
 
@@ -135,7 +189,9 @@ async function checkNearbyRelaySockets() {
 }
 
 export function refreshNearbyRelaySockets() {
-  return relayRefresh ??= checkNearbyRelaySockets().finally(() => { relayRefresh = null; });
+  // After a long suspension the token may have lapsed: renew it first.
+  return relayRefresh ??= prepareNearbyRelaySession(true).catch(() => undefined)
+    .then(checkNearbyRelaySockets).finally(() => { relayRefresh = null; });
 }
 
 /** Short, non-reversible label so two devices can compare rooms on screen. */
@@ -334,7 +390,7 @@ export class NearbyRoom {
   async join(key: NearbyRoomKey) {
     const generation = ++this.generation;
     this.key = key;
-    const { joinRoom, getRelaySockets } = await import("trystero");
+    const [{ joinRoom, getRelaySockets }] = await Promise.all([import("trystero"), prepareNearbyRelaySession().catch(() => undefined)]);
     if (generation !== this.generation) return;
     const active = () => generation === this.generation;
     this.rtcDiagnostics = createNearbyRtcDiagnostics(RTCPeerConnection);
