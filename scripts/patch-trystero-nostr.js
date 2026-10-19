@@ -144,7 +144,7 @@ if (source.includes("if (Date.now() - batcher.requestedAt >= 1e3) replayAnnounce
 const authHelpers = [
   "const nearbyNip42Challenges = new WeakMap();",
   "const nearbyNip42PendingAcks = new WeakMap();",
-  "const createNearbyNip42AuthEvent = async (challenge, relayUrl) => {",
+  "export const createNearbyNip42AuthEvent = async (challenge, relayUrl) => {",
   "  const payload = {",
   "    kind: 22242,",
   "    tags: [['relay', relayUrl], ['challenge', challenge]],",
