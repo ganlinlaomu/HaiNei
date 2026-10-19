@@ -26,13 +26,13 @@
             <button v-if="canPreview(fileFor(transfer, index))" class="file-thumbnail" type="button" :aria-label="`预览 ${file.name}`" @click="imagePreview = fileFor(transfer, index) || null"><img :src="objectUrl(fileFor(transfer, index)!)" :alt="file.name" loading="lazy" /></button>
             <span v-else class="file-symbol" aria-hidden="true">▤</span>
             <span class="file-description"><span class="file-name">{{ file.name }}</span><span class="file-size">{{ formatBytes(file.size) }}</span></span>
-            <template v-if="transfer.received[index]">
+            <template v-if="transfer.state !== 'done' && transfer.received[index]">
               <a class="file-action" :href="objectUrl(transfer.received[index])" :download="file.name">保存</a>
             </template>
           </div>
           </div>
           <div class="batch-actions">
-            <button v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="file-action batch-save" type="button" :disabled="savingBatch === transfer.id" @click="saveAll(transfer)">{{ savingBatch === transfer.id ? '正在准备…' : transfer.saveState ? '再次保存' : '保存' }}</button>
+            <button v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="file-action batch-save" type="button" :disabled="savingBatch === transfer.id" @click="saveAll(transfer)">{{ savingBatch === transfer.id ? '正在准备…' : transfer.saveState ? (transfer.files.length > 1 ? '再次保存全部' : '再次保存') : (transfer.files.length > 1 ? '保存全部' : '保存') }}</button>
             <button v-if="transfer.saveState === 'system' || transfer.saveState === 'download'" class="file-action confirm-saved" type="button" :disabled="savingBatch === transfer.id" @click="transfer.saveState = 'saved'">确认已保存</button>
             <button v-if="transfer.text" class="file-action" type="button" @click="copyText(transfer.text)">复制文字</button>
             <a v-if="zipDownloads[transfer.id]" class="file-action" :href="zipDownloads[transfer.id]" download="海内文件.zip">下载 ZIP</a>
