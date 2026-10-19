@@ -41,7 +41,7 @@
             <button v-if="transfer.direction === 'out' && !transfer.restored && ['failed', 'paused', 'declined'].includes(transfer.state)" class="file-action retry-transfer" type="button" @click="retryTransfer(transfer.id)">{{ transfer.state !== 'declined' ? '继续传输' : '重新发送' }}</button>
             <button v-if="!['queued', 'active', 'waiting', 'verifying'].includes(transfer.state)" class="clear-transfer" type="button" :disabled="savingBatch === transfer.id" @click="clearTransfer(transfer)">{{ transfer.direction === 'in' && transfer.files.length ? '移除文件' : '清除记录' }}</button>
           </div>
-          <p v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="save-hint" role="status">{{ transfer.saveState === 'saved' ? '✓ 已保存' : transfer.saveState === 'system' ? '已交给系统，请在完成保存后确认已保存' : transfer.saveState === 'download' ? '已开始下载，请检查下载完成后确认已保存' : storedHint(transfer) }}</p>
+          <p v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done' && saveHint(transfer)" class="save-hint" role="status">{{ saveHint(transfer) }}</p>
         </li>
       </ul>
     </section>
@@ -116,7 +116,7 @@
       </div>
       <p v-if="!availableTargets.length" class="recipient-hint">{{ nearbyState.ownError || nearbyState.pairError ? '连接未完成，请检查设备与网络；点击「连接设备」重试' : ownDevicesAvailable ? '在另一台设备上打开海内并登录同一账号，它会出现在这里' : '点击「连接设备」显示或扫描配对二维码' }}</p>
       <p v-else-if="!selectedTarget" class="recipient-hint">选择要发送到的设备</p>
-      <p v-else-if="selectedPeer?.route === 'internet' || selectedPeer?.route === 'relay'" class="recipient-hint">{{ selectedPeer.route === 'relay' ? '经中继服务器连接' : '经互联网直连' }}：不在同一局域网，速度取决于双方网络；使用手机网络的一方会消耗流量</p>
+      <p v-else class="recipient-hint">{{ routeHint }}</p>
       <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</span><button type="button" @click="removeStaged()">全部移除</button></div>
       <ul v-if="selectedFiles.length" class="staged-files" aria-label="待发送的文件">
         <li v-for="(file, index) in selectedFiles" :key="stagedKey(file)" class="staged-file">
@@ -172,7 +172,6 @@ import { useDialogFocus } from "@/composables/useDialogFocus";
 import { canShareTransfer, createTransferZip } from "@/services/transferBatchSave";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import { clearNearbyUnread } from "@/services/nearbyUnread";
-import { NEARBY_HISTORY_DAYS } from "@/services/nearbyHistory";
 import { deviceStorage } from "@/services/deviceStorage";
 import {
   NEARBY_MAX_BATCH_BYTES,
@@ -329,6 +328,17 @@ const availableTargets = computed(() => [
 ]);
 const selectedPeer = computed(() => availableTargets.value.find(peer => peer.kind === selectedTarget.value?.kind && peer.id === selectedTarget.value?.peerId));
 const ROUTE_LABELS: Record<NearbyRoute, string> = { lan: "局域网直连", internet: "互联网直连", relay: "经中继" };
+// Always one line under the chips once a device is chosen, so the composer never jumps.
+const routeHint = computed(() => {
+  const peer = selectedPeer.value;
+  if (!peer) return "所选设备已断开";
+  if (!peer.ready) return "正在连接…";
+  // Keep each variant to one line on a phone; a wrapping hint would jump too.
+  if (peer.route === "lan") return "经局域网直连 · 不消耗流量";
+  if (peer.route === "internet") return "经互联网直连 · 使用手机网络时会消耗流量";
+  if (peer.route === "relay") return "经中继服务器 · 使用手机网络时会消耗流量";
+  return "正在检测连接方式…";
+});
 const routeSuffix = (route?: NearbyRoute) => route ? ` · ${ROUTE_LABELS[route]}` : "";
 function isReady(name: string, compatible?: boolean) { return name !== NEARBY_UNNAMED_PEER && compatible === true; }
 function peerStatus(peer: { name: string; ready: boolean }, ready: string) {
@@ -585,10 +595,14 @@ function retryTransfer(id: string) {
 const hasAllFiles = (transfer: NearbyTransferRecord) => transfer.files.every((_, index) => !!transfer.received[index]);
 const loadingHistory = ref("");
 
-function storedHint(transfer: NearbyTransferRecord) {
-  if (transfer.stored?.length && transfer.stored.every(Boolean)) return `已加密保存在本机，${NEARBY_HISTORY_DAYS} 天后自动删除`;
-  if (transfer.restored && !hasAllFiles(transfer)) return "文件未能保存在本机，已失效";
-  return "请保存后再关闭海内";
+/** Never imply the files are saved before the person saves them to Photos or Files. */
+function saveHint(transfer: NearbyTransferRecord) {
+  if (transfer.saveState === "saved") return "✓ 已保存";
+  if (transfer.saveState === "system") return "已交给系统，请在完成保存后确认已保存";
+  if (transfer.saveState === "download") return "已开始下载，请检查下载完成后确认已保存";
+  if (transfer.restored && !hasAllFiles(transfer) && !transfer.stored?.some(Boolean)) return "文件未能保存在本机，已失效";
+  // A sealed copy survives a reload, so only warn when there is none.
+  return transfer.stored?.length && transfer.stored.every(Boolean) ? "" : "请保存后再关闭海内";
 }
 
 async function loadStoredFiles(transfer: NearbyTransferRecord) {
@@ -776,7 +790,7 @@ watch(() => nearbyState.transfers.length, async () => {
 .target-chip{display:inline-flex;flex:0 0 auto;align-items:center;gap:6px;max-width:70vw;min-height:36px;padding:0 14px;overflow:hidden;border:1px solid var(--bd-d8dee5);border-radius:999px;background:var(--bg-fff);color:var(--fg-334155);font:inherit;font-size:13px;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
 .target-chip.selected{border-color:#1687e8;background:var(--bg-eff6ff);color:var(--fg-1687e8);font-weight:650}.target-chip:disabled{opacity:.55;cursor:default}
 .target-chip.lost{border-style:dashed;color:var(--fg-64748b);cursor:default}.target-chip.connect-device{padding:0 12px;color:var(--fg-64748b)}
-.chip-dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:var(--fg-94a3b8)}.chip-dot.ready{background:#16a34a}.recipient-hint{margin:0 4px 8px;color:var(--fg-64748b);font-size:12px}
+.chip-dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:var(--fg-94a3b8)}.chip-dot.ready{background:#16a34a}.recipient-hint{margin:0 4px 8px;overflow:hidden;color:var(--fg-64748b);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
 .transfer-text{margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.5}.text-preview{max-height:120px;overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.5}
 .selected-batch{display:flex;align-items:center;gap:8px;padding:8px 0;font-size:13px;color:var(--fg-64748b)}
 .staged-files{display:flex;gap:8px;margin:0 -4px;padding:0 4px 10px;overflow-x:auto;list-style:none;scrollbar-width:none}.staged-files::-webkit-scrollbar{display:none}
