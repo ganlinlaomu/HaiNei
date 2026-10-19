@@ -18,15 +18,15 @@ const PURPOSE = "nearby-transfer";
 
 export type StoredTransfer = Pick<NearbyTransferRecord,
   "id" | "kind" | "direction" | "peerName" | "peerDevice" | "localDeviceName" | "createdAt"
-  | "files" | "text" | "state" | "saveState" | "deliveryConfirmed" | "stored">;
+  | "files" | "text" | "state" | "saveState" | "stored">;
 
 export function canStoreHistory(account: string) {
   return !!account && isLocalVaultUnlocked(account);
 }
 
 export function toStored(record: NearbyTransferRecord): StoredTransfer {
-  const { id, kind, direction, peerName, peerDevice, localDeviceName, createdAt, files, text, state, saveState, deliveryConfirmed, stored } = record;
-  return JSON.parse(JSON.stringify({ id, kind, direction, peerName, peerDevice, localDeviceName, createdAt, files, text, state, saveState, deliveryConfirmed, stored }));
+  const { id, kind, direction, peerName, peerDevice, localDeviceName, createdAt, files, text, state, saveState, stored } = record;
+  return JSON.parse(JSON.stringify({ id, kind, direction, peerName, peerDevice, localDeviceName, createdAt, files, text, state, saveState, stored }));
 }
 
 export async function putHistoryRecord(account: string, record: StoredTransfer) {

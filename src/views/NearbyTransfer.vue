@@ -38,7 +38,7 @@
             <button v-if="transfer.text" class="file-action" type="button" @click="copyText(transfer.text)">复制文字</button>
             <a v-if="zipDownloads[transfer.id]" class="file-action" :href="zipDownloads[transfer.id]" download="海内文件.zip">下载 ZIP</a>
             <button v-if="['queued', 'active', 'waiting', 'verifying', 'paused'].includes(transfer.state)" class="file-action cancel-transfer" type="button" @click="cancelNearbyTransfer(transfer.id)">取消传输</button>
-            <button v-if="transfer.direction === 'out' && !transfer.restored && ['failed', 'paused', 'declined'].includes(transfer.state)" class="file-action retry-transfer" type="button" @click="retryTransfer(transfer.id)">{{ transfer.resumable && transfer.state !== 'declined' ? '继续传输' : '重新发送' }}</button>
+            <button v-if="transfer.direction === 'out' && !transfer.restored && ['failed', 'paused', 'declined'].includes(transfer.state)" class="file-action retry-transfer" type="button" @click="retryTransfer(transfer.id)">{{ transfer.state !== 'declined' ? '继续传输' : '重新发送' }}</button>
             <button v-if="!['queued', 'active', 'waiting', 'verifying'].includes(transfer.state)" class="clear-transfer" type="button" :disabled="savingBatch === transfer.id" @click="clearTransfer(transfer)">{{ transfer.direction === 'in' && transfer.files.length ? '移除文件' : '清除记录' }}</button>
           </div>
           <p v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="save-hint" role="status">{{ transfer.saveState === 'saved' ? '✓ 已保存' : transfer.saveState === 'system' ? '已交给系统，请在完成保存后确认已保存' : transfer.saveState === 'download' ? '已开始下载，请检查下载完成后确认已保存' : storedHint(transfer) }}</p>
@@ -62,8 +62,8 @@
       <ul v-if="ownPeerList.length" class="peer-list">
         <li v-for="peer in ownPeerList" :key="peer.id" class="peer-row">
           <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2.5" /><path d="M10.5 17.5h3" /></svg></span>
-          <span class="peer-name">{{ peer.name }}<small>{{ peer.name === NEARBY_UNNAMED_PEER ? '连接中…' : '可发送 · 同账号自动接收' }}</small></span>
-          <button class="peer-send" type="button" :disabled="peer.name === NEARBY_UNNAMED_PEER" @click="selectDevice('own', peer.id)">选择此设备</button>
+          <span class="peer-name">{{ peer.name }}<small>{{ peerStatus(peer, '可发送 · 同账号自动接收') }}</small></span>
+          <button class="peer-send" type="button" :disabled="!peer.ready" @click="selectDevice('own', peer.id)">选择此设备</button>
         </li>
       </ul>
       <p v-else class="nearby-empty">{{ ownStatus }}</p>
@@ -94,8 +94,8 @@
         <ul v-if="pairPeerList.length" class="peer-list">
           <li v-for="peer in pairPeerList" :key="peer.id" class="peer-row">
             <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2" /><path d="M8 20h8" /></svg></span>
-            <span class="peer-name">{{ peer.name }}<small>{{ peer.name === NEARBY_UNNAMED_PEER ? '连接中…' : '可发送' }}</small></span>
-            <button class="peer-send" type="button" :disabled="peer.name === NEARBY_UNNAMED_PEER" @click="selectDevice('pair', peer.id)">选择此设备</button>
+            <span class="peer-name">{{ peer.name }}<small>{{ peerStatus(peer, '可发送') }}</small></span>
+            <button class="peer-send" type="button" :disabled="!peer.ready" @click="selectDevice('pair', peer.id)">选择此设备</button>
           </li>
         </ul>
         <p v-if="nearbyState.pairError" class="nearby-empty">{{ joinErrorText(nearbyState.pairError) }}</p>
@@ -110,13 +110,12 @@
 
     <footer class="assistant-composer">
       <div class="target-chips" role="group" aria-label="接收设备">
-        <button v-for="peer in availableTargets" :key="`${peer.kind}:${peer.id}`" class="target-chip" :class="{ selected: isSelected(peer) }" type="button" :aria-pressed="isSelected(peer)" :disabled="!peer.ready" @click="selectDevice(peer.kind, peer.id)"><span class="chip-dot" :class="{ ready: peer.ready }" aria-hidden="true"></span>{{ peer.ready ? peer.name : '连接中…' }}</button>
+        <button v-for="peer in availableTargets" :key="`${peer.kind}:${peer.id}`" class="target-chip" :class="{ selected: isSelected(peer) }" type="button" :aria-pressed="isSelected(peer)" :disabled="!peer.ready" @click="selectDevice(peer.kind, peer.id)"><span class="chip-dot" :class="{ ready: peer.ready }" aria-hidden="true"></span>{{ peer.ready ? peer.name : peer.name === NEARBY_UNNAMED_PEER ? '连接中…' : `${peer.name}（需更新海内）` }}</button>
         <span v-if="selectedTarget && !selectedPeer" class="target-chip lost" role="status">设备已断开，请重新选择</span>
         <button class="target-chip connect-device" type="button" :aria-label="availableTargets.length ? '连接更多设备' : '连接设备'" @click="openConnections"><span aria-hidden="true">＋</span>{{ availableTargets.length ? '' : '连接设备' }}</button>
       </div>
       <p v-if="!availableTargets.length" class="recipient-hint">{{ nearbyState.ownError || nearbyState.pairError ? '连接未完成，请检查设备与网络；点击「连接设备」重试' : ownDevicesAvailable ? '在另一台设备上打开海内并登录同一账号，它会出现在这里' : '点击「连接设备」显示或扫描配对二维码' }}</p>
       <p v-else-if="!selectedTarget" class="recipient-hint">选择要发送到的设备</p>
-      <p v-if="selectedPeer && draftText.trim() && !selectedPeer.supportsText" class="recipient-hint">请更新接收设备的海内以接收文字</p>
       <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</span><button type="button" @click="removeStaged()">全部移除</button></div>
       <ul v-if="selectedFiles.length" class="staged-files" aria-label="待发送的文件">
         <li v-for="(file, index) in selectedFiles" :key="stagedKey(file)" class="staged-file">
@@ -316,17 +315,21 @@ const pairKey = computed(() => nearbyState.pairKey);
 const pendingOffer = computed(() => nearbyState.pendingOffer);
 const transfers = computed(() => [...nearbyState.transfers].reverse());
 const ownDevicesAvailable = computed(() => keys.isLoggedIn && keys.loginMethod === "private-key" && /^[0-9a-f]{64}$/.test(keys.skHex));
-const ownPeerList = computed(() => Object.entries(nearbyState.ownPeers).map(([id, name]) => ({ id, name })));
+const ownPeerList = computed(() => Object.entries(nearbyState.ownPeers).map(([id, name]) => ({ id, name, ready: isReady(name, nearbyState.ownCompatible[id]) })));
 const showCameraRetry = computed(() => ["iPhone", "iPad"].includes(platformName)
   && !ownPeerList.value.length && nearbyState.ownError.includes("could not connect to peer"));
-const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).map(([id, name]) => ({ id, name })));
+const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).map(([id, name]) => ({ id, name, ready: isReady(name, nearbyState.pairCompatible[id]) })));
 const availableTargets = computed(() => [
-  ...ownPeerList.value.map(peer => ({ ...peer, kind: "own" as const, device: nearbyState.ownDevices[peer.id] || "", supportsText: nearbyState.ownTextPeers[peer.id] === true })),
-  ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const, device: "", supportsText: nearbyState.pairTextPeers[peer.id] === true })),
-].map(peer => ({ ...peer, ready: peer.name !== NEARBY_UNNAMED_PEER })));
+  ...ownPeerList.value.map(peer => ({ ...peer, kind: "own" as const, device: nearbyState.ownDevices[peer.id] || "" })),
+  ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const, device: "" })),
+]);
 const selectedPeer = computed(() => availableTargets.value.find(peer => peer.kind === selectedTarget.value?.kind && peer.id === selectedTarget.value?.peerId));
+function isReady(name: string, compatible?: boolean) { return name !== NEARBY_UNNAMED_PEER && compatible === true; }
+function peerStatus(peer: { name: string; ready: boolean }, ready: string) {
+  return peer.ready ? ready : peer.name === NEARBY_UNNAMED_PEER ? '连接中…' : '版本过旧，请更新海内';
+}
 const isSelected = (peer: { kind: RoomKind; id: string }) => selectedTarget.value?.kind === peer.kind && selectedTarget.value?.peerId === peer.id;
-const canSendToTarget = computed(() => !!selectedPeer.value?.ready && (!draftText.value.trim() || selectedPeer.value.supportsText));
+const canSendToTarget = computed(() => !!selectedPeer.value?.ready);
 watch(availableTargets, peers => {
   const current = selectedTarget.value;
   // Never silently redirect an existing recipient to another device. The same
@@ -550,7 +553,7 @@ function requestSend() {
   if (!hasContent.value || !canSendToTarget.value) return;
   textInput.value?.blur();
   const target = selectedTarget.value;
-  if (target && availableTargets.value.some(peer => peer.kind === target.kind && peer.id === target.peerId && (!draftText.value.trim() || peer.supportsText))) {
+  if (target && availableTargets.value.some(peer => peer.kind === target.kind && peer.id === target.peerId && peer.ready)) {
     void sendSelected(target.kind, target.peerId);
   }
 }
@@ -614,7 +617,7 @@ function transferStatus(transfer: NearbyTransferRecord) {
   if (transfer.state === "waiting") return transfer.direction === "out" ? "正在连接接收设备…" : "等待你确认";
   if (transfer.state === "declined") return transfer.direction === "out" ? "对方暂时无法接收" : "已拒绝";
   if (transfer.state === "failed") return "传输中断";
-  if (transfer.state === "done") return transfer.direction === "out" ? transfer.deliveryConfirmed ? '已送达' : '已发送 · 未确认送达' : "已接收";
+  if (transfer.state === "done") return transfer.direction === "out" ? '已送达' : "已接收";
   return `${Math.floor(batchProgress(transfer) * 100)}%`;
 }
 

@@ -90,7 +90,6 @@ describe("nearby signaling recovery", () => {
     cancelNearbyTransfer(second);
     release();
     await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === first)?.state).toBe('done'));
-    expect(nearbyState.transfers.find(item => item.id === first)?.deliveryConfirmed).toBe(true);
     expect(nearbyState.transfers.find(item => item.id === second)?.state).toBe('canceled');
     expect(room.actions.offer.request).toHaveBeenCalledOnce();
   });
@@ -222,7 +221,7 @@ describe("nearby signaling recovery", () => {
     room.actions.cancel2.handlers.onMessage({ id: record.wireId }, { peerId: 'peer' });
     expect(record.state).toBe('canceled');
     finishOffer(true);
-    await vi.waitFor(() => expect(record.deliveryConfirmed).not.toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
     expect(record.state).toBe('canceled');
   });
 
@@ -230,7 +229,7 @@ describe("nearby signaling recovery", () => {
     await ensureOwnDevicesRoom("account", "1".repeat(64));
     const own = trystero.rooms[0];
     own.onPeerJoin("peer");
-    const offer = { id: "0123456789abcdef", files: [], text: "第一行\n第二行" };
+    const offer = { id: "0123456789abcdef", files: [], text: "第一行\n第二行", protocol: 2 };
     expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "peer" })).toBe(true);
     expect(nearbyState.pendingOffer).toBeNull();
     expect(nearbyState.transfers[0]).toMatchObject({ text: offer.text, files: [], state: "done" });
@@ -242,7 +241,7 @@ describe("nearby signaling recovery", () => {
     await startPairRoom({ roomId: "qr", password: "secret" });
     const pair = trystero.rooms[0];
     pair.onPeerJoin("peer");
-    const offer = { id: "0123456789abcdef", files: [], text: "hello" };
+    const offer = { id: "0123456789abcdef", files: [], text: "hello", protocol: 2 };
     const request = pair.actions.offer.handlers.onRequest(offer, { peerId: "peer" });
     expect(nearbyState.transfers[0].state).toBe("waiting");
     answerPendingOffer(true);
@@ -250,43 +249,28 @@ describe("nearby signaling recovery", () => {
     expect(nearbyState.transfers[0].state).toBe("done");
   });
 
-  it("negotiates text capability, sends one combined offer, and keeps legacy file-only sending", async () => {
-    await ensureOwnDevicesRoom("account", "1".repeat(64));
-    const own = trystero.rooms[0];
-    own.onPeerJoin("peer");
+  it("refuses peers older than the verified protocol, then sends one combined offer", async () => {
+    const own = await modernRoom();
     own.actions.hello.handlers.onMessage({ name: "PC", reply: true }, { peerId: "peer" });
-    own.actions.offer.request.mockResolvedValue(true);
-    await expect(sendNearbyFiles("own", "peer", [], "hello")).rejects.toThrow("nearby_text_unsupported");
-    const file = new File(["a"], "a.txt");
-    await sendNearbyFiles("own", "peer", [file]);
-    expect(own.actions.file.send).toHaveBeenCalledOnce();
-    own.actions.hello.handlers.onMessage({ name: "PC", reply: true, text: true }, { peerId: "peer" });
-    await sendNearbyFiles("own", "peer", [], "hello\nworld");
-    expect(own.actions.offer.request.mock.calls.at(-1)[0]).toMatchObject({ files: [], text: "hello\nworld" });
-    expect(own.actions.file.send).toHaveBeenCalledOnce();
-    expect(nearbyState.transfers[0]).toMatchObject({ text: "hello\nworld", state: "done" });
-    await sendNearbyFiles("own", "peer", [file], "caption");
-    expect(own.actions.offer.request.mock.calls.at(-1)[0]).toMatchObject({ files: [{ name: "a.txt", size: 1 }], text: "caption" });
-    expect(own.actions.file.send).toHaveBeenCalledTimes(2);
+    expect(nearbyState.ownCompatible).toEqual({ peer: false });
+    await expect(sendNearbyFiles("own", "peer", [], "hello")).rejects.toThrow("nearby_peer_outdated");
+    own.actions.hello.handlers.onMessage({ name: "PC", reply: true, text: true, protocol: 2 }, { peerId: "peer" });
+    await sendNearbyFiles("own", "peer", [new File(["a"], "a.txt")], "caption");
+    expect(own.actions.offer.request.mock.calls.at(-1)[0]).toMatchObject({ files: [{ name: "a.txt", size: 1 }], text: "caption", protocol: 2 });
+    expect(own.actions).not.toHaveProperty("file");
     own.onPeerLeave("peer");
-    expect(nearbyState.ownTextPeers).toEqual({});
+    expect(nearbyState.ownCompatible).toEqual({});
   });
-  it("auto-accepts own-account batches but requires confirmation in a QR room", async () => {
+
+  it("auto-accepts own-account batches, rejects legacy offers, and requires confirmation in a QR room", async () => {
     await ensureOwnDevicesRoom("account", "1".repeat(64));
-    const offer = { id: "0123456789abcdef", files: [{ name: "a.txt", size: 3, type: "text/plain" }] };
+    const offer = { id: "0123456789abcdef", files: [{ name: "a.txt", size: 3, type: "text/plain" }], protocol: 2 };
     const own = trystero.rooms[0];
     own.onPeerJoin("own-peer");
+    expect(await own.actions.offer.handlers.onRequest({ ...offer, id: "fedcba9876543210", protocol: undefined }, { peerId: "own-peer" })).toBe(false);
     expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "own-peer" })).toBe(true);
     expect(nearbyState.pendingOffer).toBeNull();
-    expect(nearbyState.transfers[0].state).toBe("active");
-    const metadata = { offerId: offer.id, index: 0 };
-    expect(own.actions.file.handlers.onReceive({ peerId: "other", metadata, byteLength: 3 })).toBe(false);
-    expect(own.actions.file.handlers.onReceive({ peerId: "own-peer", metadata, byteLength: 4 })).toBe(false);
-    expect(own.actions.file.handlers.onReceive({ peerId: "own-peer", metadata, byteLength: 3 })).toBe(true);
-    own.actions.file.handlers.onMessage(new Uint8Array([1, 2, 3]).buffer, { peerId: "own-peer", metadata });
-    expect(nearbyState.transfers[0].state).toBe("done");
-    expect(nearbyState.transfers[0].files[0].name).toBe("a.txt");
-    expect(own.actions.file.handlers.onReceive({ peerId: "own-peer", metadata, byteLength: 3 })).toBe(false);
+    expect(nearbyState.transfers[0]).toMatchObject({ state: "active", files: [{ name: "a.txt" }] });
     await startPairRoom({ roomId: "qr", password: "qr-secret" });
     const pair = trystero.rooms[1];
     pair.onPeerJoin("pair-peer");
@@ -300,13 +284,15 @@ describe("nearby signaling recovery", () => {
     await ensureOwnDevicesRoom("account", "1".repeat(64));
     const own = trystero.rooms[0];
     own.onPeerJoin("peer");
-    const offer = { id: "0123456789abcdef", files: [{ name: "large", size: 700 * 1024 * 1024 }] };
+    const offer = { id: "0123456789abcdef", files: [{ name: "large", size: 700 * 1024 * 1024 }], protocol: 2 };
     expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "peer" })).toBe(true);
-    expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "peer" })).toBe(false);
+    // A repeated offer resumes the known batch instead of adding a second one.
+    expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "peer" })).toBe(true);
+    expect(nearbyState.transfers).toHaveLength(1);
     const second = { ...offer, id: "1123456789abcdef" };
     expect(await own.actions.offer.handlers.onRequest(second, { peerId: "peer" })).toBe(false);
     own.onPeerLeave("peer");
-    expect(nearbyState.transfers[0].state).toBe("failed");
+    expect(nearbyState.transfers[0].state).toBe("paused");
     clearNearbyTransfer(nearbyState.transfers[0].id);
     expect(nearbyState.transfers).toHaveLength(0);
     own.onPeerJoin("peer");

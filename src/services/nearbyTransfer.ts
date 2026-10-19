@@ -233,7 +233,8 @@ export function formatBytes(bytes: number) {
 }
 
 export type NearbyRoomHandlers = {
-  onPeers: (peers: Record<string, string>, textPeers?: Record<string, boolean>, chunkPeers?: Record<string, boolean>, devices?: Record<string, string>) => void;
+  /** `compatible`: the peer speaks the verified chunk protocol (海内 0.1.66+). */
+  onPeers: (peers: Record<string, string>, compatible?: Record<string, boolean>, devices?: Record<string, string>) => void;
   onError: (message: string) => void;
   /** Resolve true to accept. Called before any file bytes are sent. */
   onOffer: (offer: NearbyOffer) => Promise<boolean>;
@@ -251,8 +252,7 @@ export class NearbyRoom {
   private key: NearbyRoomKey | null = null;
   private generation = 0;
   private readonly names: Record<string, string> = {};
-  private readonly textPeers: Record<string, boolean> = {};
-  private readonly chunkPeers: Record<string, boolean> = {};
+  private readonly compatible: Record<string, boolean> = {};
   private readonly devices: Record<string, string> = {};
   private readonly receiver = new NearbyChunkReceiver((id, index, file) => this.handlers.onFile(id, index, file));
   private readonly pendingOffers = new Map<string, Promise<boolean>>();
@@ -261,16 +261,14 @@ export class NearbyRoom {
   private sendChunk: ((data: Blob, target: string, meta: ChunkMeta, signal: AbortSignal) => Promise<number>) | null = null;
   private control: ((value: TransferControl, target: string, signal?: AbortSignal) => Promise<number | boolean>) | null = null;
   private sendCancel: ((id: string, peer: string) => Promise<void>) | null = null;
-  private readonly accepted = new Map<string, { from: string; files: NearbyFileMeta[] }>();
   private sendHello: ((reply: boolean, target: string) => Promise<void>) | null = null;
   private helloTimer: ReturnType<typeof setInterval> | null = null;
   private requestOffer: ((offer: Omit<NearbyOffer, "from">, target: string, signal?: AbortSignal) => Promise<boolean>) | null = null;
-  private sendFile: ((data: Blob, target: string, metadata: { offerId: string; index: number }, onProgress: (percent: number) => void, signal?: AbortSignal) => Promise<void>) | null = null;
 
   constructor(private deviceName: string, private readonly handlers: NearbyRoomHandlers, private readonly deviceId = "") {}
 
   private emitPeers() {
-    this.handlers.onPeers({ ...this.names }, { ...this.textPeers }, { ...this.chunkPeers }, { ...this.devices });
+    this.handlers.onPeers({ ...this.names }, { ...this.compatible }, { ...this.devices });
   }
 
   /** Re-announce a renamed device; replies are not requested, so no loops. */
@@ -314,14 +312,14 @@ export class NearbyRoom {
         if (!active()) return;
         const wasKnown = !!this.names[peerId] && this.names[peerId] !== NEARBY_UNNAMED_PEER;
         this.names[peerId] = String(data?.name || "附近的设备").slice(0, 40);
-        this.textPeers[peerId] = data?.text === true;
-        this.chunkPeers[peerId] = data?.protocol === 2;
+        this.compatible[peerId] = data?.protocol === 2 && data?.text === true;
         if (typeof data?.device === "string" && /^[0-9a-f]{16}$/.test(data.device)) this.devices[peerId] = data.device;
         else delete this.devices[peerId];
         this.emitPeers();
         if (!data?.reply || !wasKnown) void this.sendHello?.(true, peerId);
       },
     });
+    // `text` and `protocol` stay on the wire so 0.1.66–0.1.71 peers accept us.
     this.sendHello = (reply, target) => hello.send({
       name: this.deviceName, reply, text: true, protocol: 2, ...(this.deviceId ? { device: this.deviceId } : {}),
     }, { target }).catch(() => undefined);
@@ -332,10 +330,10 @@ export class NearbyRoom {
       onRequest: async (data, { peerId }) => {
         if (!active()) return false;
         const sanitized = sanitizeOffer(data, peerId);
-        if (!sanitized || batchBytes(sanitized.files) > NEARBY_MAX_BATCH_BYTES) return false;
+        if (!sanitized || sanitized.protocol !== 2 || batchBytes(sanitized.files) > NEARBY_MAX_BATCH_BYTES) return false;
         const key = `${peerId}:${sanitized.id}`;
         if (this.canceledOffers.has(key)) return false;
-        if (sanitized.protocol === 2 && this.receiver.known(peerId, sanitized.id)) {
+        if (this.receiver.known(peerId, sanitized.id)) {
           if (!this.receiver.has(sanitized)) return false;
           this.handlers.onResume?.(sanitized.id, peerId);
           return true;
@@ -344,8 +342,7 @@ export class NearbyRoom {
         const pending = (async () => {
           const ok = await this.handlers.onOffer(sanitized);
           if (!active() || this.canceledOffers.has(key)) return false;
-          if (ok && sanitized.protocol === 2) this.receiver.begin(sanitized);
-          else if (ok && sanitized.files.length) this.accepted.set(sanitized.id, { from: peerId, files: sanitized.files.slice() });
+          if (ok) this.receiver.begin(sanitized);
           return ok;
         })();
         this.pendingOffers.set(key, pending);
@@ -394,36 +391,6 @@ export class NearbyRoom {
     this.control = (value, target, signal) => control.request(value, { target, signal, timeoutMs: 30_000 });
     this.sendCancel = (id, target) => cancel.send({ id }, { target });
 
-    const file = room.makeAction<ArrayBuffer | Blob>("file", {
-      // Refuse bytes nobody accepted, or larger than what was announced.
-      onReceive: ({ peerId, metadata, byteLength }) => {
-        if (!active()) return false;
-        const meta = (metadata || {}) as { offerId?: string; index?: number };
-        const entry = this.accepted.get(String(meta.offerId));
-        const announced = Number.isInteger(meta.index) ? entry?.files[Number(meta.index)] : undefined;
-        return !!entry && entry.from === peerId && !!announced && byteLength === announced.size;
-      },
-      onReceiveProgress: (percent, { metadata }) => {
-        if (!active()) return;
-        const meta = (metadata || {}) as { offerId?: string; index?: number };
-        this.handlers.onReceiveProgress(String(meta.offerId), Number(meta.index), percent);
-      },
-      onMessage: (data, { peerId, metadata }) => {
-        if (!active()) return;
-        const meta = (metadata || {}) as { offerId?: string; index?: number };
-        const entry = this.accepted.get(String(meta.offerId));
-        const announced = entry?.files[Number(meta.index)];
-        if (!entry || entry.from !== peerId || !announced) return;
-        const size = data instanceof Blob ? data.size : data.byteLength;
-        if (size !== announced.size) return;
-        this.handlers.onFile(String(meta.offerId), Number(meta.index), new File([data as ArrayBuffer], announced.name, { type: announced.type }));
-        delete entry.files[Number(meta.index)];
-        if (!entry.files.some(Boolean)) this.accepted.delete(String(meta.offerId));
-      },
-    });
-    this.sendFile = (data, target, metadata, onProgress, signal) =>
-      file.send(data, { target, metadata, signal, onProgress: progress => onProgress(progress) });
-
     room.onPeerJoin = peerId => {
       if (!active()) return;
       this.handlers.onError("");
@@ -433,10 +400,8 @@ export class NearbyRoom {
     };
     room.onPeerLeave = peerId => {
       if (!active()) return;
-      for (const [id, entry] of this.accepted) if (entry.from === peerId) this.accepted.delete(id);
       delete this.names[peerId];
-      delete this.textPeers[peerId];
-      delete this.chunkPeers[peerId];
+      delete this.compatible[peerId];
       delete this.devices[peerId];
       this.emitPeers();
     };
@@ -449,51 +414,41 @@ export class NearbyRoom {
 
   /** Ask the peer first; resolves false if declined or unanswered. */
   async send(peerId: string, files: File[], onProgress: (index: number, percent: number) => void, text = "", options: NearbySendOptions = {}) {
-    if (!this.requestOffer || !this.sendFile) throw new Error("nearby_not_joined");
+    if (!this.requestOffer || !this.control || !this.sendChunk) throw new Error("nearby_not_joined");
     text = text.trim();
     if (text.length > NEARBY_MAX_TEXT_LENGTH || (!files.length && !text) || files.length > 200) throw new Error("nearby_invalid_content");
-    if (text && !this.textPeers[peerId]) throw new Error("nearby_text_unsupported");
+    if (!this.compatible[peerId]) throw new Error("nearby_peer_outdated");
     if (batchBytes(files) > NEARBY_MAX_BATCH_BYTES) throw new Error("nearby_batch_too_large");
     const id = options.id || bytesToHex(crypto.getRandomValues(new Uint8Array(8)));
-    const modern = this.chunkPeers[peerId] === true;
     const signal = options.signal || new AbortController().signal;
     signal.throwIfAborted();
     this.outboundIds.add(`${peerId}:${id}`);
     const accepted = await this.requestOffer({
-      id, files: files.map(file => ({ name: file.name, size: file.size, type: file.type || "application/octet-stream" })), ...(text ? { text } : {}), ...(modern ? { protocol: 2 as const } : {}),
+      id, files: files.map(file => ({ name: file.name, size: file.size, type: file.type || "application/octet-stream" })), ...(text ? { text } : {}), protocol: 2 as const,
     }, peerId, signal);
     if (!accepted) return false;
-    if (modern) {
-      await sendChunkedFiles(files, {
-        signal, progress: onProgress,
-        status: async index => {
-          const value = await this.control!({ id, op: "status", index }, peerId, signal);
-          if (typeof value !== 'number') throw new Error("nearby_invalid_offset");
-          return value;
-        },
-        chunk: (data, meta) => this.sendChunk!(data, peerId, { ...meta, id }, signal),
-        finish: async (index, hash) => { options.onVerifying?.(); return await this.control!({ id, op: "finish", index, hash }, peerId, signal) === true; },
-        complete: async () => { options.onVerifying?.(); return await this.control!({ id, op: "complete" }, peerId, signal) === true; },
-      });
-      return true;
-    }
-    for (let index = 0; index < files.length; index++) {
-      signal.throwIfAborted();
-      await this.sendFile(files[index], peerId, { offerId: id, index }, percent => onProgress(index, percent), signal);
-    }
+    await sendChunkedFiles(files, {
+      signal, progress: onProgress,
+      status: async index => {
+        const value = await this.control!({ id, op: "status", index }, peerId, signal);
+        if (typeof value !== 'number') throw new Error("nearby_invalid_offset");
+        return value;
+      },
+      chunk: (data, meta) => this.sendChunk!(data, peerId, { ...meta, id }, signal),
+      finish: async (index, hash) => { options.onVerifying?.(); return await this.control!({ id, op: "finish", index, hash }, peerId, signal) === true; },
+      complete: async () => { options.onVerifying?.(); return await this.control!({ id, op: "complete" }, peerId, signal) === true; },
+    });
     return true;
   }
 
   cancelSend(peer: string, id: string) { void this.sendCancel?.(id, peer).catch(() => undefined); }
   cancelReceive(peer: string, id: string) {
     this.rememberCanceled(`${peer}:${id}`);
-    if (this.accepted.get(id)?.from === peer) this.accepted.delete(id);
     if (this.receiver.known(peer, id)) this.receiver.control(peer, { id, op: 'cancel' });
     this.cancelSend(peer, id);
   }
   forget(peer: string, id: string) {
     this.receiver.forget(peer, id);
-    if (this.accepted.get(id)?.from === peer) this.accepted.delete(id);
     this.outboundIds.delete(`${peer}:${id}`);
   }
 
@@ -527,17 +482,14 @@ export class NearbyRoom {
     this.room = null;
     if (this.helloTimer) clearInterval(this.helloTimer);
     this.helloTimer = null;
-    this.accepted.clear();
     if (!preserveTransfers) this.receiver.clear();
     this.pendingOffers.clear();
     if (!preserveTransfers) { this.canceledOffers.clear(); this.outboundIds.clear(); }
     this.sendChunk = null; this.control = null; this.sendCancel = null;
     this.requestOffer = null;
-    this.sendFile = null;
     this.sendHello = null;
     for (const peerId of Object.keys(this.names)) delete this.names[peerId];
-    for (const peerId of Object.keys(this.textPeers)) delete this.textPeers[peerId];
-    for (const peerId of Object.keys(this.chunkPeers)) delete this.chunkPeers[peerId];
+    for (const peerId of Object.keys(this.compatible)) delete this.compatible[peerId];
     for (const peerId of Object.keys(this.devices)) delete this.devices[peerId];
     if (room) await room.leave().catch(() => undefined);
     diagnostics?.clear();
