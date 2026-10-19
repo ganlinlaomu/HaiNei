@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.60",
-  "releaseSummary": "增加 iPhone 附近传输相机授权后重试，解决部分局域网直连失败",
+  "version": "0.1.61",
+  "releaseSummary": "私信置顶文件传输助手，支持点设备发送、同账号自动接收和批量保存",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

@@ -22,6 +22,14 @@
       <input v-model="searchQuery" type="search" placeholder="搜索私信" autocomplete="off" />
     </label>
 
+    <div class="conversation-row assistant-row">
+      <button class="conversation-main" type="button" @click="router.push('/nearby')">
+        <span class="assistant-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z" /></svg></span>
+        <span class="conversation-copy"><strong>文件传输助手</strong><span class="preview">在你的设备之间直接传输文件</span></span>
+        <span class="conversation-meta" aria-hidden="true">›</span>
+      </button>
+    </div>
+
     <div v-if="conversations.length === 0" class="empty-state">
       <strong>暂无私信</strong>
       <span>和好友开始一段新的私密对话。</span>
@@ -285,6 +293,8 @@ onDeactivated(() => {
 </script>
 
 <style scoped>
+.assistant-avatar{display:grid;width:48px;height:48px;flex:0 0 48px;place-items:center;border-radius:50%;background:var(--bg-f1f5f9);color:var(--fg-172033)}
+.assistant-avatar svg{width:25px;height:25px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round}
 .conversations-page{width:100%;min-height:100%;margin:0 auto;box-sizing:border-box;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 28px);background:var(--bg-fff);color:var(--fg-0f1419)}
 .page-header{position:sticky;top:0;z-index:4;display:flex;align-items:center;justify-content:space-between;min-height:54px;padding:0 16px;background:var(--bg-rgba-255-255-255-97)}.page-title{display:flex;align-items:baseline;gap:8px}.page-header h1{margin:0;font-size:21px;font-weight:750}.sync-label{color:var(--fg-64748b);font-size:13px;font-weight:500}.conversation-filter{display:flex;min-height:36px;align-items:center;gap:2px;padding:0 2px 0 10px;border:0;border-radius:999px;background:transparent;color:var(--fg-536471);font-size:14px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}.conversation-filter:active{background:var(--bg-f1f5f9)}.conversation-filter span{font-size:16px;line-height:1;transform:translateY(-1px)}
 .conversation-search{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:9px;margin:4px 16px 10px;padding:0 13px;border-radius:999px;background:var(--bg-eff3f4);color:var(--fg-536471)}.conversation-search svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}.conversation-search input{width:100%;height:42px;padding:0;border:0;outline:0;background:transparent;color:var(--fg-0f1419);font-size:16px}.conversation-search input::placeholder{color:var(--fg-536471)}

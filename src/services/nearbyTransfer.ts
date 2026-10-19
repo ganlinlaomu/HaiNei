@@ -173,8 +173,9 @@ export function defaultDeviceName(
 export function sanitizeOffer(value: unknown, from: string): NearbyOffer | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as { id?: unknown; files?: unknown };
-  if (typeof raw.id !== "string" || !/^[0-9a-f]{16}$/.test(raw.id) || !Array.isArray(raw.files)) return null;
-  const files = raw.files.slice(0, 200).map(file => {
+  if (typeof raw.id !== "string" || !/^[0-9a-f]{16}$/.test(raw.id) || !Array.isArray(raw.files) || raw.files.length > 200) return null;
+  if (raw.files.some(file => !file || typeof file.size !== "number" || !Number.isSafeInteger(file.size) || file.size < 0)) return null;
+  const files = raw.files.map(file => {
     const item = (file || {}) as Record<string, unknown>;
     return {
       name: String(item.name || "文件").replace(/[\\/]/g, "_").slice(0, 200) || "文件",
@@ -262,7 +263,7 @@ export class NearbyRoom {
         if (!sanitized || batchBytes(sanitized.files) > NEARBY_MAX_BATCH_BYTES) return false;
         const ok = await this.handlers.onOffer(sanitized);
         if (!active()) return false;
-        if (ok) this.accepted.set(sanitized.id, { from: peerId, files: sanitized.files });
+        if (ok) this.accepted.set(sanitized.id, { from: peerId, files: sanitized.files.slice() });
         return ok;
       },
     });
@@ -274,8 +275,8 @@ export class NearbyRoom {
         if (!active()) return false;
         const meta = (metadata || {}) as { offerId?: string; index?: number };
         const entry = this.accepted.get(String(meta.offerId));
-        const announced = entry?.files[Number(meta.index)];
-        return !!entry && entry.from === peerId && !!announced && byteLength <= announced.size + 1024;
+        const announced = Number.isInteger(meta.index) ? entry?.files[Number(meta.index)] : undefined;
+        return !!entry && entry.from === peerId && !!announced && byteLength === announced.size;
       },
       onReceiveProgress: (percent, { metadata }) => {
         if (!active()) return;
@@ -288,7 +289,11 @@ export class NearbyRoom {
         const entry = this.accepted.get(String(meta.offerId));
         const announced = entry?.files[Number(meta.index)];
         if (!entry || entry.from !== peerId || !announced) return;
+        const size = data instanceof Blob ? data.size : data.byteLength;
+        if (size !== announced.size) return;
         this.handlers.onFile(String(meta.offerId), Number(meta.index), new File([data as ArrayBuffer], announced.name, { type: announced.type }));
+        delete entry.files[Number(meta.index)];
+        if (!entry.files.some(Boolean)) this.accepted.delete(String(meta.offerId));
       },
     });
     this.sendFile = (data, target, metadata, onProgress) =>
@@ -303,6 +308,7 @@ export class NearbyRoom {
     };
     room.onPeerLeave = peerId => {
       if (!active()) return;
+      for (const [id, entry] of this.accepted) if (entry.from === peerId) this.accepted.delete(id);
       delete this.names[peerId];
       this.handlers.onPeers({ ...this.names });
     };

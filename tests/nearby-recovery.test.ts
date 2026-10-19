@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { createPinia, setActivePinia } from "pinia";
 
 const trystero = vi.hoisted(() => ({ sockets: {} as Record<string, unknown>, rooms: [] as any[] }));
 vi.mock("trystero", () => ({
@@ -8,7 +9,12 @@ vi.mock("trystero", () => ({
   joinRoom: vi.fn((_config, _id, callbacks) => {
     const room = {
       callbacks, config: _config, id: _id,
-      makeAction: () => ({ send: vi.fn(async () => {}), request: vi.fn(async () => false) }),
+      actions: {} as Record<string, any>,
+      makeAction(name: string, handlers: unknown) {
+        const action = { handlers, send: vi.fn(async () => {}), request: vi.fn(async () => false) };
+        this.actions[name] = action;
+        return action;
+      },
       leave: vi.fn(async () => {}), getPeers: () => ({}), onPeerJoin: (_id: string) => {},
     };
     trystero.rooms.push(room);
@@ -17,7 +23,7 @@ vi.mock("trystero", () => ({
 }));
 
 import { NearbyRoom, nearbyRelayStates, refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
-import { ensureOwnDevicesRoom, nearbyState, refreshNearbyDiscovery, resetNearby, retryNearbyWithCamera } from "@/services/nearbySession";
+import { answerPendingOffer, clearNearbyTransfer, ensureOwnDevicesRoom, nearbyState, refreshNearbyDiscovery, resetNearby, retryNearbyWithCamera, startPairRoom } from "@/services/nearbySession";
 
 class Socket extends EventTarget {
   static OPEN = 1;
@@ -32,6 +38,7 @@ class Socket extends EventTarget {
 }
 
 beforeEach(() => {
+  setActivePinia(createPinia());
   vi.useFakeTimers();
   vi.stubGlobal("WebSocket", Socket);
   vi.stubGlobal("RTCPeerConnection", class extends EventTarget {});
@@ -48,6 +55,50 @@ async function startProbe(socket: Socket) {
 }
 
 describe("nearby signaling recovery", () => {
+  it("auto-accepts own-account batches but requires confirmation in a QR room", async () => {
+    await ensureOwnDevicesRoom("account", "1".repeat(64));
+    const offer = { id: "0123456789abcdef", files: [{ name: "a.txt", size: 3, type: "text/plain" }] };
+    const own = trystero.rooms[0];
+    own.onPeerJoin("own-peer");
+    expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "own-peer" })).toBe(true);
+    expect(nearbyState.pendingOffer).toBeNull();
+    expect(nearbyState.transfers[0].state).toBe("active");
+    const metadata = { offerId: offer.id, index: 0 };
+    expect(own.actions.file.handlers.onReceive({ peerId: "other", metadata, byteLength: 3 })).toBe(false);
+    expect(own.actions.file.handlers.onReceive({ peerId: "own-peer", metadata, byteLength: 4 })).toBe(false);
+    expect(own.actions.file.handlers.onReceive({ peerId: "own-peer", metadata, byteLength: 3 })).toBe(true);
+    own.actions.file.handlers.onMessage(new Uint8Array([1, 2, 3]).buffer, { peerId: "own-peer", metadata });
+    expect(nearbyState.transfers[0].state).toBe("done");
+    expect(nearbyState.transfers[0].files[0].name).toBe("a.txt");
+    expect(own.actions.file.handlers.onReceive({ peerId: "own-peer", metadata, byteLength: 3 })).toBe(false);
+    await startPairRoom({ roomId: "qr", password: "qr-secret" });
+    const pair = trystero.rooms[1];
+    pair.onPeerJoin("pair-peer");
+    const request = pair.actions.offer.handlers.onRequest(offer, { peerId: "pair-peer" });
+    expect(nearbyState.pendingOffer?.transferId).toBe(`pair:${offer.id}`);
+    answerPendingOffer(true);
+    expect(await request).toBe(true);
+  });
+
+  it("reserves aggregate receive memory, rejects duplicate batches, and releases cleared files", async () => {
+    await ensureOwnDevicesRoom("account", "1".repeat(64));
+    const own = trystero.rooms[0];
+    own.onPeerJoin("peer");
+    const offer = { id: "0123456789abcdef", files: [{ name: "large", size: 700 * 1024 * 1024 }] };
+    expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "peer" })).toBe(true);
+    expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "peer" })).toBe(false);
+    const second = { ...offer, id: "1123456789abcdef" };
+    expect(await own.actions.offer.handlers.onRequest(second, { peerId: "peer" })).toBe(false);
+    own.onPeerLeave("peer");
+    expect(nearbyState.transfers[0].state).toBe("failed");
+    clearNearbyTransfer(nearbyState.transfers[0].id);
+    expect(nearbyState.transfers).toHaveLength(0);
+    own.onPeerJoin("peer");
+    expect(await own.actions.offer.handlers.onRequest(second, { peerId: "peer" })).toBe(true);
+    await resetNearby();
+    expect(nearbyState.transfers).toHaveLength(0);
+    expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "peer" })).toBe(false);
+  });
   it("closes camera capture before rebuilding the same automatic room with fresh ICE", async () => {
     const stop = vi.fn();
     const getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop }] }));

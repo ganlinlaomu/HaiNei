@@ -66,16 +66,17 @@ describe("incoming offers", () => {
   it("asks before receiving and refuses bytes that were not accepted", () => {
     const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");
     expect(service).toContain('kind: "request"');
-    expect(service).toContain("return !!entry && entry.from === peerId && !!announced && byteLength <= announced.size + 1024;");
+    expect(service).toContain("return !!entry && entry.from === peerId && !!announced && byteLength === announced.size;");
   });
 });
 
 describe("integration", () => {
-  it("is reachable without an account, linked from 我的, and loads Trystero lazily", () => {
+  it("is reachable by QR without an account, pinned in 私信, and loads Trystero lazily", () => {
     const router = readFileSync("src/router/index.ts", "utf8");
     expect(router).toContain('const NearbyTransfer = () => import("@/views/NearbyTransfer.vue");');
     expect(router).toMatch(/path: "\/nearby",[\s\S]{0,80}requiresAuth: false/);
-    expect(readFileSync("src/views/Settings.vue", "utf8")).toContain("router.push('/nearby')");
+    expect(readFileSync("src/views/Conversations.vue", "utf8")).toContain("router.push('/nearby')");
+    expect(readFileSync("src/views/Settings.vue", "utf8")).not.toContain("router.push('/nearby')");
     const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");
     expect(service).toContain('await import("trystero")');
     expect(service).not.toMatch(/^import \{[^}]*\} from "trystero";/m);
@@ -104,7 +105,7 @@ describe("rediscovery after leaving and coming back", () => {
 
   it("points people to the page when an offer arrives elsewhere", () => {
     const session = readFileSync("src/services/nearbySession.ts", "utf8");
-    expect(session).toContain("想发送 ${pending.offer.files.length} 个文件，请打开「我的 › 附近传输」确认");
+    expect(session).toContain("想发送 ${pending.offer.files.length} 个文件，请打开「私信 › 文件传输助手」确认");
   });
 });
 
