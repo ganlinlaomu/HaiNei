@@ -122,13 +122,14 @@
     </div>
 
     <footer class="assistant-composer">
-      <div v-if="selectedTarget" class="selected-target"><span>发送到 {{ selectedTargetName }}</span><button type="button" aria-label="取消接收设备" @click="selectedTarget = null">×</button></div>
+      <button class="selected-target" type="button" aria-label="选择接收设备" :disabled="!!activeSend" @click="chooseTarget"><span>{{ availableTargets.length ? selectedTarget ? `发送到：${selectedTargetName}` : '选择接收设备' : '连接设备' }}</span><span aria-hidden="true">⌄</span></button>
+      <p v-if="selectedPeer && draftText.trim() && !selectedPeer.supportsText" class="recipient-hint">请更新接收设备的海内以接收文字</p>
       <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</span><button type="button" @click="selectedFiles = []; targetPickerOpen = false">移除附件</button></div>
       <div class="file-composer">
         <textarea ref="textInput" v-model="draftText" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="输入消息……" aria-label="输入消息" :maxlength="NEARBY_MAX_TEXT_LENGTH" :disabled="!!activeSend" @focus="resizeTextInput" @input="resizeTextInput"></textarea>
         <div class="composer-actions">
           <button type="button" class="composer-icon attachment-button" aria-label="添加图片或文件" :disabled="!!activeSend" @click="chooseFiles"><span><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></span></button>
-          <button type="button" class="composer-icon send-button" aria-label="发送" :disabled="!!activeSend || !hasContent" @click="requestSend"><span><svg viewBox="0 0 24 24"><path d="m5 12 14-8-5 16-3-7-6-1Z" /></svg></span></button>
+          <button type="button" class="composer-icon send-button" aria-label="发送" :disabled="!!activeSend || !hasContent || !canSendToTarget" @click="requestSend"><span><svg viewBox="0 0 24 24"><path d="m5 12 14-8-5 16-3-7-6-1Z" /></svg></span></button>
         </div>
       </div>
     </footer>
@@ -141,7 +142,7 @@
         <h2 id="target-title">发送到设备</h2>
         <p v-if="selectedFiles.length" class="nearby-hint">已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</p>
         <p v-if="draftText.trim()" class="text-preview">{{ draftText }}</p>
-        <ul class="peer-list"><li v-for="peer in availableTargets" :key="`${peer.kind}:${peer.id}`"><button class="target-device" type="button" :disabled="!!draftText.trim() && !peer.supportsText" @click="sendSelected(peer.kind, peer.id)"><strong>{{ peer.name }}</strong><span>{{ draftText.trim() && !peer.supportsText ? '请更新此设备的海内以接收文字' : `${peer.kind === 'own' ? '我的设备' : '扫码连接的设备'} · 在线` }}</span></button></li></ul>
+        <ul class="peer-list"><li v-for="peer in availableTargets" :key="`${peer.kind}:${peer.id}`"><button class="target-device" type="button" :disabled="!!draftText.trim() && !peer.supportsText" @click="selectDevice(peer.kind, peer.id)"><strong>{{ peer.name }}</strong><span>{{ draftText.trim() && !peer.supportsText ? '请更新此设备的海内以接收文字' : `${peer.kind === 'own' ? '我的设备' : '扫码连接的设备'} · 在线` }}</span></button></li></ul>
         <p v-if="!availableTargets.length" class="nearby-empty">暂未发现设备，请在另一台设备打开文件传输助手。</p>
         <button class="link-button" type="button" @click="targetPickerOpen = false; pairingOpen = true">设备与连接</button>
         <button class="link-button" type="button" @click="targetPickerOpen = false">返回</button>
@@ -299,7 +300,13 @@ const availableTargets = computed(() => [
   ...ownPeerList.value.map(peer => ({ ...peer, kind: "own" as const, supportsText: nearbyState.ownTextPeers[peer.id] === true })),
   ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const, supportsText: nearbyState.pairTextPeers[peer.id] === true })),
 ]);
-const selectedTargetName = computed(() => availableTargets.value.find(peer => peer.kind === selectedTarget.value?.kind && peer.id === selectedTarget.value?.peerId)?.name || '设备已断开');
+const selectedPeer = computed(() => availableTargets.value.find(peer => peer.kind === selectedTarget.value?.kind && peer.id === selectedTarget.value?.peerId));
+const selectedTargetName = computed(() => selectedPeer.value?.name || '设备已断开，请重新选择');
+const canSendToTarget = computed(() => !!selectedPeer.value && (!draftText.value.trim() || selectedPeer.value.supportsText));
+watch(availableTargets, peers => {
+  // Never silently redirect an existing recipient when it disconnects.
+  if (!selectedTarget.value && peers.length === 1) selectedTarget.value = { kind: peers[0].kind, peerId: peers[0].id };
+}, { immediate: true });
 useDialogFocus(devicePanel, () => pairingOpen.value && !scannerOpen.value && !pendingOffer.value, () => { pairingOpen.value = false; });
 useDialogFocus(targetPanel, () => targetPickerOpen.value && !pendingOffer.value, () => { targetPickerOpen.value = false; });
 function joinErrorText(error: string) {
@@ -381,8 +388,17 @@ function chooseFiles() {
 }
 
 function selectDevice(kind: RoomKind, peerId: string) {
+  if (activeSend.value) return;
   selectedTarget.value = { kind, peerId };
   pairingOpen.value = false;
+  targetPickerOpen.value = false;
+}
+
+function chooseTarget() {
+  if (activeSend.value) return;
+  textInput.value?.blur();
+  if (availableTargets.value.length) targetPickerOpen.value = true;
+  else pairingOpen.value = true;
 }
 
 function onFilesPicked(event: Event) {
@@ -406,12 +422,12 @@ function resizeTextInput() {
 }
 
 function requestSend() {
-  if (activeSend.value || !hasContent.value) return;
+  if (activeSend.value || !hasContent.value || !canSendToTarget.value) return;
   textInput.value?.blur();
   const target = selectedTarget.value;
   if (target && availableTargets.value.some(peer => peer.kind === target.kind && peer.id === target.peerId && (!draftText.value.trim() || peer.supportsText))) {
     void sendSelected(target.kind, target.peerId);
-  } else targetPickerOpen.value = true;
+  }
 }
 
 async function sendSelected(kind: RoomKind, peerId: string) {
@@ -587,7 +603,7 @@ watch(() => nearbyState.transfers.length, async () => {
 .composer-icon{display:grid;width:44px;height:44px;padding:5px;place-items:center;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}.composer-icon span{display:grid;width:34px;height:34px;place-items:center;border-radius:50%}.composer-icon svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.send-button span{background:var(--bg-0f1419);color:#fff}.send-button svg{width:18px;height:18px}.composer-icon:disabled{opacity:.36;cursor:default}
 .file-composer:focus-within{min-height:76px;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 34px;align-items:stretch;padding:6px 8px 4px}.file-composer:focus-within textarea{grid-column:1;grid-row:1;width:100%;padding:4px 6px 3px}.file-composer:focus-within .composer-actions{display:flex;grid-column:1;grid-row:2;align-items:center;justify-content:space-between}
 .assistant-composer:has(textarea:focus){padding-right:16px;padding-left:16px;padding-bottom:calc(8px + env(safe-area-inset-bottom))}
-.selected-target{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;color:var(--fg-64748b);font-size:12px}.selected-target button{min-width:32px;min-height:32px;border:0;background:transparent;color:inherit;font-size:22px}
+.selected-target{display:flex;width:100%;min-height:40px;align-items:center;justify-content:space-between;gap:8px;padding:6px 4px;border:0;background:transparent;color:var(--fg-64748b);font:inherit;font-size:12px;text-align:left;cursor:pointer}.selected-target span:first-child{min-width:0;overflow-wrap:anywhere}.selected-target:disabled{opacity:.5;cursor:default}.recipient-hint{margin:0 4px 8px;color:var(--fg-64748b);font-size:12px}
 .transfer-text{margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.5}.text-preview{max-height:120px;overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.5}
 .target-device:disabled{opacity:.5;cursor:default}
 .selected-batch{display:flex;align-items:center;gap:8px;padding:8px 0;font-size:13px;color:var(--fg-64748b)}
