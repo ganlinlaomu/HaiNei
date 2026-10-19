@@ -14,9 +14,10 @@
       <ul class="transfer-list">
         <li v-for="transfer in transfers" :key="transfer.id" class="transfer-row" :class="{ outgoing: transfer.direction === 'out' }">
           <div class="transfer-head">
-            <strong>{{ transfer.direction === "out" ? `发给 ${transfer.peerName}` : `来自 ${transfer.peerName}` }}</strong>
+            <strong>{{ transfer.direction === 'out' ? `${transfer.localDeviceName || deviceName} → ${transfer.peerName}` : `${transfer.peerName} → ${transfer.localDeviceName || deviceName}` }}</strong>
             <span>{{ transferStatus(transfer) }}</span>
           </div>
+          <time v-if="transfer.createdAt" class="transfer-time" :datetime="new Date(transfer.createdAt).toISOString()">{{ transfer.direction === 'out' ? '发送于' : '接收于' }} {{ new Date(transfer.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</time>
           <p v-if="transfer.text" class="transfer-text">{{ transfer.text }}</p>
           <p v-if="transfer.files.length" class="batch-summary">{{ transfer.files.length }} 个文件 · {{ formatBytes(batchBytes(transfer.files)) }}</p>
           <progress v-if="transfer.files.length && (transfer.state === 'active' || transfer.state === 'waiting')" class="batch-progress" :value="batchProgress(transfer)" max="1" :aria-label="transferStatus(transfer)"></progress>
@@ -30,12 +31,13 @@
           </div>
           </details>
           <div class="batch-actions">
-            <button v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="file-action batch-save" type="button" :disabled="savingBatch === transfer.id" @click="saveAll(transfer)">{{ savingBatch === transfer.id ? '正在准备…' : '保存全部' }}</button>
+            <button v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="file-action batch-save" type="button" :disabled="savingBatch === transfer.id" @click="saveAll(transfer)">{{ savingBatch === transfer.id ? '正在准备…' : transfer.saveState ? '再次保存' : '保存' }}</button>
+            <button v-if="transfer.saveState === 'system' || transfer.saveState === 'download'" class="file-action confirm-saved" type="button" :disabled="savingBatch === transfer.id" @click="transfer.saveState = 'saved'">确认已保存</button>
             <button v-if="transfer.text" class="file-action" type="button" @click="copyText(transfer.text)">复制文字</button>
             <a v-if="zipDownloads[transfer.id]" class="file-action" :href="zipDownloads[transfer.id]" download="海内文件.zip">下载 ZIP</a>
             <button v-if="!['active', 'waiting'].includes(transfer.state)" class="clear-transfer" type="button" :disabled="savingBatch === transfer.id" @click="clearTransfer(transfer)">{{ transfer.direction === 'in' && transfer.files.length ? '移除文件' : '清除记录' }}</button>
           </div>
-          <p v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="save-hint">请保存后再关闭海内</p>
+          <p v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="save-hint" role="status">{{ transfer.saveState === 'saved' ? '✓ 已保存' : transfer.saveState === 'system' ? '已交给系统，请在完成保存后确认已保存' : transfer.saveState === 'download' ? '已开始下载，请检查下载完成后确认已保存' : '请保存后再关闭海内' }}</p>
         </li>
       </ul>
     </section>
@@ -492,7 +494,11 @@ function clearTransfer(transfer: NearbyTransferRecord) {
 async function saveAll(transfer: NearbyTransferRecord) {
   const files = transfer.received.filter((file): file is File => !!file);
   if (files.length !== transfer.files.length || savingBatch.value) return;
-  if (zipDownloads.value[transfer.id]) return download(zipDownloads.value[transfer.id], "海内文件.zip");
+  if (zipDownloads.value[transfer.id]) {
+    download(zipDownloads.value[transfer.id], "海内文件.zip");
+    if (transfer.saveState !== 'saved') transfer.saveState = 'download';
+    return;
+  }
   savingBatch.value = transfer.id;
   const abort = new AbortController();
   saveAbort = abort;
@@ -501,8 +507,10 @@ async function saveAll(transfer: NearbyTransferRecord) {
     if (canShareTransfer(files)) {
       // Invoke in the click handler, before any await, to keep iOS user activation.
       await navigator.share({ files });
+      if (pageActive && generation === saveGeneration && transfer.saveState !== 'saved') transfer.saveState = 'system';
     } else if (files.length === 1) {
       download(objectUrl(files[0]), files[0].name);
+      if (transfer.saveState !== 'saved') transfer.saveState = 'download';
     } else {
       const zip = await createTransferZip(files, abort.signal);
       if (!pageActive || generation !== saveGeneration) return;
@@ -510,6 +518,7 @@ async function saveAll(transfer: NearbyTransferRecord) {
       zipDownloads.value[transfer.id] = url;
       // A persistent download link remains if the browser blocks this async click.
       download(url, "海内文件.zip");
+      if (transfer.saveState !== 'saved') transfer.saveState = 'download';
     }
   } catch (error) {
     if ((error as Error)?.name !== "AbortError" && generation === saveGeneration) {
@@ -614,6 +623,8 @@ watch(() => nearbyState.transfers.length, async () => {
 .transfer-row:first-child{border-top:0}
 .transfer-head{display:flex;justify-content:space-between;gap:12px;font-size:14px}
 .transfer-head span{color:var(--fg-64748b)}
+.transfer-head strong{overflow-wrap:anywhere;min-width:0}
+.transfer-time{display:block;margin-top:5px;color:var(--fg-64748b);font-size:11px}
 .file-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;font-size:13px}
 .file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-size{color:var(--fg-64748b)}

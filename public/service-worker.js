@@ -3,7 +3,7 @@
  * ====================================================== */
 
 const VERSION = "0.1.64"; // ⚠️ 更新代码时同步修改此版本号
-const BUILD_ID = "source-7ff3b7fff6031b05"; // Replaced by scripts/update-sw-version.js on every production build
+const BUILD_ID = "source-af15d766cb6b5a64"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
 const HTML_CACHE = `${CACHE_PREFIX}-html-${VERSION}-${BUILD_ID}`;

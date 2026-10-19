@@ -13,8 +13,9 @@ export async function validateTransferAssistant() {
   const shareDescriptor = Object.getOwnPropertyDescriptor(navigator, "share");
   const canShareDescriptor = Object.getOwnPropertyDescriptor(navigator, "canShare");
   const shared: File[][] = [];
+  let shareError: Error | undefined;
   Object.defineProperty(navigator, "canShare", { configurable: true, value: () => true });
-  Object.defineProperty(navigator, "share", { configurable: true, value: async ({ files }: { files: File[] }) => { shared.push(files); } });
+  Object.defineProperty(navigator, "share", { configurable: true, value: async ({ files }: { files: File[] }) => { if (shareError) throw shareError; shared.push(files); } });
   const pinia = createPinia();
   const app = createApp(NearbyTransfer).use(pinia).use(router);
   const ui = useUIStore(pinia);
@@ -27,6 +28,7 @@ export async function validateTransferAssistant() {
     nearbyState.pairTextPeers = { peer: true };
     nearbyState.transfers.push({
       id: "fixture", kind: "pair", peerId: "peer", direction: "in", peerName: "Linux 电脑",
+      localDeviceName: "iPhone", createdAt: Date.now(),
       files: files.map(file => ({ name: file.name, size: file.size, type: file.type })),
       progress: [1, 1], received: files, state: "done",
     });
@@ -37,9 +39,24 @@ export async function validateTransferAssistant() {
     const send = document.querySelector<HTMLButtonElement>('[aria-label="发送"]')!;
     const textarea = document.querySelector<HTMLTextAreaElement>('[aria-label="输入消息"]')!;
     if (!save || !textarea || !send.disabled) throw new Error("empty composer must render with sending disabled");
+    if (!document.querySelector('.transfer-head')?.textContent?.includes('Linux 电脑 → iPhone') || !document.querySelector('.transfer-time')?.textContent?.includes('接收于')) throw new Error('records must identify both devices and reception time');
+    if (save.textContent !== '保存') throw new Error('batch save must use a concise label');
+    shareError = new DOMException('Canceled', 'AbortError');
+    save.click();
+    await settle();
+    if (nearbyState.transfers[0].saveState || document.querySelector('.confirm-saved')) throw new Error('canceling the share sheet must not mark a file saved');
+    shareError = new Error('Share failed');
+    save.click();
+    await settle();
+    if (nearbyState.transfers[0].saveState) throw new Error('failed share must not mark a file saved');
+    shareError = undefined;
     save.click();
     await settle();
     if (shared.length !== 1 || shared[0].length !== 2) throw new Error("batch save must share original files together");
+    if (nearbyState.transfers[0].saveState !== 'system' || !document.querySelector('.save-hint')?.textContent?.includes('已交给系统')) throw new Error('share completion must report handoff rather than disk save');
+    click('.confirm-saved');
+    await nextTick();
+    if (String(nearbyState.transfers[0].saveState) !== 'saved' || !document.querySelector('.save-hint')?.textContent?.includes('✓ 已保存') || document.querySelector('.confirm-saved')) throw new Error('save confirmation must remain visible as saved');
     const input = document.querySelector<HTMLInputElement>(".hidden-input")!;
     let pickerCalls = 0;
     input.click = () => { pickerCalls++; };

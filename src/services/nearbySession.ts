@@ -34,6 +34,9 @@ export type NearbyTransferRecord = {
   peerId: string;
   direction: "in" | "out";
   peerName: string;
+  localDeviceName?: string;
+  createdAt?: number;
+  saveState?: "system" | "download" | "saved";
   files: NearbyFileMeta[];
   text?: string;
   progress: number[];
@@ -165,6 +168,7 @@ function makeRoom(kind: RoomKind) {
       const peerName = peersFor(kind)[offer.from] || "附近的设备";
       const transfer: NearbyTransferRecord = {
         id, kind, peerId: offer.from, direction: "in", peerName, files: offer.files, text: offer.text,
+        localDeviceName: nearbyState.deviceName, createdAt: Date.now(),
         progress: offer.files.map(() => 0), received: offer.files.map(() => undefined), state: "waiting",
       };
       nearbyState.transfers.unshift(transfer);
@@ -340,6 +344,7 @@ export async function sendNearbyFiles(kind: RoomKind, peerId: string, files: Fil
   if (batchBytes(files) > NEARBY_MAX_BATCH_BYTES) throw new Error("nearby_batch_too_large");
   const transfer: NearbyTransferRecord = {
     id: `out:${Date.now()}:${Math.random()}`, kind, peerId, direction: "out", peerName: peersFor(kind)[peerId] || "附近的设备",
+    localDeviceName: nearbyState.deviceName, createdAt: Date.now(),
     files: files.map(file => ({ name: file.name, size: file.size, type: file.type })), text,
     progress: files.map(() => 0), received: files.map(() => undefined), state: "waiting",
   };
