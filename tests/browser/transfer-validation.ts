@@ -75,6 +75,7 @@ export async function validateTransferAssistant() {
     if (!document.querySelector('.file-thumbnail img')) throw new Error('received images must show a thumbnail');
     click('.file-thumbnail'); await nextTick();
     if (!document.querySelector('.image-preview img')) throw new Error('thumbnail must open full preview');
+    if (!document.querySelector('.image-preview a[download]')) throw new Error('image preview must retain individual saving');
     click('[aria-label="关闭图片预览"]'); await nextTick();
     if (document.querySelector(".assistant-body .device-card, .assistant-body .diagnostics, .connection-status, .choose-files")) throw new Error("chat must not contain duplicate connection or file-picker controls");
     const save = document.querySelector<HTMLButtonElement>(".batch-save");
@@ -82,7 +83,14 @@ export async function validateTransferAssistant() {
     const textarea = document.querySelector<HTMLTextAreaElement>('[aria-label="输入消息"]')!;
     if (!save || !textarea || !send.disabled) throw new Error("empty composer must render with sending disabled");
     if (!document.querySelector('.transfer-head')?.textContent?.includes('Linux 电脑 → iPhone') || !document.querySelector('.transfer-time')?.textContent?.includes('接收于')) throw new Error('records must identify both devices and reception time');
-    if (save.textContent !== '保存') throw new Error('batch save must use a concise label');
+    if (save.textContent !== '保存全部' || document.querySelector('.file-cards a[download]')) throw new Error('completed batches must have one save action below the cards');
+    const fixture = nearbyState.transfers[0];
+    const originalMeta = fixture.files;
+    fixture.files = fixture.files.slice(0, 1); fixture.received = [files[0]];
+    await nextTick();
+    if (String(save.textContent) !== '保存' || document.querySelector('.file-cards a[download]')) throw new Error('single files must have one concise save action');
+    fixture.files = originalMeta; fixture.received = files;
+    await nextTick();
     shareError = new DOMException('Canceled', 'AbortError');
     save.click();
     await settle();
