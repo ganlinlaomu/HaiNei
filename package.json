@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.61",
-  "releaseSummary": "私信置顶文件传输助手，支持点设备发送、同账号自动接收和批量保存",
+  "version": "0.1.62",
+  "releaseSummary": "文件传输助手采用简洁对话布局，修复选择文件后重复选择设备",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

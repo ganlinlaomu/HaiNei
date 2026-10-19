@@ -4,57 +4,12 @@
       <button type="button" class="header-icon" aria-label="返回私信列表" @click="router.push(keys.isLoggedIn ? '/conversations' : '/login')"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg></button>
       <span class="assistant-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z" /></svg></span>
       <strong>文件传输助手</strong>
-      <button type="button" class="header-icon" aria-label="连接其他设备" :aria-expanded="pairingOpen" @click="pairingOpen = !pairingOpen"><svg viewBox="0 0 24 24"><path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h2v2h-2zM20 15v6h-5" /></svg></button>
+      <button type="button" class="header-icon" aria-label="设备与连接" :aria-expanded="pairingOpen" @click="pairingOpen = true"><svg viewBox="0 0 24 24"><path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h2v2h-2zM20 15v6h-5" /></svg></button>
     </header>
     <div ref="chatBody" class="assistant-body">
-    <p class="nearby-intro">文件直接在设备之间传输 · 本机：{{ deviceName }}</p>
-
-    <section v-if="ownDevicesAvailable" class="nearby-card device-card">
-      <h2>我的设备</h2>
-      <ul v-if="ownPeerList.length" class="peer-list">
-        <li v-for="peer in ownPeerList" :key="peer.id" class="peer-row">
-          <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2.5" /><path d="M10.5 17.5h3" /></svg></span>
-          <span class="peer-name">{{ peer.name }}<small>在线 · 同账号自动接收</small></span>
-          <button class="peer-send" type="button" :disabled="!!activeSend" @click="selectDevice('own', peer.id)">{{ selectedFiles.length ? "发送到此设备" : "选择文件" }}</button>
-        </li>
-      </ul>
-      <p v-else class="nearby-empty">{{ ownStatus }}</p>
-      <button class="link-button" type="button" :disabled="searching || requestingCamera" @click="searchAgain">{{ searching ? "正在重新搜索…" : "重新搜索" }}</button>
-      <div v-if="showCameraRetry" class="camera-retry">
-        <p class="nearby-hint">iPhone / iPad 的浏览器可能限制局域网直连。可短暂启用相机后重试，相机会立即关闭，不拍照、不录音、不上传。</p>
-        <button class="pair-button" type="button" :disabled="searching || requestingCamera" @click="retryWithCamera">{{ requestingCamera ? "正在启用并重新连接…" : "启用设备直传" }}</button>
-      </div>
-    </section>
-    <section v-else-if="keys.isLoggedIn" class="nearby-card">
-      <h2>我的设备</h2>
-      <p class="nearby-empty">远程签名器账号无法自动发现自己的设备，请使用下方的扫码配对。</p>
-    </section>
-
-    <section v-if="pairingOpen || pairKey" class="nearby-card">
-      <h2>连接其他设备</h2>
-      <p class="nearby-hint">没登录海内的电脑、或别人的设备：一方显示二维码，另一方扫码或打开链接。</p>
-      <div v-if="!pairKey" class="pair-actions">
-        <button class="pair-button" type="button" @click="startPairing">显示二维码</button>
-        <button class="pair-button" type="button" @click="scannerOpen = true">扫码</button>
-      </div>
-      <template v-else>
-        <div v-if="pairQr && pairPeerList.length === 0" class="pair-qr">
-          <div class="qr-holder" v-html="pairQr"></div>
-          <p class="nearby-hint">用另一台设备的「文件传输助手」扫码，或相机扫码打开。</p>
-          <button class="link-button" type="button" @click="copyPairLink">{{ copied ? "已复制链接" : "复制链接" }}</button>
-        </div>
-        <ul v-if="pairPeerList.length" class="peer-list">
-          <li v-for="peer in pairPeerList" :key="peer.id" class="peer-row">
-            <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2" /><path d="M8 20h8" /></svg></span>
-            <span class="peer-name">{{ peer.name }}</span>
-            <button class="peer-send" type="button" :disabled="!!activeSend" @click="selectDevice('pair', peer.id)">{{ selectedFiles.length ? "发送到此设备" : "选择文件" }}</button>
-          </li>
-        </ul>
-        <p v-if="nearbyState.pairError" class="nearby-empty">{{ joinErrorText(nearbyState.pairError) }}</p>
-        <p v-else-if="!pairQr && !pairPeerList.length" class="nearby-empty">正在连接…</p>
-        <button class="link-button" type="button" @click="stopPairing">结束配对</button>
-      </template>
-    </section>
+    <button class="connection-status" type="button" @click="pairingOpen = true">{{ availableTargets.length ? `${availableTargets.length} 台设备在线` : '查看设备与连接' }}<span aria-hidden="true"> ›</span></button>
+    <p v-if="!transfers.length" class="empty-chat">选择图片或文件，再选择设备发送</p>
+    <div v-if="showCameraRetry" class="connection-notice"><span>暂时无法连接设备</span><button class="link-button" type="button" @click="pairingOpen = true">启用设备直传</button></div>
 
     <section v-if="transfers.length" class="transfer-history" aria-label="传输记录" aria-live="polite">
       <ul class="transfer-list">
@@ -83,6 +38,59 @@
         </li>
       </ul>
     </section>
+    </div>
+
+    <div v-if="pairingOpen" class="offer-overlay" @click.self="pairingOpen = false">
+    <section ref="devicePanel" class="offer-sheet connection-sheet" role="dialog" aria-modal="true" aria-labelledby="devices-title" tabindex="-1">
+    <header class="sheet-header"><h2 id="devices-title">设备与连接</h2><button class="header-icon" type="button" aria-label="关闭设备与连接" @click="pairingOpen = false">×</button></header>
+    <p class="nearby-hint">本机：{{ deviceName }}</p>
+
+    <section v-if="ownDevicesAvailable" class="nearby-card device-card">
+      <h2>我的设备</h2>
+      <ul v-if="ownPeerList.length" class="peer-list">
+        <li v-for="peer in ownPeerList" :key="peer.id" class="peer-row">
+          <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2.5" /><path d="M10.5 17.5h3" /></svg></span>
+          <span class="peer-name">{{ peer.name }}<small>在线 · 同账号自动接收</small></span>
+          <button class="peer-send" type="button" :disabled="!!activeSend" @click="selectDevice('own', peer.id)">{{ selectedFiles.length ? "发送到此设备" : "选择文件" }}</button>
+        </li>
+      </ul>
+      <p v-else class="nearby-empty">{{ ownStatus }}</p>
+      <button class="link-button" type="button" :disabled="searching || requestingCamera" @click="searchAgain">{{ searching ? "正在重新搜索…" : "重新搜索" }}</button>
+      <div v-if="showCameraRetry" class="camera-retry">
+        <p class="nearby-hint">iPhone / iPad 的浏览器可能限制局域网直连。可短暂启用相机后重试，相机会立即关闭，不拍照、不录音、不上传。</p>
+        <button class="pair-button" type="button" :disabled="searching || requestingCamera" @click="retryWithCamera">{{ requestingCamera ? "正在启用并重新连接…" : "启用设备直传" }}</button>
+      </div>
+    </section>
+    <section v-else-if="keys.isLoggedIn" class="nearby-card">
+      <h2>我的设备</h2>
+      <p class="nearby-empty">远程签名器账号无法自动发现自己的设备，请使用扫码配对。</p>
+    </section>
+
+    <section class="nearby-card">
+      <h2>连接其他设备</h2>
+      <p class="nearby-hint">没登录海内的电脑、或别人的设备：一方显示二维码，另一方扫码或打开链接。</p>
+      <div v-if="!pairKey" class="pair-actions">
+        <button class="pair-button" type="button" @click="startPairing">显示二维码</button>
+        <button class="pair-button" type="button" @click="scannerOpen = true">扫码</button>
+      </div>
+      <template v-else>
+        <div v-if="pairQr && pairPeerList.length === 0" class="pair-qr">
+          <div class="qr-holder" v-html="pairQr"></div>
+          <p class="nearby-hint">用另一台设备的「文件传输助手」扫码，或相机扫码打开。</p>
+          <button class="link-button" type="button" @click="copyPairLink">{{ copied ? "已复制链接" : "复制链接" }}</button>
+        </div>
+        <ul v-if="pairPeerList.length" class="peer-list">
+          <li v-for="peer in pairPeerList" :key="peer.id" class="peer-row">
+            <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2" /><path d="M8 20h8" /></svg></span>
+            <span class="peer-name">{{ peer.name }}</span>
+            <button class="peer-send" type="button" :disabled="!!activeSend" @click="selectDevice('pair', peer.id)">{{ selectedFiles.length ? "发送到此设备" : "选择文件" }}</button>
+          </li>
+        </ul>
+        <p v-if="nearbyState.pairError" class="nearby-empty">{{ joinErrorText(nearbyState.pairError) }}</p>
+        <p v-else-if="!pairQr && !pairPeerList.length" class="nearby-empty">正在连接…</p>
+        <button class="link-button" type="button" @click="stopPairing">结束配对</button>
+      </template>
+    </section>
 
     <details class="nearby-card diagnostics" @toggle="onDiagnosticsToggle">
       <summary>诊断信息</summary>
@@ -107,26 +115,28 @@
         <dt>上次搜索</dt><dd>{{ diagnostics.lastRefreshAt ? `${Math.round((Date.now() - diagnostics.lastRefreshAt) / 1000)} 秒前` : "—" }}</dd>
       </dl>
     </details>
+    </section>
     </div>
 
     <footer class="assistant-composer">
       <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}，点击设备发送</span><button type="button" @click="selectedFiles = []; targetPickerOpen = false">取消</button></div>
       <div class="file-composer">
-        <button type="button" class="header-icon" aria-label="添加文件" :disabled="!!activeSend" @click="chooseFiles"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
-        <button type="button" class="choose-files" :disabled="!!activeSend" @click="chooseFiles">{{ activeSend ? '正在发送…' : '选择图片或文件' }}</button>
+        <button type="button" class="header-icon" aria-label="添加文件" :disabled="!!activeSend" @click="chooseFiles()"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
+        <button type="button" class="choose-files" :disabled="!!activeSend" @click="chooseFiles()">{{ activeSend ? '正在发送…' : '选择图片或文件' }}</button>
         <button type="button" class="header-icon" aria-label="选择接收设备" :disabled="!!activeSend" @click="selectedFiles.length ? targetPickerOpen = true : chooseFiles()"><svg viewBox="0 0 24 24"><path d="m5 12 14-8-5 16-3-7-6-1Z" /></svg></button>
       </div>
     </footer>
 
-    <input ref="fileInput" class="hidden-input" type="file" multiple @change="onFilesPicked" />
+    <input ref="fileInput" class="hidden-input" type="file" multiple @change="onFilesPicked" @cancel="fileTarget = null" />
     <QrScannerSheet :open="scannerOpen" title="扫描配对二维码" @close="scannerOpen = false" @scanned="onScanned" />
 
     <div v-if="targetPickerOpen" class="offer-overlay" @click.self="targetPickerOpen = false">
-      <section class="offer-sheet" role="dialog" aria-modal="true" aria-labelledby="target-title">
+      <section ref="targetPanel" class="offer-sheet" role="dialog" aria-modal="true" aria-labelledby="target-title" tabindex="-1">
         <h2 id="target-title">发送到设备</h2>
         <p class="nearby-hint">已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</p>
         <ul class="peer-list"><li v-for="peer in availableTargets" :key="`${peer.kind}:${peer.id}`"><button class="target-device" type="button" @click="sendSelected(peer.kind, peer.id)"><strong>{{ peer.name }}</strong><span>{{ peer.kind === 'own' ? '我的设备' : '扫码连接的设备' }} · 在线</span></button></li></ul>
         <p v-if="!availableTargets.length" class="nearby-empty">暂未发现设备，请在另一台设备打开文件传输助手。</p>
+        <button class="link-button" type="button" @click="targetPickerOpen = false; pairingOpen = true">设备与连接</button>
         <button class="link-button" type="button" @click="targetPickerOpen = false">返回</button>
       </section>
     </div>
@@ -156,6 +166,7 @@ import qrcode from "qrcode-generator";
 import QrScannerSheet from "@/components/QrScannerSheet.vue";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
+import { useDialogFocus } from "@/composables/useDialogFocus";
 import { canShareTransfer, createTransferZip } from "@/services/transferBatchSave";
 import {
   NEARBY_MAX_BATCH_BYTES,
@@ -192,7 +203,10 @@ const copied = ref(false);
 const scannerOpen = ref(false);
 const pairingOpen = ref(false);
 const selectedFiles = ref<File[]>([]);
+const fileTarget = ref<{ kind: RoomKind; peerId: string } | null>(null);
 const targetPickerOpen = ref(false);
+const devicePanel = ref<HTMLElement | null>(null);
+const targetPanel = ref<HTMLElement | null>(null);
 const chatBody = ref<HTMLElement | null>(null);
 const savingBatch = ref("");
 const zipDownloads = ref<Record<string, string>>({});
@@ -270,6 +284,8 @@ const availableTargets = computed(() => [
   ...ownPeerList.value.map(peer => ({ ...peer, kind: "own" as const })),
   ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const })),
 ]);
+useDialogFocus(devicePanel, () => pairingOpen.value && !scannerOpen.value && !pendingOffer.value, () => { pairingOpen.value = false; });
+useDialogFocus(targetPanel, () => targetPickerOpen.value && !pendingOffer.value, () => { targetPickerOpen.value = false; });
 function joinErrorText(error: string) {
   if (error.includes("incorrect room password")) return "已发现设备，但房间密码不一致";
   if (error.includes("could not connect to peer")) return "已发现设备，但本次连接协商未完成；请点「重新搜索」";
@@ -299,6 +315,7 @@ function renderQr(key: NearbyRoomKey) {
 }
 
 async function joinPairRoom(key: NearbyRoomKey, showQr: boolean) {
+  pairingOpen.value = true;
   copied.value = false;
   pairQr.value = "";
   if (showQr) renderQr(key);
@@ -340,19 +357,23 @@ async function copyPairLink() {
   }
 }
 
-function chooseFiles() {
+function chooseFiles(target: { kind: RoomKind; peerId: string } | null = null) {
   if (activeSend.value) return;
+  fileTarget.value = target;
+  pairingOpen.value = false;
   fileInput.value?.click();
 }
 
 function selectDevice(kind: RoomKind, peerId: string) {
   if (selectedFiles.value.length) void sendSelected(kind, peerId);
-  else chooseFiles();
+  else chooseFiles({ kind, peerId });
 }
 
 function onFilesPicked(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = [...(input.files || [])];
+  const target = fileTarget.value;
+  fileTarget.value = null;
   input.value = "";
   if (!files.length) return;
   if (files.length > 200) { ui.addToast("一次最多发送 200 个文件，请分批发送", 2_600, "error"); return; }
@@ -361,7 +382,8 @@ function onFilesPicked(event: Event) {
     return;
   }
   selectedFiles.value = files;
-  targetPickerOpen.value = true;
+  if (target) void sendSelected(target.kind, target.peerId);
+  else targetPickerOpen.value = true;
 }
 
 async function sendSelected(kind: RoomKind, peerId: string) {
@@ -369,6 +391,7 @@ async function sendSelected(kind: RoomKind, peerId: string) {
   const files = selectedFiles.value;
   const account = keys.pkHex;
   activeSend.value = { kind, peerId };
+  pairingOpen.value = false;
   targetPickerOpen.value = false;
   selectedFiles.value = [];
   try {
@@ -485,8 +508,12 @@ onMounted(() => {
 watch(ownDevicesAvailable, available => { if (available) void joinOwnRoom(); });
 watch(() => keys.pkHex, () => {
   selectedFiles.value = [];
+  fileTarget.value = null;
   targetPickerOpen.value = false;
   releaseUrls();
+});
+watch(pairingOpen, open => {
+  if (!open && diagnosticsTimer) { clearInterval(diagnosticsTimer); diagnosticsTimer = null; }
 });
 watch(() => nearbyState.transfers.length, async () => {
   await nextTick();
@@ -503,6 +530,11 @@ watch(() => nearbyState.transfers.length, async () => {
 .assistant-avatar{display:grid;width:34px;height:34px;place-items:center;border-radius:50%;background:var(--bg-f1f5f9)}
 .assistant-avatar svg{width:21px;height:21px}
 .assistant-body{box-sizing:border-box;width:100%;max-width:720px;margin:0 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:12px 16px 20px;overscroll-behavior:contain}
+.connection-status{display:block;min-height:36px;margin:0 auto 10px;padding:4px 12px;border:0;background:transparent;color:var(--fg-64748b);font-size:12px;cursor:pointer}
+.empty-chat{margin:36px auto;color:var(--fg-64748b);font-size:13px;text-align:center}
+.connection-notice{display:flex;align-items:center;justify-content:center;gap:8px;color:var(--fg-64748b);font-size:12px}.connection-notice .link-button{margin:0;font-size:12px}
+.sheet-header{display:flex;align-items:center;justify-content:space-between;gap:12px}.sheet-header .header-icon{font-size:26px}
+.connection-sheet{max-height:85dvh;overflow-y:auto;overscroll-behavior:contain;outline:0}
 .assistant-composer{box-sizing:border-box;width:100%;max-width:720px;margin:0 auto;padding:6px 24px calc(24px + env(safe-area-inset-bottom));background:var(--bg-fff)}
 .file-composer{display:grid;grid-template-columns:38px minmax(0,1fr) 38px;align-items:center;min-height:48px;padding:0 8px;border:1px solid var(--bd-d8dee5);border-radius:24px;box-shadow:0 4px 18px rgba(15,23,42,.11)}
 .choose-files{min-width:0;min-height:44px;border:0;background:transparent;color:var(--fg-64748b);font:inherit;font-size:16px;text-align:left}
@@ -551,7 +583,7 @@ watch(() => nearbyState.transfers.length, async () => {
 .diag-list dd{margin:0;overflow-wrap:anywhere;color:var(--fg-334155)}
 .diag-item{display:block}
 .offer-overlay{position:fixed;inset:0;z-index:13000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.45)}
-.offer-sheet{width:min(100%,480px);box-sizing:border-box;padding:20px 20px calc(20px + env(safe-area-inset-bottom));border-radius:22px 22px 0 0;background:var(--bg-fff)}
+.offer-sheet{width:min(100%,480px);max-height:85dvh;overflow-y:auto;box-sizing:border-box;padding:20px 20px calc(20px + env(safe-area-inset-bottom));border-radius:22px 22px 0 0;background:var(--bg-fff);outline:0}
 .offer-sheet h2{margin:0;font-size:18px}
 .offer-files li{overflow:hidden;padding:4px 0;color:var(--fg-334155);font-size:14px;text-overflow:ellipsis;white-space:nowrap}
 .offer-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}
