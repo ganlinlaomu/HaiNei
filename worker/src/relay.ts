@@ -48,7 +48,7 @@ export async function createRelaySession(env: Env, pubkey: string) {
   if (!config.enabled) throw new HttpError(503, "relay_not_configured");
   if (!env.RELAY_APP_TOKEN) throw new HttpError(503, "relay_app_token_not_configured");
 
-  const response = await fetch(relaySessionEndpoint(config.relayUrl), {
+  const request = new Request(relaySessionEndpoint(config.relayUrl), {
     method: "POST",
     signal: AbortSignal.timeout(10_000),
     headers: {
@@ -58,6 +58,9 @@ export async function createRelaySession(env: Env, pubkey: string) {
     },
     body: JSON.stringify({ subject: normalizedPubkey, ttl: 600 }),
   });
+  // Same-account Workers must talk through a service binding; the public
+  // workers.dev URL answers 404 to Worker-originated requests.
+  const response = env.RELAY_SERVICE ? await env.RELAY_SERVICE.fetch(request) : await fetch(request);
   const text = await response.text();
   let body: any;
   try { body = text ? JSON.parse(text) : null; } catch { body = null; }

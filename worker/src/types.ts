@@ -17,6 +17,8 @@ export interface ServiceBinding {
 export interface Env {
   DB: D1Database;
   BLOSSOM: ServiceBinding;
+  /** Cloudflare refuses Worker-to-Worker fetches over the same account's workers.dev URLs (404). */
+  RELAY_SERVICE?: ServiceBinding;
   BLOSSOM_SERVICE_TOKEN: string;
   RELAY_APP_URL?: string;
   RELAY_APP_TOKEN?: string;

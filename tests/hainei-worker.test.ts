@@ -230,6 +230,38 @@ describe("HaiNei Worker authentication and quota", () => {
     }
   });
 
+  it("asks the managed relay through its service binding instead of the public URL", async () => {
+    const pubkey = "c".repeat(64);
+    const publicFetch = vi.fn(async () => new Response("Not found", { status: 404 }));
+    const binding = vi.fn(async (request: Request) => {
+      expect(request.url).toBe("https://cloudflare-nostr-relay.noster.workers.dev/api/app/session");
+      expect(request.headers.get("Authorization")).toBe("Bearer nra_app_token");
+      return new Response(JSON.stringify({
+        bindingVersion: 1, token: "nrs_via_binding", subject: pubkey, scope: "relay",
+        expiresAt: Math.floor(Date.now() / 1000) + 600,
+      }), { status: 201 });
+    });
+    vi.stubGlobal("fetch", publicFetch);
+    try {
+      const result = await createRelaySession({
+        ...baseEnv(),
+        RELAY_APP_URL: "wss://cloudflare-nostr-relay.noster.workers.dev",
+        RELAY_APP_TOKEN: "nra_app_token",
+        RELAY_SERVICE: { fetch: binding },
+      }, pubkey);
+      expect(result.token).toBe("nrs_via_binding");
+      expect(binding).toHaveBeenCalledOnce();
+      expect(publicFetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("binds the managed relay service in wrangler.toml", () => {
+    const config = readFileSync("worker/wrangler.toml", "utf8");
+    expect(config).toMatch(/\[\[services\]\]\nbinding = "RELAY_SERVICE"\nservice = "cloudflare-nostr-relay"/);
+  });
+
   it("uses the server-side service credential to obtain a scoped Blossom token", async () => {
     const db = new MemoryD1();
     const pubkey = "b".repeat(64);
