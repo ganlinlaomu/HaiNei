@@ -25,7 +25,7 @@
     <div class="conversation-row assistant-row">
       <button class="conversation-main" type="button" @click="router.push('/nearby')">
         <span class="assistant-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z" /></svg></span>
-        <span class="conversation-copy"><strong>文件传输助手</strong><span class="preview">在你的设备之间直接传输文件</span></span>
+        <span class="conversation-copy"><strong>文件传输助手</strong></span>
         <span class="conversation-meta" aria-hidden="true">›</span>
       </button>
     </div>
