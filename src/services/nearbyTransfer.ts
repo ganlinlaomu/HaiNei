@@ -238,6 +238,35 @@ export function sanitizeOffer(value: unknown, from: string): NearbyOffer | null 
   return files.length || text ? { id: raw.id, files, from, ...(text ? { text } : {}), ...(raw.protocol === 2 ? { protocol: 2 as const } : {}) } : null;
 }
 
+export type NearbyRoute = "lan" | "internet" | "relay";
+
+type CandidateStats = { candidateType?: string; address?: string; ip?: string };
+
+function onLocalNetwork(candidate?: CandidateStats) {
+  const address = (candidate?.address || candidate?.ip || "").toLowerCase();
+  if (address) return /\.local$|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^169\.254\.|^fe80:|^f[cd][0-9a-f]{2}:/.test(address);
+  return candidate?.candidateType === "host";
+}
+
+/**
+ * Which way the bytes actually travel, from the selected ICE pair. Addresses
+ * are only inspected here and never stored or shown.
+ */
+export async function connectionRoute(pc: Pick<RTCPeerConnection, "getStats">): Promise<NearbyRoute | ""> {
+  const stats = await pc.getStats() as unknown as Map<string, any>;
+  let pair: { localCandidateId?: string; remoteCandidateId?: string } | undefined;
+  stats.forEach(entry => {
+    if (entry.type === "transport" && entry.selectedCandidatePairId) pair = stats.get(entry.selectedCandidatePairId);
+  });
+  // Firefox marks the pair itself instead of exposing a transport entry.
+  if (!pair) stats.forEach(entry => { if (!pair && entry.type === "candidate-pair" && entry.selected && entry.state === "succeeded") pair = entry; });
+  if (!pair) return "";
+  const local = stats.get(pair.localCandidateId || "") as CandidateStats | undefined;
+  const remote = stats.get(pair.remoteCandidateId || "") as CandidateStats | undefined;
+  if (local?.candidateType === "relay" || remote?.candidateType === "relay") return "relay";
+  return onLocalNetwork(local) && onLocalNetwork(remote) ? "lan" : "internet";
+}
+
 export function batchBytes(files: Pick<NearbyFileMeta, "size">[]) {
   return files.reduce((sum, file) => sum + file.size, 0);
 }
@@ -473,6 +502,13 @@ export class NearbyRoom {
   }
 
   /** WebRTC state per joined peer, for the diagnostics panel. */
+  /** Route per connected peer; peers without a selected pair are omitted. */
+  async routes(): Promise<Record<string, NearbyRoute>> {
+    const peers = Object.entries(this.room?.getPeers() || {});
+    const routes = await Promise.all(peers.map(async ([id, pc]) => [id, pc ? await connectionRoute(pc).catch(() => "") : ""] as const));
+    return Object.fromEntries(routes.filter(([, route]) => route)) as Record<string, NearbyRoute>;
+  }
+
   peerConnections(): Record<string, string> {
     const peers = this.room?.getPeers() || {};
     return Object.fromEntries(Object.entries(peers).map(([id, pc]) => [id, pc?.connectionState || "unknown"]));

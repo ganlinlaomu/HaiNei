@@ -4,7 +4,7 @@ import { useKeyStore } from "@/stores/keys";
 import { canStoreHistory, deleteHistory, loadHistory, loadHistoryFile, putHistoryFile, putHistoryRecord, toStored } from "@/services/nearbyHistory";
 import { onAppResume } from "@/services/appResumeCoordinator";
 import { requestNearbyCameraAccess } from "@/services/nearbyCameraAccess";
-import { clearNearbyUnread, markNearbyUnread } from "@/services/nearbyUnread";
+import { clearNearbyUnread, markNearbyUnread, nearbyPresence } from "@/services/nearbyUnread";
 import {
   NEARBY_MAX_BATCH_BYTES,
   NEARBY_MAX_TEXT_LENGTH,
@@ -26,6 +26,7 @@ import {
   type NearbyFileMeta,
   type NearbyOffer,
   type NearbyRoomKey,
+  type NearbyRoute,
 } from "@/services/nearbyTransfer";
 
 /**
@@ -73,6 +74,8 @@ export const nearbyState = reactive({
   ownCompatible: {} as Record<string, boolean>,
   /** Trystero peer id -> stable device id, own devices only. */
   ownDevices: {} as Record<string, string>,
+  /** How each connected peer is reached: 局域网直连 / 互联网直连 / 中继. */
+  ownRoutes: {} as Record<string, NearbyRoute>,
   ownError: "",
   pairKey: null as NearbyRoomKey | null,
   pairPeers: {} as Record<string, string>,
@@ -81,6 +84,7 @@ export const nearbyState = reactive({
   pairDevices: {} as Record<string, string>,
   /** QR peers that are already connected under 我的设备; hidden as duplicates. */
   pairDuplicates: {} as Record<string, boolean>,
+  pairRoutes: {} as Record<string, NearbyRoute>,
   pairError: "",
   transfers: [] as NearbyTransferRecord[],
   pendingOffer: null as PendingOffer | null,
@@ -199,6 +203,7 @@ function makeRoom(kind: RoomKind, deviceId = "", accountTag = "") {
       if (kind === "own") { nearbyState.ownPeers = next; nearbyState.ownCompatible = compatible; nearbyState.ownDevices = devices; }
       else { nearbyState.pairPeers = next; nearbyState.pairCompatible = compatible; nearbyState.pairDevices = devices; }
       void refreshPairDuplicates();
+      scheduleRoutes(kind);
       for (const item of nearbyState.transfers) {
         if (item.kind === kind && !next[item.peerId] && inFlight(item.state)) {
           const pending = [nearbyState.pendingOffer, ...offerQueue].find(offer => offer?.transferId === item.id);
@@ -341,6 +346,7 @@ export async function leaveOwnDevicesRoom() {
   nearbyState.ownPeers = {};
   nearbyState.ownCompatible = {};
   nearbyState.ownDevices = {};
+  nearbyState.ownRoutes = {};
   pairSecret = "";
   nearbyState.ownError = "";
   ownRoomId = "";
@@ -382,6 +388,7 @@ export async function stopPairRoom() {
   nearbyState.pairCompatible = {};
   nearbyState.pairDevices = {};
   nearbyState.pairDuplicates = {};
+  nearbyState.pairRoutes = {};
   nearbyState.pairError = "";
   failRoomTransfers("pair");
   updateRelayResumeWatch();
@@ -403,6 +410,31 @@ export async function resetNearby() {
 }
 
 let ownRoomId = "";
+const routeTimers: Partial<Record<RoomKind, ReturnType<typeof setTimeout>>> = {};
+
+/** Read the selected ICE pairs once negotiation has settled. */
+function scheduleRoutes(kind: RoomKind, delay = 1_500) {
+  clearTimeout(routeTimers[kind]);
+  routeTimers[kind] = setTimeout(async () => {
+    const room = rooms[kind];
+    if (!room) return;
+    const routes = await room.routes().catch(() => ({} as Record<string, NearbyRoute>));
+    if (rooms[kind] !== room) return;
+    if (kind === "own") nearbyState.ownRoutes = routes;
+    else nearbyState.pairRoutes = routes;
+  }, delay);
+}
+
+/** Called when the assistant opens; routes can change after resume. */
+export function refreshNearbyRoutes() {
+  for (const kind of ["own", "pair"] as const) if (rooms[kind]) scheduleRoutes(kind, 0);
+}
+
+const usable = (name: string, compatible?: boolean) => name !== NEARBY_UNNAMED_PEER && compatible === true;
+// Feeds the 私信 row without loading this module there.
+watch(() => Object.entries(nearbyState.ownPeers).filter(([id, name]) => usable(name, nearbyState.ownCompatible[id])).length
+  + Object.entries(nearbyState.pairPeers).filter(([id, name]) => usable(name, nearbyState.pairCompatible[id]) && !nearbyState.pairDuplicates[id]).length,
+count => { nearbyPresence.online = count; }, { immediate: true });
 /** Derived from the private key while the own room is joined; tags QR rooms. */
 let pairSecret = "";
 let duplicateCheck = 0;

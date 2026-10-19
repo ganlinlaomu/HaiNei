@@ -23,7 +23,8 @@ vi.mock("trystero", () => ({
 }));
 
 import { NearbyRoom, nearbyDeviceId, nearbyRelayStates, pairAccountTag, pairDeviceTag, pairIdentitySecret, refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
-import { stopPairRoom } from "@/services/nearbySession";
+import { refreshNearbyRoutes, stopPairRoom } from "@/services/nearbySession";
+import { nearbyPresence } from "@/services/nearbyUnread";
 import { renameNearbyDevice, answerPendingOffer, cancelNearbyTransfer, clearNearbyTransfer, ensureOwnDevicesRoom, nearbyState, queueNearbyFiles, refreshNearbyDiscovery, resetNearby, retryNearbyTransfer, retryNearbyWithCamera, sendNearbyFiles, startPairRoom } from "@/services/nearbySession";
 import { NEARBY_CHUNK_BYTES, chunkDigest } from '@/services/nearbyChunks';
 
@@ -191,6 +192,28 @@ describe("nearby signaling recovery", () => {
     expect(nearbyState.pairDuplicates).toEqual({});
     expect(nearbyState.pairKey?.roomId).toBe(roomId);
     await stopPairRoom();
+  });
+
+  it('counts usable devices for the 私信 row and reads each connection route', async () => {
+    const own = await modernRoom();
+    expect(nearbyPresence.online).toBe(1);
+    own.onPeerJoin('outdated');
+    own.actions.hello.handlers.onMessage({ name: 'Old', reply: true }, { peerId: 'outdated' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nearbyPresence.online).toBe(1);
+    const stats = new Map<string, Record<string, unknown>>([
+      ['t', { type: 'transport', selectedCandidatePairId: 'p' }],
+      ['p', { type: 'candidate-pair', localCandidateId: 'l', remoteCandidateId: 'r' }],
+      ['l', { type: 'local-candidate', candidateType: 'host', address: '192.168.1.2' }],
+      ['r', { type: 'remote-candidate', candidateType: 'host', address: '192.168.1.3' }],
+    ]);
+    own.getPeers = () => ({ peer: { getStats: async () => stats } });
+    refreshNearbyRoutes();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(nearbyState.ownRoutes).toEqual({ peer: 'lan' }));
+    own.onPeerLeave('peer');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nearbyPresence.online).toBe(0);
   });
 
   it('renames this device and re-announces it without asking for replies', async () => {
