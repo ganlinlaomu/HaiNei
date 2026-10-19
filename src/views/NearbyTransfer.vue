@@ -104,29 +104,7 @@
       </template>
     </section>
 
-    <details class="nearby-card diagnostics" @toggle="onDiagnosticsToggle">
-      <summary>诊断信息</summary>
-      <dl v-if="diagnostics" class="diag-list">
-        <dt>版本</dt><dd>v{{ APP_VERSION }} · {{ deviceName }}</dd>
-        <dt>账号</dt><dd>{{ diagnostics.account ? `${diagnostics.account.slice(0, 6)}…${diagnostics.account.slice(-6)}` : "未登录" }}</dd>
-        <dt>房间指纹</dt><dd>{{ diagnostics.ownRoom || "—" }}（两台设备应一致）</dd>
-        <dt>房间状态</dt><dd>{{ diagnostics.ownJoined ? "已加入" : "未加入" }} · 本机 ID {{ diagnostics.selfId || "—" }}</dd>
-        <dt>Relay</dt><dd><span v-for="relay in diagnostics.relays" :key="relay.host" class="diag-item">{{ relay.host }}：{{ relay.state }}<span v-if="relay.rejection">（{{ relay.rejection }}）</span></span><span v-if="!diagnostics.relays.length">尚未连接</span></dd>
-        <dt>设备连接</dt><dd><span v-for="(state, id) in diagnostics.ownPeers" :key="id" class="diag-item">{{ String(id).slice(0, 6) }} {{ nearbyState.ownPeers[id] || "" }}：{{ state }}</span><span v-if="!Object.keys(diagnostics.ownPeers).length">无</span></dd>
-        <dt v-if="diagnostics.ownError">连接错误</dt><dd v-if="diagnostics.ownError">{{ joinErrorText(diagnostics.ownError) }}</dd>
-        <dt v-if="diagnostics.ownError">原始错误</dt><dd v-if="diagnostics.ownError">{{ diagnostics.ownError }}</dd>
-        <template v-for="attempt in diagnostics.negotiations" :key="attempt.id">
-          <dt>协商 {{ attempt.id }}</dt>
-          <dd>
-            SDP：{{ attempt.localDescription }} / {{ attempt.remoteDescription }}；
-            ICE：{{ attempt.ice }}；连接：{{ attempt.connection }}；收集：{{ attempt.gathering }}<br />
-            本机候选：{{ attempt.localCandidates }}（{{ attempt.candidateTypes.join(", ") || "无" }}）；远端候选处理：{{ attempt.remoteCandidates }}
-            <span v-if="attempt.iceErrors.length">；STUN 错误：{{ attempt.iceErrors.join(", ") }}</span>
-          </dd>
-        </template>
-        <dt>上次搜索</dt><dd>{{ diagnostics.lastRefreshAt ? `${Math.round((Date.now() - diagnostics.lastRefreshAt) / 1000)} 秒前` : "—" }}</dd>
-      </dl>
-    </details>
+    <button class="link-button copy-diagnostics" type="button" @click="copyDiagnostics">复制诊断信息</button>
     </section>
     </div>
 
@@ -267,20 +245,35 @@ const objectUrls = new Map<File, string>();
 const searching = ref(false);
 const requestingCamera = ref(false);
 let cameraRequest: AbortController | null = null;
-const diagnostics = ref<Awaited<ReturnType<typeof nearbyDiagnostics>> | null>(null);
-let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
-
-async function loadDiagnostics() {
-  diagnostics.value = await nearbyDiagnostics();
+/** Plain-text connection report for troubleshooting; no addresses or keys. */
+async function diagnosticsText() {
+  const d = await nearbyDiagnostics();
+  return [
+    `版本：v${APP_VERSION} · ${deviceName.value}`,
+    `账号：${d.account ? `${d.account.slice(0, 6)}…${d.account.slice(-6)}` : "未登录"}`,
+    `房间指纹：${d.ownRoom || "—"}（两台设备应一致）`,
+    `房间状态：${d.ownJoined ? "已加入" : "未加入"} · 本机 ID ${d.selfId || "—"}`,
+    `Relay：${d.relays.map(relay => `${relay.host} ${relay.state}${relay.rejection ? `（${relay.rejection}）` : ""}`).join("；") || "尚未连接"}`,
+    `设备连接：${Object.entries(d.ownPeers).map(([id, state]) => `${id.slice(0, 6)} ${nearbyState.ownPeers[id] || ""} ${state}`).join("；") || "无"}`,
+    ...(d.ownError ? [`连接错误：${joinErrorText(d.ownError)}`, `原始错误：${d.ownError}`] : []),
+    ...d.negotiations.map(attempt => `协商 ${attempt.id}：SDP ${attempt.localDescription}/${attempt.remoteDescription}；ICE ${attempt.ice}；连接 ${attempt.connection}；收集 ${attempt.gathering}；`
+      + `本机候选 ${attempt.localCandidates}（${attempt.candidateTypes.join(", ") || "无"}）；远端候选 ${attempt.remoteCandidates}${attempt.iceErrors.length ? `；STUN 错误 ${attempt.iceErrors.join(", ")}` : ""}`),
+    `上次搜索：${d.lastRefreshAt ? `${Math.round((Date.now() - d.lastRefreshAt) / 1000)} 秒前` : "—"}`,
+  ].join("\n");
 }
 
-function onDiagnosticsToggle(event: Event) {
-  const open = (event.target as HTMLDetailsElement).open;
-  if (diagnosticsTimer) clearInterval(diagnosticsTimer);
-  diagnosticsTimer = null;
-  if (!open) return;
-  void loadDiagnostics();
-  diagnosticsTimer = setInterval(() => { void loadDiagnostics(); }, 2_000);
+async function copyDiagnostics() {
+  try {
+    // Safari only allows the write inside the tap; hand it a pending blob.
+    if (typeof ClipboardItem === "function" && navigator.clipboard?.write) {
+      await navigator.clipboard.write([new ClipboardItem({ "text/plain": diagnosticsText().then(text => new Blob([text], { type: "text/plain" })) })]);
+    } else {
+      await navigator.clipboard.writeText(await diagnosticsText());
+    }
+    ui.addToast("诊断信息已复制", 1_600, "success");
+  } catch {
+    ui.addToast("无法复制诊断信息", 2_400, "error");
+  }
 }
 
 /** Check relay liveness, then rebuild failed rooms without disturbing live peers. */
@@ -290,7 +283,6 @@ async function searchAgain() {
   try {
     await joinOwnRoom();
     await refreshNearbyDiscovery();
-    await loadDiagnostics();
   } catch {
     ui.addToast("无法重新搜索附近设备，请检查网络", 2_400, "error");
   } finally {
@@ -304,7 +296,7 @@ async function retryWithCamera() {
   cameraRequest = request;
   requestingCamera.value = true;
   try {
-    if (await retryNearbyWithCamera(request.signal)) await loadDiagnostics();
+    await retryNearbyWithCamera(request.signal);
   } catch {
     if (!request.signal.aborted) ui.addToast("无法启用相机并重试，请检查海内的相机权限和网络", 3_000, "error");
   } finally {
@@ -318,7 +310,6 @@ onBeforeUnmount(() => {
   pageActive = false;
   releaseUrls();
   cameraRequest?.abort();
-  if (diagnosticsTimer) clearInterval(diagnosticsTimer);
 });
 
 const pairKey = computed(() => nearbyState.pairKey);
@@ -742,7 +733,6 @@ watch(() => keys.pkHex, () => {
 watch(draftText, () => { void nextTick(resizeTextInput); });
 watch(pairingOpen, open => {
   if (!open) renaming.value = false;
-  if (!open && diagnosticsTimer) { clearInterval(diagnosticsTimer); diagnosticsTimer = null; }
 });
 watch(() => nearbyState.transfers.length, async () => {
   await nextTick();
@@ -827,11 +817,7 @@ watch(() => nearbyState.transfers.length, async () => {
 .file-row progress{width:100%;height:6px}
 .file-action{display:inline-flex;min-height:36px;align-items:center;padding:0 12px;border:1px solid var(--bd-cbd5e1);border-radius:10px;background:var(--bg-fff);color:var(--fg-334155);font-size:13px;text-decoration:none;cursor:pointer}
 .hidden-input{display:none}
-.diagnostics summary{min-height:32px;color:var(--fg-64748b);font-size:14px;cursor:pointer}
-.diag-list{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:10px 0 0;font-size:12px;line-height:1.5}
-.diag-list dt{color:var(--fg-64748b)}
-.diag-list dd{margin:0;overflow-wrap:anywhere;color:var(--fg-334155)}
-.diag-item{display:block}
+.copy-diagnostics{display:block;margin:8px auto 0;color:var(--fg-64748b);font-weight:500}
 .offer-overlay{position:fixed;inset:0;z-index:13000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.45)}
 .offer-sheet{width:min(100%,480px);max-height:85dvh;overflow-y:auto;box-sizing:border-box;padding:20px 20px calc(20px + env(safe-area-inset-bottom));border-radius:22px 22px 0 0;background:var(--bg-fff);outline:0}
 .offer-sheet h2{margin:0;font-size:18px}

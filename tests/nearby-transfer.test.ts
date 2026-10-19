@@ -148,7 +148,8 @@ describe("half-open relay sockets", () => {
 describe("diagnostics", () => {
   it("shows comparable room fingerprints and connection states, plus a manual re-search", () => {
     const page = readFileSync("src/views/NearbyTransfer.vue", "utf8");
-    expect(page).toContain("<summary>诊断信息</summary>");
+    expect(page).toContain(">复制诊断信息</button>");
+    expect(page).toContain("new ClipboardItem({ \"text/plain\": diagnosticsText()");
     expect(page).toContain("房间指纹");
     expect(page).toContain('"重新搜索"');
     const service = readFileSync("src/services/nearbyTransfer.ts", "utf8");

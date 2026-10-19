@@ -14,7 +14,6 @@ import {
   encryptDirectMessage,
   nip17Adapter
 } from "@/nostr/messaging/protocol";
-import { MessageDeduplicator } from "@/nostr/messaging/deduplication";
 import { buildMessageSubscriptions } from "@/nostr/messaging/subscriptions";
 import { logger } from "@/utils/logger";
 
@@ -72,7 +71,7 @@ describe("NIP-17 gift wrap", () => {
     debug.mockRestore();
   });
 
-  it("builds, unwraps, validates and deduplicates a standard message", async () => {
+  it("builds, unwraps and validates a standard message", async () => {
     const encoded = await nip17Adapter.encode!({
       recipientPubkeys: [recipientPubkey],
       plaintext: "private hello",
@@ -88,9 +87,6 @@ describe("NIP-17 gift wrap", () => {
     expect(decoded?.tags).toContainEqual(["l", "hainei-interaction"]);
     expect(decoded?.tags).not.toContainEqual(["p", wrongPubkey]);
     expect(decoded?.transportEventId).toBe(recipientWrap.id);
-    const dedupe = new MessageDeduplicator();
-    expect(dedupe.accept(decoded!)).toBe(true);
-    expect(dedupe.accept({ ...decoded!, transportEventId: "f".repeat(64) })).toBe(false);
   });
 
   it("decodes an event produced by the official nostr-tools NIP-17 implementation", async () => {

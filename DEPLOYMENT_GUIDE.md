@@ -169,11 +169,6 @@ rsync -avz --delete dist/ user@server:/var/www/html/
 - ✅ Service Worker 范围限制在根目录
 - ✅ 不缓存敏感数据
 
-## 📚 更多文档
-
-- [完整解决方案文档](./PWA_UPDATE_SOLUTION.md)
-- [详细测试指南](./PWA_UPDATE_TESTING_GUIDE.md)
-
 ## 💡 提示
 
 ### 开发环境

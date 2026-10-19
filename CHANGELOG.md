@@ -1,3 +1,10 @@
+## 0.1.72 — 2026-10-19
+
+- 文件传输助手「设备与连接」中的诊断面板改为「复制诊断信息」按钮，内容不变（版本、房间指纹、Relay、设备连接、协商与错误），便于发送排查；不再每 2 秒刷新。
+- 删除未被使用的代码：`utils/backfill.ts`、`utils/secure.ts`、仅测试使用的 `repositories/messageRepository.ts` 与 `nostr/messaging/deduplication.ts`；相关测试改为直接验证数据表。
+- 删除随部署公开发布的过时文件 `public/service-worker.js.bak`。
+- 删除根目录 21 份一次性修复/测试记录文档与空的 `README`，保留 README.md、CHANGELOG.md、DEPLOYMENT_GUIDE.md。
+
 ## 0.1.71 — 2026-10-19
 
 - 文件传输助手的记录与收到的文件用账号本地密钥加密保存在本机（数据库 v20 新增 transferRecords / transferFileParts），刷新、关闭或被系统回收后重新打开仍在；锁定、退出或切换账号后不可读，删除账号数据时一并清除。

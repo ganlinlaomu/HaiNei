@@ -5,7 +5,6 @@ import {
   HaiNeiDatabase,
   resolveUnambiguousLegacyAccount
 } from "@/db/dexie";
-import { MessageRepository } from "@/repositories/messageRepository";
 import { MetaRepository } from "@/repositories/metaRepository";
 import { ImageCacheRepository } from "@/repositories/imageCacheRepository";
 
@@ -48,20 +47,20 @@ afterEach(async () => {
 describe("account-scoped repositories", () => {
   it("isolates messages and same-peer conversations across accounts and reloads", async () => {
     const database = createDatabase();
-    const messages = new MessageRepository(database);
+    const contents = async (source: HaiNeiDatabase, account: string) =>
+      (await source.accountMessages.where("[accountPubkey+pubkey]").equals([account, PEER_C]).toArray()).map(item => item.content);
 
-    await messages.put(ACCOUNT_A, { id: "same-id", pubkey: PEER_C, content: "A private", created_at: 10 });
-    await messages.put(ACCOUNT_B, { id: "same-id", pubkey: PEER_C, content: "B private", created_at: 20 });
+    await database.accountMessages.put({ accountPubkey: ACCOUNT_A, id: "same-id", pubkey: PEER_C, content: "A private", created_at: 10 });
+    await database.accountMessages.put({ accountPubkey: ACCOUNT_B, id: "same-id", pubkey: PEER_C, content: "B private", created_at: 20 });
 
-    expect((await messages.listByPeer(ACCOUNT_A, PEER_C)).map(item => item.content)).toEqual(["A private"]);
-    expect((await messages.listByPeer(ACCOUNT_B, PEER_C)).map(item => item.content)).toEqual(["B private"]);
+    expect(await contents(database, ACCOUNT_A)).toEqual(["A private"]);
+    expect(await contents(database, ACCOUNT_B)).toEqual(["B private"]);
 
     database.close();
     const reopened = new HaiNeiDatabase(database.name);
     databases.push(reopened);
-    const reloadedMessages = new MessageRepository(reopened);
-    expect((await reloadedMessages.listLatest(ACCOUNT_A))[0].content).toBe("A private");
-    expect((await reloadedMessages.listLatest(ACCOUNT_B))[0].content).toBe("B private");
+    expect(await contents(reopened, ACCOUNT_A)).toEqual(["A private"]);
+    expect(await contents(reopened, ACCOUNT_B)).toEqual(["B private"]);
   });
 
   it("isolates unread metadata and sealed image-cache rows", async () => {
@@ -118,7 +117,7 @@ describe("v2 to v3 migration", () => {
     const upgraded = new HaiNeiDatabase(name);
     databases.push(upgraded);
     await upgraded.open();
-    expect((await new MessageRepository(upgraded).get(ACCOUNT_A, "legacy"))?.content).toBe("private");
+    expect((await upgraded.accountMessages.get([ACCOUNT_A, "legacy"]))?.content).toBe("private");
   });
 
   it("quarantines ambiguous legacy rows without crashing or assigning ownership", async () => {
