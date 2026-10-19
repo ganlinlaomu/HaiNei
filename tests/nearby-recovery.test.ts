@@ -22,8 +22,8 @@ vi.mock("trystero", () => ({
   }),
 }));
 
-import { NearbyRoom, nearbyRelayStates, refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
-import { answerPendingOffer, cancelNearbyTransfer, clearNearbyTransfer, ensureOwnDevicesRoom, nearbyState, queueNearbyFiles, refreshNearbyDiscovery, resetNearby, retryNearbyTransfer, retryNearbyWithCamera, sendNearbyFiles, startPairRoom } from "@/services/nearbySession";
+import { NearbyRoom, nearbyDeviceId, nearbyRelayStates, refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
+import { renameNearbyDevice, answerPendingOffer, cancelNearbyTransfer, clearNearbyTransfer, ensureOwnDevicesRoom, nearbyState, queueNearbyFiles, refreshNearbyDiscovery, resetNearby, retryNearbyTransfer, retryNearbyWithCamera, sendNearbyFiles, startPairRoom } from "@/services/nearbySession";
 import { NEARBY_CHUNK_BYTES, chunkDigest } from '@/services/nearbyChunks';
 
 class Socket extends EventTarget {
@@ -116,6 +116,50 @@ describe("nearby signaling recovery", () => {
     expect(room.actions.chunk2.request.mock.calls[1][1].metadata.offset).toBe(NEARBY_CHUNK_BYTES);
     expect(nearbyState.transfers).toHaveLength(4);
     expect(nearbyState.transfers.every(item => item.state === 'done')).toBe(true);
+  });
+
+  it('announces a stable device id to own devices only', async () => {
+    const own = await modernRoom();
+    own.onPeerJoin('other');
+    const device = await nearbyDeviceId();
+    expect(device).toMatch(/^[0-9a-f]{16}$/);
+    expect(own.actions.hello.send.mock.calls.at(-1)[0]).toMatchObject({ device });
+    await startPairRoom({ roomId: 'a'.repeat(32), password: 'b'.repeat(32) });
+    const pair = trystero.rooms.at(-1);
+    pair.onPeerJoin('stranger');
+    expect(pair.actions.hello.send.mock.calls.at(-1)[0]).not.toHaveProperty('device');
+    pair.actions.hello.handlers.onMessage({ name: 'PC', reply: true, device: 'f'.repeat(16) }, { peerId: 'stranger' });
+    expect(nearbyState.ownDevices).not.toHaveProperty('stranger');
+  });
+
+  it('follows a reloaded own device to its new connection and finishes the batch', async () => {
+    const room = await modernRoom();
+    room.actions.hello.handlers.onMessage({ name: 'PC', reply: true, text: true, protocol: 2, device: 'a'.repeat(16) }, { peerId: 'peer' });
+    const original = room.actions.chunk2.request.getMockImplementation();
+    room.actions.chunk2.request.mockImplementationOnce(async (value: any, options: any) => {
+      await original(value, options);
+      room.onPeerLeave('peer');
+      throw new Error('receiver reloaded');
+    });
+    const id = queueNearbyFiles('own', 'peer', [new File([new Uint8Array(NEARBY_CHUNK_BYTES + 3)], 'large.bin')]);
+    await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === id)?.state).toBe('paused'));
+    expect(nearbyState.transfers.find(item => item.id === id)?.peerDevice).toBe('a'.repeat(16));
+    room.onPeerJoin('reloaded');
+    room.actions.hello.handlers.onMessage({ name: 'PC', reply: true, text: true, protocol: 2, device: 'b'.repeat(16) }, { peerId: 'reloaded' });
+    expect(nearbyState.transfers.find(item => item.id === id)?.peerId).toBe('peer');
+    room.actions.hello.handlers.onMessage({ name: '书房电脑', reply: true, text: true, protocol: 2, device: 'a'.repeat(16) }, { peerId: 'reloaded' });
+    expect(nearbyState.transfers.find(item => item.id === id)).toMatchObject({ peerId: 'reloaded', peerName: '书房电脑' });
+    await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === id)?.state).toBe('done'));
+    expect(room.actions.chunk2.request.mock.calls.at(-1)[1].target).toBe('reloaded');
+  });
+
+  it('renames this device and re-announces it without asking for replies', async () => {
+    const room = await modernRoom();
+    room.actions.hello.send.mockClear();
+    expect(renameNearbyDevice('  书房电脑  ')).toBe('书房电脑');
+    expect(nearbyState.deviceName).toBe('书房电脑');
+    expect(room.actions.hello.send).toHaveBeenCalledWith(expect.objectContaining({ name: '书房电脑', reply: true }), { target: 'peer' });
+    expect(renameNearbyDevice('')).not.toBe('');
   });
 
   it('retains source files for a failed attempt and retries without repeating delivered bytes', async () => {

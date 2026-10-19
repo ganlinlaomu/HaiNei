@@ -1,5 +1,5 @@
 import type { Room } from "trystero";
-import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
+import { DEFAULT_RELAY_URLS, getOrCreateDeviceId } from "@/services/connectionSettings";
 import { createNearbyRtcDiagnostics } from "@/services/nearbyRtcDiagnostics";
 import { NearbyChunkReceiver, NEARBY_CHUNK_BYTES, sendChunkedFiles, type ChunkMeta, type TransferControl } from "./nearbyChunks";
 
@@ -16,6 +16,8 @@ export const NEARBY_APP_ID = "hainei-nearby-v1";
 export const NEARBY_MAX_BATCH_BYTES = 1024 * 1024 * 1024;
 export const NEARBY_MAX_TEXT_LENGTH = 20_000;
 export const NEARBY_OFFER_TIMEOUT_MS = 60_000;
+export const NEARBY_MAX_DEVICE_NAME = 40;
+const DEVICE_NAME_KEY = "hainei_nearby_device_name";
 /** Shown until a peer has told us its device name. */
 export const NEARBY_UNNAMED_PEER = "正在识别…";
 const HELLO_RETRY_MS = 4_000;
@@ -159,6 +161,35 @@ export async function nearbyRelayStates() {
   };
 }
 
+let deviceIdFlight: Promise<string> | null = null;
+
+/**
+ * Stable per-install id, only announced to this account's own devices so a
+ * reloaded device can be recognised. Derived rather than reused so it cannot
+ * be linked with the app's other device identifiers.
+ */
+export function nearbyDeviceId() {
+  return deviceIdFlight ??= (async () => {
+    let base = "";
+    try { base = getOrCreateDeviceId(localStorage); } catch { base = bytesToHex(crypto.getRandomValues(new Uint8Array(16))); }
+    return (await derive(base, "device-id")).slice(0, 16);
+  })();
+}
+
+export function savedDeviceName() {
+  try { return (localStorage.getItem(DEVICE_NAME_KEY) || "").trim().slice(0, NEARBY_MAX_DEVICE_NAME); } catch { return ""; }
+}
+
+/** Empty clears the custom name and falls back to the platform name. */
+export function saveDeviceName(name: string) {
+  const value = name.trim().slice(0, NEARBY_MAX_DEVICE_NAME);
+  try {
+    if (value) localStorage.setItem(DEVICE_NAME_KEY, value);
+    else localStorage.removeItem(DEVICE_NAME_KEY);
+  } catch { /* private mode: keep the name for this session only */ }
+  return value || defaultDeviceName();
+}
+
 export function defaultDeviceName(
   userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent,
   maxTouchPoints = typeof navigator === "undefined" ? 0 : navigator.maxTouchPoints || 0,
@@ -203,7 +234,7 @@ export function formatBytes(bytes: number) {
 }
 
 export type NearbyRoomHandlers = {
-  onPeers: (peers: Record<string, string>, textPeers?: Record<string, boolean>, chunkPeers?: Record<string, boolean>) => void;
+  onPeers: (peers: Record<string, string>, textPeers?: Record<string, boolean>, chunkPeers?: Record<string, boolean>, devices?: Record<string, string>) => void;
   onError: (message: string) => void;
   /** Resolve true to accept. Called before any file bytes are sent. */
   onOffer: (offer: NearbyOffer) => Promise<boolean>;
@@ -223,6 +254,7 @@ export class NearbyRoom {
   private readonly names: Record<string, string> = {};
   private readonly textPeers: Record<string, boolean> = {};
   private readonly chunkPeers: Record<string, boolean> = {};
+  private readonly devices: Record<string, string> = {};
   private readonly receiver = new NearbyChunkReceiver((id, index, file) => this.handlers.onFile(id, index, file));
   private readonly pendingOffers = new Map<string, Promise<boolean>>();
   private readonly canceledOffers = new Set<string>();
@@ -236,7 +268,19 @@ export class NearbyRoom {
   private requestOffer: ((offer: Omit<NearbyOffer, "from">, target: string, signal?: AbortSignal) => Promise<boolean>) | null = null;
   private sendFile: ((data: Blob, target: string, metadata: { offerId: string; index: number }, onProgress: (percent: number) => void, signal?: AbortSignal) => Promise<void>) | null = null;
 
-  constructor(private readonly deviceName: string, private readonly handlers: NearbyRoomHandlers) {}
+  constructor(private deviceName: string, private readonly handlers: NearbyRoomHandlers, private readonly deviceId = "") {}
+
+  private emitPeers() {
+    this.handlers.onPeers({ ...this.names }, { ...this.textPeers }, { ...this.chunkPeers }, { ...this.devices });
+  }
+
+  /** Re-announce a renamed device; replies are not requested, so no loops. */
+  setDeviceName(name: string) {
+    this.deviceName = name;
+    for (const [peerId, known] of Object.entries(this.names)) {
+      if (known !== NEARBY_UNNAMED_PEER) void this.sendHello?.(true, peerId);
+    }
+  }
 
   private rememberCanceled(key: string) {
     this.canceledOffers.add(key);
@@ -266,18 +310,22 @@ export class NearbyRoom {
 
     // Names are exchanged both ways: a peer that rejoined (or missed our
     // first hello) asks again, and unnamed peers are re-greeted until known.
-    const hello = room.makeAction<{ name: string; reply: boolean; text?: boolean; protocol?: number }>("hello", {
+    const hello = room.makeAction<{ name: string; reply: boolean; text?: boolean; protocol?: number; device?: string }>("hello", {
       onMessage: (data, { peerId }) => {
         if (!active()) return;
         const wasKnown = !!this.names[peerId] && this.names[peerId] !== NEARBY_UNNAMED_PEER;
         this.names[peerId] = String(data?.name || "附近的设备").slice(0, 40);
         this.textPeers[peerId] = data?.text === true;
         this.chunkPeers[peerId] = data?.protocol === 2;
-        this.handlers.onPeers({ ...this.names }, { ...this.textPeers }, { ...this.chunkPeers });
+        if (typeof data?.device === "string" && /^[0-9a-f]{16}$/.test(data.device)) this.devices[peerId] = data.device;
+        else delete this.devices[peerId];
+        this.emitPeers();
         if (!data?.reply || !wasKnown) void this.sendHello?.(true, peerId);
       },
     });
-    this.sendHello = (reply, target) => hello.send({ name: this.deviceName, reply, text: true, protocol: 2 }, { target }).catch(() => undefined);
+    this.sendHello = (reply, target) => hello.send({
+      name: this.deviceName, reply, text: true, protocol: 2, ...(this.deviceId ? { device: this.deviceId } : {}),
+    }, { target }).catch(() => undefined);
 
     const offer = room.makeAction<any, boolean>("offer", {
       kind: "request",
@@ -381,7 +429,7 @@ export class NearbyRoom {
       if (!active()) return;
       this.handlers.onError("");
       if (!this.names[peerId]) this.names[peerId] = NEARBY_UNNAMED_PEER;
-      this.handlers.onPeers({ ...this.names }, { ...this.textPeers }, { ...this.chunkPeers });
+      this.emitPeers();
       void this.sendHello?.(false, peerId);
     };
     room.onPeerLeave = peerId => {
@@ -390,7 +438,8 @@ export class NearbyRoom {
       delete this.names[peerId];
       delete this.textPeers[peerId];
       delete this.chunkPeers[peerId];
-      this.handlers.onPeers({ ...this.names }, { ...this.textPeers }, { ...this.chunkPeers });
+      delete this.devices[peerId];
+      this.emitPeers();
     };
     this.helloTimer = setInterval(() => {
       for (const [peerId, name] of Object.entries(this.names)) {
@@ -490,6 +539,7 @@ export class NearbyRoom {
     for (const peerId of Object.keys(this.names)) delete this.names[peerId];
     for (const peerId of Object.keys(this.textPeers)) delete this.textPeers[peerId];
     for (const peerId of Object.keys(this.chunkPeers)) delete this.chunkPeers[peerId];
+    for (const peerId of Object.keys(this.devices)) delete this.devices[peerId];
     if (room) await room.leave().catch(() => undefined);
     diagnostics?.clear();
   }

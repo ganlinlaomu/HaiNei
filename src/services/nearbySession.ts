@@ -11,6 +11,9 @@ import {
   NearbyRoom,
   batchBytes,
   defaultDeviceName,
+  nearbyDeviceId,
+  saveDeviceName,
+  savedDeviceName,
   nearbyRelayStates,
   ownDevicesRoom,
   refreshNearbyRelaySockets,
@@ -36,6 +39,8 @@ export type NearbyTransferRecord = {
   peerId: string;
   direction: "in" | "out";
   peerName: string;
+  /** Stable id of an own device, so a reloaded receiver can be found again. */
+  peerDevice?: string;
   localDeviceName?: string;
   createdAt?: number;
   saveState?: "system" | "download" | "saved";
@@ -53,12 +58,14 @@ export type NearbyTransferRecord = {
 export type PendingOffer = { transferId: string; offer: NearbyOffer; peerName: string; resolve: (ok: boolean) => void };
 
 export const nearbyState = reactive({
-  deviceName: defaultDeviceName(),
+  deviceName: savedDeviceName() || defaultDeviceName(),
   ownAccount: "",
   ownJoined: false,
   ownPeers: {} as Record<string, string>,
   ownTextPeers: {} as Record<string, boolean>,
   ownChunkPeers: {} as Record<string, boolean>,
+  /** Trystero peer id -> stable device id, own devices only. */
+  ownDevices: {} as Record<string, string>,
   ownError: "",
   pairKey: null as NearbyRoomKey | null,
   pairPeers: {} as Record<string, string>,
@@ -157,10 +164,25 @@ function peersFor(kind: RoomKind) {
   return kind === "own" ? nearbyState.ownPeers : nearbyState.pairPeers;
 }
 
-function makeRoom(kind: RoomKind) {
+/**
+ * A reloaded own device comes back under a new peer id. Point unfinished
+ * outgoing records at it, so they resume (or can be retried) automatically.
+ */
+function rebindOwnDevices(next: Record<string, string>, devices: Record<string, string>) {
+  for (const item of nearbyState.transfers) {
+    if (item.kind !== "own" || item.direction !== "out" || !item.peerDevice || next[item.peerId]) continue;
+    if (!["paused", "failed", "declined"].includes(item.state) || sendTasks.get(item.id)?.controller) continue;
+    const peerId = Object.keys(devices).find(id => devices[id] === item.peerDevice && next[id] && next[id] !== NEARBY_UNNAMED_PEER);
+    if (!peerId) continue;
+    item.peerId = peerId;
+    item.peerName = next[peerId];
+  }
+}
+
+function makeRoom(kind: RoomKind, deviceId = "") {
   return new NearbyRoom(nearbyState.deviceName, {
-    onPeers: (next, textPeers = {}, chunkPeers = {}) => {
-      if (kind === "own") { nearbyState.ownPeers = next; nearbyState.ownTextPeers = textPeers; nearbyState.ownChunkPeers = chunkPeers; }
+    onPeers: (next, textPeers = {}, chunkPeers = {}, devices = {}) => {
+      if (kind === "own") { nearbyState.ownPeers = next; nearbyState.ownTextPeers = textPeers; nearbyState.ownChunkPeers = chunkPeers; nearbyState.ownDevices = devices; }
       else { nearbyState.pairPeers = next; nearbyState.pairTextPeers = textPeers; nearbyState.pairChunkPeers = chunkPeers; }
       for (const item of nearbyState.transfers) {
         if (item.kind === kind && !next[item.peerId] && inFlight(item.state)) {
@@ -170,6 +192,7 @@ function makeRoom(kind: RoomKind) {
           sendTasks.get(item.id)?.controller?.abort(new Error("nearby_disconnected"));
         }
       }
+      if (kind === "own") rebindOwnDevices(next, devices);
       for (const task of sendTasks.values()) {
         const item = task.record;
         if (item.kind === kind && item.state === "paused" && chunkPeers[item.peerId] && !task.controller && rooms[kind] === task.room) {
@@ -259,7 +282,7 @@ function makeRoom(kind: RoomKind) {
       pending?.resolve(false);
       record.state = 'canceled';
     },
-  });
+  }, deviceId);
 }
 
 /** Join (once) the room shared by every device of this account. */
@@ -270,7 +293,9 @@ export async function ensureOwnDevicesRoom(account: string, privateKeyHex: strin
   const generation = ownGeneration;
   await leaving;
   if (generation !== ownGeneration) return;
-  const room = makeRoom("own");
+  const deviceId = await nearbyDeviceId();
+  if (generation !== ownGeneration || rooms.own) return;
+  const room = makeRoom("own", deviceId);
   rooms.own = room;
   nearbyState.ownAccount = normalized;
   nearbyState.ownError = "";
@@ -299,6 +324,7 @@ export async function leaveOwnDevicesRoom() {
   nearbyState.ownPeers = {};
   nearbyState.ownTextPeers = {};
   nearbyState.ownChunkPeers = {};
+  nearbyState.ownDevices = {};
   nearbyState.ownError = "";
   ownRoomId = "";
   failRoomTransfers("own");
@@ -373,6 +399,14 @@ export async function nearbyDiagnostics() {
   };
 }
 
+/** Persist a custom name for this device and tell connected peers. */
+export function renameNearbyDevice(name: string) {
+  nearbyState.deviceName = saveDeviceName(name);
+  rooms.own?.setDeviceName(nearbyState.deviceName);
+  rooms.pair?.setDeviceName(nearbyState.deviceName);
+  return nearbyState.deviceName;
+}
+
 export function answerPendingOffer(accept: boolean) {
   nearbyState.pendingOffer?.resolve(accept);
 }
@@ -412,6 +446,7 @@ function createSendTask(kind: RoomKind, peerId: string, files: File[], text = ""
   const wireId = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
   const transfer: NearbyTransferRecord = {
     id: `out:${wireId}`, wireId, kind, peerId, direction: "out", peerName: peersFor(kind)[peerId] || "附近的设备",
+    ...(kind === "own" && nearbyState.ownDevices[peerId] ? { peerDevice: nearbyState.ownDevices[peerId] } : {}),
     resumable: (kind === 'own' ? nearbyState.ownChunkPeers : nearbyState.pairChunkPeers)[peerId] === true,
     localDeviceName: nearbyState.deviceName, createdAt: Date.now(),
     files: files.map(file => ({ name: file.name, size: file.size, type: file.type })), text,

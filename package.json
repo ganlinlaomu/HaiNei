@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.69",
-  "releaseSummary": "文件传输支持追加附件、单个移除、拖拽和粘贴",
+  "version": "0.1.70",
+  "releaseSummary": "文件传输记住设备，对方刷新后自动续传，可给本机改名",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

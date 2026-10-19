@@ -49,7 +49,12 @@
     <div v-if="pairingOpen" class="offer-overlay" @click.self="pairingOpen = false">
     <section ref="devicePanel" class="offer-sheet connection-sheet" role="dialog" aria-modal="true" aria-labelledby="devices-title" tabindex="-1">
     <header class="sheet-header"><h2 id="devices-title">设备与连接</h2><button class="header-icon" type="button" aria-label="关闭设备与连接" @click="pairingOpen = false">×</button></header>
-    <p class="nearby-hint">本机：{{ deviceName }}</p>
+    <form v-if="renaming" class="rename-form" @submit.prevent="saveRename">
+      <input ref="renameInput" v-model="nameDraft" :maxlength="NEARBY_MAX_DEVICE_NAME" aria-label="本机名称" placeholder="例如：书房电脑" enterkeyhint="done" />
+      <button class="link-button" type="submit">保存</button>
+      <button class="link-button" type="button" @click="renaming = false">取消</button>
+    </form>
+    <p v-else class="nearby-hint device-name-row">本机：{{ deviceName }}<button class="link-button rename-device" type="button" @click="startRename">改名</button></p>
 
     <section v-if="ownDevicesAvailable" class="nearby-card device-card">
       <h2>我的设备</h2>
@@ -190,9 +195,11 @@ import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import { clearNearbyUnread } from "@/services/nearbyUnread";
 import {
   NEARBY_MAX_BATCH_BYTES,
+  NEARBY_MAX_DEVICE_NAME,
   NEARBY_MAX_TEXT_LENGTH,
   NEARBY_UNNAMED_PEER,
   batchBytes,
+  defaultDeviceName,
   formatBytes,
   pairingLink,
   parsePairing,
@@ -209,6 +216,7 @@ import {
   refreshNearbyDiscovery,
   retryNearbyWithCamera,
   queueNearbyFiles,
+  renameNearbyDevice,
   retryNearbyTransfer,
   startPairRoom,
   stopPairRoom,
@@ -220,7 +228,14 @@ const keys = useKeyStore();
 const ui = useUIStore();
 const route = useRoute();
 const router = useRouter();
-const deviceName = nearbyState.deviceName;
+const deviceName = computed(() => nearbyState.deviceName);
+/** Platform, not the editable name: decides WebKit-only connection help. */
+const platformName = defaultDeviceName();
+const renaming = ref(false);
+const nameDraft = ref("");
+const renameInput = ref<HTMLInputElement | null>(null);
+const LAST_TARGET_KEY = "hainei_nearby_last_device";
+const rememberedDevice = () => { try { return localStorage.getItem(LAST_TARGET_KEY) || ""; } catch { return ""; } };
 
 const pairQr = ref("");
 const copied = ref(false);
@@ -229,7 +244,7 @@ const pairingOpen = ref(false);
 const selectedFiles = ref<File[]>([]);
 const draftText = ref("");
 const textInput = ref<HTMLTextAreaElement | null>(null);
-const selectedTarget = ref<{ kind: RoomKind; peerId: string } | null>(null);
+const selectedTarget = ref<{ kind: RoomKind; peerId: string; device?: string } | null>(null);
 const hasContent = computed(() => !!draftText.value.trim() || selectedFiles.value.length > 0);
 const devicePanel = ref<HTMLElement | null>(null);
 const chatBody = ref<HTMLElement | null>(null);
@@ -306,19 +321,30 @@ const pendingOffer = computed(() => nearbyState.pendingOffer);
 const transfers = computed(() => [...nearbyState.transfers].reverse());
 const ownDevicesAvailable = computed(() => keys.isLoggedIn && keys.loginMethod === "private-key" && /^[0-9a-f]{64}$/.test(keys.skHex));
 const ownPeerList = computed(() => Object.entries(nearbyState.ownPeers).map(([id, name]) => ({ id, name })));
-const showCameraRetry = computed(() => ["iPhone", "iPad"].includes(deviceName)
+const showCameraRetry = computed(() => ["iPhone", "iPad"].includes(platformName)
   && !ownPeerList.value.length && nearbyState.ownError.includes("could not connect to peer"));
 const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).map(([id, name]) => ({ id, name })));
 const availableTargets = computed(() => [
-  ...ownPeerList.value.map(peer => ({ ...peer, kind: "own" as const, supportsText: nearbyState.ownTextPeers[peer.id] === true })),
-  ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const, supportsText: nearbyState.pairTextPeers[peer.id] === true })),
+  ...ownPeerList.value.map(peer => ({ ...peer, kind: "own" as const, device: nearbyState.ownDevices[peer.id] || "", supportsText: nearbyState.ownTextPeers[peer.id] === true })),
+  ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const, device: "", supportsText: nearbyState.pairTextPeers[peer.id] === true })),
 ].map(peer => ({ ...peer, ready: peer.name !== NEARBY_UNNAMED_PEER })));
 const selectedPeer = computed(() => availableTargets.value.find(peer => peer.kind === selectedTarget.value?.kind && peer.id === selectedTarget.value?.peerId));
 const isSelected = (peer: { kind: RoomKind; id: string }) => selectedTarget.value?.kind === peer.kind && selectedTarget.value?.peerId === peer.id;
 const canSendToTarget = computed(() => !!selectedPeer.value?.ready && (!draftText.value.trim() || selectedPeer.value.supportsText));
 watch(availableTargets, peers => {
-  // Never silently redirect an existing recipient when it disconnects.
-  if (!selectedTarget.value && peers.length === 1 && peers[0].ready) selectedTarget.value = { kind: peers[0].kind, peerId: peers[0].id };
+  const current = selectedTarget.value;
+  // Never silently redirect an existing recipient to another device. The same
+  // own device returning under a new connection id is still that recipient.
+  if (current && !peers.some(peer => peer.kind === current.kind && peer.id === current.peerId)) {
+    const same = current.device && peers.find(peer => peer.kind === current.kind && peer.device === current.device && peer.ready);
+    if (same) selectedTarget.value = { ...current, peerId: same.id };
+    return;
+  }
+  if (current) return;
+  const remembered = rememberedDevice();
+  const pick = (remembered && peers.find(peer => peer.ready && peer.device === remembered))
+    || (peers.length === 1 && peers[0].ready ? peers[0] : null);
+  if (pick) selectedTarget.value = { kind: pick.kind, peerId: pick.id, ...(pick.device ? { device: pick.device } : {}) };
 }, { immediate: true });
 useDialogFocus(devicePanel, () => pairingOpen.value && !scannerOpen.value && !pendingOffer.value, () => { pairingOpen.value = false; });
 useDialogFocus(imagePanel, () => !!imagePreview.value && !pendingOffer.value, () => { imagePreview.value = null; });
@@ -411,9 +437,23 @@ function chooseFiles() {
 }
 
 function selectDevice(kind: RoomKind, peerId: string) {
-  if (!availableTargets.value.some(peer => peer.kind === kind && peer.id === peerId && peer.ready)) return;
-  selectedTarget.value = { kind, peerId };
+  const peer = availableTargets.value.find(item => item.kind === kind && item.id === peerId && item.ready);
+  if (!peer) return;
+  selectedTarget.value = { kind, peerId, ...(peer.device ? { device: peer.device } : {}) };
+  if (peer.device) try { localStorage.setItem(LAST_TARGET_KEY, peer.device); } catch { /* remembered for this visit only */ }
   pairingOpen.value = false;
+}
+
+async function startRename() {
+  nameDraft.value = nearbyState.deviceName;
+  renaming.value = true;
+  await nextTick();
+  renameInput.value?.select();
+}
+
+function saveRename() {
+  renameNearbyDevice(nameDraft.value);
+  renaming.value = false;
 }
 
 function openConnections() {
@@ -674,6 +714,7 @@ watch(() => keys.pkHex, () => {
 });
 watch(draftText, () => { void nextTick(resizeTextInput); });
 watch(pairingOpen, open => {
+  if (!open) renaming.value = false;
   if (!open && diagnosticsTimer) { clearInterval(diagnosticsTimer); diagnosticsTimer = null; }
 });
 watch(() => nearbyState.transfers.length, async () => {
@@ -694,6 +735,8 @@ watch(() => nearbyState.transfers.length, async () => {
 .empty-chat{margin:36px auto;color:var(--fg-64748b);font-size:13px;text-align:center}
 .connection-notice{display:flex;align-items:center;justify-content:center;gap:8px;color:var(--fg-64748b);font-size:12px}.connection-notice .link-button{margin:0;font-size:12px}
 .sheet-header{display:flex;align-items:center;justify-content:space-between;gap:12px}.sheet-header .header-icon{font-size:26px}
+.device-name-row{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.rename-device{min-height:32px;margin:0;padding:0 6px;font-size:14px}
+.rename-form{display:flex;align-items:center;gap:4px;margin-top:8px}.rename-form input{flex:1;min-width:0;height:40px;padding:0 12px;border:1px solid var(--bd-d8dee5);border-radius:10px;background:var(--bg-fff);color:inherit;font:inherit;font-size:16px}.rename-form .link-button{margin:0}
 .connection-sheet{max-height:85dvh;overflow-y:auto;overscroll-behavior:contain;outline:0}
 .assistant-composer{box-sizing:border-box;width:100%;max-width:720px;margin:0 auto;padding:6px 24px calc(24px + env(safe-area-inset-bottom));background:var(--bg-fff)}
 .file-composer{display:grid;grid-template-columns:44px minmax(0,1fr) 44px;align-items:center;min-height:48px;padding:2px 8px;border:1px solid var(--bd-d8dee5);border-radius:24px;box-shadow:0 4px 18px rgba(15,23,42,.11)}
