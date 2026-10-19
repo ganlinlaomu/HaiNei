@@ -32,15 +32,16 @@
           </div>
           </div>
           <div class="batch-actions">
-            <button v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="file-action batch-save" type="button" :disabled="savingBatch === transfer.id" @click="saveAll(transfer)">{{ savingBatch === transfer.id ? '正在准备…' : transfer.saveState ? (transfer.files.length > 1 ? '再次保存全部' : '再次保存') : (transfer.files.length > 1 ? '保存全部' : '保存') }}</button>
+            <button v-if="transfer.direction === 'in' && transfer.state === 'done' && !hasAllFiles(transfer) && transfer.stored?.some(Boolean)" class="file-action load-history" type="button" :disabled="loadingHistory === transfer.id" @click="loadStoredFiles(transfer)">{{ loadingHistory === transfer.id ? '正在载入…' : '载入文件' }}</button>
+            <button v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done' && hasAllFiles(transfer)" class="file-action batch-save" type="button" :disabled="savingBatch === transfer.id" @click="saveAll(transfer)">{{ savingBatch === transfer.id ? '正在准备…' : transfer.saveState ? (transfer.files.length > 1 ? '再次保存全部' : '再次保存') : (transfer.files.length > 1 ? '保存全部' : '保存') }}</button>
             <button v-if="transfer.saveState === 'system' || transfer.saveState === 'download'" class="file-action confirm-saved" type="button" :disabled="savingBatch === transfer.id" @click="transfer.saveState = 'saved'">确认已保存</button>
             <button v-if="transfer.text" class="file-action" type="button" @click="copyText(transfer.text)">复制文字</button>
             <a v-if="zipDownloads[transfer.id]" class="file-action" :href="zipDownloads[transfer.id]" download="海内文件.zip">下载 ZIP</a>
             <button v-if="['queued', 'active', 'waiting', 'verifying', 'paused'].includes(transfer.state)" class="file-action cancel-transfer" type="button" @click="cancelNearbyTransfer(transfer.id)">取消传输</button>
-            <button v-if="transfer.direction === 'out' && ['failed', 'paused', 'declined'].includes(transfer.state)" class="file-action retry-transfer" type="button" @click="retryTransfer(transfer.id)">{{ transfer.resumable && transfer.state !== 'declined' ? '继续传输' : '重新发送' }}</button>
+            <button v-if="transfer.direction === 'out' && !transfer.restored && ['failed', 'paused', 'declined'].includes(transfer.state)" class="file-action retry-transfer" type="button" @click="retryTransfer(transfer.id)">{{ transfer.resumable && transfer.state !== 'declined' ? '继续传输' : '重新发送' }}</button>
             <button v-if="!['queued', 'active', 'waiting', 'verifying'].includes(transfer.state)" class="clear-transfer" type="button" :disabled="savingBatch === transfer.id" @click="clearTransfer(transfer)">{{ transfer.direction === 'in' && transfer.files.length ? '移除文件' : '清除记录' }}</button>
           </div>
-          <p v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="save-hint" role="status">{{ transfer.saveState === 'saved' ? '✓ 已保存' : transfer.saveState === 'system' ? '已交给系统，请在完成保存后确认已保存' : transfer.saveState === 'download' ? '已开始下载，请检查下载完成后确认已保存' : '请保存后再关闭海内' }}</p>
+          <p v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="save-hint" role="status">{{ transfer.saveState === 'saved' ? '✓ 已保存' : transfer.saveState === 'system' ? '已交给系统，请在完成保存后确认已保存' : transfer.saveState === 'download' ? '已开始下载，请检查下载完成后确认已保存' : storedHint(transfer) }}</p>
         </li>
       </ul>
     </section>
@@ -193,6 +194,7 @@ import { useDialogFocus } from "@/composables/useDialogFocus";
 import { canShareTransfer, createTransferZip } from "@/services/transferBatchSave";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import { clearNearbyUnread } from "@/services/nearbyUnread";
+import { NEARBY_HISTORY_DAYS } from "@/services/nearbyHistory";
 import { deviceStorage } from "@/services/deviceStorage";
 import {
   NEARBY_MAX_BATCH_BYTES,
@@ -217,7 +219,9 @@ import {
   refreshNearbyDiscovery,
   retryNearbyWithCamera,
   queueNearbyFiles,
+  loadNearbyHistoryFiles,
   renameNearbyDevice,
+  restoreNearbyHistory,
   retryNearbyTransfer,
   startPairRoom,
   stopPairRoom,
@@ -578,6 +582,27 @@ function retryTransfer(id: string) {
   try { retryNearbyTransfer(id); }
   catch { ui.addToast('接收设备尚未连接，请在接收设备上打开海内', 2_600, 'error'); }
 }
+const hasAllFiles = (transfer: NearbyTransferRecord) => transfer.files.every((_, index) => !!transfer.received[index]);
+const loadingHistory = ref("");
+
+function storedHint(transfer: NearbyTransferRecord) {
+  if (transfer.stored?.length && transfer.stored.every(Boolean)) return `已加密保存在本机，${NEARBY_HISTORY_DAYS} 天后自动删除`;
+  if (transfer.restored && !hasAllFiles(transfer)) return "文件未能保存在本机，已失效";
+  return "请保存后再关闭海内";
+}
+
+async function loadStoredFiles(transfer: NearbyTransferRecord) {
+  if (loadingHistory.value) return;
+  loadingHistory.value = transfer.id;
+  try {
+    if (!await loadNearbyHistoryFiles(transfer.id)) ui.addToast("部分文件无法载入，可能已过期或被系统清理", 2_600, "error");
+  } catch {
+    ui.addToast("无法载入文件，请确认账号已解锁", 2_600, "error");
+  } finally {
+    loadingHistory.value = "";
+  }
+}
+
 function fileFor(transfer: NearbyTransferRecord, index: number) { return transfer.direction === 'out' ? transfer.source?.[index] : transfer.received[index]; }
 function canPreview(file?: File) { return !!file && /^image\/(jpeg|png|gif|webp|avif)$/.test(file.type); }
 
@@ -692,6 +717,7 @@ function download(url: string, name: string) {
 
 onMounted(() => {
   clearNearbyUnread();
+  void restoreNearbyHistory().catch(() => undefined);
   document.addEventListener("paste", onPaste);
   // A page visit must not cut off an in-flight offer/answer/candidate exchange.
   void joinOwnRoom();
