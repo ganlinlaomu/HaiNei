@@ -116,7 +116,7 @@
       </div>
       <p v-if="!availableTargets.length" class="recipient-hint">{{ nearbyState.ownError || nearbyState.pairError ? '连接未完成，请检查设备与网络；点击「连接设备」重试' : ownDevicesAvailable ? '在另一台设备上打开海内并登录同一账号，它会出现在这里' : '点击「连接设备」显示或扫描配对二维码' }}</p>
       <p v-else-if="!selectedTarget" class="recipient-hint">选择要发送到的设备</p>
-      <p v-else-if="selectedPeer?.route === 'internet' || selectedPeer?.route === 'relay'" class="recipient-hint">{{ selectedPeer.route === 'relay' ? '经中继服务器连接' : '经互联网直连' }}，不在同一局域网，会使用移动数据流量</p>
+      <p v-else-if="selectedPeer?.route === 'internet' || selectedPeer?.route === 'relay'" class="recipient-hint">{{ selectedPeer.route === 'relay' ? '经中继服务器连接' : '经互联网直连' }}：不在同一局域网，速度取决于双方网络；使用手机网络的一方会消耗流量</p>
       <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</span><button type="button" @click="removeStaged()">全部移除</button></div>
       <ul v-if="selectedFiles.length" class="staged-files" aria-label="待发送的文件">
         <li v-for="(file, index) in selectedFiles" :key="stagedKey(file)" class="staged-file">

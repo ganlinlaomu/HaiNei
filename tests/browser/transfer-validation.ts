@@ -122,7 +122,7 @@ export async function validateTransferAssistant() {
     const chip = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button.target-chip')].find(item => item.textContent?.includes(name))!;
     if (!selectedChip().includes('Linux 电脑')) throw new Error('a single device must be selected automatically');
     nearbyState.pairRoutes = { peer: 'internet' }; await nextTick();
-    if (!document.querySelector('.recipient-hint')?.textContent?.includes('互联网直连')) throw new Error('internet routes must warn about mobile data before sending');
+    if (!document.querySelector('.recipient-hint')?.textContent?.includes('互联网直连')) throw new Error('internet routes must be explained before sending');
     nearbyState.pairRoutes = { peer: 'lan' }; await nextTick();
     if (document.querySelector('.recipient-hint')) throw new Error('same-network routes need no warning');
     nearbyState.pairRoutes = {};
