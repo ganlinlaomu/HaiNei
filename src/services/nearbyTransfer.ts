@@ -1,5 +1,6 @@
 import type { Room } from "trystero";
 import { DEFAULT_RELAY_URLS, getOrCreateDeviceId } from "@/services/connectionSettings";
+import { deviceStorage } from "@/services/deviceStorage";
 import { createNearbyRtcDiagnostics } from "@/services/nearbyRtcDiagnostics";
 import { NearbyChunkReceiver, NEARBY_CHUNK_BYTES, sendChunkedFiles, type ChunkMeta, type TransferControl } from "./nearbyChunks";
 
@@ -171,22 +172,20 @@ let deviceIdFlight: Promise<string> | null = null;
 export function nearbyDeviceId() {
   return deviceIdFlight ??= (async () => {
     let base = "";
-    try { base = getOrCreateDeviceId(localStorage); } catch { base = bytesToHex(crypto.getRandomValues(new Uint8Array(16))); }
+    try { base = getOrCreateDeviceId(); } catch { base = bytesToHex(crypto.getRandomValues(new Uint8Array(16))); }
     return (await derive(base, "device-id")).slice(0, 16);
   })();
 }
 
 export function savedDeviceName() {
-  try { return (localStorage.getItem(DEVICE_NAME_KEY) || "").trim().slice(0, NEARBY_MAX_DEVICE_NAME); } catch { return ""; }
+  return (deviceStorage.getItem(DEVICE_NAME_KEY) || "").trim().slice(0, NEARBY_MAX_DEVICE_NAME);
 }
 
 /** Empty clears the custom name and falls back to the platform name. */
 export function saveDeviceName(name: string) {
   const value = name.trim().slice(0, NEARBY_MAX_DEVICE_NAME);
-  try {
-    if (value) localStorage.setItem(DEVICE_NAME_KEY, value);
-    else localStorage.removeItem(DEVICE_NAME_KEY);
-  } catch { /* private mode: keep the name for this session only */ }
+  if (value) deviceStorage.setItem(DEVICE_NAME_KEY, value);
+  else deviceStorage.removeItem(DEVICE_NAME_KEY);
   return value || defaultDeviceName();
 }
 

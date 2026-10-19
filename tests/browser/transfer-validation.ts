@@ -5,6 +5,7 @@ import NearbyTransfer from "../../src/views/NearbyTransfer.vue";
 import { nearbyState, renameNearbyDevice, resetNearby } from "../../src/services/nearbySession";
 import { useUIStore } from "../../src/stores/ui";
 import { useKeyStore } from "../../src/stores/keys";
+import { deviceStorage } from "../../src/services/deviceStorage";
 import { NEARBY_UNNAMED_PEER } from '../../src/services/nearbyTransfer';
 import qrcode from 'qrcode-generator';
 
@@ -221,14 +222,14 @@ export async function validateTransferAssistant() {
     await nextTick();
     if (!document.querySelector('.connection-sheet')) throw new Error('connection action must open device connections');
     click('[aria-label="关闭设备与连接"]');
-    localStorage.removeItem('hainei_nearby_last_device');
+    deviceStorage.removeItem('hainei_nearby_last_device');
     nearbyState.ownPeers = { o1: 'MacBook', o2: 'iPad' };
     nearbyState.ownDevices = { o1: '1'.repeat(16), o2: '2'.repeat(16) };
     nearbyState.ownTextPeers = { o1: true, o2: true };
     await nextTick();
     if (selectedChip()) throw new Error('two devices must not be chosen automatically');
     chip('MacBook').click(); await nextTick();
-    if (localStorage.getItem('hainei_nearby_last_device') !== '1'.repeat(16)) throw new Error('the chosen own device must be remembered');
+    if (deviceStorage.getItem('hainei_nearby_last_device') !== '1'.repeat(16)) throw new Error('the chosen own device must be remembered');
     nearbyState.ownPeers = { o2: 'iPad', o3: 'MacBook' };
     nearbyState.ownDevices = { o2: '2'.repeat(16), o3: '1'.repeat(16) };
     nearbyState.ownTextPeers = { o2: true, o3: true };
@@ -258,7 +259,7 @@ export async function validateTransferAssistant() {
     if (nearbyState.transfers.length) throw new Error("clear must release local records");
   } finally {
     renameNearbyDevice('');
-    localStorage.removeItem('hainei_nearby_last_device');
+    deviceStorage.removeItem('hainei_nearby_last_device');
     app.unmount();
     await resetNearby();
     for (const toast of [...ui.toasts]) ui.removeToast(toast.id);

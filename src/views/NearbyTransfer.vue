@@ -193,6 +193,7 @@ import { useDialogFocus } from "@/composables/useDialogFocus";
 import { canShareTransfer, createTransferZip } from "@/services/transferBatchSave";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import { clearNearbyUnread } from "@/services/nearbyUnread";
+import { deviceStorage } from "@/services/deviceStorage";
 import {
   NEARBY_MAX_BATCH_BYTES,
   NEARBY_MAX_DEVICE_NAME,
@@ -235,7 +236,7 @@ const renaming = ref(false);
 const nameDraft = ref("");
 const renameInput = ref<HTMLInputElement | null>(null);
 const LAST_TARGET_KEY = "hainei_nearby_last_device";
-const rememberedDevice = () => { try { return localStorage.getItem(LAST_TARGET_KEY) || ""; } catch { return ""; } };
+const rememberedDevice = () => deviceStorage.getItem(LAST_TARGET_KEY) || "";
 
 const pairQr = ref("");
 const copied = ref(false);
@@ -440,7 +441,7 @@ function selectDevice(kind: RoomKind, peerId: string) {
   const peer = availableTargets.value.find(item => item.kind === kind && item.id === peerId && item.ready);
   if (!peer) return;
   selectedTarget.value = { kind, peerId, ...(peer.device ? { device: peer.device } : {}) };
-  if (peer.device) try { localStorage.setItem(LAST_TARGET_KEY, peer.device); } catch { /* remembered for this visit only */ }
+  if (peer.device) deviceStorage.setItem(LAST_TARGET_KEY, peer.device);
   pairingOpen.value = false;
 }
 
