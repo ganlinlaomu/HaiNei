@@ -13,6 +13,7 @@ import { createNearbyRtcDiagnostics } from "@/services/nearbyRtcDiagnostics";
 export const NEARBY_APP_ID = "hainei-nearby-v1";
 /** iPhone keeps received files in memory; one batch must stay well below that. */
 export const NEARBY_MAX_BATCH_BYTES = 1024 * 1024 * 1024;
+export const NEARBY_MAX_TEXT_LENGTH = 20_000;
 export const NEARBY_OFFER_TIMEOUT_MS = 60_000;
 /** Shown until a peer has told us its device name. */
 export const NEARBY_UNNAMED_PEER = "正在识别…";
@@ -21,7 +22,7 @@ const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }];
 
 export type NearbyRoomKey = { roomId: string; password: string };
 export type NearbyFileMeta = { name: string; size: number; type: string };
-export type NearbyOffer = { id: string; files: NearbyFileMeta[]; from: string };
+export type NearbyOffer = { id: string; files: NearbyFileMeta[]; from: string; text?: string };
 
 function bytesToHex(bytes: Uint8Array) {
   return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
@@ -172,9 +173,11 @@ export function defaultDeviceName(
 
 export function sanitizeOffer(value: unknown, from: string): NearbyOffer | null {
   if (!value || typeof value !== "object") return null;
-  const raw = value as { id?: unknown; files?: unknown };
+  const raw = value as { id?: unknown; files?: unknown; text?: unknown };
   if (typeof raw.id !== "string" || !/^[0-9a-f]{16}$/.test(raw.id) || !Array.isArray(raw.files) || raw.files.length > 200) return null;
   if (raw.files.some(file => !file || typeof file.size !== "number" || !Number.isSafeInteger(file.size) || file.size < 0)) return null;
+  if (raw.text !== undefined && (typeof raw.text !== "string" || raw.text.length > NEARBY_MAX_TEXT_LENGTH)) return null;
+  const text = typeof raw.text === "string" ? raw.text.trim() : "";
   const files = raw.files.map(file => {
     const item = (file || {}) as Record<string, unknown>;
     return {
@@ -183,7 +186,7 @@ export function sanitizeOffer(value: unknown, from: string): NearbyOffer | null 
       type: String(item.type || "application/octet-stream").slice(0, 100),
     };
   });
-  return files.length ? { id: raw.id, files, from } : null;
+  return files.length || text ? { id: raw.id, files, from, ...(text ? { text } : {}) } : null;
 }
 
 export function batchBytes(files: Pick<NearbyFileMeta, "size">[]) {
@@ -198,7 +201,7 @@ export function formatBytes(bytes: number) {
 }
 
 export type NearbyRoomHandlers = {
-  onPeers: (peers: Record<string, string>) => void;
+  onPeers: (peers: Record<string, string>, textPeers?: Record<string, boolean>) => void;
   onError: (message: string) => void;
   /** Resolve true to accept. Called before any file bytes are sent. */
   onOffer: (offer: NearbyOffer) => Promise<boolean>;
@@ -213,6 +216,7 @@ export class NearbyRoom {
   private key: NearbyRoomKey | null = null;
   private generation = 0;
   private readonly names: Record<string, string> = {};
+  private readonly textPeers: Record<string, boolean> = {};
   private readonly accepted = new Map<string, { from: string; files: NearbyFileMeta[] }>();
   private sendHello: ((reply: boolean, target: string) => Promise<void>) | null = null;
   private helloTimer: ReturnType<typeof setInterval> | null = null;
@@ -244,16 +248,17 @@ export class NearbyRoom {
 
     // Names are exchanged both ways: a peer that rejoined (or missed our
     // first hello) asks again, and unnamed peers are re-greeted until known.
-    const hello = room.makeAction<{ name: string; reply: boolean }>("hello", {
+    const hello = room.makeAction<{ name: string; reply: boolean; text?: boolean }>("hello", {
       onMessage: (data, { peerId }) => {
         if (!active()) return;
         const wasKnown = !!this.names[peerId] && this.names[peerId] !== NEARBY_UNNAMED_PEER;
         this.names[peerId] = String(data?.name || "附近的设备").slice(0, 40);
-        this.handlers.onPeers({ ...this.names });
+        this.textPeers[peerId] = data?.text === true;
+        this.handlers.onPeers({ ...this.names }, { ...this.textPeers });
         if (!data?.reply || !wasKnown) void this.sendHello?.(true, peerId);
       },
     });
-    this.sendHello = (reply, target) => hello.send({ name: this.deviceName, reply }, { target }).catch(() => undefined);
+    this.sendHello = (reply, target) => hello.send({ name: this.deviceName, reply, text: true }, { target }).catch(() => undefined);
 
     const offer = room.makeAction<any, boolean>("offer", {
       kind: "request",
@@ -263,7 +268,7 @@ export class NearbyRoom {
         if (!sanitized || batchBytes(sanitized.files) > NEARBY_MAX_BATCH_BYTES) return false;
         const ok = await this.handlers.onOffer(sanitized);
         if (!active()) return false;
-        if (ok) this.accepted.set(sanitized.id, { from: peerId, files: sanitized.files.slice() });
+        if (ok && sanitized.files.length) this.accepted.set(sanitized.id, { from: peerId, files: sanitized.files.slice() });
         return ok;
       },
     });
@@ -303,14 +308,15 @@ export class NearbyRoom {
       if (!active()) return;
       this.handlers.onError("");
       if (!this.names[peerId]) this.names[peerId] = NEARBY_UNNAMED_PEER;
-      this.handlers.onPeers({ ...this.names });
+      this.handlers.onPeers({ ...this.names }, { ...this.textPeers });
       void this.sendHello?.(false, peerId);
     };
     room.onPeerLeave = peerId => {
       if (!active()) return;
       for (const [id, entry] of this.accepted) if (entry.from === peerId) this.accepted.delete(id);
       delete this.names[peerId];
-      this.handlers.onPeers({ ...this.names });
+      delete this.textPeers[peerId];
+      this.handlers.onPeers({ ...this.names }, { ...this.textPeers });
     };
     this.helloTimer = setInterval(() => {
       for (const [peerId, name] of Object.entries(this.names)) {
@@ -320,12 +326,15 @@ export class NearbyRoom {
   }
 
   /** Ask the peer first; resolves false if declined or unanswered. */
-  async send(peerId: string, files: File[], onProgress: (index: number, percent: number) => void) {
+  async send(peerId: string, files: File[], onProgress: (index: number, percent: number) => void, text = "") {
     if (!this.requestOffer || !this.sendFile) throw new Error("nearby_not_joined");
+    text = text.trim();
+    if (text.length > NEARBY_MAX_TEXT_LENGTH || (!files.length && !text) || files.length > 200) throw new Error("nearby_invalid_content");
+    if (text && !this.textPeers[peerId]) throw new Error("nearby_text_unsupported");
     if (batchBytes(files) > NEARBY_MAX_BATCH_BYTES) throw new Error("nearby_batch_too_large");
     const id = bytesToHex(crypto.getRandomValues(new Uint8Array(8)));
     const accepted = await this.requestOffer({
-      id, files: files.map(file => ({ name: file.name, size: file.size, type: file.type || "application/octet-stream" })),
+      id, files: files.map(file => ({ name: file.name, size: file.size, type: file.type || "application/octet-stream" })), ...(text ? { text } : {}),
     }, peerId).catch(() => false);
     if (!accepted) return false;
     for (let index = 0; index < files.length; index++) {
@@ -369,6 +378,7 @@ export class NearbyRoom {
     this.sendFile = null;
     this.sendHello = null;
     for (const peerId of Object.keys(this.names)) delete this.names[peerId];
+    for (const peerId of Object.keys(this.textPeers)) delete this.textPeers[peerId];
     if (room) await room.leave().catch(() => undefined);
     diagnostics?.clear();
   }

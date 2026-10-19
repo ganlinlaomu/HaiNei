@@ -23,7 +23,7 @@ vi.mock("trystero", () => ({
 }));
 
 import { NearbyRoom, nearbyRelayStates, refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
-import { answerPendingOffer, clearNearbyTransfer, ensureOwnDevicesRoom, nearbyState, refreshNearbyDiscovery, resetNearby, retryNearbyWithCamera, startPairRoom } from "@/services/nearbySession";
+import { answerPendingOffer, clearNearbyTransfer, ensureOwnDevicesRoom, nearbyState, refreshNearbyDiscovery, resetNearby, retryNearbyWithCamera, sendNearbyFiles, startPairRoom } from "@/services/nearbySession";
 
 class Socket extends EventTarget {
   static OPEN = 1;
@@ -55,6 +55,51 @@ async function startProbe(socket: Socket) {
 }
 
 describe("nearby signaling recovery", () => {
+  it("receives text as a completed own-account message and clears it on account reset", async () => {
+    await ensureOwnDevicesRoom("account", "1".repeat(64));
+    const own = trystero.rooms[0];
+    own.onPeerJoin("peer");
+    const offer = { id: "0123456789abcdef", files: [], text: "第一行\n第二行" };
+    expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "peer" })).toBe(true);
+    expect(nearbyState.pendingOffer).toBeNull();
+    expect(nearbyState.transfers[0]).toMatchObject({ text: offer.text, files: [], state: "done" });
+    await resetNearby();
+    expect(nearbyState.transfers).toEqual([]);
+  });
+
+  it("requires QR-peer confirmation for text, with no phantom active file transfer", async () => {
+    await startPairRoom({ roomId: "qr", password: "secret" });
+    const pair = trystero.rooms[0];
+    pair.onPeerJoin("peer");
+    const offer = { id: "0123456789abcdef", files: [], text: "hello" };
+    const request = pair.actions.offer.handlers.onRequest(offer, { peerId: "peer" });
+    expect(nearbyState.transfers[0].state).toBe("waiting");
+    answerPendingOffer(true);
+    expect(await request).toBe(true);
+    expect(nearbyState.transfers[0].state).toBe("done");
+  });
+
+  it("negotiates text capability, sends one combined offer, and keeps legacy file-only sending", async () => {
+    await ensureOwnDevicesRoom("account", "1".repeat(64));
+    const own = trystero.rooms[0];
+    own.onPeerJoin("peer");
+    own.actions.hello.handlers.onMessage({ name: "PC", reply: true }, { peerId: "peer" });
+    own.actions.offer.request.mockResolvedValue(true);
+    await expect(sendNearbyFiles("own", "peer", [], "hello")).rejects.toThrow("nearby_text_unsupported");
+    const file = new File(["a"], "a.txt");
+    await sendNearbyFiles("own", "peer", [file]);
+    expect(own.actions.file.send).toHaveBeenCalledOnce();
+    own.actions.hello.handlers.onMessage({ name: "PC", reply: true, text: true }, { peerId: "peer" });
+    await sendNearbyFiles("own", "peer", [], "hello\nworld");
+    expect(own.actions.offer.request.mock.calls.at(-1)[0]).toMatchObject({ files: [], text: "hello\nworld" });
+    expect(own.actions.file.send).toHaveBeenCalledOnce();
+    expect(nearbyState.transfers[0]).toMatchObject({ text: "hello\nworld", state: "done" });
+    await sendNearbyFiles("own", "peer", [file], "caption");
+    expect(own.actions.offer.request.mock.calls.at(-1)[0]).toMatchObject({ files: [{ name: "a.txt", size: 1 }], text: "caption" });
+    expect(own.actions.file.send).toHaveBeenCalledTimes(2);
+    own.onPeerLeave("peer");
+    expect(nearbyState.ownTextPeers).toEqual({});
+  });
   it("auto-accepts own-account batches but requires confirmation in a QR room", async () => {
     await ensureOwnDevicesRoom("account", "1".repeat(64));
     const offer = { id: "0123456789abcdef", files: [{ name: "a.txt", size: 3, type: "text/plain" }] };

@@ -4,6 +4,7 @@ import { onAppResume } from "@/services/appResumeCoordinator";
 import { requestNearbyCameraAccess } from "@/services/nearbyCameraAccess";
 import {
   NEARBY_MAX_BATCH_BYTES,
+  NEARBY_MAX_TEXT_LENGTH,
   NEARBY_OFFER_TIMEOUT_MS,
   NearbyRoom,
   batchBytes,
@@ -34,6 +35,7 @@ export type NearbyTransferRecord = {
   direction: "in" | "out";
   peerName: string;
   files: NearbyFileMeta[];
+  text?: string;
   progress: number[];
   received: (File | undefined)[];
   state: "waiting" | "active" | "done" | "declined" | "failed";
@@ -46,9 +48,11 @@ export const nearbyState = reactive({
   ownAccount: "",
   ownJoined: false,
   ownPeers: {} as Record<string, string>,
+  ownTextPeers: {} as Record<string, boolean>,
   ownError: "",
   pairKey: null as NearbyRoomKey | null,
   pairPeers: {} as Record<string, string>,
+  pairTextPeers: {} as Record<string, boolean>,
   pairError: "",
   transfers: [] as NearbyTransferRecord[],
   pendingOffer: null as PendingOffer | null,
@@ -105,6 +109,10 @@ const offerQueue: PendingOffer[] = [];
 let offerListener: ((offer: PendingOffer) => void) | null = pending => {
   // Rooms stay joined after leaving the page; point people back to it.
   if (typeof location !== "undefined" && location.hash.startsWith("#/nearby")) return;
+  if (!pending.offer.files.length) {
+    useUIStore().addToast(`${pending.peerName} 想发送文字，请打开「私信 › 文件传输助手」确认`, 6_000, "info");
+    return;
+  }
   useUIStore().addToast(`${pending.peerName} 想发送 ${pending.offer.files.length} 个文件，请打开「私信 › 文件传输助手」确认`, 6_000, "info");
 };
 
@@ -128,7 +136,7 @@ function peersFor(kind: RoomKind) {
 
 function makeRoom(kind: RoomKind) {
   return new NearbyRoom(nearbyState.deviceName, {
-    onPeers: next => {
+    onPeers: (next, textPeers = {}) => {
       for (const item of nearbyState.transfers) {
         if (item.kind === kind && !next[item.peerId] && (item.state === "active" || item.state === "waiting")) {
           item.state = "failed";
@@ -137,8 +145,8 @@ function makeRoom(kind: RoomKind) {
           item.state = "failed";
         }
       }
-      if (kind === "own") nearbyState.ownPeers = next;
-      else nearbyState.pairPeers = next;
+      if (kind === "own") { nearbyState.ownPeers = next; nearbyState.ownTextPeers = textPeers; }
+      else { nearbyState.pairPeers = next; nearbyState.pairTextPeers = textPeers; }
     },
     onError: message => {
       if (kind === "own") nearbyState.ownError = message;
@@ -156,14 +164,14 @@ function makeRoom(kind: RoomKind) {
         || reserved + batchBytes(offer.files) > NEARBY_MAX_BATCH_BYTES) { resolve(false); return; }
       const peerName = peersFor(kind)[offer.from] || "附近的设备";
       const transfer: NearbyTransferRecord = {
-        id, kind, peerId: offer.from, direction: "in", peerName, files: offer.files,
+        id, kind, peerId: offer.from, direction: "in", peerName, files: offer.files, text: offer.text,
         progress: offer.files.map(() => 0), received: offer.files.map(() => undefined), state: "waiting",
       };
       nearbyState.transfers.unshift(transfer);
       // Only possession of this account's private key derives the own room's
       // secret and encrypted signaling password. QR rooms never get this trust.
       if (kind === "own") {
-        transfer.state = "active";
+        transfer.state = offer.files.length ? "active" : "done";
         resolve(true);
         return;
       }
@@ -172,7 +180,7 @@ function makeRoom(kind: RoomKind) {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        updateTransfer(transfer.id, item => { item.state = ok ? "active" : "declined"; });
+        updateTransfer(transfer.id, item => { item.state = ok ? (offer.files.length ? "active" : "done") : "declined"; });
         if (nearbyState.pendingOffer?.transferId === transfer.id) nearbyState.pendingOffer = null;
         const queued = offerQueue.findIndex(item => item.transferId === transfer.id);
         if (queued >= 0) offerQueue.splice(queued, 1);
@@ -234,6 +242,7 @@ export async function leaveOwnDevicesRoom() {
   nearbyState.ownAccount = "";
   nearbyState.ownJoined = false;
   nearbyState.ownPeers = {};
+  nearbyState.ownTextPeers = {};
   nearbyState.ownError = "";
   ownRoomId = "";
   failRoomTransfers("own");
@@ -266,6 +275,7 @@ export async function stopPairRoom() {
   rooms.pair = undefined;
   nearbyState.pairKey = null;
   nearbyState.pairPeers = {};
+  nearbyState.pairTextPeers = {};
   nearbyState.pairError = "";
   failRoomTransfers("pair");
   updateRelayResumeWatch();
@@ -321,21 +331,23 @@ function failRoomTransfers(kind: RoomKind) {
   }
 }
 
-export async function sendNearbyFiles(kind: RoomKind, peerId: string, files: File[]) {
+export async function sendNearbyFiles(kind: RoomKind, peerId: string, files: File[], text = "") {
   const room = rooms[kind];
   if (!room) throw new Error("nearby_not_joined");
-  if (!files.length || files.length > 200 || !peersFor(kind)[peerId]) throw new Error("nearby_invalid_target_or_files");
+  text = text.trim();
+  if ((!files.length && !text) || text.length > NEARBY_MAX_TEXT_LENGTH || files.length > 200 || !peersFor(kind)[peerId]) throw new Error("nearby_invalid_target_or_files");
+  if (text && !(kind === "own" ? nearbyState.ownTextPeers : nearbyState.pairTextPeers)[peerId]) throw new Error("nearby_text_unsupported");
   if (batchBytes(files) > NEARBY_MAX_BATCH_BYTES) throw new Error("nearby_batch_too_large");
   const transfer: NearbyTransferRecord = {
     id: `out:${Date.now()}:${Math.random()}`, kind, peerId, direction: "out", peerName: peersFor(kind)[peerId] || "附近的设备",
-    files: files.map(file => ({ name: file.name, size: file.size, type: file.type })),
+    files: files.map(file => ({ name: file.name, size: file.size, type: file.type })), text,
     progress: files.map(() => 0), received: files.map(() => undefined), state: "waiting",
   };
   nearbyState.transfers.unshift(transfer);
   try {
     const accepted = await room.send(peerId, files, (index, percent) => {
       updateTransfer(transfer.id, item => { item.state = "active"; item.progress[index] = percent; });
-    });
+    }, text);
     updateTransfer(transfer.id, item => { item.state = accepted ? "done" : "declined"; });
   } catch {
     updateTransfer(transfer.id, item => { item.state = "failed"; });

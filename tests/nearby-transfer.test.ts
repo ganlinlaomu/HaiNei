@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   NEARBY_MAX_BATCH_BYTES,
+  NEARBY_MAX_TEXT_LENGTH,
   batchBytes,
   defaultDeviceName,
   ownDevicesRoom,
@@ -47,6 +48,14 @@ describe("附近传输 rooms", () => {
 });
 
 describe("incoming offers", () => {
+  it("accepts text alone or with files, preserving newlines and rejecting empty or oversized text", () => {
+    const id = "0123456789abcdef";
+    expect(sanitizeOffer({ id, files: [], text: "第一行\n第二行" }, "peer")).toEqual({ id, files: [], text: "第一行\n第二行", from: "peer" });
+    expect(sanitizeOffer({ id, files: [{ name: "a", size: 0 }], text: "说明" }, "peer")?.text).toBe("说明");
+    expect(sanitizeOffer({ id, files: [], text: "  " }, "peer")).toBeNull();
+    expect(sanitizeOffer({ id, files: [], text: "a".repeat(NEARBY_MAX_TEXT_LENGTH + 1) }, "peer")).toBeNull();
+    expect(sanitizeOffer({ id, files: [], text: {} }, "peer")).toBeNull();
+  });
   it("accepts well-formed offers and strips path separators from names", () => {
     const offer = sanitizeOffer({ id: "0123456789abcdef", files: [{ name: "../照片/a.jpg", size: 10, type: "image/jpeg" }] }, "peer");
     expect(offer).toEqual({ id: "0123456789abcdef", from: "peer", files: [{ name: ".._照片_a.jpg", size: 10, type: "image/jpeg" }] });
