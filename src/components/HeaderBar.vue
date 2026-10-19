@@ -18,7 +18,7 @@
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
         </svg>
-        <span v-if="directMessages.unreadCount > 0" class="badge">{{ directMessages.unreadCount }}</span>
+        <span v-if="directMessages.unreadCount + nearbyUnread.count > 0" class="badge">{{ directMessages.unreadCount + nearbyUnread.count }}</span>
       </span>
     </router-link>
     <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 2 }" to="/notifications" aria-label="通知" @pointerdown="preloadBottomTab('notifications')" @focus="preloadBottomTab('notifications')" @click="handleNavigation">
@@ -61,6 +61,7 @@ import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useDirectMessagesStore } from "@/stores/directMessages";
+import { nearbyUnread } from "@/services/nearbyUnread";
 import { loadConversationsView, loadNotificationsView, loadSettingsView } from "@/router/lazyViews";
 import { getBottomNavTabIndex } from "@/utils/bottomNavigation";
 
@@ -101,7 +102,7 @@ export default defineComponent({
       ui.closePostEditor();
     }
     
-    return { isLoggedIn, shortPk, preloadBottomTab, handleNavigation, notifications, directMessages, shouldShowBottomNav, activeTabIndex, ui };
+    return { isLoggedIn, shortPk, preloadBottomTab, handleNavigation, notifications, directMessages, nearbyUnread, shouldShowBottomNav, activeTabIndex, ui };
   }
 });
 </script>

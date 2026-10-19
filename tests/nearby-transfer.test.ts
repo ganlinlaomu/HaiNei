@@ -112,9 +112,21 @@ describe("rediscovery after leaving and coming back", () => {
     expect(service).toContain("if (name === NEARBY_UNNAMED_PEER) void this.sendHello?.(false, peerId);");
   });
 
-  it("points people to the page when an offer arrives elsewhere", () => {
+  it("points people to the page when anything arrives elsewhere, including own devices", () => {
     const session = readFileSync("src/services/nearbySession.ts", "utf8");
-    expect(session).toContain("想发送 ${pending.offer.files.length} 个文件，请打开「私信 › 文件传输助手」确认");
+    expect(session).toContain("announceIncoming(peerName, offer, false);");
+    expect(session).toContain("toastId = announceIncoming(peerName, offer, true);");
+    expect(session).toContain('{ label: needsAnswer ? "去确认" : "查看", run: openAssistant }');
+    expect(session).toContain("if (toastId) useUIStore().removeToast(toastId);");
+    expect(readFileSync("src/views/NearbyTransfer.vue", "utf8")).toContain("clearNearbyUnread();");
+    expect(readFileSync("src/components/HeaderBar.vue", "utf8")).toContain("directMessages.unreadCount + nearbyUnread.count");
+  });
+
+  it("joins the own-devices room after unlock without opening the assistant", () => {
+    const app = readFileSync("src/App.vue", "utf8");
+    expect(app).toContain('scheduleBackgroundTask("nearby-own-devices"');
+    expect(app).toContain('await import("@/services/nearbySession")');
+    expect(app).not.toMatch(/^import [^\n]*nearbySession/m);
   });
 });
 
