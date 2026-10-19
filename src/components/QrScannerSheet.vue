@@ -24,6 +24,7 @@
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useUIStore } from "@/stores/ui";
 import { useDialogFocus } from "@/composables/useDialogFocus";
+import { drawScaled, loadQrDecoder } from "@/utils/qrDecode";
 
 const props = defineProps<{ open: boolean; title?: string }>();
 const emit = defineEmits<{
@@ -37,10 +38,11 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const cameraError = ref("");
 const scannerPanel = ref<HTMLElement | null>(null);
 useDialogFocus(scannerPanel, () => props.open, close);
-let controls: any = null;
-let reader: any = null;
+let stream: MediaStream | null = null;
+let frameTimer: ReturnType<typeof setTimeout> | null = null;
 let handled = false;
 let generation = 0;
+const SCAN_INTERVAL_MS = 180;
 
 watch(() => props.open, async visible => {
   ui.setBlockingOverlay("friend-qr-scanner", visible);
@@ -54,10 +56,10 @@ watch(() => props.open, async visible => {
 
 function stopScanner() {
   generation += 1;
-  try { controls?.stop?.(); } catch {}
-  controls = null;
-  const stream = videoEl.value?.srcObject as MediaStream | null;
+  if (frameTimer) clearTimeout(frameTimer);
+  frameTimer = null;
   stream?.getTracks().forEach(track => track.stop());
+  stream = null;
   if (videoEl.value) videoEl.value.srcObject = null;
 }
 
@@ -67,22 +69,28 @@ async function startScanner() {
   handled = false;
   cameraError.value = "";
   try {
-    const mod = await import("@zxing/browser");
-    if (!props.open || run !== generation || !videoEl.value) return;
-    reader = new mod.BrowserQRCodeReader();
-    const localControls = await reader.decodeFromVideoDevice(
-      undefined,
-      videoEl.value,
-      (result: any, _error: unknown, callbackControls: any) => {
-        if (callbackControls && run === generation) controls = callbackControls;
-        if (result && !handled && run === generation) complete(result.getText());
-      }
-    );
-    if (!props.open || run !== generation) {
-      localControls?.stop?.();
+    const [decode, media] = await Promise.all([
+      loadQrDecoder(),
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false }),
+    ]);
+    const video = videoEl.value;
+    if (!props.open || run !== generation || !video) {
+      media.getTracks().forEach(track => track.stop());
       return;
     }
-    controls = localControls;
+    stream = media;
+    video.srcObject = media;
+    await video.play().catch(() => undefined);
+    const canvas = document.createElement("canvas");
+    const scan = async () => {
+      if (run !== generation || handled) return;
+      if (video.videoWidth) {
+        const value = await decode(drawScaled(canvas, video, video.videoWidth, video.videoHeight, 720)).catch(() => null);
+        if (value && run === generation) { complete(value); return; }
+      }
+      if (run === generation) frameTimer = setTimeout(scan, SCAN_INTERVAL_MS);
+    };
+    void scan();
   } catch {
     if (run !== generation || !props.open) return;
     cameraError.value = "无法打开相机。请允许相机权限，或从相册选择二维码。";
@@ -104,16 +112,14 @@ async function scanImage(event: Event) {
   const run = generation;
   cameraError.value = "";
   try {
-    const mod = await import("@zxing/browser");
+    const decode = await loadQrDecoder();
+    const image = await createImageBitmap(file);
+    if (!props.open || run !== generation) { image.close(); return; }
+    const value = await decode(drawScaled(document.createElement("canvas"), image, image.width, image.height, 1600), true);
+    image.close();
     if (!props.open || run !== generation) return;
-    const imageReader = reader || new mod.BrowserQRCodeReader();
-    const url = URL.createObjectURL(file);
-    try {
-      const result = await imageReader.decodeFromImageUrl(url);
-      if (props.open && run === generation) complete(result.getText());
-    } finally {
-      URL.revokeObjectURL(url);
-    }
+    if (value) complete(value);
+    else cameraError.value = "没有识别到二维码，请换一张更清晰的图片。";
   } catch {
     if (props.open && run === generation) cameraError.value = "没有识别到二维码，请换一张更清晰的图片。";
   }

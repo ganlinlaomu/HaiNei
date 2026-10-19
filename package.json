@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.73",
-  "releaseSummary": "文件传输移除旧版协议，旧版本设备提示更新",
+  "version": "0.1.74",
+  "releaseSummary": "扫码改用浏览器原生识别与精简解码器，扫码组件体积减少约 86%",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
@@ -16,7 +16,6 @@
   "dependencies": {
     "@noble/ciphers": "0.5.3",
     "@noble/hashes": "1.3.1",
-    "@zxing/browser": "0.1.5",
     "@zxing/library": "0.21.3",
     "dexie": "^3.2.2",
     "nostr-tools": "2.18.2",
