@@ -125,10 +125,15 @@
     </div>
 
     <footer class="assistant-composer">
-      <button class="selected-target" type="button" aria-label="选择接收设备" @click="chooseTarget"><span>{{ availableTargets.length ? selectedTarget ? `发送到：${selectedTargetName}${selectedPeer?.ready ? ' · 可发送' : ''}` : '选择接收设备' : '连接设备' }}</span><span aria-hidden="true">⌄</span></button>
-      <p v-if="!availableTargets.length && (nearbyState.ownError || nearbyState.pairError)" class="recipient-hint">连接未完成，请检查设备与网络；点击「连接设备」重试</p>
+      <div class="target-chips" role="group" aria-label="接收设备">
+        <button v-for="peer in availableTargets" :key="`${peer.kind}:${peer.id}`" class="target-chip" :class="{ selected: isSelected(peer) }" type="button" :aria-pressed="isSelected(peer)" :disabled="!peer.ready" @click="selectDevice(peer.kind, peer.id)"><span class="chip-dot" :class="{ ready: peer.ready }" aria-hidden="true"></span>{{ peer.ready ? peer.name : '连接中…' }}</button>
+        <span v-if="selectedTarget && !selectedPeer" class="target-chip lost" role="status">设备已断开，请重新选择</span>
+        <button class="target-chip connect-device" type="button" :aria-label="availableTargets.length ? '连接更多设备' : '连接设备'" @click="openConnections"><span aria-hidden="true">＋</span>{{ availableTargets.length ? '' : '连接设备' }}</button>
+      </div>
+      <p v-if="!availableTargets.length" class="recipient-hint">{{ nearbyState.ownError || nearbyState.pairError ? '连接未完成，请检查设备与网络；点击「连接设备」重试' : ownDevicesAvailable ? '在另一台设备上打开海内并登录同一账号，它会出现在这里' : '点击「连接设备」显示或扫描配对二维码' }}</p>
+      <p v-else-if="!selectedTarget" class="recipient-hint">选择要发送到的设备</p>
       <p v-if="selectedPeer && draftText.trim() && !selectedPeer.supportsText" class="recipient-hint">请更新接收设备的海内以接收文字</p>
-      <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</span><button type="button" @click="selectedFiles = []; targetPickerOpen = false">移除附件</button></div>
+      <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</span><button type="button" @click="selectedFiles = []">移除附件</button></div>
       <div class="file-composer">
         <textarea ref="textInput" v-model="draftText" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="输入消息……" aria-label="输入消息" :maxlength="NEARBY_MAX_TEXT_LENGTH" @focus="resizeTextInput" @input="resizeTextInput"></textarea>
         <div class="composer-actions">
@@ -140,18 +145,6 @@
 
     <input ref="fileInput" class="hidden-input" type="file" multiple @change="onFilesPicked" @cancel="filePickerGeneration = -1" />
     <QrScannerSheet :open="scannerOpen" title="扫描配对二维码" @close="closeScanner" @scanned="onScanned" />
-
-    <div v-if="targetPickerOpen" class="offer-overlay" @click.self="targetPickerOpen = false">
-      <section ref="targetPanel" class="offer-sheet" role="dialog" aria-modal="true" aria-labelledby="target-title" tabindex="-1">
-        <h2 id="target-title">发送到设备</h2>
-        <p v-if="selectedFiles.length" class="nearby-hint">已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</p>
-        <p v-if="draftText.trim()" class="text-preview">{{ draftText }}</p>
-        <ul class="peer-list"><li v-for="peer in availableTargets" :key="`${peer.kind}:${peer.id}`"><button class="target-device" type="button" :disabled="!peer.ready || (!!draftText.trim() && !peer.supportsText)" @click="selectDevice(peer.kind, peer.id)"><strong>{{ peer.name }}</strong><span>{{ !peer.ready ? '连接中，暂不可发送' : draftText.trim() && !peer.supportsText ? '请更新此设备的海内以接收文字' : `${peer.kind === 'own' ? '我的设备' : '扫码连接的设备'} · 可发送` }}</span></button></li></ul>
-        <p v-if="!availableTargets.length" class="nearby-empty">暂未发现设备，请在另一台设备打开文件传输助手。</p>
-        <button class="link-button" type="button" @click="targetPickerOpen = false; pairingOpen = true">设备与连接</button>
-        <button class="link-button" type="button" @click="targetPickerOpen = false">返回</button>
-      </section>
-    </div>
 
     <div v-if="imagePreview" class="offer-overlay image-overlay" @click.self="imagePreview = null">
       <section ref="imagePanel" class="image-preview" role="dialog" aria-modal="true" aria-label="图片预览" tabindex="-1"><button class="header-icon" type="button" aria-label="关闭图片预览" @click="imagePreview = null">×</button><img :src="objectUrl(imagePreview)" :alt="imagePreview.name" /><a class="file-action" :href="objectUrl(imagePreview)" :download="imagePreview.name">保存图片</a></section>
@@ -185,6 +178,7 @@ import { useUIStore } from "@/stores/ui";
 import { useDialogFocus } from "@/composables/useDialogFocus";
 import { canShareTransfer, createTransferZip } from "@/services/transferBatchSave";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
+import { clearNearbyUnread } from "@/services/nearbyUnread";
 import {
   NEARBY_MAX_BATCH_BYTES,
   NEARBY_MAX_TEXT_LENGTH,
@@ -228,9 +222,7 @@ const draftText = ref("");
 const textInput = ref<HTMLTextAreaElement | null>(null);
 const selectedTarget = ref<{ kind: RoomKind; peerId: string } | null>(null);
 const hasContent = computed(() => !!draftText.value.trim() || selectedFiles.value.length > 0);
-const targetPickerOpen = ref(false);
 const devicePanel = ref<HTMLElement | null>(null);
-const targetPanel = ref<HTMLElement | null>(null);
 const chatBody = ref<HTMLElement | null>(null);
 const savingBatch = ref("");
 const imagePreview = ref<File | null>(null);
@@ -312,14 +304,13 @@ const availableTargets = computed(() => [
   ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const, supportsText: nearbyState.pairTextPeers[peer.id] === true })),
 ].map(peer => ({ ...peer, ready: peer.name !== NEARBY_UNNAMED_PEER })));
 const selectedPeer = computed(() => availableTargets.value.find(peer => peer.kind === selectedTarget.value?.kind && peer.id === selectedTarget.value?.peerId));
-const selectedTargetName = computed(() => selectedPeer.value?.name || '设备已断开，请重新选择');
+const isSelected = (peer: { kind: RoomKind; id: string }) => selectedTarget.value?.kind === peer.kind && selectedTarget.value?.peerId === peer.id;
 const canSendToTarget = computed(() => !!selectedPeer.value?.ready && (!draftText.value.trim() || selectedPeer.value.supportsText));
 watch(availableTargets, peers => {
   // Never silently redirect an existing recipient when it disconnects.
   if (!selectedTarget.value && peers.length === 1 && peers[0].ready) selectedTarget.value = { kind: peers[0].kind, peerId: peers[0].id };
 }, { immediate: true });
 useDialogFocus(devicePanel, () => pairingOpen.value && !scannerOpen.value && !pendingOffer.value, () => { pairingOpen.value = false; });
-useDialogFocus(targetPanel, () => targetPickerOpen.value && !pendingOffer.value, () => { targetPickerOpen.value = false; });
 useDialogFocus(imagePanel, () => !!imagePreview.value && !pendingOffer.value, () => { imagePreview.value = null; });
 function joinErrorText(error: string) {
   if (error.includes("incorrect room password")) return "已发现设备，但房间密码不一致";
@@ -330,7 +321,7 @@ function joinErrorText(error: string) {
 const ownStatus = computed(() => nearbyState.ownError
   ? joinErrorText(nearbyState.ownError)
   : nearbyState.ownJoined
-    ? "在你的其他设备上打开「文件传输助手」，它们会出现在这里。"
+    ? "在你的其他设备上打开海内并登录同一账号，它们会出现在这里。"
     : "正在寻找你的其他设备…");
 
 async function joinOwnRoom() {
@@ -385,7 +376,6 @@ function onScanned(value: string) {
 
 function openScanner() {
   pairingOpen.value = false;
-  targetPickerOpen.value = false;
   imagePreview.value = null;
   scannerOpen.value = true;
 }
@@ -414,13 +404,11 @@ function selectDevice(kind: RoomKind, peerId: string) {
   if (!availableTargets.value.some(peer => peer.kind === kind && peer.id === peerId && peer.ready)) return;
   selectedTarget.value = { kind, peerId };
   pairingOpen.value = false;
-  targetPickerOpen.value = false;
 }
 
-function chooseTarget() {
+function openConnections() {
   textInput.value?.blur();
-  if (availableTargets.value.length) targetPickerOpen.value = true;
-  else pairingOpen.value = true;
+  pairingOpen.value = true;
 }
 
 function onFilesPicked(event: Event) {
@@ -459,7 +447,6 @@ function sendSelected(kind: RoomKind, peerId: string) {
   try {
     queueNearbyFiles(kind, peerId, files, text);
     pairingOpen.value = false;
-    targetPickerOpen.value = false;
     selectedFiles.value = [];
     draftText.value = "";
   } catch (error) {
@@ -469,7 +456,7 @@ function sendSelected(kind: RoomKind, peerId: string) {
 
 function retryTransfer(id: string) {
   try { retryNearbyTransfer(id); }
-  catch { ui.addToast('接收设备尚未连接，请在同一设备打开文件传输助手', 2_600, 'error'); }
+  catch { ui.addToast('接收设备尚未连接，请在接收设备上打开海内', 2_600, 'error'); }
 }
 function fileFor(transfer: NearbyTransferRecord, index: number) { return transfer.direction === 'out' ? transfer.source?.[index] : transfer.received[index]; }
 function canPreview(file?: File) { return !!file && /^image\/(jpeg|png|gif|webp|avif)$/.test(file.type); }
@@ -584,6 +571,7 @@ function download(url: string, name: string) {
 }
 
 onMounted(() => {
+  clearNearbyUnread();
   // A page visit must not cut off an in-flight offer/answer/candidate exchange.
   void joinOwnRoom();
   const pair = typeof route.query.pair === "string" ? parsePairing(route.query.pair) : null;
@@ -602,7 +590,6 @@ watch(() => keys.pkHex, () => {
   imagePreview.value = null;
   scannerOpen.value = false;
   pairingOpen.value = false;
-  targetPickerOpen.value = false;
   releaseUrls();
 });
 watch(draftText, () => { void nextTick(resizeTextInput); });
@@ -635,14 +622,15 @@ watch(() => nearbyState.transfers.length, async () => {
 .composer-icon{display:grid;width:44px;height:44px;padding:5px;place-items:center;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}.composer-icon span{display:grid;width:34px;height:34px;place-items:center;border-radius:50%}.composer-icon svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.send-button span{background:var(--bg-0f1419);color:#fff}.send-button svg{width:18px;height:18px}.composer-icon:disabled{opacity:.36;cursor:default}
 .file-composer:focus-within{min-height:76px;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 34px;align-items:stretch;padding:6px 8px 4px}.file-composer:focus-within textarea{grid-column:1;grid-row:1;width:100%;padding:4px 6px 3px}.file-composer:focus-within .composer-actions{display:flex;grid-column:1;grid-row:2;align-items:center;justify-content:space-between}
 .assistant-composer:has(textarea:focus){padding-right:16px;padding-left:16px;padding-bottom:calc(8px + env(safe-area-inset-bottom))}
-.selected-target{display:flex;width:100%;min-height:40px;align-items:center;justify-content:space-between;gap:8px;padding:6px 4px;border:0;background:transparent;color:var(--fg-64748b);font:inherit;font-size:12px;text-align:left;cursor:pointer}.selected-target span:first-child{min-width:0;overflow-wrap:anywhere}.selected-target:disabled{opacity:.5;cursor:default}.recipient-hint{margin:0 4px 8px;color:var(--fg-64748b);font-size:12px}
+.target-chips{display:flex;gap:8px;margin:0 -4px;padding:4px 4px 8px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.target-chips::-webkit-scrollbar{display:none}
+.target-chip{display:inline-flex;flex:0 0 auto;align-items:center;gap:6px;max-width:70vw;min-height:36px;padding:0 14px;overflow:hidden;border:1px solid var(--bd-d8dee5);border-radius:999px;background:var(--bg-fff);color:var(--fg-334155);font:inherit;font-size:13px;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.target-chip.selected{border-color:#1687e8;background:var(--bg-eff6ff);color:var(--fg-1687e8);font-weight:650}.target-chip:disabled{opacity:.55;cursor:default}
+.target-chip.lost{border-style:dashed;color:var(--fg-64748b);cursor:default}.target-chip.connect-device{padding:0 12px;color:var(--fg-64748b)}
+.chip-dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:var(--fg-94a3b8)}.chip-dot.ready{background:#16a34a}.recipient-hint{margin:0 4px 8px;color:var(--fg-64748b);font-size:12px}
 .transfer-text{margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.5}.text-preview{max-height:120px;overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.5}
-.target-device:disabled{opacity:.5;cursor:default}
 .selected-batch{display:flex;align-items:center;gap:8px;padding:8px 0;font-size:13px;color:var(--fg-64748b)}
 .selected-batch span{flex:1}.selected-batch button{min-height:36px;border:0;background:transparent;color:var(--fg-1687e8)}
 .peer-name small{display:block;margin-top:4px;color:var(--fg-64748b);font-size:11px;font-weight:400}
-.target-device{display:flex;width:100%;min-height:64px;flex-direction:column;justify-content:center;gap:5px;padding:10px 0;border:0;border-bottom:1px solid var(--bd-eef2f7);background:transparent;color:inherit;text-align:left;font-size:16px}
-.target-device span{color:var(--fg-64748b);font-size:12px}
 .nearby-intro,.nearby-hint{margin:8px 0 0;color:var(--fg-64748b);font-size:14px;line-height:1.6}
 .nearby-card{margin-top:16px;padding:16px;border:1px solid var(--bd-e2e8f0);border-radius:18px}
 .nearby-card h2{margin:0;font-size:17px}

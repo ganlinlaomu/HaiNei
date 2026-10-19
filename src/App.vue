@@ -229,6 +229,21 @@ export default defineComponent({
       },
       { immediate: true }
     );
+    // 文件传输助手: join the own-devices room once per session, so this
+    // device can receive (and be found) without opening the assistant first.
+    watch(
+      () => [keys.pkHex, keys.loginMethod, keys.skHex, keys.isUnlocked] as const,
+      ([account, method, secret, unlocked]) => {
+        if (!account || method !== "private-key" || !unlocked || !/^[0-9a-f]{64}$/.test(secret)) return;
+        const current = () => keys.pkHex === account && keys.skHex === secret && keys.isUnlocked;
+        scheduleBackgroundTask("nearby-own-devices", async () => {
+          if (!current()) return;
+          const { ensureOwnDevicesRoom } = await import("@/services/nearbySession");
+          if (current()) await ensureOwnDevicesRoom(account, secret);
+        }, { priority: "idle", timeoutMs: 5_000 });
+      },
+      { immediate: true }
+    );
     onMounted(() => {
       stopActivityMonitor = installForegroundActivityMonitor();
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked && keys.credentialMode !== "device",lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
@@ -256,6 +271,7 @@ export default defineComponent({
       cancelBackgroundTask("preload-post-editor");
       cancelBackgroundTask("preload-bottom-tabs");
       cancelBackgroundTask("foreground-bookmark-sync");
+      cancelBackgroundTask("nearby-own-devices");
       disposed = true;
       document.body.classList.remove("login-page", "post-editor-open");
     });

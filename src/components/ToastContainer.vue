@@ -2,6 +2,7 @@
   <div class="toast-container" v-if="store.toasts.length">
     <div v-for="t in store.toasts" :key="t.id" :class="['toast', t.type]">
       <span class="toast-message">{{ t.message }}</span>
+      <button v-if="t.action" class="toast-action" type="button" @click="store.removeToast(t.id); t.action.run()">{{ t.action.label }}</button>
       <button class="close" aria-label="关闭提示" @click="store.removeToast(t.id)">✕</button>
     </div>
   </div>
@@ -25,7 +26,8 @@ export default defineComponent({
 .toast::before{display:grid;width:15px;height:15px;flex:0 0 15px;place-items:center;border-radius:50%;font-size:11px;font-weight:800}
 .toast.success{border-color:rgba(22,163,74,.22);background:var(--bg-rgba-247-254-249-97)}.toast.success::before{content:"✓";color:var(--fg-15803d);background:var(--bg-dcfce7)}
 .toast.error{border-color:rgba(220,38,38,.2)}.toast.error::before{content:"!";color:var(--fg-dc2626);background:var(--bg-fef2f2)}
-.toast-message{min-width:0;overflow-wrap:anywhere}
+.toast-message{min-width:0;flex:1;overflow-wrap:anywhere}
+.toast-action{min-height:28px;flex:0 0 auto;padding:0 10px;border:0;border-radius:7px;background:var(--bg-eff6ff);color:var(--fg-1687e8);font:inherit;font-weight:650;cursor:pointer}
 .toast .close{display:grid;width:28px;height:28px;flex:0 0 28px;padding:0;border:0;border-radius:7px;background:transparent;color:var(--fg-94a3b8);place-items:center;cursor:pointer;font-size:12px}.toast .close:active{background:var(--bg-f1f5f9)}
 @keyframes toast-enter{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 @media(prefers-reduced-motion:reduce){.toast{animation:none}}

@@ -2,6 +2,7 @@ import { reactive } from "vue";
 import { useUIStore } from "@/stores/ui";
 import { onAppResume } from "@/services/appResumeCoordinator";
 import { requestNearbyCameraAccess } from "@/services/nearbyCameraAccess";
+import { clearNearbyUnread, markNearbyUnread } from "@/services/nearbyUnread";
 import {
   NEARBY_MAX_BATCH_BYTES,
   NEARBY_MAX_TEXT_LENGTH,
@@ -121,19 +122,26 @@ function updateRelayResumeWatch() {
   }
 }
 const offerQueue: PendingOffer[] = [];
-let offerListener: ((offer: PendingOffer) => void) | null = pending => {
-  // Rooms stay joined after leaving the page; point people back to it.
-  if (typeof location !== "undefined" && location.hash.startsWith("#/nearby")) return;
-  if (!pending.offer.files.length) {
-    useUIStore().addToast(`${pending.peerName} 想发送文字，请打开「私信 › 文件传输助手」确认`, 6_000, "info");
-    return;
-  }
-  useUIStore().addToast(`${pending.peerName} 想发送 ${pending.offer.files.length} 个文件，请打开「私信 › 文件传输助手」确认`, 6_000, "info");
-};
 
-/** Lets the app tell people about an offer while they are on another page. */
-export function onNearbyOffer(listener: ((offer: PendingOffer) => void) | null) {
-  offerListener = listener;
+function onAssistantPage() {
+  return typeof location !== "undefined" && location.hash.startsWith("#/nearby");
+}
+
+function openAssistant() {
+  void import("@/router").then(({ default: router }) => router.push("/nearby")).catch(() => undefined);
+}
+
+/** Rooms stay joined on every page; tell people when something arrives elsewhere. */
+function announceIncoming(peerName: string, offer: NearbyOffer, needsAnswer: boolean) {
+  if (onAssistantPage()) return 0;
+  markNearbyUnread();
+  const content = offer.files.length ? ` ${offer.files.length} 个文件` : "文字";
+  return useUIStore().addToast(
+    needsAnswer ? `${peerName} 想发送${content}` : `${peerName} 发来${content}`,
+    needsAnswer ? NEARBY_OFFER_TIMEOUT_MS - 5_000 : 6_000,
+    "info",
+    { label: needsAnswer ? "去确认" : "查看", run: openAssistant },
+  );
 }
 
 function updateTransfer(id: string, patch: (transfer: NearbyTransferRecord) => void) {
@@ -200,13 +208,17 @@ function makeRoom(kind: RoomKind) {
       if (kind === "own") {
         transfer.state = offer.files.length ? "active" : "done";
         resolve(true);
+        announceIncoming(peerName, offer, false);
         return;
       }
       let settled = false;
+      let toastId = 0;
       const finish = (ok: boolean) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        // An answered or expired request must not leave a stale 去确认 prompt.
+        if (toastId) useUIStore().removeToast(toastId);
         updateTransfer(transfer.id, item => { item.state = ok ? (offer.files.length ? "active" : "done") : "declined"; });
         if (nearbyState.pendingOffer?.transferId === transfer.id) nearbyState.pendingOffer = null;
         const queued = offerQueue.findIndex(item => item.transferId === transfer.id);
@@ -219,7 +231,7 @@ function makeRoom(kind: RoomKind) {
       const pending: PendingOffer = { transferId: transfer.id, offer, peerName, resolve: finish };
       offerQueue.push(pending);
       showNextOffer();
-      offerListener?.(pending);
+      toastId = announceIncoming(peerName, offer, true);
     }),
     onReceiveProgress: (offerId, index, percent) => {
       updateTransfer(`${kind}:${offerId}`, item => { if (item.state !== 'canceled') { item.state = 'active'; item.progress[index] = percent; } });
@@ -336,6 +348,7 @@ export async function resetNearby() {
   offerQueue.length = 0;
   nearbyState.pendingOffer = null;
   nearbyState.transfers = [];
+  clearNearbyUnread();
   await Promise.all([leaveOwnDevicesRoom(), stopPairRoom()]);
 }
 

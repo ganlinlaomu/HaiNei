@@ -26,7 +26,10 @@
       <button class="conversation-main" type="button" @click="router.push('/nearby')">
         <span class="assistant-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z" /></svg></span>
         <span class="conversation-copy"><strong>文件传输助手</strong></span>
-        <span class="conversation-meta" aria-hidden="true">›</span>
+        <span class="conversation-meta">
+          <span v-if="nearbyUnread.count" class="unread-badge" :aria-label="`${nearbyUnread.count} 条新传输`">{{ nearbyUnread.count }}</span>
+          <span v-else aria-hidden="true">›</span>
+        </span>
       </button>
     </div>
 
@@ -87,6 +90,7 @@
 </template>
 
 <script setup lang="ts">
+import { nearbyUnread } from "@/services/nearbyUnread";
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import NewConversationSheet from "@/components/NewConversationSheet.vue";

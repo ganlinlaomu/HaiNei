@@ -26,7 +26,7 @@ describe("liquid bottom navigation", () => {
     expect(source).toContain('class="nav-liquid-surface"');
     expect(source).toContain('aria-hidden="true"');
     expect(source).toContain("getBottomNavTabIndex(route.path)");
-    expect(source).toContain('v-if="directMessages.unreadCount > 0"');
+    expect(source).toContain('v-if="directMessages.unreadCount + nearbyUnread.count > 0"');
     expect(source).toContain('v-if="notifications.unreadCount > 0"');
     expect(source).toContain('name.startsWith("comment-sheet-")');
     expect(source).toContain("route.meta.hideBottomNav === true");

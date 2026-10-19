@@ -6,15 +6,18 @@ type Toast = {
   message: string;
   timeout?: number;
   type?: "info" | "success" | "error";
+  action?: ToastAction;
 };
+
+export type ToastAction = { label: string; run: () => void };
 
 export const useUIStore = defineStore("ui", () => {
   const toasts = ref<Toast[]>([]);
   let nextId = 1;
 
-  function addToast(message: string, timeout = 2000, type: Toast["type"] = "info") {
+  function addToast(message: string, timeout = 2000, type: Toast["type"] = "info", action?: ToastAction) {
     const id = nextId++;
-    const t: Toast = { id, message, timeout, type };
+    const t: Toast = { id, message, timeout, type, ...(action ? { action } : {}) };
     toasts.value.push(t);
     if (timeout && timeout > 0) {
       setTimeout(() => removeToast(id), timeout);

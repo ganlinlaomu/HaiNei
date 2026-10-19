@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.67",
-  "releaseSummary": "文件传输移除重复保存按钮，统一底部保存操作",
+  "version": "0.1.68",
+  "releaseSummary": "文件传输助手后台接收与提醒，设备改为标签切换",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
