@@ -25,6 +25,7 @@ const fields: Record<string, string[]> = {
   replaceableEventOutbox: ["event", "lastError"],
   dmRelayDirectory: ["relays", "eventId", "eventCreatedAt", "publishedAt", "source", "sourceRelays"],
   accountProfiles: ["nickname", "bio", "avatar"],
+  transferRecords: ["record"],
 };
 export function lockLocalVault(account: string) {
   keys.get(account)?.fill(0);

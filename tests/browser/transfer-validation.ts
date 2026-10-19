@@ -249,6 +249,18 @@ export async function validateTransferAssistant() {
     click('[aria-label="关闭设备与连接"]'); await nextTick();
     nearbyState.ownPeers = {}; nearbyState.ownDevices = {}; nearbyState.ownTextPeers = {};
     await nextTick();
+    nearbyState.transfers.unshift({ id: "restored", kind: "own", peerId: "", direction: "in", peerName: "Mac", restored: true, stored: [true], createdAt: Date.now(),
+      files: [{ name: "旧文件.pdf", size: 3, type: "application/pdf" }], progress: [1], received: [undefined], state: "done" });
+    nearbyState.transfers.unshift({ id: "restored-out", kind: "own", peerId: "", direction: "out", peerName: "Mac", restored: true, createdAt: Date.now(),
+      files: [{ name: "发出.pdf", size: 3, type: "application/pdf" }], progress: [0], received: [undefined], state: "failed" });
+    await nextTick();
+    const restoredRow = [...document.querySelectorAll('.transfer-row')].find(row => row.textContent?.includes('旧文件.pdf'))!;
+    if (!restoredRow.querySelector('.load-history') || restoredRow.querySelector('.batch-save')) throw new Error('restored files must be loaded before saving');
+    if (!restoredRow.querySelector('.save-hint')?.textContent?.includes('已加密保存在本机')) throw new Error('stored files must say they are kept encrypted on this device');
+    const restoredOut = [...document.querySelectorAll('.transfer-row')].find(row => row.textContent?.includes('发出.pdf'))!;
+    if (restoredOut.querySelector('.retry-transfer')) throw new Error('restored sends cannot be retried without the original files');
+    nearbyState.transfers.splice(0, 2);
+    await nextTick();
     nearbyState.transfers.unshift({ id: "text", kind: "pair", peerId: "peer", direction: "in", peerName: "Linux 电脑", text: "收到的文字\n换行", files: [], progress: [], received: [], state: "done" });
     await nextTick();
     const textBubble = document.querySelector(".transfer-row:last-child")!;

@@ -3,8 +3,8 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.70";
-export const DB_VERSION = 19;
+export const APP_VERSION = "0.1.71";
+export const DB_VERSION = 20;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -328,6 +328,13 @@ export type BookmarkRecord = {
   deleted?: boolean;
 };
 
+/** 文件传输助手 history. `record` is sealed by the local vault. */
+export type TransferHistoryRecord = { accountPubkey: string; id: string; createdAt: number; record: unknown };
+/** One vault-sealed slice of a received file; never stored in plaintext. */
+export type TransferFilePartRecord = {
+  accountPubkey: string; key: string; recordId: string; index: number; part: number;
+  size: number; mime: string; iv: ArrayBuffer; bytes: ArrayBuffer;
+};
 export type DeviceKeyValueRecord = { key: string; value: string; updatedAt: number };
 export type AccountStateNamespace =
   | "friendships" | "friend_metadata" | "own_profile" | "settings"
@@ -460,6 +467,8 @@ export class HaiNeiDatabase extends Dexie {
   accountStateMirrors!: Table<AccountStateMirrorRecord, [string, AccountStateNamespace]>;
   replaceableEventOutbox!: Table<ReplaceableEventOutboxRecord, [string, string]>;
   dmRelayDirectory!: Table<DmRelayDirectoryRecord, [string, string]>;
+  transferRecords!: Table<TransferHistoryRecord, [string, string]>;
+  transferFileParts!: Table<TransferFilePartRecord, [string, string]>;
 
   constructor(name = DATABASE_NAME, requireVault = import.meta.env.MODE !== "test") {
     super(name);
@@ -730,6 +739,11 @@ export class HaiNeiDatabase extends Dexie {
     // Metadata is inside the vault envelope; old v18 rows remain readable.
     this.version(19).stores({
       accountNotes: "[accountPubkey+id], accountPubkey, [accountPubkey+updatedAt]"
+    });
+    // Additive: encrypted 文件传输助手 history, pruned after 7 days.
+    this.version(20).stores({
+      transferRecords: "[accountPubkey+id], accountPubkey, [accountPubkey+createdAt]",
+      transferFileParts: "[accountPubkey+key], accountPubkey, [accountPubkey+recordId]"
     });
 
 

@@ -1,5 +1,7 @@
-import { reactive } from "vue";
+import { reactive, watch } from "vue";
 import { useUIStore } from "@/stores/ui";
+import { useKeyStore } from "@/stores/keys";
+import { canStoreHistory, deleteHistory, loadHistory, loadHistoryFile, putHistoryFile, putHistoryRecord, toStored } from "@/services/nearbyHistory";
 import { onAppResume } from "@/services/appResumeCoordinator";
 import { requestNearbyCameraAccess } from "@/services/nearbyCameraAccess";
 import { clearNearbyUnread, markNearbyUnread } from "@/services/nearbyUnread";
@@ -52,6 +54,10 @@ export type NearbyTransferRecord = {
   wireId?: string;
   resumable?: boolean;
   deliveryConfirmed?: boolean;
+  /** Per file: a sealed copy exists in this account's history. */
+  stored?: boolean[];
+  /** Restored from history; the original send can no longer be retried. */
+  restored?: boolean;
   state: "queued" | "waiting" | "active" | "verifying" | "paused" | "canceled" | "done" | "declined" | "failed";
 };
 
@@ -170,7 +176,7 @@ function peersFor(kind: RoomKind) {
  */
 function rebindOwnDevices(next: Record<string, string>, devices: Record<string, string>) {
   for (const item of nearbyState.transfers) {
-    if (item.kind !== "own" || item.direction !== "out" || !item.peerDevice || next[item.peerId]) continue;
+    if (item.kind !== "own" || item.direction !== "out" || item.restored || !item.peerDevice || next[item.peerId]) continue;
     if (!["paused", "failed", "declined"].includes(item.state) || sendTasks.get(item.id)?.controller) continue;
     const peerId = Object.keys(devices).find(id => devices[id] === item.peerDevice && next[id] && next[id] !== NEARBY_UNNAMED_PEER);
     if (!peerId) continue;
@@ -265,6 +271,7 @@ function makeRoom(kind: RoomKind, deviceId = "") {
         item.received[index] = file;
         item.progress[index] = 1;
         if (item.received.every(Boolean)) item.state = "done";
+        storeReceivedFile(item, index, file);
       });
     },
     onResume: (id, peerId) => {
@@ -375,6 +382,7 @@ export async function resetNearby() {
   nearbyState.pendingOffer = null;
   nearbyState.transfers = [];
   clearNearbyUnread();
+  resetHistory();
   await Promise.all([leaveOwnDevicesRoom(), stopPairRoom()]);
 }
 
@@ -422,6 +430,7 @@ export function clearNearbyTransfer(id: string) {
   if (record.wireId) rooms[record.kind]?.forget(record.peerId, record.wireId);
   sendTasks.delete(id);
   nearbyState.transfers.splice(index, 1);
+  forgetHistory(id);
 }
 
 function failRoomTransfers(kind: RoomKind) {
@@ -538,4 +547,125 @@ export function cancelNearbyTransfer(id: string) {
       item.state = 'canceled';
     }
   }
+}
+
+/* ---- Encrypted history (文件传输助手 records survive reloads for 7 days) ---- */
+
+const historyAccount = () => (useKeyStore().pkHex || "").toLowerCase();
+const savedSnapshots = new Map<string, string>();
+let historyGeneration = 0;
+let restoredFor = "";
+let fileWrites: Promise<unknown> = Promise.resolve();
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let quotaWarned = false;
+/** Restored files are decrypted into memory up to this budget; the rest on demand. */
+const RESTORE_BUDGET_BYTES = 256 * 1024 * 1024;
+
+function resetHistory() {
+  historyGeneration++;
+  restoredFor = "";
+  savedSnapshots.clear();
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = null;
+}
+
+function forgetHistory(id: string) {
+  const account = historyAccount();
+  savedSnapshots.delete(id);
+  if (canStoreHistory(account)) void deleteHistory(account, [id]).catch(() => undefined);
+}
+
+function warnStorageFailure(error: unknown) {
+  if (quotaWarned || (error as Error)?.message === "local_vault_locked") return;
+  quotaWarned = true;
+  useUIStore().addToast("无法在本机保存传输记录，文件仅保留到关闭页面，请及时保存", 4_000, "error");
+}
+
+function flushHistory() {
+  saveTimer = null;
+  const account = historyAccount();
+  if (!canStoreHistory(account)) return;
+  const generation = historyGeneration;
+  for (const record of nearbyState.transfers) {
+    const snapshot = toStored(record);
+    const json = JSON.stringify(snapshot);
+    if (savedSnapshots.get(record.id) === json) continue;
+    savedSnapshots.set(record.id, json);
+    void putHistoryRecord(account, snapshot).catch(error => {
+      if (generation === historyGeneration) { savedSnapshots.delete(record.id); warnStorageFailure(error); }
+    });
+  }
+}
+
+// Progress ticks are excluded: only states and names are worth a write.
+watch(() => nearbyState.transfers.map(item => [item.id, item.state, item.saveState, item.peerName, item.deliveryConfirmed, item.stored?.join()].join("|")).join("\n"), () => {
+  if (!saveTimer) saveTimer = setTimeout(flushHistory, 800);
+});
+
+function storeReceivedFile(record: NearbyTransferRecord, index: number, file: File) {
+  const account = historyAccount();
+  if (!canStoreHistory(account)) return;
+  const generation = historyGeneration;
+  fileWrites = fileWrites.then(async () => {
+    if (generation !== historyGeneration || !nearbyState.transfers.includes(record)) return;
+    try {
+      if (!await putHistoryFile(account, record.id, index, file)) return;
+      // Removed while sealing: drop the copy rather than leaving orphans.
+      if (generation !== historyGeneration || !nearbyState.transfers.includes(record)) { await deleteHistory(account, [record.id]); return; }
+      const stored = record.stored?.slice() || record.files.map(() => false);
+      stored[index] = true;
+      record.stored = stored;
+    } catch (error) {
+      if (generation === historyGeneration) warnStorageFailure(error);
+    }
+  });
+}
+
+function restoredState(record: Pick<NearbyTransferRecord, "state">): NearbyTransferRecord["state"] {
+  return ["done", "declined", "canceled"].includes(record.state) ? record.state : "failed";
+}
+
+/** Bring back this account's recent records once per session. */
+export async function restoreNearbyHistory() {
+  const account = historyAccount();
+  if (!canStoreHistory(account) || restoredFor === account) return;
+  restoredFor = account;
+  const generation = historyGeneration;
+  const stored = await loadHistory(account).catch(() => []);
+  if (generation !== historyGeneration) return;
+  const known = new Set(nearbyState.transfers.map(item => item.id));
+  for (const item of stored) {
+    if (known.has(item.id) || nearbyState.transfers.length >= 100) continue;
+    nearbyState.transfers.push({
+      ...item, peerId: "", restored: true, state: restoredState(item),
+      progress: item.files.map((_, index) => item.direction === "out" || item.stored?.[index] ? 1 : 0),
+      received: item.files.map(() => undefined),
+    });
+    savedSnapshots.set(item.id, JSON.stringify(item));
+  }
+  nearbyState.transfers.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  let budget = RESTORE_BUDGET_BYTES;
+  for (const record of nearbyState.transfers) {
+    if (!record.restored || record.direction !== "in" || !record.stored?.some(Boolean)) continue;
+    const size = batchBytes(record.files.filter((_, index) => record.stored?.[index]));
+    if (size > budget) continue;
+    budget -= size;
+    await loadNearbyHistoryFiles(record.id);
+    if (generation !== historyGeneration) return;
+  }
+}
+
+/** Decrypt a restored record's files into memory so they can be previewed and saved. */
+export async function loadNearbyHistoryFiles(id: string) {
+  const account = historyAccount();
+  const record = nearbyState.transfers.find(item => item.id === id);
+  if (!record || !canStoreHistory(account)) return false;
+  const generation = historyGeneration;
+  for (const [index, meta] of record.files.entries()) {
+    if (record.received[index] || !record.stored?.[index]) continue;
+    const file = await loadHistoryFile(account, id, index, meta.name, meta.type);
+    if (generation !== historyGeneration) return false;
+    if (file) record.received[index] = file;
+  }
+  return record.files.every((_, index) => !!record.received[index]);
 }
