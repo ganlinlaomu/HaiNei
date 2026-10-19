@@ -23,7 +23,8 @@ vi.mock("trystero", () => ({
 }));
 
 import { NearbyRoom, nearbyRelayStates, refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
-import { answerPendingOffer, clearNearbyTransfer, ensureOwnDevicesRoom, nearbyState, refreshNearbyDiscovery, resetNearby, retryNearbyWithCamera, sendNearbyFiles, startPairRoom } from "@/services/nearbySession";
+import { answerPendingOffer, cancelNearbyTransfer, clearNearbyTransfer, ensureOwnDevicesRoom, nearbyState, queueNearbyFiles, refreshNearbyDiscovery, resetNearby, retryNearbyTransfer, retryNearbyWithCamera, sendNearbyFiles, startPairRoom } from "@/services/nearbySession";
+import { NEARBY_CHUNK_BYTES, chunkDigest } from '@/services/nearbyChunks';
 
 class Socket extends EventTarget {
   static OPEN = 1;
@@ -55,6 +56,132 @@ async function startProbe(socket: Socket) {
 }
 
 describe("nearby signaling recovery", () => {
+  async function modernRoom() {
+    await ensureOwnDevicesRoom('account', '1'.repeat(64));
+    const room = trystero.rooms[0];
+    room.onPeerJoin('peer');
+    room.actions.hello.handlers.onMessage({ name: 'PC', reply: true, text: true, protocol: 2 }, { peerId: 'peer' });
+    for (const name of ['offer', 'chunk2', 'control2']) room.actions[name].request.mockImplementation(async (value: any, options: any) => {
+      const handlers = room.actions[name].handlers;
+      const byteLength = value instanceof Blob ? value.size : new TextEncoder().encode(JSON.stringify(value)).length;
+      if (handlers.onReceive && !await handlers.onReceive({ kind: 'request', peerId: 'peer', metadata: options.metadata, byteLength })) throw new Error('request rejected');
+      const response = await handlers.onRequest(value, { peerId: 'peer', metadata: options.metadata });
+      // Trystero uses the same admission handler for responses, without request metadata.
+      if (handlers.onReceive && !await handlers.onReceive({ kind: 'response', peerId: 'peer', byteLength: JSON.stringify(response).length })) throw new Error('response rejected');
+      return response;
+    });
+    return room;
+  }
+
+  it('waits for receiver completion, serializes queued batches and can cancel a queued item', async () => {
+    const room = await modernRoom();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const control = room.actions.control2.request.getMockImplementation();
+    room.actions.control2.request.mockImplementation(async (value: any, options: any) => {
+      if (value.op === 'complete') await gate;
+      return control(value, options);
+    });
+    const first = queueNearbyFiles('own', 'peer', [new File(['abc'], 'a.txt')]);
+    const second = queueNearbyFiles('own', 'peer', [], 'second');
+    await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === first)?.state).toBe('verifying'));
+    expect(nearbyState.transfers.find(item => item.id === second)?.state).toBe('queued');
+    expect(room.actions.offer.request).toHaveBeenCalledOnce();
+    cancelNearbyTransfer(second);
+    release();
+    await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === first)?.state).toBe('done'));
+    expect(nearbyState.transfers.find(item => item.id === first)?.deliveryConfirmed).toBe(true);
+    expect(nearbyState.transfers.find(item => item.id === second)?.state).toBe('canceled');
+    expect(room.actions.offer.request).toHaveBeenCalledOnce();
+  });
+
+  it('continues the same offer from acknowledged offsets on reconnect without duplicate records', async () => {
+    const room = await modernRoom();
+    const original = room.actions.chunk2.request.getMockImplementation();
+    room.actions.chunk2.request.mockImplementationOnce(async (value: any, options: any) => {
+      await original(value, options);
+      room.onPeerLeave('peer');
+      throw new Error('connection lost after ack');
+    });
+    const id = queueNearbyFiles('own', 'peer', [new File([new Uint8Array(NEARBY_CHUNK_BYTES + 3)], 'large.bin')]);
+    const queued = queueNearbyFiles('own', 'peer', [], 'after reconnect');
+    await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === id)?.state).toBe('paused'));
+    expect(nearbyState.transfers.find(item => item.id === queued)?.state).toBe('paused');
+    expect(nearbyState.transfers.filter(item => item.direction === 'in')).toHaveLength(1);
+    room.onPeerJoin('peer');
+    room.actions.hello.handlers.onMessage({ name: 'PC', reply: true, text: true, protocol: 2 }, { peerId: 'peer' });
+    await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === id)?.state).toBe('done'));
+    await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === queued)?.state).toBe('done'));
+    expect(room.actions.chunk2.request).toHaveBeenCalledTimes(2);
+    expect(room.actions.chunk2.request.mock.calls[1][1].metadata.offset).toBe(NEARBY_CHUNK_BYTES);
+    expect(nearbyState.transfers).toHaveLength(4);
+    expect(nearbyState.transfers.every(item => item.state === 'done')).toBe(true);
+  });
+
+  it('retains source files for a failed attempt and retries without repeating delivered bytes', async () => {
+    const room = await modernRoom();
+    room.actions.control2.request.mockRejectedValueOnce(new Error('temporary error'));
+    const id = queueNearbyFiles('own', 'peer', [new File(['abc'], 'a.txt')]);
+    await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === id)?.state).toBe('failed'));
+    const wireId = nearbyState.transfers.find(item => item.id === id)?.wireId;
+    retryNearbyTransfer(id);
+    await vi.waitFor(() => expect(nearbyState.transfers.find(item => item.id === id)?.state).toBe('done'));
+    expect(nearbyState.transfers.find(item => item.id === id)?.wireId).toBe(wireId);
+    expect(nearbyState.transfers).toHaveLength(2);
+  });
+
+  it('clears the queue and aborts the active request on account reset', async () => {
+    const room = await modernRoom();
+    let signal!: AbortSignal;
+    room.actions.offer.request.mockImplementation((_offer: any, options: any) => {
+      signal = options.signal;
+      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new DOMException('canceled', 'AbortError')), { once: true }));
+    });
+    const pending = sendNearbyFiles('own', 'peer', [], 'first');
+    queueNearbyFiles('own', 'peer', [], 'queued');
+    await resetNearby();
+    await pending;
+    expect(signal.aborted).toBe(true);
+    expect(nearbyState.transfers).toEqual([]);
+    expect(room.actions.offer.request).toHaveBeenCalledOnce();
+  });
+
+  it('preserves partial chunks across same-room discovery restart but releases them on leave', async () => {
+    const onOffer = vi.fn(async () => true), onResume = vi.fn();
+    const room = new NearbyRoom('phone', { onPeers: vi.fn(), onError: vi.fn(), onOffer, onResume, onReceiveProgress: vi.fn(), onFile: vi.fn() });
+    await room.join({ roomId: 'resume', password: 'secret' });
+    const offer = { id: '0123456789abcdef', files: [{ name: 'a', size: NEARBY_CHUNK_BYTES + 1, type: 'application/octet-stream' }], protocol: 2 };
+    const first = trystero.rooms[0];
+    expect(await first.actions.offer.handlers.onRequest(offer, { peerId: 'peer' })).toBe(true);
+    const bytes = new Uint8Array(NEARBY_CHUNK_BYTES);
+    await first.actions.chunk2.handlers.onRequest(bytes.buffer, { peerId: 'peer', metadata: { id: offer.id, index: 0, offset: 0, hash: chunkDigest(bytes) } });
+    await room.restart();
+    const second = trystero.rooms[1];
+    expect(await second.actions.offer.handlers.onRequest(offer, { peerId: 'peer' })).toBe(true);
+    expect(onOffer).toHaveBeenCalledOnce();
+    expect(onResume).toHaveBeenCalledWith(offer.id, 'peer');
+    expect(second.actions.control2.handlers.onRequest({ id: offer.id, index: 0, op: 'status' }, { peerId: 'peer' })).toBe(NEARBY_CHUNK_BYTES);
+    await room.leave();
+    await room.join({ roomId: 'other', password: 'other' });
+    expect(() => trystero.rooms[2].actions.control2.handlers.onRequest({ id: offer.id, index: 0, op: 'status' }, { peerId: 'peer' })).toThrow('unknown_transfer');
+    await room.leave();
+  });
+
+  it('honors receiver cancellation and never marks a late result delivered', async () => {
+    const room = await modernRoom();
+    let finishOffer!: (ok: boolean) => void;
+    room.actions.offer.request.mockImplementationOnce(() => new Promise<boolean>(resolve => { finishOffer = resolve; }));
+    const id = queueNearbyFiles('own', 'peer', [], 'pending');
+    const record = nearbyState.transfers.find(item => item.id === id)!;
+    room.actions.cancel2.handlers.onMessage({ id: record.wireId }, { peerId: 'other' });
+    expect(record.state).toBe('waiting');
+    room.actions.cancel2.handlers.onMessage({ id: record.wireId }, { peerId: 'peer' });
+    expect(record.state).toBe('canceled');
+    finishOffer(true);
+    await vi.waitFor(() => expect(record.deliveryConfirmed).not.toBe(true));
+    expect(record.state).toBe('canceled');
+  });
+
   it("receives text as a completed own-account message and clears it on account reset", async () => {
     await ensureOwnDevicesRoom("account", "1".repeat(64));
     const own = trystero.rooms[0];

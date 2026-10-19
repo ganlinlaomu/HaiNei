@@ -1,6 +1,6 @@
 <template>
   <div v-if="open" class="scanner-overlay" role="presentation" @click.self="close">
-    <section class="scanner-sheet" role="dialog" aria-modal="true"  :aria-label="title || '扫描好友二维码'">
+    <section ref="scannerPanel" class="scanner-sheet" role="dialog" aria-modal="true" tabindex="-1" :aria-label="title || '扫描好友二维码'">
       <div class="scanner-header">
         <strong>{{ title || "扫描好友二维码" }}</strong>
         <button type="button" aria-label="关闭" @click="close">×</button>
@@ -23,6 +23,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useUIStore } from "@/stores/ui";
+import { useDialogFocus } from "@/composables/useDialogFocus";
 
 const props = defineProps<{ open: boolean; title?: string }>();
 const emit = defineEmits<{
@@ -34,6 +35,8 @@ const ui = useUIStore();
 const videoEl = ref<HTMLVideoElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const cameraError = ref("");
+const scannerPanel = ref<HTMLElement | null>(null);
+useDialogFocus(scannerPanel, () => props.open, close);
 let controls: any = null;
 let reader: any = null;
 let handled = false;
@@ -87,7 +90,7 @@ async function startScanner() {
 }
 
 function complete(value: string) {
-  if (handled) return;
+  if (handled || !props.open) return;
   handled = true;
   stopScanner();
   emit("scanned", value);
@@ -98,19 +101,21 @@ async function scanImage(event: Event) {
   const file = input.files?.[0];
   input.value = "";
   if (!file) return;
+  const run = generation;
   cameraError.value = "";
   try {
     const mod = await import("@zxing/browser");
+    if (!props.open || run !== generation) return;
     const imageReader = reader || new mod.BrowserQRCodeReader();
     const url = URL.createObjectURL(file);
     try {
       const result = await imageReader.decodeFromImageUrl(url);
-      complete(result.getText());
+      if (props.open && run === generation) complete(result.getText());
     } finally {
       URL.revokeObjectURL(url);
     }
   } catch {
-    cameraError.value = "没有识别到二维码，请换一张更清晰的图片。";
+    if (props.open && run === generation) cameraError.value = "没有识别到二维码，请换一张更清晰的图片。";
   }
 }
 
@@ -135,7 +140,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .scanner-overlay{position:fixed;inset:0;z-index:12500;display:flex;align-items:flex-end;justify-content:center;background:rgba(2,6,23,.72)}
-.scanner-sheet{width:min(100%,520px);box-sizing:border-box;padding:16px 16px calc(22px + env(safe-area-inset-bottom));border-radius:22px 22px 0 0;background:var(--bg-fff)}
+.scanner-sheet{width:min(100%,520px);max-height:95dvh;overflow-y:auto;box-sizing:border-box;padding:16px 16px calc(22px + env(safe-area-inset-bottom));border-radius:22px 22px 0 0;background:var(--bg-fff)}
 .scanner-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;color:var(--fg-172033);font-size:17px}.scanner-header button{width:34px;height:34px;border:0;border-radius:50%;background:var(--bg-f1f5f9);color:var(--fg-475569);font-size:24px}
 .camera-frame{position:relative;overflow:hidden;width:100%;aspect-ratio:1;border-radius:18px;background:#0f172a}.camera-frame video{width:100%;height:100%;object-fit:cover}.scan-frame{position:absolute;inset:17%;border:2px solid var(--bd-rgba-255-255-255-92);border-radius:18px;box-shadow:0 0 0 999px rgba(2,6,23,.25)}
 .hint,.error{margin:12px 0 0;text-align:center;font-size:13px}.hint{color:var(--fg-64748b)}.error{color:var(--fg-b91c1c)}

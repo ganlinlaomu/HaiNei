@@ -5,6 +5,8 @@ import NearbyTransfer from "../../src/views/NearbyTransfer.vue";
 import { nearbyState, resetNearby } from "../../src/services/nearbySession";
 import { useUIStore } from "../../src/stores/ui";
 import { useKeyStore } from "../../src/stores/keys";
+import { NEARBY_UNNAMED_PEER } from '../../src/services/nearbyTransfer';
+import qrcode from 'qrcode-generator';
 
 /** Exercise real composer bindings, staged attachments and batch saving. */
 export async function validateTransferAssistant() {
@@ -12,6 +14,8 @@ export async function validateTransferAssistant() {
   await router.push("/nearby");
   const shareDescriptor = Object.getOwnPropertyDescriptor(navigator, "share");
   const canShareDescriptor = Object.getOwnPropertyDescriptor(navigator, "canShare");
+  const cameraDescriptor = Object.getOwnPropertyDescriptor(navigator.mediaDevices, 'getUserMedia');
+  Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { configurable: true, value: async () => { throw new DOMException('Denied', 'NotAllowedError'); } });
   const shared: File[][] = [];
   let shareError: Error | undefined;
   Object.defineProperty(navigator, "canShare", { configurable: true, value: () => true });
@@ -22,7 +26,8 @@ export async function validateTransferAssistant() {
   const settle = async () => { await new Promise(resolve => setTimeout(resolve, 0)); await nextTick(); };
   const click = (selector: string) => document.querySelector<HTMLButtonElement>(selector)!.click();
   try {
-    const files = [new File(["photo"], "照片.jpg", { type: "image/jpeg" }), new File(["pdf"], "文档.pdf", { type: "application/pdf" })];
+    const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7X0AAAAASUVORK5CYII='), c => c.charCodeAt(0));
+    const files = [new File([png], "照片.png", { type: "image/png" }), new File(["pdf"], "文档.pdf", { type: "application/pdf" })];
     nearbyState.pairKey = { roomId: "preview", password: "preview" };
     nearbyState.pairPeers = { peer: "Linux 电脑" };
     nearbyState.pairTextPeers = { peer: true };
@@ -34,6 +39,43 @@ export async function validateTransferAssistant() {
     });
     app.mount("#app");
     await nextTick();
+    const waitFor = async (predicate: () => boolean) => {
+      for (let attempt = 0; attempt < 250; attempt++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 20)); }
+      throw new Error('timed out waiting for scanner');
+    };
+    nearbyState.pairKey = null;
+    nearbyState.pairPeers = {};
+    click('[aria-label="设备与连接"]');
+    await nextTick();
+    click('.scan-device');
+    await nextTick();
+    if (!document.querySelector('.scanner-overlay') || document.querySelector('.connection-sheet')) throw new Error('device panel must close before opening scanner');
+    const frame = document.querySelector('.camera-frame')!.getBoundingClientRect();
+    if (!document.querySelector('.scanner-overlay')!.contains(document.elementFromPoint(frame.x + frame.width / 2, frame.y + frame.height / 2))) throw new Error('scanner must not be covered by another panel');
+    await waitFor(() => !!document.querySelector('.scanner-sheet .error'));
+    if (document.querySelector('.connection-sheet')) throw new Error('camera denial must leave the scanner and photo fallback visible');
+    // Decode a real QR image to exercise scanner completion and panel restoration.
+    const qr = qrcode(0, 'M'); qr.addData('not-a-hainei-pairing-link'); qr.make();
+    const image = new Image(); image.src = qr.createDataURL(5, 4); await image.decode();
+    const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+    canvas.getContext('2d')!.drawImage(image, 0, 0);
+    const blob = await new Promise<Blob>(resolve => canvas.toBlob(value => resolve(value!), 'image/png'));
+    const qrInput = document.querySelector<HTMLInputElement>('.scanner-sheet input')!;
+    const qrSelection = new DataTransfer(); qrSelection.items.add(new File([blob], 'qr.png', { type: 'image/png' }));
+    qrInput.files = qrSelection.files; qrInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => !document.querySelector('.scanner-overlay'));
+    if (!document.querySelector('.connection-sheet')) throw new Error('decoded QR must close the scanner and restore the connection panel');
+    click('.scan-device'); await nextTick();
+    click('.scanner-header button'); await nextTick();
+    if (document.querySelector('.scanner-overlay') || !document.querySelector('.connection-sheet')) throw new Error('canceling scan must restore the device panel');
+    click('[aria-label="关闭设备与连接"]');
+    nearbyState.pairKey = { roomId: 'preview', password: 'preview' };
+    nearbyState.pairPeers = { peer: 'Linux 电脑' };
+    await nextTick();
+    if (!document.querySelector('.file-thumbnail img')) throw new Error('received images must show a thumbnail');
+    click('.file-thumbnail'); await nextTick();
+    if (!document.querySelector('.image-preview img')) throw new Error('thumbnail must open full preview');
+    click('[aria-label="关闭图片预览"]'); await nextTick();
     if (document.querySelector(".assistant-body .device-card, .assistant-body .diagnostics, .connection-status, .choose-files")) throw new Error("chat must not contain duplicate connection or file-picker controls");
     const save = document.querySelector<HTMLButtonElement>(".batch-save");
     const send = document.querySelector<HTMLButtonElement>('[aria-label="发送"]')!;
@@ -68,6 +110,11 @@ export async function validateTransferAssistant() {
     };
     const typeText = (text: string) => { textarea.value = text; textarea.dispatchEvent(new Event("input", { bubbles: true })); };
     if (!document.querySelector('.selected-target')?.textContent?.includes('Linux 电脑')) throw new Error('a single device must be selected automatically');
+    nearbyState.pairPeers = { peer: NEARBY_UNNAMED_PEER };
+    typeText('pending connection'); await nextTick();
+    if (!send.disabled || document.querySelector('.selected-target')?.textContent?.includes('可发送')) throw new Error('unidentified connections must not be presented as ready');
+    nearbyState.pairPeers = { peer: 'Linux 电脑' };
+    typeText(''); await nextTick();
     click(".attachment-button");
     pickBatch();
     await nextTick();
@@ -158,5 +205,7 @@ export async function validateTransferAssistant() {
       if (descriptor) Object.defineProperty(navigator, name, descriptor);
       else delete (navigator as unknown as Record<string, unknown>)[name];
     }
+    if (cameraDescriptor) Object.defineProperty(navigator.mediaDevices, 'getUserMedia', cameraDescriptor);
+    else delete (navigator.mediaDevices as unknown as Record<string, unknown>).getUserMedia;
   }
 }

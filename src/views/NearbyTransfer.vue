@@ -20,22 +20,25 @@
           <time v-if="transfer.createdAt" class="transfer-time" :datetime="new Date(transfer.createdAt).toISOString()">{{ transfer.direction === 'out' ? '发送于' : '接收于' }} {{ new Date(transfer.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</time>
           <p v-if="transfer.text" class="transfer-text">{{ transfer.text }}</p>
           <p v-if="transfer.files.length" class="batch-summary">{{ transfer.files.length }} 个文件 · {{ formatBytes(batchBytes(transfer.files)) }}</p>
-          <progress v-if="transfer.files.length && (transfer.state === 'active' || transfer.state === 'waiting')" class="batch-progress" :value="batchProgress(transfer)" max="1" :aria-label="transferStatus(transfer)"></progress>
-          <details v-if="transfer.files.length" class="batch-files"><summary>{{ transfer.files.length === 1 ? transfer.files[0].name : '查看文件' }}</summary>
+          <progress v-if="transfer.files.length && ['queued', 'active', 'waiting', 'verifying', 'paused'].includes(transfer.state)" class="batch-progress" :value="batchProgress(transfer)" max="1" :aria-label="transferStatus(transfer)"></progress>
+          <div v-if="transfer.files.length" class="batch-files file-cards">
           <div v-for="(file, index) in transfer.files" :key="index" class="file-row">
-            <span class="file-name">{{ file.name }}</span>
-            <span class="file-size">{{ formatBytes(file.size) }}</span>
+            <button v-if="canPreview(fileFor(transfer, index))" class="file-thumbnail" type="button" :aria-label="`预览 ${file.name}`" @click="imagePreview = fileFor(transfer, index) || null"><img :src="objectUrl(fileFor(transfer, index)!)" :alt="file.name" loading="lazy" /></button>
+            <span v-else class="file-symbol" aria-hidden="true">▤</span>
+            <span class="file-description"><span class="file-name">{{ file.name }}</span><span class="file-size">{{ formatBytes(file.size) }}</span></span>
             <template v-if="transfer.received[index]">
               <a class="file-action" :href="objectUrl(transfer.received[index])" :download="file.name">保存</a>
             </template>
           </div>
-          </details>
+          </div>
           <div class="batch-actions">
             <button v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="file-action batch-save" type="button" :disabled="savingBatch === transfer.id" @click="saveAll(transfer)">{{ savingBatch === transfer.id ? '正在准备…' : transfer.saveState ? '再次保存' : '保存' }}</button>
             <button v-if="transfer.saveState === 'system' || transfer.saveState === 'download'" class="file-action confirm-saved" type="button" :disabled="savingBatch === transfer.id" @click="transfer.saveState = 'saved'">确认已保存</button>
             <button v-if="transfer.text" class="file-action" type="button" @click="copyText(transfer.text)">复制文字</button>
             <a v-if="zipDownloads[transfer.id]" class="file-action" :href="zipDownloads[transfer.id]" download="海内文件.zip">下载 ZIP</a>
-            <button v-if="!['active', 'waiting'].includes(transfer.state)" class="clear-transfer" type="button" :disabled="savingBatch === transfer.id" @click="clearTransfer(transfer)">{{ transfer.direction === 'in' && transfer.files.length ? '移除文件' : '清除记录' }}</button>
+            <button v-if="['queued', 'active', 'waiting', 'verifying', 'paused'].includes(transfer.state)" class="file-action cancel-transfer" type="button" @click="cancelNearbyTransfer(transfer.id)">取消传输</button>
+            <button v-if="transfer.direction === 'out' && ['failed', 'paused', 'declined'].includes(transfer.state)" class="file-action retry-transfer" type="button" @click="retryTransfer(transfer.id)">{{ transfer.resumable && transfer.state !== 'declined' ? '继续传输' : '重新发送' }}</button>
+            <button v-if="!['queued', 'active', 'waiting', 'verifying'].includes(transfer.state)" class="clear-transfer" type="button" :disabled="savingBatch === transfer.id" @click="clearTransfer(transfer)">{{ transfer.direction === 'in' && transfer.files.length ? '移除文件' : '清除记录' }}</button>
           </div>
           <p v-if="transfer.direction === 'in' && transfer.files.length && transfer.state === 'done'" class="save-hint" role="status">{{ transfer.saveState === 'saved' ? '✓ 已保存' : transfer.saveState === 'system' ? '已交给系统，请在完成保存后确认已保存' : transfer.saveState === 'download' ? '已开始下载，请检查下载完成后确认已保存' : '请保存后再关闭海内' }}</p>
         </li>
@@ -53,8 +56,8 @@
       <ul v-if="ownPeerList.length" class="peer-list">
         <li v-for="peer in ownPeerList" :key="peer.id" class="peer-row">
           <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2.5" /><path d="M10.5 17.5h3" /></svg></span>
-          <span class="peer-name">{{ peer.name }}<small>在线 · 同账号自动接收</small></span>
-          <button class="peer-send" type="button" :disabled="!!activeSend" @click="selectDevice('own', peer.id)">选择此设备</button>
+          <span class="peer-name">{{ peer.name }}<small>{{ peer.name === NEARBY_UNNAMED_PEER ? '连接中…' : '可发送 · 同账号自动接收' }}</small></span>
+          <button class="peer-send" type="button" :disabled="peer.name === NEARBY_UNNAMED_PEER" @click="selectDevice('own', peer.id)">选择此设备</button>
         </li>
       </ul>
       <p v-else class="nearby-empty">{{ ownStatus }}</p>
@@ -74,7 +77,7 @@
       <p class="nearby-hint">没登录海内的电脑、或别人的设备：一方显示二维码，另一方扫码或打开链接。</p>
       <div v-if="!pairKey" class="pair-actions">
         <button class="pair-button" type="button" @click="startPairing">显示二维码</button>
-        <button class="pair-button" type="button" @click="scannerOpen = true">扫码</button>
+        <button class="pair-button scan-device" type="button" @click="openScanner">扫码</button>
       </div>
       <template v-else>
         <div v-if="pairQr && pairPeerList.length === 0" class="pair-qr">
@@ -85,8 +88,8 @@
         <ul v-if="pairPeerList.length" class="peer-list">
           <li v-for="peer in pairPeerList" :key="peer.id" class="peer-row">
             <span class="peer-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2" /><path d="M8 20h8" /></svg></span>
-            <span class="peer-name">{{ peer.name }}</span>
-            <button class="peer-send" type="button" :disabled="!!activeSend" @click="selectDevice('pair', peer.id)">选择此设备</button>
+            <span class="peer-name">{{ peer.name }}<small>{{ peer.name === NEARBY_UNNAMED_PEER ? '连接中…' : '可发送' }}</small></span>
+            <button class="peer-send" type="button" :disabled="peer.name === NEARBY_UNNAMED_PEER" @click="selectDevice('pair', peer.id)">选择此设备</button>
           </li>
         </ul>
         <p v-if="nearbyState.pairError" class="nearby-empty">{{ joinErrorText(nearbyState.pairError) }}</p>
@@ -122,34 +125,38 @@
     </div>
 
     <footer class="assistant-composer">
-      <button class="selected-target" type="button" aria-label="选择接收设备" :disabled="!!activeSend" @click="chooseTarget"><span>{{ availableTargets.length ? selectedTarget ? `发送到：${selectedTargetName}` : '选择接收设备' : '连接设备' }}</span><span aria-hidden="true">⌄</span></button>
+      <button class="selected-target" type="button" aria-label="选择接收设备" @click="chooseTarget"><span>{{ availableTargets.length ? selectedTarget ? `发送到：${selectedTargetName}${selectedPeer?.ready ? ' · 可发送' : ''}` : '选择接收设备' : '连接设备' }}</span><span aria-hidden="true">⌄</span></button>
+      <p v-if="!availableTargets.length && (nearbyState.ownError || nearbyState.pairError)" class="recipient-hint">连接未完成，请检查设备与网络；点击「连接设备」重试</p>
       <p v-if="selectedPeer && draftText.trim() && !selectedPeer.supportsText" class="recipient-hint">请更新接收设备的海内以接收文字</p>
       <div v-if="selectedFiles.length" class="selected-batch"><span>已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</span><button type="button" @click="selectedFiles = []; targetPickerOpen = false">移除附件</button></div>
       <div class="file-composer">
-        <textarea ref="textInput" v-model="draftText" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="输入消息……" aria-label="输入消息" :maxlength="NEARBY_MAX_TEXT_LENGTH" :disabled="!!activeSend" @focus="resizeTextInput" @input="resizeTextInput"></textarea>
+        <textarea ref="textInput" v-model="draftText" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="输入消息……" aria-label="输入消息" :maxlength="NEARBY_MAX_TEXT_LENGTH" @focus="resizeTextInput" @input="resizeTextInput"></textarea>
         <div class="composer-actions">
-          <button type="button" class="composer-icon attachment-button" aria-label="添加图片或文件" :disabled="!!activeSend" @click="chooseFiles"><span><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></span></button>
-          <button type="button" class="composer-icon send-button" aria-label="发送" :disabled="!!activeSend || !hasContent || !canSendToTarget" @click="requestSend"><span><svg viewBox="0 0 24 24"><path d="m5 12 14-8-5 16-3-7-6-1Z" /></svg></span></button>
+          <button type="button" class="composer-icon attachment-button" aria-label="添加图片或文件" @click="chooseFiles"><span><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></span></button>
+          <button type="button" class="composer-icon send-button" aria-label="发送" :disabled="!hasContent || !canSendToTarget" @click="requestSend"><span><svg viewBox="0 0 24 24"><path d="m5 12 14-8-5 16-3-7-6-1Z" /></svg></span></button>
         </div>
       </div>
     </footer>
 
     <input ref="fileInput" class="hidden-input" type="file" multiple @change="onFilesPicked" @cancel="filePickerGeneration = -1" />
-    <QrScannerSheet :open="scannerOpen" title="扫描配对二维码" @close="scannerOpen = false" @scanned="onScanned" />
+    <QrScannerSheet :open="scannerOpen" title="扫描配对二维码" @close="closeScanner" @scanned="onScanned" />
 
     <div v-if="targetPickerOpen" class="offer-overlay" @click.self="targetPickerOpen = false">
       <section ref="targetPanel" class="offer-sheet" role="dialog" aria-modal="true" aria-labelledby="target-title" tabindex="-1">
         <h2 id="target-title">发送到设备</h2>
         <p v-if="selectedFiles.length" class="nearby-hint">已选 {{ selectedFiles.length }} 个文件 · {{ formatBytes(batchBytes(selectedFiles)) }}</p>
         <p v-if="draftText.trim()" class="text-preview">{{ draftText }}</p>
-        <ul class="peer-list"><li v-for="peer in availableTargets" :key="`${peer.kind}:${peer.id}`"><button class="target-device" type="button" :disabled="!!draftText.trim() && !peer.supportsText" @click="selectDevice(peer.kind, peer.id)"><strong>{{ peer.name }}</strong><span>{{ draftText.trim() && !peer.supportsText ? '请更新此设备的海内以接收文字' : `${peer.kind === 'own' ? '我的设备' : '扫码连接的设备'} · 在线` }}</span></button></li></ul>
+        <ul class="peer-list"><li v-for="peer in availableTargets" :key="`${peer.kind}:${peer.id}`"><button class="target-device" type="button" :disabled="!peer.ready || (!!draftText.trim() && !peer.supportsText)" @click="selectDevice(peer.kind, peer.id)"><strong>{{ peer.name }}</strong><span>{{ !peer.ready ? '连接中，暂不可发送' : draftText.trim() && !peer.supportsText ? '请更新此设备的海内以接收文字' : `${peer.kind === 'own' ? '我的设备' : '扫码连接的设备'} · 可发送` }}</span></button></li></ul>
         <p v-if="!availableTargets.length" class="nearby-empty">暂未发现设备，请在另一台设备打开文件传输助手。</p>
         <button class="link-button" type="button" @click="targetPickerOpen = false; pairingOpen = true">设备与连接</button>
         <button class="link-button" type="button" @click="targetPickerOpen = false">返回</button>
       </section>
     </div>
 
-    <div v-if="pendingOffer" class="offer-overlay" role="dialog" aria-modal="true" aria-labelledby="offer-title">
+    <div v-if="imagePreview" class="offer-overlay image-overlay" @click.self="imagePreview = null">
+      <section ref="imagePanel" class="image-preview" role="dialog" aria-modal="true" aria-label="图片预览" tabindex="-1"><button class="header-icon" type="button" aria-label="关闭图片预览" @click="imagePreview = null">×</button><img :src="objectUrl(imagePreview)" :alt="imagePreview.name" /><a class="file-action" :href="objectUrl(imagePreview)" :download="imagePreview.name">保存图片</a></section>
+    </div>
+    <div v-if="pendingOffer && !scannerOpen" class="offer-overlay" role="dialog" aria-modal="true" aria-labelledby="offer-title">
       <section class="offer-sheet">
         <h2 id="offer-title">{{ pendingOffer.peerName }} 想发送{{ pendingOffer.offer.files.length ? ` ${pendingOffer.offer.files.length} 个文件` : '文字' }}</h2>
         <p v-if="pendingOffer.offer.text" class="text-preview">{{ pendingOffer.offer.text }}</p>
@@ -181,6 +188,7 @@ import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import {
   NEARBY_MAX_BATCH_BYTES,
   NEARBY_MAX_TEXT_LENGTH,
+  NEARBY_UNNAMED_PEER,
   batchBytes,
   formatBytes,
   pairingLink,
@@ -191,12 +199,14 @@ import {
 import {
   answerPendingOffer,
   clearNearbyTransfer,
+  cancelNearbyTransfer,
   ensureOwnDevicesRoom,
   nearbyDiagnostics,
   nearbyState,
   refreshNearbyDiscovery,
   retryNearbyWithCamera,
-  sendNearbyFiles,
+  queueNearbyFiles,
+  retryNearbyTransfer,
   startPairRoom,
   stopPairRoom,
   type NearbyTransferRecord,
@@ -223,11 +233,12 @@ const devicePanel = ref<HTMLElement | null>(null);
 const targetPanel = ref<HTMLElement | null>(null);
 const chatBody = ref<HTMLElement | null>(null);
 const savingBatch = ref("");
+const imagePreview = ref<File | null>(null);
+const imagePanel = ref<HTMLElement | null>(null);
 const zipDownloads = ref<Record<string, string>>({});
 let pageActive = true;
 let saveGeneration = 0;
 let saveAbort: AbortController | null = null;
-const activeSend = ref<{ kind: RoomKind; peerId: string } | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 let pickerGeneration = 0;
 let filePickerGeneration = -1;
@@ -299,16 +310,17 @@ const pairPeerList = computed(() => Object.entries(nearbyState.pairPeers).map(([
 const availableTargets = computed(() => [
   ...ownPeerList.value.map(peer => ({ ...peer, kind: "own" as const, supportsText: nearbyState.ownTextPeers[peer.id] === true })),
   ...pairPeerList.value.map(peer => ({ ...peer, kind: "pair" as const, supportsText: nearbyState.pairTextPeers[peer.id] === true })),
-]);
+].map(peer => ({ ...peer, ready: peer.name !== NEARBY_UNNAMED_PEER })));
 const selectedPeer = computed(() => availableTargets.value.find(peer => peer.kind === selectedTarget.value?.kind && peer.id === selectedTarget.value?.peerId));
 const selectedTargetName = computed(() => selectedPeer.value?.name || '设备已断开，请重新选择');
-const canSendToTarget = computed(() => !!selectedPeer.value && (!draftText.value.trim() || selectedPeer.value.supportsText));
+const canSendToTarget = computed(() => !!selectedPeer.value?.ready && (!draftText.value.trim() || selectedPeer.value.supportsText));
 watch(availableTargets, peers => {
   // Never silently redirect an existing recipient when it disconnects.
-  if (!selectedTarget.value && peers.length === 1) selectedTarget.value = { kind: peers[0].kind, peerId: peers[0].id };
+  if (!selectedTarget.value && peers.length === 1 && peers[0].ready) selectedTarget.value = { kind: peers[0].kind, peerId: peers[0].id };
 }, { immediate: true });
 useDialogFocus(devicePanel, () => pairingOpen.value && !scannerOpen.value && !pendingOffer.value, () => { pairingOpen.value = false; });
 useDialogFocus(targetPanel, () => targetPickerOpen.value && !pendingOffer.value, () => { targetPickerOpen.value = false; });
+useDialogFocus(imagePanel, () => !!imagePreview.value && !pendingOffer.value, () => { imagePreview.value = null; });
 function joinErrorText(error: string) {
   if (error.includes("incorrect room password")) return "已发现设备，但房间密码不一致";
   if (error.includes("could not connect to peer")) return "已发现设备，但本次连接协商未完成；请点「重新搜索」";
@@ -362,12 +374,24 @@ async function stopPairing() {
 
 function onScanned(value: string) {
   scannerOpen.value = false;
+  pairingOpen.value = true;
   const key = parsePairing(value);
   if (!key) {
     ui.addToast("这不是附近传输的配对二维码", 2_000, "error");
     return;
   }
   void joinPairRoom(key, false);
+}
+
+function openScanner() {
+  pairingOpen.value = false;
+  targetPickerOpen.value = false;
+  imagePreview.value = null;
+  scannerOpen.value = true;
+}
+function closeScanner() {
+  scannerOpen.value = false;
+  pairingOpen.value = true;
 }
 
 async function copyPairLink() {
@@ -381,21 +405,19 @@ async function copyPairLink() {
 }
 
 function chooseFiles() {
-  if (activeSend.value) return;
   filePickerGeneration = pickerGeneration;
   pairingOpen.value = false;
   fileInput.value?.click();
 }
 
 function selectDevice(kind: RoomKind, peerId: string) {
-  if (activeSend.value) return;
+  if (!availableTargets.value.some(peer => peer.kind === kind && peer.id === peerId && peer.ready)) return;
   selectedTarget.value = { kind, peerId };
   pairingOpen.value = false;
   targetPickerOpen.value = false;
 }
 
 function chooseTarget() {
-  if (activeSend.value) return;
   textInput.value?.blur();
   if (availableTargets.value.length) targetPickerOpen.value = true;
   else pairingOpen.value = true;
@@ -422,7 +444,7 @@ function resizeTextInput() {
 }
 
 function requestSend() {
-  if (activeSend.value || !hasContent.value || !canSendToTarget.value) return;
+  if (!hasContent.value || !canSendToTarget.value) return;
   textInput.value?.blur();
   const target = selectedTarget.value;
   if (target && availableTargets.value.some(peer => peer.kind === target.kind && peer.id === target.peerId && (!draftText.value.trim() || peer.supportsText))) {
@@ -430,25 +452,27 @@ function requestSend() {
   }
 }
 
-async function sendSelected(kind: RoomKind, peerId: string) {
-  if (activeSend.value || !hasContent.value) return;
+function sendSelected(kind: RoomKind, peerId: string) {
+  if (!hasContent.value) return;
   const files = selectedFiles.value;
   const text = draftText.value;
-  const account = keys.pkHex;
-  activeSend.value = { kind, peerId };
-  pairingOpen.value = false;
-  targetPickerOpen.value = false;
-  selectedFiles.value = [];
-  draftText.value = "";
   try {
-    await sendNearbyFiles(kind, peerId, files, text);
-  } catch {
-    ui.addToast("设备已断开，请重新选择设备", 2_400, "error");
-    if (pageActive && keys.pkHex === account) { selectedFiles.value = files; draftText.value = text; }
-  } finally {
-    activeSend.value = null;
+    queueNearbyFiles(kind, peerId, files, text);
+    pairingOpen.value = false;
+    targetPickerOpen.value = false;
+    selectedFiles.value = [];
+    draftText.value = "";
+  } catch (error) {
+    ui.addToast((error as Error)?.message === 'nearby_queue_full' ? '传输队列已满，请移除已完成的记录后再发送' : '设备暂不可发送，请检查连接', 2_400, "error");
   }
 }
+
+function retryTransfer(id: string) {
+  try { retryNearbyTransfer(id); }
+  catch { ui.addToast('接收设备尚未连接，请在同一设备打开文件传输助手', 2_600, 'error'); }
+}
+function fileFor(transfer: NearbyTransferRecord, index: number) { return transfer.direction === 'out' ? transfer.source?.[index] : transfer.received[index]; }
+function canPreview(file?: File) { return !!file && /^image\/(jpeg|png|gif|webp|avif)$/.test(file.type); }
 
 async function copyText(text: string) {
   try { await navigator.clipboard.writeText(text); ui.addToast("已复制", 1_400, "success"); }
@@ -460,10 +484,14 @@ function answerOffer(accept: boolean) {
 }
 
 function transferStatus(transfer: NearbyTransferRecord) {
+  if (transfer.state === 'queued') return '排队中';
+  if (transfer.state === 'verifying') return '正在确认送达…';
+  if (transfer.state === 'paused') return '连接中断，等待重连';
+  if (transfer.state === 'canceled') return '已取消';
   if (transfer.state === "waiting") return transfer.direction === "out" ? "正在连接接收设备…" : "等待你确认";
   if (transfer.state === "declined") return transfer.direction === "out" ? "对方暂时无法接收" : "已拒绝";
   if (transfer.state === "failed") return "传输中断";
-  if (transfer.state === "done") return transfer.direction === "out" ? "已发送" : "已接收";
+  if (transfer.state === "done") return transfer.direction === "out" ? transfer.deliveryConfirmed ? '已送达' : '已发送 · 未确认送达' : "已接收";
   return `${Math.floor(batchProgress(transfer) * 100)}%`;
 }
 
@@ -496,7 +524,7 @@ function releaseUrls() {
 
 function clearTransfer(transfer: NearbyTransferRecord) {
   if (savingBatch.value === transfer.id) return;
-  for (const file of transfer.received) {
+  for (const file of [...transfer.received, ...(transfer.source || [])]) {
     if (!file) continue;
     const url = objectUrls.get(file);
     if (url) URL.revokeObjectURL(url);
@@ -504,6 +532,7 @@ function clearTransfer(transfer: NearbyTransferRecord) {
   }
   if (zipDownloads.value[transfer.id]) URL.revokeObjectURL(zipDownloads.value[transfer.id]);
   delete zipDownloads.value[transfer.id];
+  if (imagePreview.value && [...transfer.received, ...(transfer.source || [])].includes(imagePreview.value)) imagePreview.value = null;
   clearNearbyTransfer(transfer.id);
 }
 
@@ -570,6 +599,9 @@ watch(() => keys.pkHex, () => {
   selectedFiles.value = [];
   draftText.value = "";
   selectedTarget.value = null;
+  imagePreview.value = null;
+  scannerOpen.value = false;
+  pairingOpen.value = false;
   targetPickerOpen.value = false;
   releaseUrls();
 });
@@ -642,8 +674,12 @@ watch(() => nearbyState.transfers.length, async () => {
 .transfer-head strong{overflow-wrap:anywhere;min-width:0}
 .transfer-time{display:block;margin-top:5px;color:var(--fg-64748b);font-size:11px}
 .file-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;font-size:13px}
-.file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-name{display:block;min-width:0;overflow-wrap:anywhere}
 .file-size{color:var(--fg-64748b)}
+.file-description{flex:1;min-width:0}.file-description .file-size{display:block;margin-top:5px;font-size:11px}
+.file-cards .file-row{flex-wrap:nowrap;padding:10px;border:1px solid var(--bd-e2e8f0);border-radius:12px;background:var(--bg-fff)}
+.file-thumbnail{flex:0 0 60px;width:60px;height:60px;padding:0;overflow:hidden;border:0;border-radius:8px;background:var(--bg-f1f5f9);cursor:pointer}.file-thumbnail img{display:block;width:100%;height:100%;object-fit:cover}.file-symbol{display:grid;place-items:center;flex:0 0 40px;height:48px;font-size:30px;color:var(--fg-64748b)}
+.image-overlay{align-items:center;padding:12px;box-sizing:border-box}.image-preview{position:relative;display:flex;flex-direction:column;align-items:center;gap:12px;width:min(720px,100%);max-height:90dvh;padding:12px;box-sizing:border-box;border-radius:16px;background:var(--bg-fff)}.image-preview .header-icon{align-self:flex-end;flex-shrink:0}.image-preview img{display:block;min-height:0;max-width:100%;object-fit:contain;flex:1}.image-preview a{padding:10px;flex-shrink:0}
 .file-row progress{width:100%;height:6px}
 .file-action{display:inline-flex;min-height:36px;align-items:center;padding:0 12px;border:1px solid var(--bd-cbd5e1);border-radius:10px;background:var(--bg-fff);color:var(--fg-334155);font-size:13px;text-decoration:none;cursor:pointer}
 .hidden-input{display:none}
