@@ -6,6 +6,22 @@ import { swPrecachePlugin } from "./build-plugins/swPrecache";
 
 const DEFAULT_PORT = 5173;
 
+// Third-party code loaded at startup changes far less often than app code.
+// Keeping it in its own chunk lets the service worker reuse it across app
+// releases, so an update only downloads HaiNei's own code. Only modules the
+// entry reaches through static imports belong there: anything reached only
+// through a lazy import (Trystero, zxing, settings-only helpers) must stay
+// in its lazy chunk or it would start loading at launch.
+type ModuleInfo = { isEntry: boolean; importers: readonly string[] } | null;
+function startupVendor(id: string, getModuleInfo: (id: string) => ModuleInfo, seen = new Map<string, boolean>()): boolean {
+  if (seen.has(id)) return seen.get(id)!;
+  seen.set(id, false);
+  const info = getModuleInfo(id);
+  const reachable = !!info && (info.isEntry || info.importers.some(importer => startupVendor(importer, getModuleInfo, seen)));
+  seen.set(id, reachable);
+  return reachable;
+}
+
 
 const rawAllowed = (process.env.ALLOWED_HOSTS ?? "localhost,127.0.0.1,raspberrypi.dzo-hadar.ts.net").trim();
 const ALLOWED_HOSTS = rawAllowed === "" ? [] : rawAllowed.split(",").map(s => s.trim());
@@ -13,6 +29,15 @@ const ALLOWED_HOSTS = rawAllowed === "" ? [] : rawAllowed.split(",").map(s => s.
 export default defineConfig({
   // Dev server keeps no CSP so Vite HMR (ws://) keeps working.
   plugins: [vue(), cspMetaPlugin(path.resolve(__dirname, "public/_headers")), swPrecachePlugin()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id, { getModuleInfo }) {
+          if (id.includes("/node_modules/") && startupVendor(id, getModuleInfo)) return "vendor";
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src")
