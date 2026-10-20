@@ -14,7 +14,7 @@ function sameOrigin(body: string, status = 200): Response {
   return response;
 }
 
-function worker(options: { fetch?: (request: any) => Promise<Response>; cacheFails?: boolean } = {}) {
+function worker(options: { fetch?: (request: any) => Promise<Response>; cacheFails?: boolean; precache?: string[] } = {}) {
   const handlers = new Map<string, (event: any) => void>();
   const rows = new Map<string, Response>();
   const pending: Promise<unknown>[] = [];
@@ -23,6 +23,7 @@ function worker(options: { fetch?: (request: any) => Promise<Response>; cacheFai
   const cache = {
     match: async (request: any) => rows.get(keyOf(request))?.clone(),
     put: async (request: any, response: Response) => { rows.set(keyOf(request), response.clone()); },
+    add: async (request: any) => { rows.set(keyOf(request), await (options.fetch ?? (async () => new Response("network")))(request)); },
     addAll: async () => {},
   };
   const caches = {
@@ -41,12 +42,17 @@ function worker(options: { fetch?: (request: any) => Promise<Response>; cacheFai
     clients: { matchAll: async () => [] },
     registration: { showNotification },
   };
-  runInNewContext(readFileSync("public/service-worker.js", "utf8"), {
+  let source = readFileSync("public/service-worker.js", "utf8");
+  if (options.precache) source = source.replace(/const PRECACHE_ASSETS = \[.*?\];/, `const PRECACHE_ASSETS = ${JSON.stringify(options.precache)};`);
+  runInNewContext(source, {
     self, caches, URL, Response, console, setTimeout, clearTimeout,
     fetch: options.fetch ?? (async () => new Response("network")),
   });
   return {
     rows, showNotification,
+    install() {
+      handlers.get("install")!({ waitUntil: (promise: Promise<unknown>) => pending.push(promise) });
+    },
     navigate(url = "https://app.test/") {
       let response: Promise<Response> | undefined;
       handlers.get("fetch")!({
@@ -64,6 +70,20 @@ function worker(options: { fetch?: (request: any) => Promise<Response>; cacheFai
 }
 
 afterEach(() => vi.useRealTimers());
+
+describe("service worker updates", () => {
+  it("reuses hashed assets from the previous build instead of downloading them again", async () => {
+    const assets = ["/assets/vendor-same.js", "/assets/index-new.js"];
+    const fetched: string[] = [];
+    const sw = worker({ precache: assets, fetch: async (request: any) => { fetched.push(typeof request === "string" ? request : request.url); return sameOrigin("downloaded"); } });
+    sw.rows.set(assets[0], new Response("kept from the previous build"));
+    sw.install();
+    await sw.settle();
+    expect(fetched).not.toContain(assets[0]);
+    expect(fetched).toContain(assets[1]);
+    expect(await sw.rows.get(assets[0])!.clone().text()).toBe("kept from the previous build");
+  });
+});
 
 describe("service worker navigation", () => {
   it("opens the cached shell at once on a stalled network, then refreshes the cache", async () => {

@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.82"; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.83"; // ⚠️ 更新代码时同步修改此版本号
 const BUILD_ID = "source-08655ebf22d057a4"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
@@ -27,8 +27,16 @@ self.addEventListener('install', (event) => {
         '/icon-192.png',
         '/icon-512.png'
       ]);
+      // /assets/ names carry a content hash: a file with the same name in an
+      // earlier build's cache is byte-identical, so reuse it instead of
+      // downloading the whole app again on every update.
+      const precache = async (url) => {
+        const previous = await caches.match(url).catch(() => undefined);
+        if (previous) return cache.put(url, previous);
+        return cache.add(url);
+      };
       // One unreachable chunk must not abort the install; it is fetched on demand.
-      const results = await Promise.allSettled(PRECACHE_ASSETS.map((url) => cache.add(url)));
+      const results = await Promise.allSettled(PRECACHE_ASSETS.map(precache));
       const failed = results.filter((result) => result.status === 'rejected').length;
       console.log('[SW] precached', PRECACHE_ASSETS.length - failed, '/', PRECACHE_ASSETS.length);
     })

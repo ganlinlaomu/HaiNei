@@ -19,7 +19,8 @@ describe("service worker precache", () => {
     const built = injectPrecacheList(sw, ["/assets/a.js"]);
     expect(built).toContain('const PRECACHE_ASSETS = ["/assets/a.js"];');
     // One failing chunk must not abort the install.
-    expect(sw).toContain("Promise.allSettled(PRECACHE_ASSETS.map((url) => cache.add(url)))");
+    expect(sw).toContain("Promise.allSettled(PRECACHE_ASSETS.map(precache))");
+    expect(sw).toContain("return cache.add(url);");
     expect(() => injectPrecacheList("no marker", [])).toThrow();
     expect(readFileSync("vite.config.ts", "utf8")).toContain("swPrecachePlugin()");
   });
