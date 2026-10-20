@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.80",
-  "releaseSummary": "修复两台设备显示的连接方式不一致",
+  "version": "0.1.81",
+  "releaseSummary": "文件传输移除连接方式标注",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

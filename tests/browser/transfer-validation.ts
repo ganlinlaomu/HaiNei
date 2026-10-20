@@ -121,13 +121,6 @@ export async function validateTransferAssistant() {
     const selectedChip = () => document.querySelector('.target-chip.selected')?.textContent || '';
     const chip = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button.target-chip')].find(item => item.textContent?.includes(name))!;
     if (!selectedChip().includes('Linux 电脑')) throw new Error('a single device must be selected automatically');
-    nearbyState.pairRoutes = { peer: 'internet' }; await nextTick();
-    if (!document.querySelector('.recipient-hint')?.textContent?.includes('互联网直连')) throw new Error('internet routes must be explained before sending');
-    nearbyState.pairRoutes = { peer: 'lan' }; await nextTick();
-    if (!document.querySelector('.recipient-hint')?.textContent?.includes('局域网直连')) throw new Error('same-network routes must keep the hint line so the layout does not jump');
-    nearbyState.pairRoutes = {}; await nextTick();
-    if (!document.querySelector('.recipient-hint')?.textContent?.includes('正在检测')) throw new Error('the hint line must be reserved while the route is unknown');
-    nearbyState.pairRoutes = {};
     nearbyState.pairPeers = { peer: NEARBY_UNNAMED_PEER };
     typeText('pending connection'); await nextTick();
     if (!send.disabled || !chip('连接中').disabled) throw new Error('unidentified connections must not be presented as ready');

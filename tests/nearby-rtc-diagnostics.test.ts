@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { createNearbyRtcDiagnostics } from "@/services/nearbyRtcDiagnostics";
-import { connectionRoute } from "@/services/nearbyTransfer";
 
 class FakePeer extends EventTarget {
   connectionState = "new";
@@ -42,63 +41,5 @@ describe("nearby RTC diagnostic evidence", () => {
     expect(diagnostic.snapshots()).toHaveLength(12);
     expect(diagnostic.snapshots().at(-1)?.iceErrors).toEqual([701]);
     expect(JSON.stringify(diagnostic.snapshots())).not.toContain("private");
-  });
-});
-
-describe("connection route", () => {
-  const report = (entries: Record<string, Record<string, unknown>>) => ({ getStats: async () => new Map(Object.entries(entries)) as unknown as RTCStatsReport });
-  const viaTransport = (local: Record<string, unknown>, remote: Record<string, unknown>) => report({
-    t: { type: "transport", selectedCandidatePairId: "p" },
-    p: { type: "candidate-pair", localCandidateId: "l", remoteCandidateId: "r", state: "succeeded" },
-    l: { type: "local-candidate", ...local }, r: { type: "remote-candidate", ...remote },
-  });
-
-  it("labels same-network, internet and relayed pairs from the selected candidates", async () => {
-    expect(await connectionRoute(viaTransport({ candidateType: "host", address: "192.168.1.5" }, { candidateType: "host", address: "192.168.1.9" }))).toBe("lan");
-    expect(await connectionRoute(viaTransport({ candidateType: "host", address: "a1b2.local" }, { candidateType: "prflx", address: "10.0.0.7" }))).toBe("lan");
-    expect(await connectionRoute(viaTransport({ candidateType: "srflx", address: "203.0.113.4" }, { candidateType: "srflx", address: "198.51.100.8" }))).toBe("internet");
-    expect(await connectionRoute(viaTransport({ candidateType: "host", address: "192.168.1.5" }, { candidateType: "srflx", address: "198.51.100.8" }))).toBe("internet");
-    expect(await connectionRoute(viaTransport({ candidateType: "relay", address: "192.0.2.1" }, { candidateType: "host", address: "192.168.1.9" }))).toBe("relay");
-  });
-
-  // Both ends of one connection must reach the same verdict.
-  const bothEnds = async (a: { local: Record<string, unknown>; own?: Record<string, unknown>[] }, b: { local: Record<string, unknown>; own?: Record<string, unknown>[] }) => {
-    const side = (me: typeof a, peer: typeof b) => report({
-      t: { type: "transport", selectedCandidatePairId: "p" },
-      p: { type: "candidate-pair", localCandidateId: "l", remoteCandidateId: "r" },
-      l: { type: "local-candidate", ...me.local },
-      r: { type: "remote-candidate", ...peer.local },
-      ...Object.fromEntries((me.own || []).map((entry, index) => [`o${index}`, { type: "local-candidate", ...entry }])),
-    });
-    return [await connectionRoute(side(a, b)), await connectionRoute(side(b, a))];
-  };
-
-  it("treats a shared IPv6 /64 or the same public IPv4 as one network, from both ends", async () => {
-    expect(await bothEnds(
-      { local: { candidateType: "host", address: "2409:8a00:1:2:aaaa::5" } },
-      { local: { candidateType: "host", address: "2409:8a00:1:2:bbbb::9" } },
-    )).toEqual(["lan", "lan"]);
-    expect(await bothEnds(
-      { local: { candidateType: "host", address: "2409:8a00:1:2::5" } },
-      { local: { candidateType: "host", address: "240e:3b0:9:7::9" } },
-    )).toEqual(["internet", "internet"]);
-    // Hairpinned through one router: the peer's public address is also ours.
-    expect(await bothEnds(
-      { local: { candidateType: "srflx", address: "203.0.113.4" }, own: [{ candidateType: "host", address: "192.168.1.5" }] },
-      { local: { candidateType: "srflx", address: "203.0.113.4" }, own: [{ candidateType: "host", address: "192.168.1.9" }] },
-    )).toEqual(["lan", "lan"]);
-  });
-
-  it("falls back to the remote candidate type when the browser hides its address", async () => {
-    expect(await connectionRoute(viaTransport({ candidateType: "host" }, { candidateType: "host" }))).toBe("lan");
-    expect(await connectionRoute(viaTransport({ candidateType: "host" }, { candidateType: "srflx" }))).toBe("internet");
-  });
-
-  it("reads Firefox's selected pair and returns nothing before a pair is chosen", async () => {
-    expect(await connectionRoute(report({
-      p: { type: "candidate-pair", selected: true, state: "succeeded", localCandidateId: "l", remoteCandidateId: "r" },
-      l: { type: "local-candidate", candidateType: "host", address: "fe80::1" }, r: { type: "remote-candidate", candidateType: "host", address: "fd12::3" },
-    }))).toBe("lan");
-    expect(await connectionRoute(report({ p: { type: "candidate-pair", state: "in-progress" } }))).toBe("");
   });
 });
