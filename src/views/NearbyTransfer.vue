@@ -79,8 +79,7 @@
     </section>
 
     <section class="nearby-card">
-      <h2>连接其他设备</h2>
-      <p class="nearby-hint">没登录海内的电脑、或别人的设备：一方显示二维码，另一方扫码或打开链接。</p>
+      <h2>不同账号配对</h2>
       <div v-if="!pairKey" class="pair-actions">
         <button class="pair-button" type="button" @click="startPairing">显示二维码</button>
         <button class="pair-button scan-device" type="button" @click="openScanner">扫码</button>
