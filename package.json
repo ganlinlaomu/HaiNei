@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.78",
-  "releaseSummary": "文件传输连接方式提示固定一行，收到文件不再误显示已保存",
+  "version": "0.1.79",
+  "releaseSummary": "「连接其他设备」改名为「不同账号配对」",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

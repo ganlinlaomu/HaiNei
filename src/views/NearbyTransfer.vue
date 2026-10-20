@@ -79,8 +79,7 @@
     </section>
 
     <section class="nearby-card">
-      <h2>连接其他设备</h2>
-      <p class="nearby-hint">没登录海内的电脑、或别人的设备：一方显示二维码，另一方扫码或打开链接。</p>
+      <h2>不同账号配对</h2>
       <div v-if="!pairKey" class="pair-actions">
         <button class="pair-button" type="button" @click="startPairing">显示二维码</button>
         <button class="pair-button scan-device" type="button" @click="openScanner">扫码</button>
@@ -333,10 +332,7 @@ const routeHint = computed(() => {
   const peer = selectedPeer.value;
   if (!peer) return "所选设备已断开";
   if (!peer.ready) return "正在连接…";
-  // Keep each variant to one line on a phone; a wrapping hint would jump too.
-  if (peer.route === "lan") return "经局域网直连 · 不消耗流量";
-  if (peer.route === "internet") return "经互联网直连 · 使用手机网络时会消耗流量";
-  if (peer.route === "relay") return "经中继服务器 · 使用手机网络时会消耗流量";
+  if (peer.route) return ROUTE_LABELS[peer.route];
   return "正在检测连接方式…";
 });
 const routeSuffix = (route?: NearbyRoute) => route ? ` · ${ROUTE_LABELS[route]}` : "";
