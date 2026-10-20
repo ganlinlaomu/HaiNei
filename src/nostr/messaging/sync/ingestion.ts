@@ -2,7 +2,7 @@ import { BoundedSet } from "@/utils/boundedSet";
 import type { NostrEvent } from "nostr-tools";
 import { decodeMessageEvent, type CanonicalMessage, type DecodeContext } from "@/nostr/messaging/protocol";
 import { syncedMessageRepository, type SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
-import { debugLog } from "@/utils/debugLog";
+import { debugLog, startupMark } from "@/utils/debugLog";
 import { isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
 import type { MessageDeliveryResult, MessageIngestionMetadata } from "./types";
 import {
@@ -39,6 +39,7 @@ export class MessageIngestionPipeline {
   private readonly deliveredLogicalIds = new BoundedSet<string>();
   private readonly discardedLogicalIds = new BoundedSet<string>();
   private readonly finalizedTransportIds = new BoundedSet<string>();
+  private firstInsertMarked = false;
   private readonly logicalFlights = new Map<string, Promise<{ inserted: boolean; discarded: boolean; deferred: boolean }>>();
   private readonly pendingPersistenceRetries = new Map<string, {
     message: CanonicalMessage;
@@ -359,6 +360,10 @@ export class MessageIngestionPipeline {
     if (!this.isSessionCurrent()) {
       debugLog("sync", "stale_session_discarded", diagnostic, "warn");
       return { inserted: result.inserted, discarded: true, deferred: false };
+    }
+    if (result.inserted && !this.firstInsertMarked) {
+      this.firstInsertMarked = true;
+      startupMark("first_message_stored", { source: metadata.source });
     }
     if (this.onPersisted) {
       try {

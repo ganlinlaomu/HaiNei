@@ -7,7 +7,7 @@ import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { syncedMessageRepository, type SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { closeSubscription } from "@/utils/subscriptions";
 import { logger } from "@/utils/logger";
-import { debugLog } from "@/utils/debugLog";
+import { debugLog, startupMark } from "@/utils/debugLog";
 import { runPagedCatchup, type SubscribeForCatchup } from "./catchup";
 import { MessageIngestionPipeline, type DecodeMessage } from "./ingestion";
 import { calculateCatchupSince } from "./sorting";
@@ -260,6 +260,7 @@ export class MessageSyncManager {
     const flight = (async () => {
       const entries = await readEncryptedPushInbox(account);
       if (!this.isCurrent(sessionId, account)) return;
+      startupMark("push_inbox_read", { entries: entries.length });
       const acknowledged: string[] = [];
       let next = 0;
       // Bound expensive decryption and relay lookups without blocking normal REQ.
@@ -269,11 +270,14 @@ export class MessageSyncManager {
           const hint = entry.hint;
           let event: NostrEvent | null = null;
           try {
-            if (hint.event && isVerifiedPushGiftWrap(hint.event, account, hint.eventId)) {
-              event = hint.event;
+            const fetchStarted = Date.now();
+            const embedded = !!hint.event && isVerifiedPushGiftWrap(hint.event, account, hint.eventId);
+            if (embedded) {
+              event = hint.event!;
             } else {
               event = await this.fetchPushedEvent(hint, account, sessionId);
             }
+            startupMark("push_hint_event", { from: embedded ? "push" : event ? "relay" : "missing", fetchMs: embedded ? 0 : Date.now() - fetchStarted });
             if (!event || !this.isCurrent(sessionId, account)) continue;
             // Reuse the same NIP-17 authorization, durable storage and dedupe
             // pipeline as realtime Relay delivery. Never mirror raw push data.
@@ -375,8 +379,10 @@ export class MessageSyncManager {
       // Cloud read state / friendships are still being restored. Push hints
       // above are already shown; Relay streams must not race that restore.
       this.listenForPushHints(sessionId, accountPubkey);
+      startupMark("history_gate_waiting");
       await options.historyGate;
       if (!isCurrent()) return;
+      startupMark("history_gate_released");
       this.drainEncryptedPushInbox(sessionId, accountPubkey);
       await this.pipeline.retryDeferredAuthorization();
       if (!isCurrent()) return;
@@ -671,6 +677,7 @@ export class MessageSyncManager {
       } while (nextSource && this.isCurrent(sessionId, options.accountPubkey) && this.isForeground());
       if (!this.catchupAbortController?.signal.aborted && this.isForeground()) {
         await this.setStatus("live", sessionId);
+        startupMark("relay_catchup_live");
       }
     } catch (e) {
       logger.warn(`[message-sync] catch-up failed account=${options.accountPubkey.slice(0, 8)}`, e);

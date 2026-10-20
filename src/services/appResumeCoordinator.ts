@@ -1,3 +1,4 @@
+import { startupMark } from "@/utils/debugLog";
 export type AppResumeReason = "visibilitychange" | "focus" | "pageshow" | "online";
 export type AppResumeHandler = (reason: AppResumeReason) => void | Promise<void>;
 
@@ -23,6 +24,8 @@ function dispatch(reason: AppResumeReason) {
   hiddenSinceLastDispatch = false;
   lastDispatchAt = now;
   lastDispatchReason = reason;
+  // Later startup_ marks of this resume can be read relative to this one.
+  startupMark("app_resumed", { reason });
   for (const handler of [...handlers]) {
     try {
       void Promise.resolve(handler(reason)).catch(error => {

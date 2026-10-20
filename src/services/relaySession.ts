@@ -4,6 +4,7 @@ import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 import { signWorkerRequest } from "@/services/workerAuth";
 import { timedJsonFetch } from "@/utils/timedFetch";
 import { deviceStorage } from "@/services/deviceStorage";
+import { startupMark } from "@/utils/debugLog";
 
 const CONFIG_CACHE_MS = 5 * 60_000;
 const EXPIRY_SKEW_SECONDS = 30;
@@ -126,6 +127,7 @@ export async function getManagedRelaySessionForUrl(url: string, force = false): 
   if (!force && sessionInflight) return sessionInflight;
 
   const currentIdentity = identity;
+  const tokenStarted = Date.now();
   const pending = (async () => {
     const base = workerBaseUrl();
     const challengeResponse = await timedJsonFetch(`${base}/api/auth/challenge`, {
@@ -179,6 +181,10 @@ export async function getManagedRelaySessionForUrl(url: string, force = false): 
   })();
 
   sessionInflight = pending;
-  try { return await pending; }
-  finally { if (sessionInflight === pending) sessionInflight = null; }
+  let ok = false;
+  try { const session = await pending; ok = true; return session; }
+  finally {
+    if (sessionInflight === pending) sessionInflight = null;
+    startupMark("relay_token", { durationMs: Date.now() - tokenStarted, ok });
+  }
 }

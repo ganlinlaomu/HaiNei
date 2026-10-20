@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.83",
-  "releaseSummary": "版本更新下载量减少约四成",
+  "version": "0.1.84",
+  "releaseSummary": "加入启动与消息到达计时日志",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
