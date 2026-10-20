@@ -46,6 +46,13 @@ describe("QR device handoff cryptography", () => {
       expect(link).not.toContain(session.pollToken);
       expect(parsePairLink(link.replace("https://hainei.example", "https://other.example"))).toBe(null);
       expect(parsePairLink("nostr:npub1deadbeef")).toBe(null);
+      // The Android app shows its QR from https://localhost; the web app must still accept it.
+      const appLink = link.replace("https://hainei.example", "https://localhost");
+      expect(parsePairLink(appLink)).toEqual({ id: session.id, receiverKey: session.receiverKey });
+      expect(parsePairLink(appLink.replace("https://", "http://"))).toBe(null);
+      // The app has no web origin, so it accepts the web app's QR from any https host, but not http.
+      expect(parsePairLink(link, "https://localhost")).toEqual({ id: session.id, receiverKey: session.receiverKey });
+      expect(parsePairLink(link.replace("https://", "http://"), "https://localhost")).toBe(null);
     } finally {
       Object.defineProperty(globalThis, "window", { configurable: true, value: oldWindow });
     }

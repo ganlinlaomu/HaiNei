@@ -35,10 +35,19 @@ export async function makePairKeys(): Promise<PairKeys> {
   const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
   return { privateKey: pair.privateKey, publicKey: encode(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey))) };
 }
+// The Android app (Capacitor) serves HaiNei from this origin, so its pairing QR carries it.
+const NATIVE_APP_ORIGIN = "https://localhost";
+
+function acceptedPairOrigin(linkOrigin: string, ownOrigin: string) {
+  if (linkOrigin === ownOrigin || linkOrigin === NATIVE_APP_ORIGIN) return true;
+  // The app has no web origin of its own, so it accepts QRs shown by the web app on any https host.
+  return ownOrigin === NATIVE_APP_ORIGIN && linkOrigin.startsWith("https://");
+}
+
 export function parsePairLink(value: string, origin = window.location.origin): { id: string; receiverKey: string } | null {
   let url: URL;
   try { url = new URL(value); } catch { return null; }
-  if (url.origin !== origin || url.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(url.hostname)) return null;
+  if (!acceptedPairOrigin(url.origin, origin) || url.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(url.hostname)) return null;
   const hash = url.hash.replace(/^#/, "");
   let relative: URL;
   try { relative = new URL(hash, url.origin); } catch { return null; }
