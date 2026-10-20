@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.79",
-  "releaseSummary": "「连接其他设备」改名为「不同账号配对」",
+  "version": "0.1.80",
+  "releaseSummary": "修复两台设备显示的连接方式不一致",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
