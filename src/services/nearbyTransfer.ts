@@ -294,53 +294,6 @@ export function sanitizeOffer(value: unknown, from: string): NearbyOffer | null 
   return files.length || text ? { id: raw.id, files, from, ...(text ? { text } : {}), ...(raw.protocol === 2 ? { protocol: 2 as const } : {}) } : null;
 }
 
-export type NearbyRoute = "lan" | "internet" | "relay";
-
-type CandidateStats = { type?: string; candidateType?: string; address?: string; ip?: string };
-
-const candidateAddress = (candidate?: CandidateStats) => (candidate?.address || candidate?.ip || "").toLowerCase().replace(/^\[|\]$/g, "");
-const isPrivateAddress = (address: string) =>
-  /\.local$|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^169\.254\.|^fe80:|^f[cd][0-9a-f]{2}:/.test(address);
-
-/** First 64 bits of an IPv6 address, the usual size of one home network. */
-function ipv6Prefix(address: string) {
-  if (!address.includes(":")) return "";
-  const [head, tail = ""] = address.split("::");
-  const left = head ? head.split(":") : [];
-  const right = address.includes("::") && tail ? tail.split(":") : [];
-  const groups = [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right];
-  return groups.slice(0, 4).map(group => (parseInt(group, 16) || 0).toString(16)).join(":");
-}
-
-/**
- * Which way the bytes actually travel, from the selected ICE pair. ICE pairs
- * local candidates by their host base, so only the remote side tells the path;
- * it is compared with this device's own addresses. Addresses are inspected
- * here only, never stored or shown.
- */
-export async function connectionRoute(pc: Pick<RTCPeerConnection, "getStats">): Promise<NearbyRoute | ""> {
-  const stats = await pc.getStats() as unknown as Map<string, any>;
-  let pair: { localCandidateId?: string; remoteCandidateId?: string } | undefined;
-  stats.forEach(entry => {
-    if (entry.type === "transport" && entry.selectedCandidatePairId) pair = stats.get(entry.selectedCandidatePairId);
-  });
-  // Firefox marks the pair itself instead of exposing a transport entry.
-  if (!pair) stats.forEach(entry => { if (!pair && entry.type === "candidate-pair" && entry.selected && entry.state === "succeeded") pair = entry; });
-  if (!pair) return "";
-  const local = stats.get(pair.localCandidateId || "") as CandidateStats | undefined;
-  const remote = stats.get(pair.remoteCandidateId || "") as CandidateStats | undefined;
-  if (local?.candidateType === "relay" || remote?.candidateType === "relay") return "relay";
-  const address = candidateAddress(remote);
-  if (!address) return remote?.candidateType === "host" ? "lan" : "internet";
-  if (isPrivateAddress(address)) return "lan";
-  const own: string[] = [];
-  stats.forEach(entry => { if (entry.type === "local-candidate" && candidateAddress(entry)) own.push(candidateAddress(entry)); });
-  // Same public IPv4 (one router, hairpinned) or same IPv6 /64: same network.
-  if (own.includes(address)) return "lan";
-  const prefix = ipv6Prefix(address);
-  return prefix && own.some(mine => ipv6Prefix(mine) === prefix) ? "lan" : "internet";
-}
-
 export function batchBytes(files: Pick<NearbyFileMeta, "size">[]) {
   return files.reduce((sum, file) => sum + file.size, 0);
 }
@@ -576,13 +529,6 @@ export class NearbyRoom {
   }
 
   /** WebRTC state per joined peer, for the diagnostics panel. */
-  /** Route per connected peer; peers without a selected pair are omitted. */
-  async routes(): Promise<Record<string, NearbyRoute>> {
-    const peers = Object.entries(this.room?.getPeers() || {});
-    const routes = await Promise.all(peers.map(async ([id, pc]) => [id, pc ? await connectionRoute(pc).catch(() => "") : ""] as const));
-    return Object.fromEntries(routes.filter(([, route]) => route)) as Record<string, NearbyRoute>;
-  }
-
   peerConnections(): Record<string, string> {
     const peers = this.room?.getPeers() || {};
     return Object.fromEntries(Object.entries(peers).map(([id, pc]) => [id, pc?.connectionState || "unknown"]));
