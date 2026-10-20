@@ -27,6 +27,9 @@ export type NewDebugLogEntry = Omit<DebugLogEntry, "id" | "ts"> &
   Partial<Pick<DebugLogEntry, "id" | "ts">>;
 
 const MAX_LOGS = 1000;
+/** Launch milestones are kept apart: a startup history catch-up alone can
+ * log a thousand lines within seconds and push them out of the main buffer. */
+const MAX_STARTUP_MARKS = 200;
 // Trim in chunks so the buffer is not shifted on every append.
 const TRIM_SLACK = 200;
 let sequence = 0;
@@ -41,6 +44,7 @@ function nextId(ts: number) {
 // reactive, and the snapshot is built when something (Debug.vue) reads it.
 export const useDebugLogsStore = defineStore("debugLogs", () => {
   let buffer: DebugLogEntry[] = [];
+  let startupBuffer: DebugLogEntry[] = [];
   const revision = ref(0);
 
   const entries = computed<DebugLogEntry[]>(() => {
@@ -50,14 +54,19 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
 
   function append(entry: NewDebugLogEntry, data: Record<string, unknown> | undefined) {
     const ts = entry.ts ?? Date.now();
-    buffer.push({
+    const record: DebugLogEntry = {
       id: entry.id ?? nextId(ts),
       ts,
       level: entry.level,
       category: entry.category,
       event: entry.event,
       ...(data ? { data } : {})
-    });
+    };
+    buffer.push(record);
+    if (record.event.startsWith("startup_")) {
+      startupBuffer.push(record);
+      if (startupBuffer.length > MAX_STARTUP_MARKS) startupBuffer = startupBuffer.slice(-MAX_STARTUP_MARKS);
+    }
     if (buffer.length > MAX_LOGS + TRIM_SLACK) buffer = buffer.slice(-MAX_LOGS);
     revision.value++;
   }
@@ -71,8 +80,14 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
     append(entry, entry.data);
   }
 
+  /** Launch milestones, newest last; survives floods of other entries. */
+  function startupMarks() {
+    return startupBuffer.slice();
+  }
+
   function clear() {
     buffer = [];
+    startupBuffer = [];
     revision.value++;
   }
 
@@ -80,5 +95,5 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
     return JSON.stringify(entries.value, null, 2);
   }
 
-  return { entries, add, addSanitized, clear, exportJson };
+  return { entries, add, addSanitized, clear, exportJson, startupMarks };
 });

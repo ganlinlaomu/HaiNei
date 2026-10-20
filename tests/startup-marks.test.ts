@@ -14,6 +14,16 @@ describe("startup timing marks", () => {
     expect(typeof entry.data?.ms).toBe("number");
   });
 
+  it("keeps launch milestones even when a flood of other entries fills the log", () => {
+    setActivePinia(createPinia());
+    startupMark("session_restored", { loggedIn: true });
+    const logs = useDebugLogsStore();
+    for (let index = 0; index < 1500; index++) logs.add({ category: "nip17", event: "wrap_received", level: "debug" });
+    expect(logs.entries.some(item => item.event === "startup_session_restored")).toBe(false);
+    expect(logs.startupMarks().map(item => item.event)).toEqual(["startup_session_restored"]);
+    expect(readFileSync("src/views/Debug.vue", "utf8")).toContain("startup: logs.startupMarks()");
+  });
+
   it("marks every step between opening HaiNei and the first stored message", () => {
     const sources = ["src/main.ts", "src/stores/keys.ts", "src/services/relaySession.ts", "src/services/appResumeCoordinator.ts",
       "src/nostr/messaging/sync/MessageSyncManager.ts", "src/nostr/messaging/sync/ingestion.ts"].map(path => readFileSync(path, "utf8")).join("\n");

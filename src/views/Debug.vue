@@ -222,7 +222,7 @@ const lastSend = computed<LastSend | null>(() => {
 
 function exportLogs() {
   refreshRelayStatus();
-  const payload = { appVersion: APP_VERSION, dbVersion: DB_VERSION, account: accountPrefix.value, persistentStorage: persistentStorage.value, relayStatus: relayStatus.value, logs: logs.entries };
+  const payload = { appVersion: APP_VERSION, dbVersion: DB_VERSION, account: accountPrefix.value, persistentStorage: persistentStorage.value, relayStatus: relayStatus.value, startup: logs.startupMarks(), logs: logs.entries };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
