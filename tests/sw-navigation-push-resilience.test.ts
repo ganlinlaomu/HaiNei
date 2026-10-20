@@ -66,15 +66,13 @@ function worker(options: { fetch?: (request: any) => Promise<Response>; cacheFai
 afterEach(() => vi.useRealTimers());
 
 describe("service worker navigation", () => {
-  it("serves the cached shell when the network stalls, then refreshes the cache", async () => {
-    vi.useFakeTimers();
+  it("opens the cached shell at once on a stalled network, then refreshes the cache", async () => {
     let release!: (response: Response) => void;
     const sw = worker({ fetch: () => new Promise(resolve => { release = resolve; }) });
     sw.rows.set("https://app.test/", new Response("cached shell"));
 
-    const response = sw.navigate();
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(await (await response).text()).toBe("cached shell");
+    // No timer has to elapse: the cached page answers immediately.
+    expect(await (await sw.navigate()).text()).toBe("cached shell");
 
     release(sameOrigin("fresh shell"));
     await sw.settle();
@@ -84,15 +82,16 @@ describe("service worker navigation", () => {
   it("never replaces the cached shell with an error page", async () => {
     const sw = worker({ fetch: async () => sameOrigin("server error", 500) });
     sw.rows.set("https://app.test/", new Response("cached shell"));
-    expect((await sw.navigate()).status).toBe(500);
+    expect(await (await sw.navigate()).text()).toBe("cached shell");
     await sw.settle();
     expect(await sw.rows.get("https://app.test/")!.clone().text()).toBe("cached shell");
   });
 
-  it("returns the network response when it arrives in time", async () => {
-    const sw = worker({ fetch: async () => new Response("network page") });
-    sw.rows.set("https://app.test/", new Response("cached shell"));
+  it("uses the network page when nothing is cached yet", async () => {
+    const sw = worker({ fetch: async () => sameOrigin("network page") });
     expect(await (await sw.navigate()).text()).toBe("network page");
+    await sw.settle();
+    expect(await sw.rows.get("https://app.test/")!.clone().text()).toBe("network page");
   });
 
   it("keeps waiting for the network when nothing is cached", async () => {
@@ -105,10 +104,15 @@ describe("service worker navigation", () => {
     expect(await (await response).text()).toBe("slow network page");
   });
 
-  it("falls back to the cache when the network fails outright", async () => {
+  it("opens the cached shell offline", async () => {
     const sw = worker({ fetch: async () => { throw new TypeError("offline"); } });
     sw.rows.set("https://app.test/", new Response("cached shell"));
     expect(await (await sw.navigate()).text()).toBe("cached shell");
+  });
+
+  it("still loads the page when CacheStorage is unavailable", async () => {
+    const sw = worker({ fetch: async () => sameOrigin("network page"), cacheFails: true });
+    expect(await (await sw.navigate()).text()).toBe("network page");
   });
 
   it("only caches successful same-origin pages", () => {

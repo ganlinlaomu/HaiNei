@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.81",
-  "releaseSummary": "文件传输移除连接方式标注",
+  "version": "0.1.82",
+  "releaseSummary": "慢网速下打开更快：页面优先用缓存，并加入启动画面",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

@@ -7,9 +7,19 @@
     <link rel="manifest" href="/manifest.json" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#0f172a" />
+    <!-- Painted before any JS runs, so a slow start is never a blank white page.
+         Vue replaces #app on mount. Colors match --bg in src/styles.css. -->
+    <style>
+      html, body { margin: 0; background: #f7fafc; }
+      .boot-splash { position: fixed; inset: 0; display: grid; place-items: center; color: #94a3b8; font: 600 28px/1 system-ui, -apple-system, "PingFang SC", "Noto Sans SC", sans-serif; letter-spacing: .2em; }
+      @media (prefers-color-scheme: dark) {
+        html, body { background: #0e0f12; }
+        .boot-splash { color: #475569; }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app"><div class="boot-splash" aria-hidden="true">海内</div></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

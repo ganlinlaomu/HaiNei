@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.81"; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.82"; // ⚠️ 更新代码时同步修改此版本号
 const BUILD_ID = "source-08655ebf22d057a4"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
@@ -15,7 +15,6 @@ const PUSH_HINT_MAX_ITEMS = 32;
 // One replaceable DM notification instead of one per message.
 const DM_NOTIFICATION_TAG = 'hainei-dm';
 // Lie-fi (signal but no throughput) must not hold the app shell hostage.
-const NAVIGATION_TIMEOUT_MS = 3000;
 // Every built JS/CSS chunk, so lazily loaded pages open offline too.
 const PRECACHE_ASSETS = []; // filled in by build-plugins/swPrecache.ts
 
@@ -254,9 +253,10 @@ self.addEventListener('message', (event) => {
   }
 });
 
-// Network first, but fall back to the cached shell after NAVIGATION_TIMEOUT_MS.
-// The network response still refreshes the cache for the next launch. Without
-// a cached shell, keep waiting for the network as before.
+// Cache first for pages: a cached shell opens instantly even on a slow
+// network, while the network copy refreshes the cache for the next launch.
+// HTML_CACHE is versioned with this build, so a cached page always matches
+// the assets this worker precached; new builds arrive via the update flow.
 async function navigationResponse(event, request) {
   let storeCopy = Promise.resolve();
   const network = fetch(request).then((response) => {
@@ -270,14 +270,8 @@ async function navigationResponse(event, request) {
   // Registered now, while the event is active; it may outlive respondWith.
   event.waitUntil(network.then(() => storeCopy, () => {}));
 
-  let timer;
-  const timedOut = new Promise((resolve) => { timer = setTimeout(() => resolve('timeout'), NAVIGATION_TIMEOUT_MS); });
-  const first = await Promise.race([network.catch(() => 'error'), timedOut]);
-  clearTimeout(timer);
-  if (first !== 'timeout' && first !== 'error') return first;
-  const cached = await caches.match(request);
-  if (cached) return cached;
-  return network;
+  const cached = await caches.open(HTML_CACHE).then((cache) => cache.match(request)).catch(() => undefined);
+  return cached || network;
 }
 
 // Fetch 拦截：确保不缓存 API 请求
