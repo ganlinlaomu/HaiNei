@@ -332,10 +332,7 @@ const routeHint = computed(() => {
   const peer = selectedPeer.value;
   if (!peer) return "所选设备已断开";
   if (!peer.ready) return "正在连接…";
-  // Keep each variant to one line on a phone; a wrapping hint would jump too.
-  if (peer.route === "lan") return "经局域网直连 · 不消耗流量";
-  if (peer.route === "internet") return "经互联网直连 · 使用手机网络时会消耗流量";
-  if (peer.route === "relay") return "经中继服务器 · 使用手机网络时会消耗流量";
+  if (peer.route) return ROUTE_LABELS[peer.route];
   return "正在检测连接方式…";
 });
 const routeSuffix = (route?: NearbyRoute) => route ? ` · ${ROUTE_LABELS[route]}` : "";
