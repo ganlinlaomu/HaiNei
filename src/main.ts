@@ -1,4 +1,5 @@
 import { createApp } from "vue";
+import { startupMark } from "@/utils/debugLog";
 import { createPinia } from "pinia";
 import App from "./App.vue";
 import "./styles.css";
@@ -65,6 +66,8 @@ export function registerServiceWorker() {
 }
 
 async function bootstrap() {
+  // Pinia is not active yet; report this with the "mounted" mark.
+  const bootMs = Math.round(performance.now());
   // Device/session storage must be hydrated before version checks and before
   // Vue Router runs its auth guard. Otherwise restoreSession() sees an empty
   // in-memory deviceStorage map and permanently marks the session as restored.
@@ -95,12 +98,14 @@ async function bootstrap() {
 
   // 🚀 优先渲染：先 mount，再恢复会话（避免首屏白屏）
   app.mount("#app");
+  startupMark("mounted", { bootMs });
 
   // 异步恢复登录态，不阻塞首屏渲染
   (async () => {
     const keys = useKeyStore();
     try {
       await keys.restoreSession();
+      startupMark("session_restored", { loggedIn: keys.isLoggedIn, unlocked: keys.isUnlocked });
     } catch (e) {
       console.error("[main] restoreSession failed", e);
     }

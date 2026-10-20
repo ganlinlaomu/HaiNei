@@ -26,7 +26,7 @@ import {
   removeEncryptedKey,
   hasEncryptedKey
 } from "@/utils/crypto";
-import { debugLog } from "@/utils/debugLog";
+import { debugLog, startupMark } from "@/utils/debugLog";
 import { clearAccountScopedCaches } from "@/services/nostrCache";
 import { clearMemoryImageCache } from "@/utils/imageCache";
 import { cancelOutgoingWorkForAccount } from "@/nostr/messaging/service";
@@ -249,9 +249,11 @@ export const useKeyStore = defineStore("keys", {
       void messageSyncStart.catch(() => undefined);
       // Network phase: runs after local login has completed.
       void (async () => {
+        const criticalStarted = Date.now();
         try {
           await this.restoreCriticalAccountState(pk, criticalStateRestore, isCurrent);
         } finally {
+          startupMark("critical_state_restored", { durationMs: Date.now() - criticalStarted });
           // Never strand the Relay subscription, even if the restore failed.
           releaseHistory();
         }

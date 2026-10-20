@@ -24,3 +24,13 @@ export function debugLog(
   }
   logger[level](`[${category}] ${event}`, safeData ?? {});
 }
+
+/**
+ * A launch milestone. `ms` counts from the moment the page started loading,
+ * so on a cold start it reads directly as "this long after opening HaiNei".
+ * Filter the debug log by "startup_" to see the whole timeline.
+ */
+export function startupMark(event: string, data: Record<string, unknown> = {}) {
+  const ms = typeof performance === "undefined" ? undefined : Math.round(performance.now());
+  debugLog("system", `startup_${event}`, { ms, ...data }, "info");
+}
