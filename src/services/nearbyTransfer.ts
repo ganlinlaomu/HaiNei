@@ -296,17 +296,27 @@ export function sanitizeOffer(value: unknown, from: string): NearbyOffer | null 
 
 export type NearbyRoute = "lan" | "internet" | "relay";
 
-type CandidateStats = { candidateType?: string; address?: string; ip?: string };
+type CandidateStats = { type?: string; candidateType?: string; address?: string; ip?: string };
 
-function onLocalNetwork(candidate?: CandidateStats) {
-  const address = (candidate?.address || candidate?.ip || "").toLowerCase();
-  if (address) return /\.local$|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^169\.254\.|^fe80:|^f[cd][0-9a-f]{2}:/.test(address);
-  return candidate?.candidateType === "host";
+const candidateAddress = (candidate?: CandidateStats) => (candidate?.address || candidate?.ip || "").toLowerCase().replace(/^\[|\]$/g, "");
+const isPrivateAddress = (address: string) =>
+  /\.local$|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^169\.254\.|^fe80:|^f[cd][0-9a-f]{2}:/.test(address);
+
+/** First 64 bits of an IPv6 address, the usual size of one home network. */
+function ipv6Prefix(address: string) {
+  if (!address.includes(":")) return "";
+  const [head, tail = ""] = address.split("::");
+  const left = head ? head.split(":") : [];
+  const right = address.includes("::") && tail ? tail.split(":") : [];
+  const groups = [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right];
+  return groups.slice(0, 4).map(group => (parseInt(group, 16) || 0).toString(16)).join(":");
 }
 
 /**
- * Which way the bytes actually travel, from the selected ICE pair. Addresses
- * are only inspected here and never stored or shown.
+ * Which way the bytes actually travel, from the selected ICE pair. ICE pairs
+ * local candidates by their host base, so only the remote side tells the path;
+ * it is compared with this device's own addresses. Addresses are inspected
+ * here only, never stored or shown.
  */
 export async function connectionRoute(pc: Pick<RTCPeerConnection, "getStats">): Promise<NearbyRoute | ""> {
   const stats = await pc.getStats() as unknown as Map<string, any>;
@@ -320,7 +330,15 @@ export async function connectionRoute(pc: Pick<RTCPeerConnection, "getStats">): 
   const local = stats.get(pair.localCandidateId || "") as CandidateStats | undefined;
   const remote = stats.get(pair.remoteCandidateId || "") as CandidateStats | undefined;
   if (local?.candidateType === "relay" || remote?.candidateType === "relay") return "relay";
-  return onLocalNetwork(local) && onLocalNetwork(remote) ? "lan" : "internet";
+  const address = candidateAddress(remote);
+  if (!address) return remote?.candidateType === "host" ? "lan" : "internet";
+  if (isPrivateAddress(address)) return "lan";
+  const own: string[] = [];
+  stats.forEach(entry => { if (entry.type === "local-candidate" && candidateAddress(entry)) own.push(candidateAddress(entry)); });
+  // Same public IPv4 (one router, hairpinned) or same IPv6 /64: same network.
+  if (own.includes(address)) return "lan";
+  const prefix = ipv6Prefix(address);
+  return prefix && own.some(mine => ipv6Prefix(mine) === prefix) ? "lan" : "internet";
 }
 
 export function batchBytes(files: Pick<NearbyFileMeta, "size">[]) {
