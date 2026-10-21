@@ -25,10 +25,10 @@ describe("startup timing marks", () => {
   });
 
   it("marks every step between opening HaiNei and the first stored message", () => {
-    const sources = ["src/main.ts", "src/stores/keys.ts", "src/services/relaySession.ts", "src/services/appResumeCoordinator.ts",
+    const sources = ["src/main.ts", "src/stores/keys.ts", "src/services/relaySession.ts", "src/services/appResumeCoordinator.ts", "src/services/accountMessageSync.ts",
       "src/nostr/messaging/sync/MessageSyncManager.ts", "src/nostr/messaging/sync/ingestion.ts"].map(path => readFileSync(path, "utf8")).join("\n");
     for (const step of ["mounted", "session_restored", "critical_state_restored", "relay_token", "app_resumed", "push_inbox_read",
-      "push_hint_event", "history_gate_waiting", "history_gate_released", "relay_catchup_live", "first_message_stored"]) {
+      "push_hint_event", "history_gate_waiting", "history_gate_released", "relay_catchup_live", "first_message_stored", "catchup_page", "unread_revealed", "app_hidden"]) {
       expect(sources).toContain(`startupMark("${step}"`);
     }
   });

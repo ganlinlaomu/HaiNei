@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.88",
-  "releaseSummary": "Feed 显示自己的笔记和待办",
+  "version": "0.1.89",
+  "releaseSummary": "加入历史追赶与未读显示计时",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
