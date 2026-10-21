@@ -204,7 +204,7 @@ describe("HaiNei Worker authentication and quota", () => {
       const request = input instanceof Request ? input : new Request(input, init);
       expect(request.url).toBe("https://relay.example.com/api/app/session");
       expect(request.headers.get("Authorization")).toBe("Bearer relay-long-lived-secret");
-      expect(await request.json()).toEqual({ subject: pubkey, ttl: 600 });
+      expect(await request.json()).toEqual({ subject: pubkey, ttl: 24 * 60 * 60 });
       return new Response(JSON.stringify({
         bindingVersion: 1,
         token: "nrs_short_lived_session",

@@ -1,6 +1,10 @@
 import { HttpError, type Env } from "./types";
 
 const PUBKEY = /^[0-9a-f]{64}$/;
+// Clients keep the session on the device and reuse it across launches, so a
+// day-long session saves two round trips on nearly every start. Requires the
+// relay to accept TTLs above an hour.
+export const RELAY_SESSION_TTL_SECONDS = 24 * 60 * 60;
 
 function isLoopback(hostname: string) {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
@@ -56,7 +60,7 @@ export async function createRelaySession(env: Env, pubkey: string) {
       "Content-Type": "application/json",
       Accept: "application/json",
     },
-    body: JSON.stringify({ subject: normalizedPubkey, ttl: 600 }),
+    body: JSON.stringify({ subject: normalizedPubkey, ttl: RELAY_SESSION_TTL_SECONDS }),
   });
   // Same-account Workers must talk through a service binding; the public
   // workers.dev URL answers 404 to Worker-originated requests.

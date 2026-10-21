@@ -8,6 +8,11 @@ import { startupMark } from "@/utils/debugLog";
 
 const CONFIG_CACHE_MS = 5 * 60_000;
 const EXPIRY_SKEW_SECONDS = 30;
+// Sessions last a day and are kept per account (encrypted with its local
+// data), so most launches connect without the ~1 s challenge + session
+// round trips. Renew in the background once less than this remains.
+const RENEW_AHEAD_SECONDS = 2 * 60 * 60;
+const storedSessionKey = (pubkey: string) => `nostr_relay_session_${pubkey}`;
 const MANAGED_RELAY_STORAGE_KEY = "hainei_managed_relay_url";
 const RECEIVED_SINCE_STORAGE_KEY = "hainei_relay_received_since";
 const RECEIVED_SINCE_CACHE_MS = 24 * 60 * 60_000;
@@ -33,6 +38,9 @@ let configInflight: Promise<ManagedRelayConfig> | null = null;
 let identity: { pubkey: string; signEvent: RelaySigner } | null = null;
 let sessionCache: ManagedRelaySession | null = null;
 let sessionInflight: Promise<ManagedRelaySession> | null = null;
+let renewInflight: Promise<unknown> | null = null;
+// Tokens read back from storage rather than issued in this app session.
+const restoredTokens = new Set<string>();
 let receivedSinceProbe: { url: string; supported: boolean; checkedAt: number; ttl: number } | null = null;
 let receivedSinceInflight: Promise<boolean> | null = null;
 
@@ -52,10 +60,38 @@ function usable(session: ManagedRelaySession | null, now = Math.floor(Date.now()
   return !!session && session.scope === "relay" && session.expiresAt > now + EXPIRY_SKEW_SECONDS;
 }
 
+function storedSession(pubkey: string): ManagedRelaySession | null {
+  try {
+    const value = JSON.parse(deviceStorage.getItem(storedSessionKey(pubkey)) || "null");
+    const session: ManagedRelaySession = {
+      token: String(value?.token || ""),
+      pubkey: String(value?.pubkey || ""),
+      relayUrl: normalizeRelayUrl(String(value?.relayUrl || "")),
+      scope: value?.scope,
+      expiresAt: Number(value?.expiresAt),
+    };
+    return session.token.startsWith("nrs_") && session.pubkey === pubkey && session.relayUrl && usable(session) ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistSession(session: ManagedRelaySession) {
+  try { deviceStorage.setItem(storedSessionKey(session.pubkey), JSON.stringify(session)); } catch { /* memory copy still works */ }
+}
+
 /** Synchronous read for socket factories; null unless a fresh token is cached. */
 export function cachedManagedRelaySession(url: string) {
   const normalizedUrl = normalizeRelayUrl(url);
-  return usable(sessionCache) && sessionCache?.relayUrl === normalizedUrl && sessionCache.pubkey === identity?.pubkey ? sessionCache : null;
+  const session = usable(sessionCache) && sessionCache?.relayUrl === normalizedUrl && sessionCache.pubkey === identity?.pubkey ? sessionCache : null;
+  if (session && session.expiresAt - Math.floor(Date.now() / 1000) < RENEW_AHEAD_SECONDS && !renewInflight) {
+    // Swap in a fresh session before this one lapses; sockets keep using
+    // the current token until then.
+    renewInflight = getManagedRelaySessionForUrl(normalizedUrl, true)
+      .catch(() => undefined)
+      .finally(() => { renewInflight = null; });
+  }
+  return session;
 }
 
 export function registerRelaySessionSigner(pubkey: string, signEvent: RelaySigner) {
@@ -66,6 +102,25 @@ export function registerRelaySessionSigner(pubkey: string, signEvent: RelaySigne
     sessionInflight = null;
   }
   identity = { pubkey: normalized, signEvent };
+  if (!usable(sessionCache)) {
+    sessionCache = storedSession(normalized);
+    if (sessionCache) restoredTokens.add(sessionCache.token);
+  }
+  return true;
+}
+
+/**
+ * The relay refused a session restored from storage (for example after the
+ * app was re-created in the relay admin). Forget it so the next connection
+ * asks for a new one. Fresh sessions are never dropped here, so a relay
+ * that rejects every session cannot cause a token request loop.
+ */
+export function invalidateRestoredRelaySession(token: string) {
+  if (!restoredTokens.delete(token)) return false;
+  if (sessionCache?.token === token) {
+    try { deviceStorage.removeItem(storedSessionKey(sessionCache.pubkey)); } catch { /* replaced on next issue */ }
+    sessionCache = null;
+  }
   return true;
 }
 
@@ -84,6 +139,7 @@ export function resetManagedRelaySessionForTests() {
   identity = null;
   sessionCache = null;
   sessionInflight = null;
+  renewInflight = null;
 }
 
 export function managedRelayUrlFromCache() {
@@ -184,6 +240,7 @@ export async function getManagedRelaySessionForUrl(url: string, force = false): 
     ) throw new Error("HaiNei Worker 返回了无效 Relay 会话");
     if (identity !== currentIdentity) throw new Error("relay_session_account_changed");
     sessionCache = session;
+    persistSession(session);
     return session;
   })();
 
