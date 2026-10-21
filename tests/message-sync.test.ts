@@ -785,6 +785,74 @@ describe("PR4 durable per-Relay reconciliation", () => {
     }
   });
 
+  it("reconciles a NIP-77 relay and fetches only the wraps it lacks", async () => {
+    const repo = new SyncedMessageRepository(database());
+    let nowMs = 1_900_000_000_000;
+    const requests: Array<{ relay: string; filter: any }> = [];
+    const subscribeFake = (relays: string[], filters: any[]) => {
+      const catchup = filters.some(f => f.until !== undefined || f.ids !== undefined);
+      if (catchup) requests.push({ relay: relays[0], filter: filters[0] });
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          if (!catchup) return;
+          if (name === "event" && filters[0].ids) {
+            queueMicrotask(() => filters[0].ids.forEach((id: string) => callback({ id, kind: 1059, created_at: 1_899_999_000 }, relays[0])));
+          }
+          if (name === "eose") queueMicrotask(() => queueMicrotask(() => callback(relays[0])));
+        },
+        unsub() {},
+      };
+    };
+    const reconcile = vi.fn(async (_relay: string, _filter: any, local: Array<{ id: string }>) =>
+      ["a", "b", "c"].map(letter => letter.repeat(64)).filter(id => !local.some(item => item.id === id)));
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => nowMs,
+      decode: async () => null,
+      reconcile,
+    });
+    const status = vi.fn();
+    try {
+      await manager.start({
+        accountPubkey: ACCOUNT_A,
+        relays: ["wss://dzo"],
+        authors: [PEER, ACCOUNT_A],
+        decodeContext: { accountPubkey: ACCOUNT_A },
+        negentropyRelays: async relays => relays,
+        onCatchupStatus: status,
+      });
+      requests.length = 0;
+      reconcile.mockClear();
+      nowMs += 3_600_000;
+      await manager.resume("manual");
+      // One reconciliation over the window, then only the missing ids.
+      expect(reconcile).toHaveBeenCalledTimes(1);
+      expect(reconcile.mock.calls[0][1]).toMatchObject({ kinds: [1059], "#p": [ACCOUNT_A] });
+      expect(reconcile.mock.calls[0][1].limit).toBeUndefined();
+      expect(requests).toEqual([{ relay: "wss://dzo", filter: { ids: ["a", "b", "c"].map(l => l.repeat(64)), limit: 3 } }]);
+      expect(status).toHaveBeenLastCalledWith("settled");
+
+      // Processed wraps are remembered: the next reconciliation has them.
+      requests.length = 0;
+      nowMs += 3_600_000;
+      await manager.resume("manual");
+      expect(reconcile.mock.calls[1][2].map((item: any) => item.id).sort()).toEqual(["a", "b", "c"].map(l => l.repeat(64)));
+      expect(requests).toEqual([]);
+
+      // A relay that refuses NIP-77 falls back to the regular window.
+      reconcile.mockResolvedValueOnce(null);
+      nowMs += 3_600_000;
+      await manager.resume("manual");
+      expect(requests.some(request => request.filter.until !== undefined)).toBe(true);
+    } finally {
+      manager.stop();
+    }
+  });
+
   it("does not advance an account checkpoint from one Relay reconnect alone", async () => {
     const repo = new SyncedMessageRepository(database());
     let clockMs = 1_900_000_000_000;

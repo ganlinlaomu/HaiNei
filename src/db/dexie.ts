@@ -3,8 +3,8 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.97";
-export const DB_VERSION = 21;
+export const APP_VERSION = "0.1.98";
+export const DB_VERSION = 22;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -100,6 +100,14 @@ export type ConversationReadStateRecord = {
   /** Sub-second part of the read cursor's (orderAt, id) key. */
   lastReadMs?: number;
   updatedAt: number;
+};
+
+/** A gift wrap (outer event) this account has fully processed, for NIP-77
+ * set reconciliation. Wrap ids and outer timestamps are public relay data. */
+export type SeenGiftWrapRecord = {
+  accountPubkey: string;
+  id: string;
+  createdAt: number;
 };
 
 export type RelaySyncStateRecord = {
@@ -475,6 +483,7 @@ export class HaiNeiDatabase extends Dexie {
   dmRelayDirectory!: Table<DmRelayDirectoryRecord, [string, string]>;
   transferRecords!: Table<TransferHistoryRecord, [string, string]>;
   transferFileParts!: Table<TransferFilePartRecord, [string, string]>;
+  seenGiftWraps!: Table<SeenGiftWrapRecord, [string, string]>;
 
   constructor(name = DATABASE_NAME, requireVault = import.meta.env.MODE !== "test") {
     super(name);
@@ -755,6 +764,10 @@ export class HaiNeiDatabase extends Dexie {
     // already stored instead of decrypting every recent gift wrap again.
     this.version(21).stores({
       syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+conversationId+createdAt+id], [accountPubkey+createdAt+id], [accountPubkey+conversationId+messageClass+createdAt+id], [accountPubkey+createdAt], [accountPubkey+senderPubkey], *transportEventIds"
+    });
+
+    this.version(22).stores({
+      seenGiftWraps: "[accountPubkey+id], accountPubkey, [accountPubkey+createdAt]"
     });
 
 

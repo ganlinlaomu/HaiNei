@@ -13,7 +13,8 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "nostr-tools-nip77": ["node_modules/nostr-tools/lib/types/nip77.d.ts"]
     },
     "types": ["vite/client"]
   },

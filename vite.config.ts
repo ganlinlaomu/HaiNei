@@ -40,7 +40,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "src")
+      "@": path.resolve(__dirname, "src"),
+      // NIP-77 negentropy is only reachable through nostr-tools' root bundle,
+      // which would pull in every NIP; alias its standalone module instead.
+      "nostr-tools-nip77": path.resolve(__dirname, "node_modules/nostr-tools/lib/esm/nip77.js")
     }
   },
   server: {

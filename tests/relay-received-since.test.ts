@@ -45,3 +45,20 @@ describe("received_since relay support", () => {
     expect(await managedReceivedSinceRelay()).toBe("");
   });
 });
+
+describe("relay NIP-77 support", () => {
+  it("reads supported_nips from NIP-11 once a day and treats failures as unsupported", async () => {
+    const { negentropyCapableRelays, resetRelayCapabilitiesForTests } = await import("@/services/relayCapabilities");
+    resetRelayCapabilitiesForTests();
+    deviceStorage.removeItem("hainei_relay_nips");
+    const fetchMock = vi.fn(async (url: string) => url.includes("strfry")
+      ? new Response(JSON.stringify({ supported_nips: [1, 11, 77] }))
+      : url.includes("down") ? Promise.reject(new TypeError("offline")) : new Response(JSON.stringify({ supported_nips: [1, 11] })));
+    vi.stubGlobal("fetch", fetchMock);
+    const relays = ["wss://strfry.example", "wss://plain.example", "wss://down.example"];
+    expect(await negentropyCapableRelays(relays)).toEqual(["wss://strfry.example"]);
+    expect(await negentropyCapableRelays(relays)).toEqual(["wss://strfry.example"]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    deviceStorage.removeItem("hainei_relay_nips");
+  });
+});

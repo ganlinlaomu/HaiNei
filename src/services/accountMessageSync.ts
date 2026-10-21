@@ -2,6 +2,7 @@ import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { getActivePinia } from "pinia";
 import { getRelaysFromStorage, inspectRelays, onRelayConnectionState, releaseUnusedRelayConnections } from "@/nostr/relays";
 import { managedReceivedSinceRelay, managedRelayUrlFromCache } from "@/services/relaySession";
+import { negentropyCapableRelays } from "@/services/relayCapabilities";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
@@ -485,6 +486,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
       // reveal unread once it is done; slower relays keep paging behind it.
       preferredCatchupRelay: managedRelayUrlFromCache,
       receivedSinceRelay: managedReceivedSinceRelay,
+      negentropyRelays: negentropyCapableRelays,
       onPreferredRelayCaughtUp: () => {
         if (!isCurrent() || directMessages.historyHydrationPhase !== "hydrating") return;
         clearStartupUnreadGraceTimer();
