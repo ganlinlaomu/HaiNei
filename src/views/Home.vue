@@ -74,6 +74,7 @@ import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { usePostsStore } from "@/stores/posts";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
 import { logger } from "@/utils/logger";
+import { startupMark } from "@/utils/debugLog";
 import PostCard from "@/components/PostCard.vue";
 import PrivateNoteCard from "@/components/PrivateNoteCard.vue";
 import { usePrivateFeedCards } from "@/composables/usePrivateFeedCards";
@@ -437,7 +438,9 @@ export default defineComponent({
     }
 
     async function initializeHomeRuntime(accountPk: string) {
+      const started = Date.now();
       await msgs.load(accountPk);
+      const inboxMs = Date.now() - started;
       await feedPreferences.load(accountPk);
       if (!accountPk || keys.pkHex !== accountPk || msgs.loadedFor !== accountPk) {
         logger.warn(`[account] Home initialization discarded account=${accountPk?.slice(0, 8) || "none"}`);
@@ -447,6 +450,7 @@ export default defineComponent({
       refreshVisibleInbox(true);
       displayedMessages.value = messagesRef.value.slice(0, PAGE_SIZE);
       isInitialLoad.value = false;
+      startupMark("home_feed_ready", { durationMs: Date.now() - started, inboxMs, items: displayedMessages.value.length });
 
       const storedLastSeen = getLastSeenCreatedAt(accountPk) || 0;
       const newestInUI = displayedMessages.value[0]?.created_at || 0;

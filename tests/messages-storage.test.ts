@@ -53,6 +53,20 @@ describe("Home Dexie restoration", () => {
     expect(setItem).not.toHaveBeenCalled();
   });
 
+  it("shows Home without waiting for the full-history disappearing purge", async () => {
+    // The purge decrypts every stored message; awaiting it before the list
+    // left Home blank (and the phone busy) for seconds on large accounts.
+    mocks.purgeExpired.mockReturnValue(new Promise(() => undefined));
+    mocks.list.mockResolvedValue([{
+      accountPubkey: ACCOUNT, id: "home-1", senderPubkey: OTHER, recipientPubkeys: [ACCOUNT],
+      conversationId: "home-1", plaintext: "hello", createdAt: 12, protocol: "nip17",
+      transportKind: 1059, transportEventIds: ["wrap"], firstSeenAt: 1, lastSeenAt: 1
+    }]);
+    const messages = useMessagesStore();
+    await messages.load(ACCOUNT);
+    expect(messages.inbox.map(item => item.id)).toEqual(["home-1"]);
+  });
+
   it("ignores a duplicate arrival of the same message", async () => {
     const messages = useMessagesStore();
     await messages.load(ACCOUNT);

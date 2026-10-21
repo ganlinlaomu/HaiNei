@@ -2,6 +2,8 @@ import { messageOrderAt } from "@/nostr/messaging/sync/sorting";
 import { defineStore } from "pinia";
 import { markRaw, toRaw } from "vue";
 import { deviceStorage } from "@/services/deviceStorage";
+import { scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
+import { startupMark } from "@/utils/debugLog";
 import { useKeyStore } from "./keys";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
@@ -182,8 +184,7 @@ export const useMessagesStore = defineStore("messages", {
       } catch {
         // Leave the legacy key intact so a later load can retry safely.
       }
-      // Purge expired temporary plaintext before restoring the in-memory mirror.
-      await syncedMessageRepository.purgeExpiredDisappearing(targetPk);
+      const listStarted = Date.now();
       const records = await syncedMessageRepository.listRecent(targetPk);
       if (this.loadedFor !== targetPk) return;
       const durableInbox: InboxItem[] = records
@@ -234,6 +235,17 @@ export const useMessagesStore = defineStore("messages", {
       this.inbox = [...inboxById.values()].sort((a, b) =>
         messageOrderAt(b.created_at, b.tags) - messageOrderAt(a.created_at, a.tags) || a.id.localeCompare(b.id));
       this.recordInboxMutation("replace");
+      startupMark("inbox_loaded", { records: records.length, durationMs: Date.now() - listStarted });
+      // Burning expired disappearing messages scans (and decrypts) every
+      // stored message. It used to run before this list and kept Home blank
+      // and the phone busy for seconds; expired ones are already filtered out
+      // above, so it now runs afterwards in the background.
+      scheduleBackgroundTask(`purge-disappearing:${targetPk}`, async () => {
+        const started = Date.now();
+        const cleaned = await syncedMessageRepository.purgeExpiredDisappearing(targetPk);
+        startupMark("disappearing_purged", { cleaned, durationMs: Date.now() - started });
+        if (cleaned && this.loadedFor === targetPk) await this.loadDurableInbox(targetPk);
+      }, { timeoutMs: 5_000 });
       this.outbox = outgoing.filter(item => item.state === "sent").map(item => {
         const message = item.message as CanonicalMessage;
         return {

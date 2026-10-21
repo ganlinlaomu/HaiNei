@@ -326,8 +326,9 @@ export class SyncedMessageRepository {
    * Return only minimal identifiers; never materialize plaintext for scheduling. */
   async listDueOpenedDisappearing(accountPubkey: string, nowMs = Date.now()): Promise<OpenedDmState[]> {
     const account = normalizeAccountPubkey(accountPubkey);
-    const records = await this.database.accountMeta.where("accountPubkey").equals(account)
-      .filter(record => record.key.startsWith("dm-open:")).toArray();
+    // Key range, so other (sealed) account values are not read and decrypted.
+    const records = await this.database.accountMeta.where("[accountPubkey+key]")
+      .between([account, "dm-open:"], [account, "dm-open:\uffff"]).toArray();
     return records
       .map(record => record.value as OpenedDmState | undefined)
       .filter((record): record is OpenedDmState => !!record
@@ -339,13 +340,28 @@ export class SyncedMessageRepository {
 
   /** Never defer secure local deletion to the next time that particular chat
    * is opened. All expired/watched plaintext is purged on account restoration. */
-  async purgeExpiredDisappearing(accountPubkey: string, nowMs = Date.now()) {
+  /**
+   * Burn expired disappearing messages. Their tags are sealed by the local
+   * vault, so finding them means reading (and decrypting) every stored
+   * message. Do that in small batches with a yield between them so it never
+   * holds the UI thread; callers run it in the background, since expired
+   * messages are already hidden from every list.
+   */
+  async purgeExpiredDisappearing(accountPubkey: string, nowMs = Date.now(), batchSize = 100) {
     const account = normalizeAccountPubkey(accountPubkey);
-    const [expired, openedDue] = await Promise.all([
-      this.database.syncedMessages.where("accountPubkey").equals(account)
-        .filter(record => isExpiredDisappearing(record.tags, Math.floor(nowMs / 1000))).toArray(),
-      this.listDueOpenedDisappearing(account, nowMs),
-    ]);
+    const nowSeconds = Math.floor(nowMs / 1000);
+    const expired: SyncedMessageRecord[] = [];
+    let after = "";
+    for (;;) {
+      const batch = await this.database.syncedMessages.where("[accountPubkey+id]")
+        .between([account, after], [account, Dexie.maxKey], false, true)
+        .limit(batchSize).toArray();
+      for (const record of batch) if (isExpiredDisappearing(record.tags, nowSeconds)) expired.push(record);
+      if (batch.length < batchSize) break;
+      after = batch[batch.length - 1].id;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    const openedDue = await this.listDueOpenedDisappearing(account, nowMs);
     const toBurn = new Map<string, string>();
     for (const record of expired) {
       const peer = directMessagePeer(record, account);
