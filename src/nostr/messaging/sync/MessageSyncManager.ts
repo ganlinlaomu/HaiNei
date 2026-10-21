@@ -69,6 +69,16 @@ export function relayCatchupRetryDelayMs(attempt: number) {
   return Math.min(RELAY_CATCHUP_RETRY_MAX_MS, RELAY_CATCHUP_RETRY_BASE_MS * 2 ** exponent);
 }
 
+/** Error kind, message and the first stack frames, without message content. */
+function describeError(error: unknown) {
+  const value = error instanceof Error ? error : new Error(String(error));
+  return {
+    name: value.name || "Error",
+    message: String(value.message || "").slice(0, 160),
+    stack: String(value.stack || "").split("\n").slice(1, 4).map(line => line.trim().slice(0, 120)).join(" | "),
+  };
+}
+
 export class MessageSyncManager {
   private readonly repository: SyncedMessageRepository;
   private readonly subscribeFn: SubscribeForCatchup;
@@ -688,6 +698,11 @@ export class MessageSyncManager {
       }
     } catch (e) {
       logger.warn(`[message-sync] catch-up failed account=${options.accountPubkey.slice(0, 8)}`, e);
+      // A failing catch-up never records completion, so the next launch
+      // repeats the full history page; keep the cause in the exported log.
+      const failure = describeError(e);
+      debugLog("sync", "catchup_failed", failure, "warn");
+      startupMark("catchup_failed", failure);
       await this.setStatus("error", sessionId);
     } finally {
       if (this.catchupSessionId === sessionId) {

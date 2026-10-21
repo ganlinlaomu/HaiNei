@@ -526,6 +526,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
     return true;
   } catch (error) {
     if (isCurrent()) {
+      const value = error instanceof Error ? error : new Error(String(error));
+      startupMark("message_sync_failed", { name: value.name || "Error", message: String(value.message || "").slice(0, 160) });
       setAccountMessageSyncStatus(account, "error");
       settleStartupUnread("error");
     }
