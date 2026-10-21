@@ -406,6 +406,25 @@ describe("reliable message persistence", () => {
   });
 });
 
+describe("startup catch-up of already stored messages", () => {
+  it("skips decrypting a gift wrap whose message is already stored", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const decode = vi.fn(async () => message("stored-once", 100, { transportEventId: "wrap-a" }));
+    const first = new MessageIngestionPipeline(ACCOUNT_A, { accountPubkey: ACCOUNT_A }, () => true, () => true, repo, decode);
+    expect(await first.ingestNostrEvent({ id: "wrap-a", kind: 1059, created_at: 100 } as any, { source: "history" })).toMatchObject({ inserted: true, known: true });
+    expect(decode).toHaveBeenCalledOnce();
+
+    // A fresh launch has empty in-memory caches; only the database knows.
+    decryptedEventCache.clear();
+    eventCache.clear();
+    const relaunched = new MessageIngestionPipeline(ACCOUNT_A, { accountPubkey: ACCOUNT_A }, () => true, () => true, repo, decode);
+    expect(await relaunched.ingestNostrEvent({ id: "wrap-a", kind: 1059, created_at: 100 } as any, { source: "history" })).toMatchObject({ inserted: false, known: true });
+    expect(decode).toHaveBeenCalledOnce();
+    expect((await repo.listTransportEventIds(ACCOUNT_A)).has("wrap-a")).toBe(true);
+    expect((await repo.listTransportEventIds(ACCOUNT_B)).has("wrap-a")).toBe(false);
+  });
+});
+
 describe("relay catch-up", () => {
   it("waits for every relay EOSE and retains the slower relay event", async () => {
     const subscribeFake = () => {
