@@ -341,6 +341,19 @@ describe("reliable message persistence", () => {
     expect(await repo.listDeferredAuthorizationMessages(ACCOUNT_A)).toEqual([]);
   });
 
+  it("a full deferred queue skips the message instead of failing the catch-up", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const pipeline = new MessageIngestionPipeline(ACCOUNT_A, { accountPubkey: ACCOUNT_A }, () => true, () => "defer", repo);
+    for (let index = 0; index < 25; index += 1) {
+      await pipeline.ingestCanonicalMessage(message(`deferred-${index}`, 100 + index), { source: "catchup" });
+    }
+    // Overflow used to throw deferred_queue_full, which aborted the whole
+    // catch-up so history never completed and the queue never drained.
+    await expect(pipeline.ingestCanonicalMessage(message("overflow", 200), { source: "catchup" }))
+      .resolves.toMatchObject({ inserted: false, discarded: false, deferred: false });
+    expect(await repo.listDeferredAuthorizationMessages(ACCOUNT_A)).toHaveLength(25);
+  });
+
   it("never persists a rejected message when another gift wrap repeats the same logical message", async () => {
     const repo = new SyncedMessageRepository(database());
     const rejected = vi.fn(() => false);
