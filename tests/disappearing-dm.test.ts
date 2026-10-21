@@ -145,6 +145,24 @@ describe("opt-in disappearing NIP-17", () => {
     expect(await repo.openDisappearingMessage(receiver, disappearing.id, sender, Date.now() + 49 * 3600 * 1000)).toBeNull();
   });
 
+  it("finds expired temporary messages across scan batches without touching the rest", async () => {
+    const repo = repository();
+    const now = Date.now();
+    const temporary = [];
+    for (let i = 0; i < 25; i++) {
+      const message = (await nip17Adapter.encode!({
+        recipientPubkeys: [receiver], plaintext: `message ${i}`, tags: [["t", "hainei-dm"]],
+        ...(i % 8 === 0 ? { burnAfterSeconds: 30 } : {}),
+      }, context)).message;
+      await repo.insertMessageIfAbsent(receiver, message);
+      if (i % 8 === 0) temporary.push(message.id);
+    }
+    // Unopened temporary messages expire after two days; scan in batches of 10.
+    expect(await repo.purgeExpiredDisappearing(receiver, now + 49 * 3600 * 1000, 10)).toBe(temporary.length);
+    for (const id of temporary) expect(await repo.get(receiver, id)).toBeUndefined();
+    expect((await repo.list(receiver)).length).toBe(25 - temporary.length);
+  });
+
   it("sender independently destroys a read temporary message at the peer's durable deadline", async () => {
     const repo = repository();
     const temporary = (await nip17Adapter.encode!({

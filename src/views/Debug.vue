@@ -125,6 +125,8 @@ type RelayStatus = RelayRuntimeStatus;
 type LastSend = { ts: number; logicalMessageId: string; recipients: number; giftWraps: number; copies: Array<{ eventId: string; target: string; role: string; relays: Array<{ relay: string; status: string; reason?: string }> }> };
 
 const logs = useDebugLogsStore();
+// Read ahead so the export stays synchronous inside the tap (iOS downloads).
+const previousLaunch = ref<unknown>(null);
 const keys = useKeyStore();
 const relayStatus = ref<Record<string, RelayStatus>>({});
 const relayStats = ref({ idleRelayConnections: 0, idleConnectionsReleased: 0 });
@@ -222,7 +224,7 @@ const lastSend = computed<LastSend | null>(() => {
 
 function exportLogs() {
   refreshRelayStatus();
-  const payload = { appVersion: APP_VERSION, dbVersion: DB_VERSION, account: accountPrefix.value, persistentStorage: persistentStorage.value, relayStatus: relayStatus.value, startup: logs.startupMarks(), logs: logs.entries };
+  const payload = { appVersion: APP_VERSION, dbVersion: DB_VERSION, account: accountPrefix.value, persistentStorage: persistentStorage.value, relayStatus: relayStatus.value, startup: logs.startupMarks(), previousLaunch: previousLaunch.value, logs: logs.entries };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -230,7 +232,7 @@ function exportLogs() {
   URL.revokeObjectURL(url);
 }
 
-onMounted(() => { void refreshDmInbox(); void persistentStorageState().then(state => { persistentStorage.value = state; }); refreshRelayStatus(); timer = window.setInterval(() => { now.value = Date.now(); refreshRelayStatus(); }, 2000); });
+onMounted(() => { void logs.previousLaunchLog().then(value => { previousLaunch.value = value; }); void refreshDmInbox(); void persistentStorageState().then(state => { persistentStorage.value = state; }); refreshRelayStatus(); timer = window.setInterval(() => { now.value = Date.now(); refreshRelayStatus(); }, 2000); });
 onBeforeUnmount(() => { if (timer) clearInterval(timer); });
 </script>
 
