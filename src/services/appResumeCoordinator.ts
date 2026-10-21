@@ -38,7 +38,11 @@ function dispatch(reason: AppResumeReason) {
 }
 
 function visibilityHandler() {
-  if (document.visibilityState === "hidden") hiddenSinceLastDispatch = true;
+  if (document.visibilityState === "hidden") {
+    hiddenSinceLastDispatch = true;
+    // Background interrupts catch-up; show it in the launch timeline.
+    startupMark("app_hidden");
+  }
   else if (document.visibilityState === "visible") dispatch("visibilitychange");
 }
 function focusHandler() { dispatch("focus"); }

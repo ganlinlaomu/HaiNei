@@ -663,6 +663,11 @@ export class MessageSyncManager {
           await this.repository.commitCatchupProgress(options.accountPubkey, syncStatePatch, relayPatches);
         }
         options.onCatchupStatus?.(completedFreshHistory || fullAccountCoverage ? "settled" : "pending");
+        startupMark("catchup_page", {
+          source: activeSource, received: result.received, unique: result.unique,
+          settled: completedFreshHistory || fullAccountCoverage, incomplete: !!result.incomplete,
+          failedRelays: result.failedRelays.size, timedOut: !!result.timedOut,
+        });
         this.scheduleRelayRetries(sessionId, options.accountPubkey, result);
         if (result.incomplete) {
           logger.warn(`[message-sync] catch-up incomplete account=${options.accountPubkey.slice(0, 8)} phase=${activeSource} failed=${[...result.failedRelays.entries()].map(([url, reason]) => `${url}:${reason}`).join(",") || (result.paginationStalled ? "timestamp-pagination-stalled" : result.timedOut ? "timeout" : result.aborted ? "aborted" : "partial")}`);

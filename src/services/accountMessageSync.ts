@@ -20,7 +20,7 @@ import { syncedMessageRepository } from "@/repositories/syncedMessageRepository"
 import { onMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 import { pushEnabledForAccount, syncPushAuthorizationPolicy } from "@/services/pushNotifications";
 import { mentionedPubkeysFromTags } from "@/utils/mentions";
-import { debugLog } from "@/utils/debugLog";
+import { debugLog, startupMark } from "@/utils/debugLog";
 import { deliveryStatsLogData, recordPersistedDelivery, resetDeliveryStats } from "@/services/dmDeliveryStats";
 import {
   cancelDmRelayDirectoryWork,
@@ -303,6 +303,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
       // Old manager callbacks must not unmask a newer account session.
       if (isCurrent() && directMessages.historyHydrationPhase === outcome) {
         directMessages.finishReadStateRestore(account);
+        // Until here the unread badge and fresh unread were held back.
+        startupMark("unread_revealed", { outcome });
       }
     }).catch(error => {
       // Do not expose the provisional hundreds-of-unread projection on
