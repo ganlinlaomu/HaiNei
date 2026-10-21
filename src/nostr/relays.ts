@@ -16,7 +16,7 @@ import {
 } from "@/services/connectionSettings";
 import { performanceCounters } from "@/services/nostrCache";
 import { deviceStorage } from "@/services/deviceStorage";
-import { getManagedRelaySessionForUrl, managedRelayUrlFromCache } from "@/services/relaySession";
+import { getManagedRelaySessionForUrl, invalidateRestoredRelaySession, managedRelayUrlFromCache } from "@/services/relaySession";
 
 type RelayConn = {
   url: string;
@@ -468,6 +468,16 @@ function ensureRelayConn(url: string): RelayConn {
         try { ws.close(); } catch {}
       }, CONNECTION_OPEN_TIMEOUT);
 
+      // A saved day-long session the relay no longer accepts is replaced
+      // instead of being retried until it expires.
+      const dropRejectedSession = (reason: unknown) => {
+        if (!managedSession || !/^(?:auth-required|restricted):/.test(String(reason ?? ""))) return;
+        if (!invalidateRestoredRelaySession(managedSession.token)) return;
+        debugLog("relay", "relay_session_rejected", { relay: url }, "warn");
+        conn.pendingCloseReason = "session-refresh";
+        try { ws.close(4001, "relay session rejected"); } catch {}
+      };
+
       const onOpen = () => {
         if (conn.ws !== ws || generation !== conn.generation) return;
         if (conn.connectTimer) window.clearTimeout(conn.connectTimer);
@@ -580,6 +590,7 @@ function ensureRelayConn(url: string): RelayConn {
           const id = data[1];
           const ok = data[2];
           const msg = data[3];
+          if (ok === false) dropRejectedSession(msg);
           const h = conn.okHandlers.get(id);
           if (h) {
             try { h({ ok, msg }); } catch (e) { logger.warn("ok handler error", e); }
@@ -588,6 +599,7 @@ function ensureRelayConn(url: string): RelayConn {
         } else {
           if (t === "CLOSED") {
             const subId = data[1];
+            dropRejectedSession(data[2]);
             settleSubscription(conn, subId, "failure", "closed");
           }
         }
