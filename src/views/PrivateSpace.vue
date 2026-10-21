@@ -372,7 +372,7 @@ const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, o
 let swipeStart: { id: string; x: number; y: number } | null = null;
 let handlingQuickCreate = false;
 const query = ref("");
-const filter = ref<SpaceFilter>(route.query.new === "note" ? "note" : route.query.new === "todo" ? "todo" : route.query.tab === "saved" ? "saved" : getPrivateSpaceTab(keys.pkHex));
+const filter = ref<SpaceFilter>(route.query.new === "note" ? "note" : route.query.new === "todo" ? "todo" : route.query.tab === "saved" || route.query.tab === "note" || route.query.tab === "todo" ? route.query.tab : getPrivateSpaceTab(keys.pkHex));
 const searchLabel = computed(() => privateSpaceSearchLabel(filter.value));
 const emptyMessage = computed(() => privateSpaceEmptyMessage(filter.value, query.value));
 const moreOpen = ref(false);
@@ -524,7 +524,7 @@ function updateInList(record: PrivateSpaceRecord) {
 async function loadForAccount(account: string) {
   const version = ++loadVersion;
   filter.value = route.query.new === "note" ? "note" : route.query.new === "todo" ? "todo"
-    : route.query.tab === "saved" ? "saved" : getPrivateSpaceTab(account);
+    : route.query.tab === "saved" || route.query.tab === "note" || route.query.tab === "todo" ? route.query.tab : getPrivateSpaceTab(account);
   closeAllNoteSwipes();
   blockedSwipeClickId.value = "";
   notes.value = [];

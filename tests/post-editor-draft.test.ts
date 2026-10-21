@@ -70,6 +70,16 @@ describe("complete post draft media", () => {
     });
   });
 
+  it("reopens a self-only draft from an older release as a note, and keeps the chosen type", async () => {
+    const { deviceStorage } = await import("@/services/deviceStorage");
+    deviceStorage.setItem(postDraftKey(ACCOUNT)!, JSON.stringify({ content: "private", allFriends: false, selectedGroups: [], audienceChosen: true }));
+    expect(loadPostDraft(ACCOUNT)).toMatchObject({ type: "note", content: "private" });
+    deviceStorage.setItem(postDraftKey(ACCOUNT)!, JSON.stringify({ content: "group", allFriends: false, selectedGroups: ["家人"], audienceChosen: true }));
+    expect(loadPostDraft(ACCOUNT)).toMatchObject({ type: "post" });
+    savePostDraft(ACCOUNT, { type: "todo", content: "买菜\n取快递", allFriends: false, selectedGroups: [] });
+    expect(loadPostDraft(ACCOUNT)).toMatchObject({ type: "todo", content: "买菜\n取快递" });
+  });
+
   it("remembers only explicitly selected audiences, including self-only", () => {
     savePostDraft(ACCOUNT, { content: "private", allFriends: false, selectedGroups: [], audienceChosen: true });
     expect(loadPostDraft(ACCOUNT)).toMatchObject({
@@ -148,7 +158,9 @@ describe("post editor close and media UX", () => {
     expect(source).toContain("const audienceChosen = ref(false)");
     expect(source).toContain("audienceChosen: audienceChosen.value");
     expect(source).toContain("visibilityOpen.value = !!audienceChosen.value && !allFriends.value && selectedGroups.value.length > 0");
-    expect(source).toContain("function chooseSelf()");
+    // "Only me" moved to the 笔记 type; posts always reach at least one friend.
+    expect(source).not.toContain("function chooseSelf()");
+    expect(source).toContain("const validAudience = audienceChosen.value && (allFriends.value || selectedGroups.value.length > 0)");
     expect(source).toContain("audienceChosen.value = selectedGroups.value.length > 0");
     expect(source).toContain("if (!validAudience)");
     expect(source).toContain("visibilityRow.value?.scrollIntoView");
@@ -168,10 +180,21 @@ describe("post editor close and media UX", () => {
     expect(source).toContain("if (!validAudience)");
   });
 
+  it("writes notes and to-do lists from the same composer, always private", () => {
+    const source = readFileSync("src/components/PostEditorModal.vue", "utf8");
+    expect(source).toContain('{ value: "post", label: "动态" }, { value: "note", label: "笔记" }, { value: "todo", label: "待办" }');
+    expect(source).toContain('<section v-if="postType === \'post\'" ref="visibilityRow" class="audience-section"');
+    expect(source).toContain("🔒 仅自己可见");
+    expect(source).toContain('if (postType.value !== "post" && !pendingPostRetry.value) {');
+    expect(source).toContain("await privateSpaceRepository.createWithContent(account, crypto.randomUUID(), draft);");
+    expect(source).toContain("notePrivateSpaceMutation(keys);");
+    expect(source).toContain('content.value.split("\\n")');
+  });
+
   it("redesigns the publisher into content, audience cards, and a compact toolbar", () => {
     expect(source).toContain('class="editor-header-row"');
     expect(source).toContain('class="editor-author"');
-    expect(source).toContain('placeholder="这一刻，你想分享什么？"');
+    expect(source).toContain('post: "这一刻，你想分享什么？"');
     expect(source).toContain('class="audience-cards"');
     expect(source).toContain('aria-label="可见范围"');
     expect(source).toContain("仅自己");
@@ -181,7 +204,7 @@ describe("post editor close and media UX", () => {
     expect(source).toContain('class="composer-toolbar"');
     expect(source).toContain('@click="insertMentionTrigger"');
     expect(source).toContain("@click=\"onSend()\"");
-    expect(source).toContain(".audience-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));");
+    expect(source).toContain(".audience-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));");
     expect(source).toContain(".editor-textarea::placeholder { color: #94a3b8; }");
   });
 

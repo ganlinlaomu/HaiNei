@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.86",
-  "releaseSummary": "打开海内时不再重复解密已存私信，推送缓存及时清理",
+  "version": "0.1.87",
+  "releaseSummary": "发布页可直接写笔记和待办",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

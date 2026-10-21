@@ -28,6 +28,14 @@ afterEach(async () => {
   }
 });
 
+describe("notes written in the composer", () => {
+  it("show their images although they have no source post", () => {
+    const attachments = [{ kind: "image" as const, url: "blossom+aesgcm:abc" }];
+    expect(privateSpaceDisplay({ body: "今天的照片", attachments })).toEqual({ text: "今天的照片", attachments });
+    expect(privateSpaceDisplay({ body: "只有文字" })).toEqual({ text: "只有文字", attachments: [] });
+  });
+});
+
 describe("PR-FIX-B excerpt semantics", () => {
   it("strips inline media and video JSON from feed body while keeping typed attachments", () => {
     const raw = [
