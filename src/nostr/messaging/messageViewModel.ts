@@ -1,3 +1,4 @@
+import type { PrivateSpaceRecord } from "@/db/dexie";
 import type { SyncedMessageRecord } from "@/db/dexie";
 import { isDmReceiptMessage, isDmReceiptPayload } from "@/nostr/messaging/dmReceipts";
 import { classifyPrivateMessage, isHomeControl } from "@/nostr/messaging/messageRouting";
@@ -6,6 +7,8 @@ export { isHomeControl };
 
 export type InboxItem = {
   id: string;
+  /** A note or to-do from 私人空间 shown in the owner's own feed (never sent). */
+  privateNote?: PrivateSpaceRecord;
   pubkey: string;
   created_at: number;
   content: string;

@@ -44,13 +44,15 @@
         </template>
       </div>
       <div v-if="topSpacerHeight" class="virtual-spacer" :style="{ height: `${topSpacerHeight}px` }" aria-hidden="true"></div>
-      <PostCard
-        v-for="m in virtualMessages"
-        :key="m.id"
-        :message="m"
-        :open-comment-id="route.query.mid === m.id ? String(route.query.rid || route.query.iid || '') : undefined"
-        @height="recordPostHeight"
-      />
+      <template v-for="m in virtualMessages" :key="m.id">
+        <PrivateNoteCard v-if="m.privateNote" :item="m" @height="recordPostHeight" />
+        <PostCard
+          v-else
+          :message="m"
+          :open-comment-id="route.query.mid === m.id ? String(route.query.rid || route.query.iid || '') : undefined"
+          @height="recordPostHeight"
+        />
+      </template>
       <div v-if="bottomSpacerHeight" class="virtual-spacer" :style="{ height: `${bottomSpacerHeight}px` }" aria-hidden="true"></div>
       
       <div v-if="hasMore" ref="loadMoreSentinel" class="load-more-sentinel" aria-live="polite">
@@ -73,6 +75,8 @@ import { usePostsStore } from "@/stores/posts";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
 import { logger } from "@/utils/logger";
 import PostCard from "@/components/PostCard.vue";
+import PrivateNoteCard from "@/components/PrivateNoteCard.vue";
+import { usePrivateFeedCards } from "@/composables/usePrivateFeedCards";
 import { useRoute, useRouter } from "vue-router";
 import { usePullToRefresh } from "@/components/usePullToRefresh";
 import { getLastSeenCreatedAt, updateLastSeenToNewest } from "@/utils/lastSeen";
@@ -107,7 +111,7 @@ function compareHomeMessages(a: { id: string; created_at?: number }, b: { id: st
 
 export default defineComponent({
   name: "Home",
-  components: { PostCard },
+  components: { PostCard, PrivateNoteCard },
   setup() {
     const friends = useFriendsStore();
     const friendships = useFriendshipsStore();
@@ -129,7 +133,12 @@ export default defineComponent({
     const storedHistory = ref<InboxItem[]>([]);
     let historyCursor: {createdAt:number;id:string} | undefined;
     const historyExhausted = ref(false);
-    const visibleInbox = () => [...new Map([...storedHistory.value,...msgs.inbox].map(m=>[m.id,m])).values()].filter(message => isHomeRenderable(message) && feedPreferences.isVisible(message));
+    // The owner's own notes and open to-dos, visible to nobody else.
+    const { cards: privateCards, revision: privateCardsRevision } = usePrivateFeedCards(() => applyPrivateCards());
+    const visibleInbox = () => [
+      ...[...new Map([...storedHistory.value,...msgs.inbox].map(m=>[m.id,m])).values()].filter(message => isHomeRenderable(message) && feedPreferences.isVisible(message)),
+      ...privateCards.value,
+    ];
 
     let homeAccountPk = "";
     let stopSyncStatusListener: (() => void) | null = null;
@@ -138,6 +147,7 @@ export default defineComponent({
     const displayedMessages = ref([] as InboxItem[]);
     let visibleInboxMessageRevision = -1;
     let visibleInboxPreferenceRevision = -1;
+    let visibleInboxPrivateRevision = -1;
 
     function insertSortedHomeMessage(current: InboxItem[], item: InboxItem) {
       let low = 0;
@@ -161,15 +171,18 @@ export default defineComponent({
     } {
       const messageRevision = msgs.inboxRevision;
       const preferenceRevision = feedPreferences.revision;
+      const privateRevision = privateCardsRevision.value;
       if (!force
         && messageRevision === visibleInboxMessageRevision
-        && preferenceRevision === visibleInboxPreferenceRevision) {
+        && preferenceRevision === visibleInboxPreferenceRevision
+        && privateRevision === visibleInboxPrivateRevision) {
         return { changed: false, mode: "none" };
       }
 
       // Several arrivals can land between two watcher runs. As long as every
       // one of them is a plain insert, apply them incrementally as well.
       const mutations = !force && preferenceRevision === visibleInboxPreferenceRevision
+        && privateRevision === visibleInboxPrivateRevision
         ? msgs.inboxMutationsSince(visibleInboxMessageRevision)
         : null;
       const canApplyInserts = !!mutations?.length
@@ -203,6 +216,7 @@ export default defineComponent({
 
       visibleInboxMessageRevision = messageRevision;
       visibleInboxPreferenceRevision = preferenceRevision;
+      visibleInboxPrivateRevision = privateRevision;
       return {
         changed: true,
         mode: canApplyInserts ? "incremental" : "rebuild",
@@ -387,6 +401,24 @@ export default defineComponent({
     let loadMoreObserver: IntersectionObserver | null = null;
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
 
+    /**
+     * Apply a changed set of private cards to what is already on screen:
+     * drop removed ones, refresh edited ones, and add the rest by time, but
+     * only within the span of posts already loaded (older ones arrive with
+     * "load more", like posts).
+     */
+    function applyPrivateCards() {
+      if (!readyForPending.value) return;
+      refreshVisibleInbox();
+      const posts = displayedMessages.value.filter(message => !message.privateNote);
+      const oldest = posts.at(-1)?.created_at ?? 0;
+      const showAll = historyExhausted.value && messagesRef.value.length - privateCards.value.length <= posts.length;
+      const cards = privateCards.value
+        .filter(card => showAll || posts.length === 0 || card.created_at >= oldest)
+        .sort(compareHomeMessages);
+      displayedMessages.value = mergeSortedMessagesWithDedup(cards, posts);
+    }
+
     function clearHomeRuntimeState() {
       storedHistory.value=[]; historyCursor=undefined; historyExhausted.value=false;
       messagesRef.value = [];
@@ -400,6 +432,7 @@ export default defineComponent({
       updateRelayNotice("idle");
       homeAccountPk = "";
       visibleInboxMessageRevision = -1;
+      visibleInboxPrivateRevision = -1;
       visibleInboxPreferenceRevision = -1;
     }
 
