@@ -12,6 +12,7 @@ import {
   unsupportedMessageCleanupMetaKey,
 } from "@/repositories/syncedMessageRepository";
 import { MessageSyncManager } from "@/nostr/messaging/sync/MessageSyncManager";
+import { CATCHUP_PAGE_LIMIT, INITIAL_HISTORY_MAX_BATCHES, RESUME_MAX_BATCHES } from "@/nostr/messaging/sync/types";
 import { decryptedEventCache, eventCache, scopedKey } from "@/services/nostrCache";
 
 const ACCOUNT_A = "a".repeat(64);
@@ -508,6 +509,37 @@ describe("relay catch-up", () => {
     expect(result.nextUntilByRelay).toEqual({ "wss://a": 150, "wss://b": 200 });
     expect(result.failedRelays.get("wss://b")).toBe("closed");
     expect(result.incomplete).toBe(true);
+  });
+
+  it("pages past a relay that caps each REQ at the catch-up page limit", async () => {
+    // The managed relay returns at most 250 events per REQ. Asking for more
+    // made a capped page look short, ending catch-up with older events unread.
+    const RELAY_MAX_LIMIT = 250;
+    const stored = Array.from({ length: 400 }, (_, i) => ({ id: `capped-${i}`, created_at: 1_000 - i }));
+    const subscribeFake = (_relays: string[], filters: any[]) => ({
+      on(name: string, callback: (...args: any[]) => void) {
+        if (name === "event") queueMicrotask(() => {
+          const { until, limit } = filters[0];
+          stored.filter(event => event.created_at <= until)
+            .slice(0, Math.min(limit, RELAY_MAX_LIMIT))
+            .forEach(event => callback(event, "wss://capped"));
+        });
+        if (name === "eose") queueMicrotask(() => queueMicrotask(() => callback("wss://capped")));
+      },
+      unsub() {},
+    });
+    const ingested = new Set<string>();
+    const result = await runPagedCatchup({
+      relays: ["wss://capped"],
+      filters: [{ until: 1_000, limit: CATCHUP_PAGE_LIMIT }],
+      subscribeFn: subscribeFake,
+      maxBatches: INITIAL_HISTORY_MAX_BATCHES,
+      isCurrent: () => true,
+      onEvent: async event => { ingested.add(event.id); },
+    });
+    expect(CATCHUP_PAGE_LIMIT).toBeLessThanOrEqual(RELAY_MAX_LIMIT);
+    expect(ingested.size).toBe(400);
+    expect(result.exhaustedHistory).toBe(true);
   });
 
   it("reports pending relays as timed out instead of completed", async () => {
@@ -1019,7 +1051,8 @@ describe("PR3 incremental idle continuation", () => {
           (handlers[name] ||= []).push(callback);
           if (name !== "eose" || !historical) return;
           queueMicrotask(() => {
-            if (backlog && incrementalPages++ === 0) {
+            // A backlog longer than one wake's page budget.
+            if (backlog && incrementalPages++ < RESUME_MAX_BATCHES) {
               const until = Number(filters[0].until);
               for (let i = 0; i < 500; i++) {
                 handlers.event?.forEach(handler => handler({
@@ -1055,13 +1088,13 @@ describe("PR3 incremental idle continuation", () => {
       backlog = true;
       nowMs += 1_000;
       await manager.resume("manual");
-      expect(pages).toHaveLength(2);
-      const firstUntil = pages[1];
+      expect(pages).toHaveLength(1 + RESUME_MAX_BATCHES);
+      const lastUntil = pages[RESUME_MAX_BATCHES];
       expect((await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt).toBe(priorCompletion);
       nowMs += 1_000;
       await manager.resume("manual");
-      expect(pages).toHaveLength(3);
-      expect(pages[2]).toBe(firstUntil - 500);
+      expect(pages).toHaveLength(2 + RESUME_MAX_BATCHES);
+      expect(pages[1 + RESUME_MAX_BATCHES]).toBe(lastUntil - 500);
       // Resume finished the window started on the previous run, not the
       // newer clock. The newer interval still needs reconciliation.
       expect((await repo.getSyncState(ACCOUNT_A)).lastCatchupCompletedAt).toBe(nowMs - 1_000);
@@ -1606,7 +1639,7 @@ describe("P0 resumable history repair", () => {
           queueMicrotask(() => {
             const until = Number(filters[0].until);
             const page = historyPage++;
-            for (let index = 0; index < 500; index++) {
+            for (let index = 0; index < filters[0].limit; index++) {
               const createdAt = until - index - 1;
               const event = {
                 id: `wrap-${page}-${index}`,
@@ -1642,7 +1675,7 @@ describe("P0 resumable history repair", () => {
       decodeContext: { accountPubkey: ACCOUNT_A },
     });
     const partial = await repo.getSyncState(ACCOUNT_A);
-    expect(firstHistoryUntils).toHaveLength(4);
+    expect(firstHistoryUntils).toHaveLength(INITIAL_HISTORY_MAX_BATCHES);
     expect(partial.historyBackfillCompletedAt).toBeUndefined();
     expect(partial.historyBackfillUntil).toBeLessThan(nowSeconds);
     const resumeUntil = partial.historyBackfillUntil;

@@ -1,6 +1,6 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.93",
+  "version": "0.1.94",
   "releaseSummary": "记录历史追赶失败原因",
   "private": true,
   "scripts": {
