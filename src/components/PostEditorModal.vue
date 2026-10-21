@@ -21,27 +21,33 @@
           <div class="drag-handle" aria-hidden="true"></div>
           <div class="editor-header-row">
             <button class="header-cancel" type="button" :disabled="sending" @click="requestCancel">取消</button>
-            <strong class="title">新建动态</strong>
+            <strong class="title">{{ editorTitle }}</strong>
             <span class="header-balance" aria-hidden="true"></span>
           </div>
         </header>
 
         <main ref="editorBody" class="editor-body">
+          <div class="composer-type" role="radiogroup" aria-label="类型">
+            <button v-for="option in composerTypes" :key="option.value" type="button" role="radio"
+              :class="{ selected: postType === option.value }" :aria-checked="postType === option.value"
+              :disabled="!draftReady || sending || (!!pendingPostRetry && option.value !== 'post')"
+              @click="selectComposerType(option.value)">{{ option.label }}</button>
+          </div>
           <div class="editor-author">
             <ProfileAvatar :pubkey="keys.pkHex" :size="42" />
-            <div class="editor-author-copy"><strong>{{ ownName }}</strong><span>分享此刻的想法</span></div>
+            <div class="editor-author-copy"><strong>{{ ownName }}</strong><span>{{ postType === 'post' ? '分享此刻的想法' : '🔒 仅自己可见' }}</span></div>
           </div>
           <div class="editor-textarea-wrap">
             <textarea v-model="content" ref="textarea" class="editor-textarea"
-              placeholder="这一刻，你想分享什么？" rows="6" :disabled="!draftReady || !!pendingPostRetry"
+              :placeholder="composerPlaceholder" rows="6" :disabled="!draftReady || !!pendingPostRetry"
               @paste="onPaste" @input="onMentionInput" @focus="onMentionFocus"
               @blur="onMentionBlur" @click="onMentionClick" @keydown="onMentionKeydown"></textarea>
-            <MentionSuggestions v-if="mentionOpen" :items="mentionMatches" :active-index="mentionActiveIndex"
+            <MentionSuggestions v-if="mentionOpen && postType === 'post'" :items="mentionMatches" :active-index="mentionActiveIndex"
               inline @select="selectMention" />
           </div>
 
           <!-- 图片/视频上传区域 -->
-          <div class="upload-panel">
+          <div v-if="postType !== 'todo'" class="upload-panel">
             <div class="previews">
               <div v-for="(item, idx) in uploads" :key="item.id" class="preview-item">
                 <div class="thumb-container">
@@ -86,7 +92,7 @@
           </div>
 
           <!-- Video preview -->
-          <div v-if="videoPreview" class="video-preview-item">
+          <div v-if="videoPreview && postType !== 'todo'" class="video-preview-item">
             <div class="video-thumb-container">
               <!-- Show thumbnail if available -->
               <img 
@@ -116,19 +122,12 @@
             </div>
           </div>
 
-          <section ref="visibilityRow" class="audience-section" :class="{ 'audience-section-error': visibilityError }" aria-labelledby="audience-title">
+          <section v-if="postType === 'post'" ref="visibilityRow" class="audience-section" :class="{ 'audience-section-error': visibilityError }" aria-labelledby="audience-title">
             <div class="audience-heading">
               <h3 id="audience-title">谁可以看到这条动态？</h3>
               <span class="audience-required" :class="{ chosen: audienceChosen }">{{ audienceChosen ? "已选择" : "必选" }}</span>
             </div>
             <div class="audience-cards" role="group" aria-label="可见范围">
-              <button type="button" class="audience-card"
-                :class="{ selected: audienceChosen && !allFriends && selectedGroups.length === 0 }"
-                :aria-pressed="audienceChosen && !allFriends && selectedGroups.length === 0"
-                :disabled="!draftReady || !!pendingPostRetry" @click="chooseSelf">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg>
-                <span>仅自己</span><small v-if="audienceChosen && !allFriends && selectedGroups.length === 0">✓</small>
-              </button>
               <button type="button" class="audience-card"
                 :class="{ selected: audienceChosen && !allFriends && selectedGroups.length > 0, expanded: visibilityOpen }"
                 :aria-pressed="audienceChosen && !allFriends && selectedGroups.length > 0"
@@ -152,7 +151,7 @@
                   <span>{{ gLabel(g) }}</span><small>{{ countByGroup[g] || 0 }} 人</small>
                 </button>
               </div>
-              <p v-if="groups.length === 0" class="group-picker-empty">暂无好友分组，可以选择仅自己或全部好友。</p>
+              <p v-if="groups.length === 0" class="group-picker-empty">暂无好友分组，可以选择全部好友；只给自己看请切换到「笔记」。</p>
             </div>
             <div v-if="visibilityError" id="visibility-error" class="visibility-error" role="alert">请先选择可见范围，再发布动态。</div>
             <p v-if="audienceChosen" class="audience-summary">{{ visibilitySummary }}<template v-if="allFriends || selectedGroups.length"> · {{ recipients.length }} 位好友</template></p>
@@ -162,23 +161,23 @@
 
           <div class="composer-toolbar">
             <div class="composer-tools">
-              <label class="composer-tool" :class="{ disabled: !draftReady || !uploadEnabled || uploadingAny || !!pendingPostRetry }"
+              <label v-if="postType !== 'todo'" class="composer-tool" :class="{ disabled: !draftReady || !uploadEnabled || uploadingAny || !!pendingPostRetry }"
                 :title="pendingPostRetry ? '当前贴文待重试' : (uploadEnabled ? '添加照片或视频' : '请先在设置中配置媒体服务')">
                 <input type="file" accept="image/*,video/*" multiple @change="onFilesSelected"
                   :disabled="!draftReady || !uploadEnabled || uploadingAny || !!pendingPostRetry" />
                 <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 5-5 4 3 3-4 5 6"/></svg>
                 <span class="sr-only">添加照片或视频</span>
               </label>
-              <button type="button" class="composer-tool" aria-label="提及好友"
+              <button v-if="postType === 'post'" type="button" class="composer-tool" aria-label="提及好友"
                 :disabled="!draftReady || !!pendingPostRetry" @click="insertMentionTrigger">@</button>
             </div>
             <button type="button" class="send-btn"
               :disabled="!draftReady || sending || uploadingAny || (!canSend && !pendingPostRetry)" @click="onSend()">
-              {{ sending ? "发送中…" : pendingPostRetry ? "重新发送" : "发布动态" }}
+              {{ sending ? (postType === "post" ? "发送中…" : "保存中…") : pendingPostRetry ? "重新发送" : sendLabel }}
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
             </button>
           </div>
-          <p v-if="!uploadEnabled" class="upload-config-hint small">请先在设置中配置图片与视频服务</p>
+          <p v-if="!uploadEnabled && postType !== 'todo'" class="upload-config-hint small">请先在设置中配置图片与视频服务</p>
 
           <div v-if="error" class="error">{{ error }}</div>
         </main>
@@ -238,12 +237,15 @@ import { encodeEncryptedVideoRef } from "@/utils/encryptedVideoRef";
 import { exportKeyToBase64 } from "@/utils/videoCrypto";
 import { bytesToBase64 } from "@/nostr/crypto";
 import { parseVideoUrl as parseVideoUrlUtil } from "@/utils/videoUtils";
+import { extractPrivateSpaceContent } from "@/services/privateSpaceContent";
+import type { PrivateSpaceDraft } from "@/repositories/privateSpaceRepository";
 import {
   clearPostDraft,
   loadPostDraft,
   mergeCompletedPostDraftImage,
   mergeCompletedPostDraftVideo,
   savePostDraft,
+  type ComposerType,
   type PostDraftImage,
   type PostDraftVideo,
 } from "@/utils/postDraft";
@@ -307,6 +309,25 @@ export default defineComponent({
     let suppressSheetClick = false;
 
 
+    // A shared post, or a private note / to-do list saved to 私人空间.
+    const postType = ref<ComposerType>("post");
+    const composerTypes: Array<{ value: ComposerType; label: string }> = [
+      { value: "post", label: "动态" }, { value: "note", label: "笔记" }, { value: "todo", label: "待办" },
+    ];
+    const editorTitle = computed(() => ({ post: "新建动态", note: "新建笔记", todo: "新建待办" })[postType.value]);
+    const sendLabel = computed(() => ({ post: "发布动态", note: "保存笔记", todo: "保存待办" })[postType.value]);
+    const composerPlaceholder = computed(() => ({
+      post: "这一刻，你想分享什么？", note: "记点什么，只有你自己能看到", todo: "每行一件事",
+    })[postType.value]);
+    function selectComposerType(type: ComposerType) {
+      if (pendingPostRetry.value && type !== "post") return;
+      closeMention();
+      dismissAudienceConfirmation();
+      visibilityError.value = false;
+      error.value = null;
+      postType.value = type;
+    }
+
     // recipients selection state
     const allFriends = ref(false);
     const selectedGroups = ref<Array<string>>([]);
@@ -326,6 +347,7 @@ export default defineComponent({
     function persistDraft(account = draftAccount) {
       if (!draftPersistenceEnabled || !account) return;
       savePostDraft(account, {
+        type: postType.value,
         content: content.value,
         allFriends: allFriends.value,
         selectedGroups: [...selectedGroups.value],
@@ -344,6 +366,7 @@ export default defineComponent({
     });
     const canSend = computed(() => {
       const hasText = content.value.trim().length > 0;
+      if (postType.value === "todo") return hasText;
       const hasUploadedImages = uploads.value.some(u => u.status === 'done' && u.encryptedRef);
       const hasVideo = videoPreview.value !== null;
       return hasText || hasUploadedImages || hasVideo;
@@ -420,15 +443,6 @@ export default defineComponent({
     function cancelAllFriendsConfirmation() {
       dismissAudienceConfirmation();
       visibilityOpen.value = false;
-    }
-    function chooseSelf() {
-      closeMention();
-      dismissAudienceConfirmation();
-      allFriends.value = false;
-      selectedGroups.value = [];
-      audienceChosen.value = true;
-      visibilityOpen.value = false;
-      visibilityError.value = false;
     }
     function chooseGroups() {
       closeMention();
@@ -844,6 +858,7 @@ export default defineComponent({
 
     function resetRuntimeEditor() {
       releasePostEditorMediaUrls(uploads.value, videoPreview.value);
+      postType.value = "post";
       content.value = "";
       error.value = null;
       pendingPostRetry.value = null;
@@ -1019,6 +1034,7 @@ export default defineComponent({
         if (generation !== openGeneration || !ui.showPostEditor || keys.pkHex !== accountAtOpen) return;
         draftAccount = accountAtOpen;
         const draft = loadPostDraft(accountAtOpen);
+        postType.value = draft?.type || "post";
         content.value = draft?.content || "";
         const restoredGroups = normalizeSelectedAudienceGroups(draft?.selectedGroups || [], groups.value);
         allFriends.value = !!draft?.audienceChosen && !!draft.allFriends && postAudienceFriends.value.length > 0;
@@ -1113,17 +1129,118 @@ export default defineComponent({
       releasePostEditorMediaUrls(uploads.value, videoPreview.value);
     });
 
+    async function composeContentWithMedia() {
+      // Text plus encrypted image references and video metadata, as a post stores them.
+      let fullContent = content.value;
+      const uploadedImages = uploads.value.filter(u => u.status === 'done' && (u.encryptedRef || u.url));
+      if (uploadedImages.length > 0) {
+        // Add images as markdown at the end
+        if (fullContent.length > 0 && !fullContent.endsWith("\n")) fullContent += "\n";
+        for (const img of uploadedImages) {
+          if (img.encryptedRef) {
+            fullContent += `![](${img.encryptedRef})\n`;
+            continue;
+          }
+          // Create encrypted image reference
+          if (img.encryptionKey && img.encryptionIv && img.originalMime) {
+            // Export key to raw bytes
+            const keyBytes = await crypto.subtle.exportKey("raw", img.encryptionKey);
+            const keyBase64 = bytesToBase64(new Uint8Array(keyBytes));
+            
+            const metadata: EncryptedImageMetadata = {
+              v: img.previewUrl && img.previewEncryptionKey && img.previewEncryptionIv ? 2 : 1,
+              url: img.url,
+              mime: img.originalMime,
+              alg: "AES-GCM",
+              iv: img.encryptionIv,
+              key: keyBase64,
+              width: img.width,
+              height: img.height,
+            };
+            if (img.previewMetadata) {
+              metadata.preview = img.previewMetadata;
+            } else if (img.previewUrl && img.previewEncryptionKey && img.previewEncryptionIv && img.previewMime) {
+              metadata.preview = {
+                url: img.previewUrl, mime: img.previewMime, alg: "AES-GCM", iv: img.previewEncryptionIv,
+                key: await exportKeyToBase64(img.previewEncryptionKey), width: img.previewWidth, height: img.previewHeight,
+              };
+            }
+            
+            const encryptedRef = encodeEncryptedImageRef(metadata);
+            fullContent += `![](${encryptedRef})\n`;
+          } else {
+            // Fallback to plain URL (shouldn't happen with new code)
+            fullContent += `![](${img.url})\n`;
+          }
+        }
+      }
+      
+      // Add video if present
+      if (videoPreview.value) {
+        if (fullContent.length > 0 && !fullContent.endsWith("\n")) fullContent += "\n";
+        // Store video metadata as JSON in a special format using constants
+        const videoData = {
+          type: 'video',
+          url: videoPreview.value.url,
+          provider: videoPreview.value.provider,
+          embedUrl: videoPreview.value.embedUrl
+        };
+        fullContent += `${VIDEO_METADATA_PREFIX}${JSON.stringify(videoData)}${VIDEO_METADATA_SUFFIX}\n`;
+      }
+      return { fullContent, uploadedImages };
+    }
+
+    /** 笔记 / 待办: always private, stored in 私人空间 and synced like notes made there. */
+    async function saveToPrivateSpace() {
+      const account = keys.pkHex;
+      const kind = postType.value === "todo" ? "todo" : "note";
+      sending.value = true;
+      error.value = null;
+      try {
+        let draft: PrivateSpaceDraft;
+        if (kind === "todo") {
+          const tasks = content.value.split("\n").map(line => line.trim()).filter(Boolean).slice(0, 1000)
+            .map(text => ({ id: crypto.randomUUID(), text: text.slice(0, 2000), done: false }));
+          draft = { kind, title: "", body: "", tasks, pinned: false };
+        } else {
+          const { fullContent } = await composeContentWithMedia();
+          const { text, attachments } = extractPrivateSpaceContent(fullContent);
+          draft = { kind, title: "", body: text, tasks: [], pinned: false, ...(attachments.length ? { attachments } : {}) };
+        }
+        const [{ privateSpaceRepository }, { notePrivateSpaceMutation }] = await Promise.all([
+          import("@/repositories/privateSpaceRepository"), import("@/services/privateSpaceSync"),
+        ]);
+        if (keys.pkHex !== account) return;
+        await privateSpaceRepository.createWithContent(account, crypto.randomUUID(), draft);
+        notePrivateSpaceMutation(keys);
+        clearPersistentDraft(account);
+        ui.addToast(kind === "todo" ? "已保存待办" : "已保存笔记", 2_400, "success", {
+          label: "查看", run: () => { void router.push({ path: "/settings/private-space", query: { tab: kind } }); },
+        });
+        onClose();
+      } catch (e: any) {
+        console.error("private space save error", e);
+        error.value = e?.message === "local_vault_locked" ? "请先解锁账号" : "保存失败";
+        ui.addToast("保存失败", 2_000, "error");
+      } finally {
+        sending.value = false;
+      }
+    }
+
     async function onSend(confirmedAllFriends = false) {
       if (sending.value) return;
       // Use pkHex check for consistency with onMounted and reliability
       if (!keys.pkHex) { error.value = "请先登录"; return; }
       if (!pendingPostRetry.value && !canSend.value) { error.value = "请输入内容"; return; }
       if (uploadingAny.value) { error.value = "请等待媒体上传完成"; return; }
+      if (postType.value !== "post" && !pendingPostRetry.value) {
+        await saveToPrivateSpace();
+        return;
+      }
       if (!pendingPostRetry.value) {
-        const validAudience = audienceChosen.value && (
-          (!allFriends.value && selectedGroups.value.length === 0)
-          || recipients.value.length > 0
-        );
+        // "Only me" is a note now; a post always goes to at least one friend.
+        const validAudience = audienceChosen.value && (allFriends.value || selectedGroups.value.length > 0)
+          && recipients.value.length > 0;
         if (!validAudience) {
           dismissAudienceConfirmation();
           visibilityError.value = true;
@@ -1186,63 +1303,7 @@ export default defineComponent({
       if (recips.length === 0) { error.value = "未指定收件人"; sending.value = false; return; }
 
       try {
-        // Build content with uploaded images appended
-        let fullContent = content.value;
-        const uploadedImages = uploads.value.filter(u => u.status === 'done' && (u.encryptedRef || u.url));
-        if (uploadedImages.length > 0) {
-          // Add images as markdown at the end
-          if (fullContent.length > 0 && !fullContent.endsWith("\n")) fullContent += "\n";
-          for (const img of uploadedImages) {
-            if (img.encryptedRef) {
-              fullContent += `![](${img.encryptedRef})\n`;
-              continue;
-            }
-            // Create encrypted image reference
-            if (img.encryptionKey && img.encryptionIv && img.originalMime) {
-              // Export key to raw bytes
-              const keyBytes = await crypto.subtle.exportKey("raw", img.encryptionKey);
-              const keyBase64 = bytesToBase64(new Uint8Array(keyBytes));
-              
-              const metadata: EncryptedImageMetadata = {
-                v: img.previewUrl && img.previewEncryptionKey && img.previewEncryptionIv ? 2 : 1,
-                url: img.url,
-                mime: img.originalMime,
-                alg: "AES-GCM",
-                iv: img.encryptionIv,
-                key: keyBase64,
-                width: img.width,
-                height: img.height,
-              };
-              if (img.previewMetadata) {
-                metadata.preview = img.previewMetadata;
-              } else if (img.previewUrl && img.previewEncryptionKey && img.previewEncryptionIv && img.previewMime) {
-                metadata.preview = {
-                  url: img.previewUrl, mime: img.previewMime, alg: "AES-GCM", iv: img.previewEncryptionIv,
-                  key: await exportKeyToBase64(img.previewEncryptionKey), width: img.previewWidth, height: img.previewHeight,
-                };
-              }
-              
-              const encryptedRef = encodeEncryptedImageRef(metadata);
-              fullContent += `![](${encryptedRef})\n`;
-            } else {
-              // Fallback to plain URL (shouldn't happen with new code)
-              fullContent += `![](${img.url})\n`;
-            }
-          }
-        }
-        
-        // Add video if present
-        if (videoPreview.value) {
-          if (fullContent.length > 0 && !fullContent.endsWith("\n")) fullContent += "\n";
-          // Store video metadata as JSON in a special format using constants
-          const videoData = {
-            type: 'video',
-            url: videoPreview.value.url,
-            provider: videoPreview.value.provider,
-            embedUrl: videoPreview.value.embedUrl
-          };
-          fullContent += `${VIDEO_METADATA_PREFIX}${JSON.stringify(videoData)}${VIDEO_METADATA_SUFFIX}\n`;
-        }
+        const { fullContent, uploadedImages } = await composeContentWithMedia();
         
         // Queue the complete signed NIP-17 message first. This returns after the
         // durable IndexedDB write; DM Relay discovery, publish and ACK continue
@@ -1297,7 +1358,8 @@ export default defineComponent({
 
     return {
       visible, content, sending, pendingPostRetry, allFriends, selectedGroups, audienceChosen, visibilityError,
-      visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseSelf, chooseGroups, recipients, groups, countByGroup,
+      visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseGroups,
+      postType, composerTypes, editorTitle, sendLabel, composerPlaceholder, selectComposerType, recipients, groups, countByGroup,
       keys, ownName, cancelSheetOpen, cancelContinueButton, draftReady, requestCancel, saveAndClose, continueEditing, insertMentionTrigger,
       canSend, textarea, overlay, editorCard, editorBody, error, onSend, onClose, discardDraft, toggleAll, toggleGroup,
       recipientsCount, botMentioned, selectedSet, gLabel, acceptedFriends, postAudienceFriends, uploads, uploadEnabled, uploadingAny,
@@ -1952,7 +2014,11 @@ export default defineComponent({
 .audience-heading h3 { margin: 0; color: var(--fg-0f172a); font-size: 15px; font-weight: 700; }
 .audience-required { color: var(--fg-b91c1c); font-size: 12px; font-weight: 650; white-space: nowrap; }
 .audience-required.chosen { color: var(--fg-64748b); }
-.audience-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.audience-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.composer-type { display: flex; gap: 4px; margin: 0 0 14px; padding: 3px; border-radius: 12px; background: var(--bg-f1f5f9); }
+.composer-type button { flex: 1; min-height: 34px; border: 0; border-radius: 9px; background: transparent; color: var(--fg-64748b); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.composer-type button.selected { background: var(--bg-fff); color: var(--fg-0f1419); box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+.composer-type button:disabled { cursor: default; opacity: .5; }
 .audience-card {
   position: relative;
   display: flex;

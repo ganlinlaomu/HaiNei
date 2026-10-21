@@ -125,9 +125,9 @@ export function parseLegacyPrivateSpaceBody(body: string):
 /** Read-only projection: legacy notes are never rewritten merely by viewing them. */
 export function privateSpaceDisplay(record: Pick<PrivateSpaceRecord, "body" | "source" | "attachments">):
   { text: string; source?: PrivateSpaceSource; attachments: PrivateSpaceAttachment[] } {
-  if (record.source) return {
+  if (record.source || record.attachments?.length) return {
     text: record.body,
-    source: validatePrivateSpaceSource(record.source),
+    ...(record.source ? { source: validatePrivateSpaceSource(record.source) } : {}),
     attachments: validatePrivateSpaceAttachments(record.attachments),
   };
   const old = parseLegacyPrivateSpaceBody(record.body);

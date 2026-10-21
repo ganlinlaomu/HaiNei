@@ -17,7 +17,11 @@ export interface PostDraftVideo {
   thumbnail?: string;
 }
 
+/** What the composer creates: a shared post, or a private note or to-do list. */
+export type ComposerType = "post" | "note" | "todo";
+
 export interface PostDraft {
+  type: ComposerType;
   content: string;
   allFriends: boolean;
   selectedGroups: string[];
@@ -28,7 +32,8 @@ export interface PostDraft {
   updatedAt: number;
 }
 
-export type PostDraftInput = Omit<PostDraft, "updatedAt" | "images" | "video" | "audienceChosen"> & {
+export type PostDraftInput = Omit<PostDraft, "updatedAt" | "images" | "video" | "audienceChosen" | "type"> & {
+  type?: ComposerType;
   audienceChosen?: boolean;
   images?: PostDraftImage[];
   video?: PostDraftVideo | null;
@@ -88,7 +93,12 @@ export function loadPostDraft(account?: string | null): PostDraft | null {
     // Restore their content/media, but require a fresh audience choice.
     const audienceChosen = value.audienceChosen === true;
     const allFriends = audienceChosen && value.allFriends === true;
+    const selfOnly = audienceChosen && !allFriends && !(Array.isArray(value.selectedGroups) && value.selectedGroups.length);
+    // "Only me" posts became notes; older self-only drafts reopen as a note.
+    const type: ComposerType = value.type === "note" || value.type === "todo" || value.type === "post"
+      ? value.type : selfOnly ? "note" : "post";
     return {
+      type,
       content: value.content,
       audienceChosen,
       allFriends,
@@ -109,6 +119,7 @@ export function savePostDraft(account: string | null | undefined, draft: PostDra
   if (!key) return;
   try {
     deviceStorage.setItem(key, JSON.stringify({
+      type: draft.type ?? "post",
       content: draft.content,
       audienceChosen: draft.audienceChosen === true,
       allFriends: draft.audienceChosen === true && draft.allFriends,
