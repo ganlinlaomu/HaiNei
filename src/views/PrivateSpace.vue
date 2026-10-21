@@ -545,6 +545,12 @@ async function loadForAccount(account: string) {
       notes.value = records;
       void syncPrivateSpace(keys);
       await consumeQuickCreate(route.query.new, true);
+      // Feed cards link straight to their note or to-do list.
+      const target = typeof route.query.open === "string" ? records.find(note => note.id === route.query.open && !note.deletedAt) : undefined;
+      if (target && version === loadVersion) {
+        filter.value = target.kind;
+        await open(target);
+      }
     }
   } catch (cause) {
     if (version === loadVersion) handleError(cause);
