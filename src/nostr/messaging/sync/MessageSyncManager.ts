@@ -8,7 +8,7 @@ import { syncedMessageRepository, type SyncedMessageRepository } from "@/reposit
 import { closeSubscription } from "@/utils/subscriptions";
 import { logger } from "@/utils/logger";
 import { debugLog, startupMark } from "@/utils/debugLog";
-import { runPagedCatchup, type SubscribeForCatchup } from "./catchup";
+import { fetchCatchupPage, runPagedCatchup, type SubscribeForCatchup } from "./catchup";
 import { MessageIngestionPipeline, type DecodeMessage } from "./ingestion";
 import { calculateCatchupSince } from "./sorting";
 import { retryOutgoingQueue } from "@/nostr/messaging/service";
@@ -19,6 +19,7 @@ import { acknowledgeEncryptedPushInbox, isVerifiedPushGiftWrap, readEncryptedPus
 import {
   CATCHUP_PAGE_LIMIT,
   INITIAL_HISTORY_MAX_BATCHES,
+  RECEIVED_CURSOR_MARGIN_SECONDS,
   RESUME_MAX_BATCHES,
   type MessageSource,
   type MessageSyncOptions,
@@ -547,17 +548,48 @@ export class MessageSyncManager {
         const orderedRelays = preferredRelay
           ? [preferredRelay, ...relays.filter(url => url !== preferredRelay)]
           : relays;
+        const trackSubscription = (subscription: SubscriptionLike) => {
+          this.activeCatchupSubscriptions.add(subscription);
+          return () => this.activeCatchupSubscriptions.delete(subscription);
+        };
+        const notifyPreferredCaughtUp = () => {
+          if (!this.isCurrent(sessionId, options.accountPubkey)) return;
+          startupMark("preferred_relay_caught_up", { source: activeSource });
+          options.onPreferredRelayCaughtUp?.();
+        };
+
+        // Arrival-time catch-up: one page of what the relay stored since the
+        // cursor replaces re-reading the whole NIP-59 backdating window there.
+        // A full or failed page falls back to the normal window for that relay.
+        const receiptUrl = normalizeRelayUrl(await options.receivedSinceRelay?.().catch(() => "") || "");
+        if (catchupAbortController.signal.aborted || !this.isCurrent(sessionId, options.accountPubkey)) return;
+        const receiptCandidate = (receiptUrl && relays.find(url => normalizeRelayUrl(url) === receiptUrl)) || "";
+        const receivedCursor = receiptCandidate ? state.relayStates[receiptCandidate]?.receivedCursor : undefined;
+        const receiptStartedAt = this.now();
+        let receiptRelay = "";
+        let receiptEvents = 0;
+        if (!freshHistoryRepair && receiptCandidate && typeof receivedCursor === "number") {
+          const receiptFilters = filters.map(({ since: _since, until: _until, ...filter }) => ({ ...filter, received_since: receivedCursor }));
+          const page = await fetchCatchupPage([receiptCandidate], receiptFilters, this.catchupTimeoutMs, this.subscribeFn, trackSubscription, catchupAbortController.signal);
+          let processed = true;
+          for (const { event, relayUrl: eventRelay } of page.events) {
+            if (catchupAbortController.signal.aborted || !this.isCurrent(sessionId, options.accountPubkey)) { processed = false; break; }
+            await this.pipeline?.ingestNostrEvent(event, { source: activeSource!, relayUrl: eventRelay || receiptCandidate });
+          }
+          receiptEvents = page.events.length;
+          const pageComplete = processed && !page.aborted && !page.timedOut && !page.failedRelays.size && page.allRelaysCompleted;
+          if (pageComplete && page.events.length < CATCHUP_PAGE_LIMIT) receiptRelay = receiptCandidate;
+          startupMark("received_since_page", { events: receiptEvents, used: !!receiptRelay });
+          if (receiptRelay && receiptRelay === preferredRelay) notifyPreferredCaughtUp();
+        }
         const result = await runPagedCatchup({
-          relays: orderedRelays,
+          relays: receiptRelay ? orderedRelays.filter(url => url !== receiptRelay) : orderedRelays,
           filters,
           initialUntilByRelay: freshHistoryRepair
             ? Object.fromEntries(relays.map(url => [url, state.relayStates[url]?.historyBackfillUntil ?? until]))
             : checkpoint?.pendingUntilByRelay,
           subscribeFn: this.subscribeFn,
-          trackSubscription: subscription => {
-            this.activeCatchupSubscriptions.add(subscription);
-            return () => this.activeCatchupSubscriptions.delete(subscription);
-          },
+          trackSubscription,
           signal: catchupAbortController.signal,
           timeoutMs: this.catchupTimeoutMs,
           // Initial onboarding can resume a bounded history page sequence.
@@ -568,9 +600,7 @@ export class MessageSyncManager {
           relayConcurrency: activeSource === "history" ? 1 : 2,
           onRelayDone: (doneRelay, progress) => {
             if (!preferredRelay || normalizeRelayUrl(doneRelay) !== preferredUrl || !progress.naturalEnd || progress.incomplete) return;
-            if (!this.isCurrent(sessionId, options.accountPubkey)) return;
-            startupMark("preferred_relay_caught_up", { source: activeSource });
-            options.onPreferredRelayCaughtUp?.();
+            notifyPreferredCaughtUp();
           },
           isCurrent: () => this.isCurrent(sessionId, options.accountPubkey),
           onEvent: async (event, eventRelay) => {
@@ -578,6 +608,12 @@ export class MessageSyncManager {
           }
         });
         if (!this.isCurrent(sessionId, options.accountPubkey)) return;
+        if (receiptRelay) {
+          // The arrival page covered this relay; record it like a natural end.
+          result.completedRelays.add(receiptRelay);
+          result.relayProgress[receiptRelay] = { naturalEnd: true, hitMaxBatches: false, incomplete: false };
+          result.received += receiptEvents;
+        }
         if (catchupAbortController.signal.aborted || !this.isForeground()) {
           // Incomplete pages are deliberately not committed as checkpoints.
           // Realtime remains subscribed and foreground resume will retry.
@@ -662,8 +698,20 @@ export class MessageSyncManager {
         const relayPatches: Record<string, Partial<RelaySyncStateRecord>> = {};
         for (const completedRelay of result.completedRelays) {
           const progress = result.relayProgress[completedRelay];
+          // Every event this relay received before coveredUntil is processed.
+          const coveredUntil = completedRelay === receiptRelay
+            ? Math.floor(receiptStartedAt / 1000)
+            : progress?.naturalEnd && !progress.incomplete
+              ? freshHistoryRepair ? until : checkpoint!.until
+              : undefined;
           relayPatches[completedRelay] = {
             lastEOSEAt: completedAt,
+            ...(completedRelay === receiptCandidate && coveredUntil !== undefined
+              ? { receivedCursor: Math.max(
+                  state.relayStates[completedRelay]?.receivedCursor || 0,
+                  coveredUntil - RECEIVED_CURSOR_MARGIN_SECONDS,
+                ) }
+              : {}),
             ...(freshHistoryRepair && progress?.naturalEnd && !progress.incomplete
               ? { historyBackfillCompletedAt: completedAt, historyBackfillUntil: undefined }
               : freshHistoryRepair && typeof progress?.nextUntil === "number" && !progress.incomplete
