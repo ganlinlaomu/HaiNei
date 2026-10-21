@@ -308,7 +308,16 @@ export class MessageIngestionPipeline {
     const delivery = normalizeDeliveryResult(await uiUpdate);
 
     if (delivery === "defer") {
-      await this.repository.deferAuthorizationMessage(this.accountPubkey, message, metadata);
+      try {
+        await this.repository.deferAuthorizationMessage(this.accountPubkey, message, metadata);
+      } catch (error) {
+        if (!(error instanceof Error && error.message === "deferred_queue_full")) throw error;
+        // A full queue must not abort the catch-up: that kept history from ever
+        // completing, so senders stayed unresolved and every launch refilled the
+        // queue. Leave the wrap unfinalized; a later sync fetches it again.
+        debugLog("sync", "authorization_deferred_overflow", diagnostic, "warn");
+        return { inserted: false, discarded: false, deferred: false };
+      }
       this.finalizeTransport(message);
       debugLog("sync", "authorization_deferred", diagnostic, "info");
       return { inserted: false, discarded: false, deferred: true };
