@@ -367,6 +367,20 @@ export class SyncedMessageRepository {
     return this.database.syncedMessages.get([account, messageId]);
   }
 
+  /**
+   * Every gift-wrap id already stored for this account. Walks index keys
+   * only, so no message row is read or decrypted.
+   */
+  async listTransportEventIds(accountPubkey: string): Promise<Set<string>> {
+    const account = normalizeAccountPubkey(accountPubkey);
+    const ids = new Set<string>();
+    await this.database.syncedMessages.orderBy("transportEventIds").eachKey((key, cursor) => {
+      const primary = cursor.primaryKey as unknown;
+      if (Array.isArray(primary) && primary[0] === account && typeof key === "string") ids.add(key);
+    });
+    return ids;
+  }
+
   async getDecryptedEvent(accountPubkey: string, eventId: string): Promise<CanonicalMessage | null> {
     const account = normalizeAccountPubkey(accountPubkey);
     const record = await this.database.decryptedEvents.get([account, eventId]);

@@ -85,6 +85,48 @@ describe("push inbox on cold start", () => {
     await started.catch(() => undefined);
   });
 
+  it("acknowledges a pushed message that was already stored, without decrypting it again", async () => {
+    const db = new HaiNeiDatabase(`push-known-${Date.now()}`);
+    databases.push(db);
+    const repository = new SyncedMessageRepository(db);
+    await repository.insertMessageIfAbsent(ACCOUNT, {
+      id: "1".repeat(64), senderPubkey: PEER, recipientPubkeys: [ACCOUNT], conversationId: "conversation",
+      plaintext: "旧消息", createdAt: 1_900_000_000, protocol: "nip17", transportKind: 1059,
+      transportEventId: WRAP_ID, tags: [["t", "hainei-dm"]],
+    } as any);
+    pushInbox.entries = [{
+      id: "notification-old",
+      at: Date.now(),
+      hint: { eventId: WRAP_ID, relays: [], event: { id: WRAP_ID, kind: 1059, pubkey: "f".repeat(64), created_at: 1, tags: [["p", ACCOUNT]], content: "x", sig: "0".repeat(128) } },
+    }];
+    const decode = vi.fn(async () => null);
+    let releaseHistory!: () => void;
+    const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
+    const manager = new MessageSyncManager({
+      repository,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => undefined,
+      retryOutgoing: () => undefined,
+      decode,
+      subscribe: () => ({ on() {}, unsub() {} }),
+    });
+    const started = manager.start({
+      accountPubkey: ACCOUNT,
+      relays: ["wss://relay.test"],
+      authors: [PEER, ACCOUNT],
+      decodeContext: { accountPubkey: ACCOUNT },
+      historyGate,
+      onMessage: async () => "accepted" as any,
+    });
+    await flush();
+    // Kept hints used to be re-processed on every launch.
+    expect(pushInbox.acknowledged).toEqual(["notification-old"]);
+    expect(decode).not.toHaveBeenCalled();
+    manager.stop();
+    releaseHistory();
+    await started.catch(() => undefined);
+  });
+
   it("starts sync right after the local phase and releases Relay history after the critical restore", () => {
     const keys = readFileSync("src/stores/keys.ts", "utf8");
     const local = keys.indexOf("const messageSyncStart = startAccountMessageSync(this, { historyGate });");

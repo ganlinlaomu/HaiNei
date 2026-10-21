@@ -282,7 +282,9 @@ export class MessageSyncManager {
             // Reuse the same NIP-17 authorization, durable storage and dedupe
             // pipeline as realtime Relay delivery. Never mirror raw push data.
             const result = await this.pipeline?.ingestNostrEvent(event, { source: "realtime" });
-            if (result && (result.inserted || result.deferred || result.discarded)) acknowledged.push(entry.id);
+            // Already-stored messages count too: unacknowledged hints were kept
+            // forever and re-processed on every launch.
+            if (result && (result.inserted || result.deferred || result.discarded || ("known" in result && result.known))) acknowledged.push(entry.id);
           } catch (error) {
             logger.warn("[message-sync] encrypted push hint deferred", error instanceof Error ? error.name : "unknown");
           }

@@ -3,8 +3,8 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.85";
-export const DB_VERSION = 20;
+export const APP_VERSION = "0.1.86";
+export const DB_VERSION = 21;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -744,6 +744,11 @@ export class HaiNeiDatabase extends Dexie {
     this.version(20).stores({
       transferRecords: "[accountPubkey+id], accountPubkey, [accountPubkey+createdAt]",
       transferFileParts: "[accountPubkey+key], accountPubkey, [accountPubkey+recordId]"
+    });
+    // Index wrapped event ids so a startup catch-up can skip messages it has
+    // already stored instead of decrypting every recent gift wrap again.
+    this.version(21).stores({
+      syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+conversationId+createdAt+id], [accountPubkey+createdAt+id], [accountPubkey+conversationId+messageClass+createdAt+id], [accountPubkey+createdAt], [accountPubkey+senderPubkey], *transportEventIds"
     });
 
 

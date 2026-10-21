@@ -40,6 +40,13 @@ export class MessageIngestionPipeline {
   private readonly discardedLogicalIds = new BoundedSet<string>();
   private readonly finalizedTransportIds = new BoundedSet<string>();
   private firstInsertMarked = false;
+  private storedTransportIdsFlight: Promise<Set<string>> | null = null;
+
+  /** Loaded once per session; new inserts are tracked by finalizedTransportIds. */
+  private storedTransportIds() {
+    return this.storedTransportIdsFlight ??= (this.repository.listTransportEventIds?.(this.accountPubkey) ?? Promise.resolve(new Set<string>()))
+      .catch(() => new Set<string>());
+  }
   private readonly logicalFlights = new Map<string, Promise<{ inserted: boolean; discarded: boolean; deferred: boolean }>>();
   private readonly pendingPersistenceRetries = new Map<string, {
     message: CanonicalMessage;
@@ -145,10 +152,18 @@ export class MessageIngestionPipeline {
     const cacheKey = scopedKey(this.accountPubkey, eventId);
     if (this.finalizedTransportIds.has(eventId)) {
       performanceCounters.duplicateEventsDropped++;
-      return { inserted: false, discarded: false, deferred: false };
+      return { inserted: false, discarded: false, deferred: false, known: true };
     }
 
     let message: CanonicalMessage | null | undefined = decryptedEventCache.get(cacheKey);
+    // NIP-17 backdates wraps by up to two days, so every startup catch-up
+    // re-receives recent messages. Skip decryption for ones already stored.
+    if (message === undefined && (await this.storedTransportIds()).has(eventId)) {
+      if (!this.isSessionCurrent()) return { inserted: false, discarded: true, deferred: false };
+      this.finalizedTransportIds.add(eventId);
+      performanceCounters.duplicateEventsDropped++;
+      return { inserted: false, discarded: false, deferred: false, known: true };
+    }
     if (message !== undefined) performanceCounters.decryptCacheHit++;
     try {
       if (message === undefined) {
@@ -200,7 +215,8 @@ export class MessageIngestionPipeline {
       }
     }
     if (this.isSessionCurrent()) this.finalizeTransport(message, eventId);
-    return result;
+    // Decoded and handled: the caller may drop any copy it was holding.
+    return { ...result, known: true };
   }
 
   async ingestCanonicalMessage(message: CanonicalMessage, metadata: MessageIngestionMetadata) {
