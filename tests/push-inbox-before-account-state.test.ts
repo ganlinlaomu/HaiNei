@@ -127,6 +127,34 @@ describe("push inbox on cold start", () => {
     await started.catch(() => undefined);
   });
 
+  it("records why a catch-up failed in the exported startup marks", async () => {
+    const { createPinia, setActivePinia } = await import("pinia");
+    const { useDebugLogsStore } = await import("@/stores/debugLogs");
+    setActivePinia(createPinia());
+    const db = new HaiNeiDatabase(`catchup-fail-${Date.now()}`);
+    databases.push(db);
+    const manager = new MessageSyncManager({
+      repository: new SyncedMessageRepository(db),
+      observeRelays: () => () => undefined,
+      resumeRelays: () => undefined,
+      retryOutgoing: () => undefined,
+      decode: async () => null,
+      subscribe: (_relays, filters) => {
+        if (filters.some(filter => filter.until !== undefined)) throw new TypeError("relay pool exploded");
+        return { on() {}, unsub() {} };
+      },
+    });
+    const started = manager.start({
+      accountPubkey: ACCOUNT, relays: ["wss://relay.test"], authors: [PEER, ACCOUNT],
+      decodeContext: { accountPubkey: ACCOUNT }, onMessage: async () => "accepted" as any,
+    });
+    await flush();
+    const failure = useDebugLogsStore().startupMarks().find(mark => mark.event === "startup_catchup_failed");
+    expect(failure?.data).toMatchObject({ name: "TypeError", message: "relay pool exploded" });
+    manager.stop();
+    await started.catch(() => undefined);
+  });
+
   it("starts sync right after the local phase and releases Relay history after the critical restore", () => {
     const keys = readFileSync("src/stores/keys.ts", "utf8");
     const local = keys.indexOf("const messageSyncStart = startAccountMessageSync(this, { historyGate });");

@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.89",
-  "releaseSummary": "加入历史追赶与未读显示计时",
+  "version": "0.1.90",
+  "releaseSummary": "记录历史追赶失败原因",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
