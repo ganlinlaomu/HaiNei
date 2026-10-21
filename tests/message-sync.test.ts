@@ -12,7 +12,7 @@ import {
   unsupportedMessageCleanupMetaKey,
 } from "@/repositories/syncedMessageRepository";
 import { MessageSyncManager } from "@/nostr/messaging/sync/MessageSyncManager";
-import { CATCHUP_PAGE_LIMIT, INITIAL_HISTORY_MAX_BATCHES, RESUME_MAX_BATCHES } from "@/nostr/messaging/sync/types";
+import { CATCHUP_PAGE_LIMIT, INITIAL_HISTORY_MAX_BATCHES, RECEIVED_CURSOR_MARGIN_SECONDS, RESUME_MAX_BATCHES } from "@/nostr/messaging/sync/types";
 import { decryptedEventCache, eventCache, scopedKey } from "@/services/nostrCache";
 
 const ACCOUNT_A = "a".repeat(64);
@@ -704,6 +704,83 @@ describe("PR4 durable per-Relay reconciliation", () => {
       expect(caughtUp).toHaveBeenCalledTimes(1);
     } finally {
       releaseSlow();
+      manager.stop();
+    }
+  });
+
+  it("catches up a received_since relay by arrival time once it has a cursor", async () => {
+    const repo = new SyncedMessageRepository(database());
+    let nowMs = 1_900_000_000_000;
+    let fullArrivalPage = false;
+    const requests: Array<{ relay: string; filter: any }> = [];
+    const subscribeFake = (relays: string[], filters: any[]) => {
+      const catchup = filters.some(f => f.until !== undefined || f.received_since !== undefined);
+      if (catchup) requests.push({ relay: relays[0], filter: filters[0] });
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          if (!catchup) return;
+          if (name === "event" && filters[0].received_since !== undefined && fullArrivalPage) {
+            queueMicrotask(() => {
+              for (let i = 0; i < CATCHUP_PAGE_LIMIT; i++) callback({ id: `arrival-${i}`, created_at: 1_899_999_000 - i }, relays[0]);
+            });
+          }
+          if (name === "eose") queueMicrotask(() => queueMicrotask(() => callback(relays[0])));
+        },
+        unsub() {},
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => nowMs,
+      decode: async () => null,
+    });
+    const status = vi.fn();
+    try {
+      await manager.start({
+        accountPubkey: ACCOUNT_A,
+        relays: ["wss://managed", "wss://other"],
+        authors: [PEER, ACCOUNT_A],
+        decodeContext: { accountPubkey: ACCOUNT_A },
+        receivedSinceRelay: async () => "wss://managed/",
+        onCatchupStatus: status,
+      });
+      // No cursor yet: the normal window runs, then seeds the cursor.
+      expect(requests.every(request => request.filter.received_since === undefined)).toBe(true);
+      let state = await repo.getSyncState(ACCOUNT_A);
+      const seeded = state.relayStates["wss://managed"].receivedCursor!;
+      expect(seeded).toBe(Math.floor(nowMs / 1000) - RECEIVED_CURSOR_MARGIN_SECONDS);
+      expect(state.relayStates["wss://other"]?.receivedCursor).toBeUndefined();
+
+      requests.length = 0;
+      nowMs += 3_600_000;
+      await manager.resume("manual");
+      const managed = requests.filter(request => request.relay === "wss://managed");
+      expect(managed).toHaveLength(1);
+      expect(managed[0].filter.received_since).toBe(seeded);
+      expect(managed[0].filter.since).toBeUndefined();
+      expect(managed[0].filter.until).toBeUndefined();
+      // Relays without the extension keep the backdating window.
+      expect(requests.some(request => request.relay === "wss://other" && request.filter.until !== undefined)).toBe(true);
+      state = await repo.getSyncState(ACCOUNT_A);
+      expect(state.relayStates["wss://managed"].receivedCursor).toBe(Math.floor(nowMs / 1000) - RECEIVED_CURSOR_MARGIN_SECONDS);
+      expect(status).toHaveBeenLastCalledWith("settled");
+
+      // A full arrival page may hide more: fall back to the window, cursor kept.
+      requests.length = 0;
+      fullArrivalPage = true;
+      const before = state.relayStates["wss://managed"].receivedCursor;
+      nowMs += 3_600_000;
+      await manager.resume("manual");
+      const fallback = requests.filter(request => request.relay === "wss://managed");
+      expect(fallback[0].filter.received_since).toBe(before);
+      expect(fallback.slice(1).some(request => request.filter.until !== undefined)).toBe(true);
+      state = await repo.getSyncState(ACCOUNT_A);
+      expect(state.relayStates["wss://managed"].receivedCursor).toBeGreaterThanOrEqual(before!);
+    } finally {
       manager.stop();
     }
   });

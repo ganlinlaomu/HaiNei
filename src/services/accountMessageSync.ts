@@ -1,7 +1,7 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { getActivePinia } from "pinia";
 import { getRelaysFromStorage, inspectRelays, onRelayConnectionState, releaseUnusedRelayConnections } from "@/nostr/relays";
-import { managedRelayUrlFromCache } from "@/services/relaySession";
+import { managedReceivedSinceRelay, managedRelayUrlFromCache } from "@/services/relaySession";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
@@ -484,6 +484,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
       // a self-hosted one can take many seconds. Catch up from it first and
       // reveal unread once it is done; slower relays keep paging behind it.
       preferredCatchupRelay: managedRelayUrlFromCache,
+      receivedSinceRelay: managedReceivedSinceRelay,
       onPreferredRelayCaughtUp: () => {
         if (!isCurrent() || directMessages.historyHydrationPhase !== "hydrating") return;
         clearStartupUnreadGraceTimer();

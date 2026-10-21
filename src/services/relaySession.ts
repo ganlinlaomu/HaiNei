@@ -9,6 +9,9 @@ import { startupMark } from "@/utils/debugLog";
 const CONFIG_CACHE_MS = 5 * 60_000;
 const EXPIRY_SKEW_SECONDS = 30;
 const MANAGED_RELAY_STORAGE_KEY = "hainei_managed_relay_url";
+const RECEIVED_SINCE_STORAGE_KEY = "hainei_relay_received_since";
+const RECEIVED_SINCE_CACHE_MS = 24 * 60 * 60_000;
+const RECEIVED_SINCE_RETRY_MS = 10 * 60_000;
 
 export type ManagedRelayConfig = {
   enabled: boolean;
@@ -30,6 +33,8 @@ let configInflight: Promise<ManagedRelayConfig> | null = null;
 let identity: { pubkey: string; signEvent: RelaySigner } | null = null;
 let sessionCache: ManagedRelaySession | null = null;
 let sessionInflight: Promise<ManagedRelaySession> | null = null;
+let receivedSinceProbe: { url: string; supported: boolean; checkedAt: number; ttl: number } | null = null;
+let receivedSinceInflight: Promise<boolean> | null = null;
 
 function workerBaseUrl() {
   return haineiWorkerBaseUrl().replace(/\/+$/, "");
@@ -72,6 +77,8 @@ export function clearRelaySessionSigner(pubkey?: string) {
 }
 
 export function resetManagedRelaySessionForTests() {
+  receivedSinceProbe = null;
+  receivedSinceInflight = null;
   configCache = null;
   configInflight = null;
   identity = null;
@@ -187,4 +194,46 @@ export async function getManagedRelaySessionForUrl(url: string, force = false): 
     if (sessionInflight === pending) sessionInflight = null;
     startupMark("relay_token", { durationMs: Date.now() - tokenStarted, ok });
   }
+}
+
+function relayInfoUrl(url: string) {
+  return url.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+}
+
+/**
+ * The managed relay URL when it advertises the `received_since` filter
+ * extension in NIP-11, else "". Cached for a day (per device) so a cold
+ * start does not wait on the info document.
+ */
+export async function managedReceivedSinceRelay(): Promise<string> {
+  const url = managedRelayUrlFromCache();
+  if (!url) return "";
+  const now = Date.now();
+  if (receivedSinceProbe?.url !== url) {
+    try {
+      const stored = JSON.parse(deviceStorage.getItem(RECEIVED_SINCE_STORAGE_KEY) || "null");
+      if (stored?.url === url && typeof stored.supported === "boolean" && Number.isFinite(stored.checkedAt)) {
+        receivedSinceProbe = { url, supported: stored.supported, checkedAt: stored.checkedAt, ttl: RECEIVED_SINCE_CACHE_MS };
+      }
+    } catch { /* unreadable cache: probe again */ }
+  }
+  if (receivedSinceProbe?.url === url && now - receivedSinceProbe.checkedAt < receivedSinceProbe.ttl) {
+    return receivedSinceProbe.supported ? url : "";
+  }
+  receivedSinceInflight ??= (async () => {
+    try {
+      const response = await timedJsonFetch(relayInfoUrl(url), { headers: { Accept: "application/nostr+json" } }, 2_500);
+      const supported = response.ok && (await response.json())?.received_since === true;
+      receivedSinceProbe = { url, supported, checkedAt: Date.now(), ttl: RECEIVED_SINCE_CACHE_MS };
+      try { deviceStorage.setItem(RECEIVED_SINCE_STORAGE_KEY, JSON.stringify({ url, supported, checkedAt: receivedSinceProbe.checkedAt })); } catch { /* memory cache still applies */ }
+      return supported;
+    } catch {
+      // Offline or slow: use the regular catch-up and ask again later.
+      receivedSinceProbe = { url, supported: false, checkedAt: Date.now(), ttl: RECEIVED_SINCE_RETRY_MS };
+      return false;
+    } finally {
+      receivedSinceInflight = null;
+    }
+  })();
+  return await receivedSinceInflight ? url : "";
 }

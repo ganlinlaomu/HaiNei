@@ -3,7 +3,7 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.94";
+export const APP_VERSION = "0.1.95";
 export const DB_VERSION = 21;
 export const DATABASE_NAME = "closed_community_db";
 
@@ -114,6 +114,12 @@ export type RelaySyncStateRecord = {
   historyBackfillUntil?: number;
   /** Marks that this relay independently reached the end of initial history. */
   historyBackfillCompletedAt?: number;
+  /**
+   * Unix seconds (this device's clock, minus a safety margin) before which
+   * every event this relay received has been processed. Only kept for a relay
+   * supporting the `received_since` filter extension.
+   */
+  receivedCursor?: number;
 };
 
 /** Durable per-relay incremental reconciliation. A partially fetched REQ does
