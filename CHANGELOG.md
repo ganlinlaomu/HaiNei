@@ -1,3 +1,8 @@
+## 0.1.93 — 2026-10-21
+
+- iPhone 上从推送通知点开海内 PWA 时，系统启动 App 的那几秒不再是纯白屏，而是和页面启动画面一致的「海内」画面，并跟随系统浅色 / 深色模式。v0.1.92 的日志显示页面本身 94 毫秒就已渲染，白屏发生在 iOS 冷启动 PWA、页面开始加载之前；此前没有配置 iOS 启动图（`apple-touch-startup-image`）。覆盖 iPhone SE 到 17 Pro Max 的各种屏幕尺寸，可用 `scripts/generate-ios-splash.mjs` 重新生成。
+- `manifest.json` 的启动背景色从纯白改为与 App 一致的底色。
+
 ## 0.1.92 — 2026-10-21
 
 - 历史追赶先从海内托管的 Cloudflare relay 拉取，它一完成就显示未读，其他 relay 在后台继续补齐。v0.1.91 的真机日志里，Cloudflare relay 82 毫秒返回 250 条，而自建 relay 下载约 800 条要 7 秒左右，未读要等到 9.3 秒才出现。后台补到的消息照常进入收件箱。启动计时新增 `preferred_relay_caught_up`。
