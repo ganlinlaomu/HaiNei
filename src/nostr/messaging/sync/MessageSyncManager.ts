@@ -17,7 +17,9 @@ import { scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
 import { normalizeRelayUrl } from "@/services/connectionSettings";
 import { acknowledgeEncryptedPushInbox, isVerifiedPushGiftWrap, readEncryptedPushInbox, safePushRelays, type EncryptedPushInboxEntry } from "@/services/encryptedPushInbox";
 import {
+  CATCHUP_PAGE_LIMIT,
   INITIAL_HISTORY_MAX_BATCHES,
+  RESUME_MAX_BATCHES,
   type MessageSource,
   type MessageSyncOptions,
   type SubscriptionLike,
@@ -538,7 +540,7 @@ export class MessageSyncManager {
           ? Math.min(state.historyBackfillUntil ?? nowSeconds, nowSeconds)
           : checkpoint!.until;
         const filters = buildMessageSubscriptions(options.accountPubkey, options.authors, since, until)
-          .map(filter => ({ ...filter, limit: 500 }));
+          .map(filter => ({ ...filter, limit: CATCHUP_PAGE_LIMIT }));
         logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} session=${sessionId} phase=${activeSource} since=${since} until=${until}`);
         const preferredUrl = normalizeRelayUrl(options.preferredCatchupRelay?.() || "");
         const preferredRelay = (preferredUrl && relays.find(url => normalizeRelayUrl(url) === preferredUrl)) || "";
@@ -559,8 +561,8 @@ export class MessageSyncManager {
           signal: catchupAbortController.signal,
           timeoutMs: this.catchupTimeoutMs,
           // Initial onboarding can resume a bounded history page sequence.
-          // Normal resume/reconnect runs just one page per relay per wake.
-          maxBatches: freshHistoryRepair && activeSource === "history" ? INITIAL_HISTORY_MAX_BATCHES : 1,
+          // Normal resume/reconnect runs a bounded page count per relay per wake.
+          maxBatches: freshHistoryRepair && activeSource === "history" ? INITIAL_HISTORY_MAX_BATCHES : RESUME_MAX_BATCHES,
           // On resume, a dead relay must not serially delay a healthy inbox.
           // Keep initial history repair conservative; bound resume to two.
           relayConcurrency: activeSource === "history" ? 1 : 2,
