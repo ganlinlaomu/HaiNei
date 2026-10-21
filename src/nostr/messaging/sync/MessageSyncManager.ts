@@ -540,8 +540,13 @@ export class MessageSyncManager {
         const filters = buildMessageSubscriptions(options.accountPubkey, options.authors, since, until)
           .map(filter => ({ ...filter, limit: 500 }));
         logger.debug(`[message-sync] account=${options.accountPubkey.slice(0, 8)} session=${sessionId} phase=${activeSource} since=${since} until=${until}`);
+        const preferredUrl = normalizeRelayUrl(options.preferredCatchupRelay?.() || "");
+        const preferredRelay = (preferredUrl && relays.find(url => normalizeRelayUrl(url) === preferredUrl)) || "";
+        const orderedRelays = preferredRelay
+          ? [preferredRelay, ...relays.filter(url => url !== preferredRelay)]
+          : relays;
         const result = await runPagedCatchup({
-          relays,
+          relays: orderedRelays,
           filters,
           initialUntilByRelay: freshHistoryRepair
             ? Object.fromEntries(relays.map(url => [url, state.relayStates[url]?.historyBackfillUntil ?? until]))
@@ -559,6 +564,12 @@ export class MessageSyncManager {
           // On resume, a dead relay must not serially delay a healthy inbox.
           // Keep initial history repair conservative; bound resume to two.
           relayConcurrency: activeSource === "history" ? 1 : 2,
+          onRelayDone: (doneRelay, progress) => {
+            if (!preferredRelay || normalizeRelayUrl(doneRelay) !== preferredUrl || !progress.naturalEnd || progress.incomplete) return;
+            if (!this.isCurrent(sessionId, options.accountPubkey)) return;
+            startupMark("preferred_relay_caught_up", { source: activeSource });
+            options.onPreferredRelayCaughtUp?.();
+          },
           isCurrent: () => this.isCurrent(sessionId, options.accountPubkey),
           onEvent: async (event, eventRelay) => {
             await this.pipeline?.ingestNostrEvent(event, { source: activeSource!, relayUrl: eventRelay });

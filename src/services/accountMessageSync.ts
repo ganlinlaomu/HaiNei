@@ -1,6 +1,7 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { getActivePinia } from "pinia";
 import { getRelaysFromStorage, inspectRelays, onRelayConnectionState, releaseUnusedRelayConnections } from "@/nostr/relays";
+import { managedRelayUrlFromCache } from "@/services/relaySession";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
@@ -478,6 +479,15 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
             recordPersistedDelivery(metadata.source, inserted, elapsed, messages.inboxRevision !== inboxRevision);
           }
         }
+      },
+      // The managed relay pages hundreds of wraps in well under a second while
+      // a self-hosted one can take many seconds. Catch up from it first and
+      // reveal unread once it is done; slower relays keep paging behind it.
+      preferredCatchupRelay: managedRelayUrlFromCache,
+      onPreferredRelayCaughtUp: () => {
+        if (!isCurrent() || directMessages.historyHydrationPhase !== "hydrating") return;
+        clearStartupUnreadGraceTimer();
+        settleStartupUnread("live");
       },
       onCatchupStatus: catchup => {
         if (!isCurrent()) return;

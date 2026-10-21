@@ -625,6 +625,57 @@ describe("PR4 durable per-Relay reconciliation", () => {
     }
   });
 
+  it("catches up from the preferred relay first and reports it before slower relays finish", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const scanned: string[] = [];
+    let releaseSlow!: () => void;
+    const slowGate = new Promise<void>(resolve => { releaseSlow = resolve; });
+    const subscribeFake = (relays: string[], filters: any[]) => {
+      const historical = filters.some(f => f.until !== undefined);
+      if (historical) scanned.push(relays[0]);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          if (name !== "eose" || !historical) return;
+          const done = () => callback(relays[0]);
+          if (relays[0] === "wss://slow") void slowGate.then(done);
+          else queueMicrotask(done);
+        },
+        unsub() {},
+      };
+    };
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe: subscribeFake,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => 1_900_000_000_000,
+    });
+    const caughtUp = vi.fn();
+    const status = vi.fn();
+    try {
+      const started = manager.start({
+        accountPubkey: ACCOUNT_A,
+        relays: ["wss://slow", "wss://managed"],
+        authors: [PEER, ACCOUNT_A],
+        decodeContext: { accountPubkey: ACCOUNT_A },
+        preferredCatchupRelay: () => "wss://managed/",
+        onPreferredRelayCaughtUp: caughtUp,
+        onCatchupStatus: status,
+      });
+      await vi.waitFor(() => expect(caughtUp).toHaveBeenCalledTimes(1));
+      expect(scanned).toEqual(["wss://managed", "wss://slow"]);
+      expect(status).not.toHaveBeenCalled();
+      releaseSlow();
+      await started;
+      await vi.waitFor(() => expect(status).toHaveBeenLastCalledWith("settled"));
+      expect(caughtUp).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseSlow();
+      manager.stop();
+    }
+  });
+
   it("does not advance an account checkpoint from one Relay reconnect alone", async () => {
     const repo = new SyncedMessageRepository(database());
     let clockMs = 1_900_000_000_000;

@@ -34,6 +34,10 @@ export type MessageSyncOptions = {
   onStatus?: (status: SyncStatus) => void;
   /** Distinct from a working realtime connection: history may be incomplete. */
   onCatchupStatus?: (status: "settled" | "pending") => void;
+  /** Relay to catch up from first (the managed relay is far faster to page). */
+  preferredCatchupRelay?: () => string;
+  /** The preferred relay finished its catch-up window; others may still be paging. */
+  onPreferredRelayCaughtUp?: () => void;
   /**
    * Relay work (realtime replay window and history catch-up) waits for this.
    * Push-delivered messages and the local replay do not, so a notification

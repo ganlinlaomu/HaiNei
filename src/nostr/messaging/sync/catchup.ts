@@ -149,6 +149,8 @@ export async function runPagedCatchup(options: {
   signal?: AbortSignal;
   initialUntilByRelay?: Record<string, number | undefined>;
   relayConcurrency?: number;
+  /** Called as each relay finishes, so a fast relay can be acted on early. */
+  onRelayDone?: (relay: string, progress: RelayCatchupProgress) => void;
 }) {
   const seenEventIds = new Set<string>();
   const defaultUntil = options.filters.reduce<number | undefined>((value, filter) => {
@@ -274,6 +276,7 @@ export async function runPagedCatchup(options: {
       incomplete: relayIncomplete || !canContinue(),
       paginationStalled: relayPaginationStalled,
     };
+    options.onRelayDone?.(relay, relayProgress[relay]);
   };
 
   // A small pool avoids opening every configured relay at once on mobile.
