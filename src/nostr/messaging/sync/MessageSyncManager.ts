@@ -9,6 +9,7 @@ import { closeSubscription } from "@/utils/subscriptions";
 import { logger } from "@/utils/logger";
 import { debugLog, startupMark } from "@/utils/debugLog";
 import { fetchCatchupPage, runPagedCatchup, type SubscribeForCatchup } from "./catchup";
+import { negentropyMissingIds } from "./negentropy";
 import { MessageIngestionPipeline, type DecodeMessage } from "./ingestion";
 import { calculateCatchupSince } from "./sorting";
 import { retryOutgoingQueue } from "@/nostr/messaging/service";
@@ -37,6 +38,7 @@ type ManagerDependencies = {
   activeReadRelays?: () => string[];
   retryOutgoing?: (accountPubkey: string) => Promise<unknown> | void;
   catchupTimeoutMs?: number;
+  reconcile?: typeof negentropyMissingIds;
 };
 
 function validatedCheckpoint(
@@ -61,6 +63,8 @@ function validatedCheckpoint(
   return saved;
 }
 
+// Seen wraps older than this are never inside a NIP-77 catch-up window.
+const SEEN_WRAP_WINDOW_SECONDS = 10 * 24 * 60 * 60;
 const RELAY_EVENT_FLUSH_MS = 5_000;
 
 export const RELAY_CATCHUP_RETRY_BASE_MS = 1_000;
@@ -92,6 +96,7 @@ export class MessageSyncManager {
   private readonly activeReadRelays: () => string[];
   private readonly retryOutgoing: (accountPubkey: string) => Promise<unknown> | void;
   private readonly catchupTimeoutMs?: number;
+  private readonly reconcile: typeof negentropyMissingIds;
   private options: MessageSyncOptions | null = null;
   private realtimeSubscription: SubscriptionLike | null = null;
   private removeRelayObserver: (() => void) | null = null;
@@ -103,6 +108,10 @@ export class MessageSyncManager {
   private removeForegroundResume: (() => void) | null = null;
   private connectedRelays = new Set<string>();
   private activeCatchupSubscriptions = new Set<SubscriptionLike>();
+  // Processed gift wraps, written in batches for NIP-77 reconciliation.
+  private seenWraps: Array<{ account: string; id: string; createdAt: number }> = [];
+  private seenWrapsTimer: ReturnType<typeof setTimeout> | null = null;
+  private seenWrapsPrunedFor = "";
   private pushInboxFlight: Promise<void> | null = null;
   private removePushInboxListener: (() => void) | null = null;
   private abortController: AbortController | null = null;
@@ -221,6 +230,7 @@ export class MessageSyncManager {
     this.activeReadRelays = dependencies.activeReadRelays || (() => getRelaysFromStorage("read"));
     this.retryOutgoing = dependencies.retryOutgoing || retryOutgoingQueue;
     this.catchupTimeoutMs = dependencies.catchupTimeoutMs;
+    this.reconcile = dependencies.reconcile ?? negentropyMissingIds;
   }
 
   private isCurrent(sessionId: string, accountPubkey: string) {
@@ -424,7 +434,8 @@ export class MessageSyncManager {
     this.realtimeSubscription.on("event", (event: NostrEvent, relayUrl?: string) => {
       if (!isCurrent()) return;
       this.noteRealtimeEvent(accountPubkey, relayUrl || "unknown", event.created_at);
-      void this.pipeline?.ingestNostrEvent(event, { source: "realtime", relayUrl });
+      void this.pipeline?.ingestNostrEvent(event, { source: "realtime", relayUrl })
+        .then(() => this.noteSeenWrap(accountPubkey, event, true), () => undefined);
     });
     this.realtimeSubscription.on("eose", (relayUrl: string) => {
       if (!isCurrent()) return;
@@ -575,6 +586,7 @@ export class MessageSyncManager {
           for (const { event, relayUrl: eventRelay } of page.events) {
             if (catchupAbortController.signal.aborted || !this.isCurrent(sessionId, options.accountPubkey)) { processed = false; break; }
             await this.pipeline?.ingestNostrEvent(event, { source: activeSource!, relayUrl: eventRelay || receiptCandidate });
+            this.noteSeenWrap(options.accountPubkey, event);
           }
           receiptEvents = page.events.length;
           const pageComplete = processed && !page.aborted && !page.timedOut && !page.failedRelays.size && page.allRelaysCompleted;
@@ -582,8 +594,47 @@ export class MessageSyncManager {
           startupMark("received_since_page", { events: receiptEvents, used: !!receiptRelay });
           if (receiptRelay && receiptRelay === preferredRelay) notifyPreferredCaughtUp();
         }
+
+        // NIP-77: for relays that support it, compare the processed wraps in
+        // this window with the relay's set and fetch only the missing ones,
+        // instead of downloading the whole backdating window again.
+        const negentropyDone = new Set<string>();
+        let negentropyEvents = 0;
+        const negentropyRelays = !freshHistoryRepair && options.negentropyRelays
+          ? await options.negentropyRelays(relays.filter(url => url !== receiptRelay)).catch(() => [])
+          : [];
+        if (negentropyRelays.length && !catchupAbortController.signal.aborted && this.isCurrent(sessionId, options.accountPubkey)) {
+          await this.flushSeenWraps();
+          if (this.seenWrapsPrunedFor !== options.accountPubkey) {
+            // Far older than any catch-up window; once per session.
+            this.seenWrapsPrunedFor = options.accountPubkey;
+            await this.repository.pruneSeenGiftWraps(options.accountPubkey, nowSeconds - 30 * 24 * 60 * 60).catch(() => 0);
+          }
+          const { limit: _limit, ...windowFilter } = filters[0];
+          const local = await this.repository.listSeenGiftWraps(options.accountPubkey, windowFilter.since ?? 0, windowFilter.until ?? nowSeconds);
+          for (const relay of negentropyRelays) {
+            if (catchupAbortController.signal.aborted || !this.isCurrent(sessionId, options.accountPubkey)) break;
+            const started = this.now();
+            const missing = await this.reconcile(relay, windowFilter, local, { timeoutMs: this.catchupTimeoutMs, signal: catchupAbortController.signal });
+            let complete = missing !== null;
+            for (let index = 0; complete && index < missing!.length; index += CATCHUP_PAGE_LIMIT) {
+              const ids = missing!.slice(index, index + CATCHUP_PAGE_LIMIT);
+              const page = await fetchCatchupPage([relay], [{ ids, limit: ids.length }], this.catchupTimeoutMs, this.subscribeFn, trackSubscription, catchupAbortController.signal);
+              for (const { event } of page.events) {
+                if (catchupAbortController.signal.aborted || !this.isCurrent(sessionId, options.accountPubkey)) { complete = false; break; }
+                await this.pipeline?.ingestNostrEvent(event, { source: activeSource!, relayUrl: relay });
+                this.noteSeenWrap(options.accountPubkey, event);
+              }
+              negentropyEvents += page.events.length;
+              complete = complete && !page.aborted && !page.timedOut && !page.failedRelays.size && page.allRelaysCompleted;
+            }
+            startupMark("negentropy_sync", { missing: missing?.length ?? null, used: complete, durationMs: this.now() - started });
+            if (complete) negentropyDone.add(relay);
+          }
+        }
+        const reconciled = new Set([...negentropyDone, ...(receiptRelay ? [receiptRelay] : [])]);
         const result = await runPagedCatchup({
-          relays: receiptRelay ? orderedRelays.filter(url => url !== receiptRelay) : orderedRelays,
+          relays: orderedRelays.filter(url => !reconciled.has(url)),
           filters,
           initialUntilByRelay: freshHistoryRepair
             ? Object.fromEntries(relays.map(url => [url, state.relayStates[url]?.historyBackfillUntil ?? until]))
@@ -605,8 +656,12 @@ export class MessageSyncManager {
           isCurrent: () => this.isCurrent(sessionId, options.accountPubkey),
           onEvent: async (event, eventRelay) => {
             await this.pipeline?.ingestNostrEvent(event, { source: activeSource!, relayUrl: eventRelay });
+            // Initial history import can be thousands of wraps; the first
+            // reconciliation afterwards fetches the recent window once instead.
+            if (!freshHistoryRepair) this.noteSeenWrap(options.accountPubkey, event);
           }
         });
+        await this.flushSeenWraps();
         if (!this.isCurrent(sessionId, options.accountPubkey)) return;
         if (receiptRelay) {
           // The arrival page covered this relay; record it like a natural end.
@@ -614,6 +669,12 @@ export class MessageSyncManager {
           result.relayProgress[receiptRelay] = { naturalEnd: true, hitMaxBatches: false, incomplete: false };
           result.received += receiptEvents;
         }
+        for (const relay of negentropyDone) {
+          // Reconciled against the relay's full window: a natural end too.
+          result.completedRelays.add(relay);
+          result.relayProgress[relay] = { naturalEnd: true, hitMaxBatches: false, incomplete: false };
+        }
+        result.received += negentropyEvents;
         if (catchupAbortController.signal.aborted || !this.isForeground()) {
           // Incomplete pages are deliberately not committed as checkpoints.
           // Realtime remains subscribed and foreground resume will retry.
@@ -852,7 +913,34 @@ export class MessageSyncManager {
     });
   }
 
+  /** Catch-up passes flush once at their end; realtime arrivals on a timer. */
+  private noteSeenWrap(account: string, event: NostrEvent, flushLater = false) {
+    if (event?.kind !== 1059 || typeof event.id !== "string" || !Number.isInteger(event.created_at)) return;
+    // Only the recent window is ever reconciled; skip deep history imports.
+    if (event.created_at < Math.floor(this.now() / 1000) - SEEN_WRAP_WINDOW_SECONDS) return;
+    this.seenWraps.push({ account, id: event.id, createdAt: event.created_at });
+    if (!flushLater || this.seenWrapsTimer) return;
+    this.seenWrapsTimer = setTimeout(() => { this.seenWrapsTimer = null; void this.flushSeenWraps(); }, 1_000);
+    (this.seenWrapsTimer as any).unref?.();
+  }
+
+  private async flushSeenWraps() {
+    if (this.seenWrapsTimer) clearTimeout(this.seenWrapsTimer);
+    this.seenWrapsTimer = null;
+    const batch = this.seenWraps.splice(0);
+    const byAccount = new Map<string, Array<{ id: string; createdAt: number }>>();
+    for (const wrap of batch) {
+      const list = byAccount.get(wrap.account) || [];
+      list.push({ id: wrap.id, createdAt: wrap.createdAt });
+      byAccount.set(wrap.account, list);
+    }
+    for (const [account, wraps] of byAccount) {
+      await this.repository.markGiftWrapsSeen(account, wraps).catch(() => undefined);
+    }
+  }
+
   stop() {
+    void this.flushSeenWraps();
     this.flushRealtimeEventWrites();
     this.relayEventHighs.clear();
     this.sessionId = "";

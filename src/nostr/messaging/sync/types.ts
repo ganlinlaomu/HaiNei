@@ -54,6 +54,8 @@ export type MessageSyncOptions = {
    * two-day backdating window.
    */
   receivedSinceRelay?: () => Promise<string>;
+  /** The subset of relays that support NIP-77 negentropy set reconciliation. */
+  negentropyRelays?: (relays: string[]) => Promise<string[]>;
   /**
    * Relay work (realtime replay window and history catch-up) waits for this.
    * Push-delivered messages and the local replay do not, so a notification

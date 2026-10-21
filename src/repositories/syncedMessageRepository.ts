@@ -516,6 +516,26 @@ export class SyncedMessageRepository {
     return latestDirect.filter((message): message is SyncedMessageRecord => !!message);
   }
 
+  /** Record fully processed gift wraps for NIP-77 reconciliation. */
+  async markGiftWrapsSeen(accountPubkey: string, wraps: Array<{ id: string; createdAt: number }>) {
+    if (!wraps.length) return;
+    const account = normalizeAccountPubkey(accountPubkey);
+    await this.database.seenGiftWraps.bulkPut(wraps.map(wrap => ({ accountPubkey: account, id: wrap.id, createdAt: wrap.createdAt })));
+  }
+
+  /** Processed gift wraps with an outer timestamp in [since, until]. */
+  async listSeenGiftWraps(accountPubkey: string, since: number, until: number) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    return this.database.seenGiftWraps.where("[accountPubkey+createdAt]")
+      .between([account, since], [account, until], true, true).toArray();
+  }
+
+  async pruneSeenGiftWraps(accountPubkey: string, before: number) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    return this.database.seenGiftWraps.where("[accountPubkey+createdAt]")
+      .between([account, Dexie.minKey], [account, before], true, false).delete();
+  }
+
   /** Newest stored message timestamp via the [accountPubkey+createdAt] index. */
   async latestMessageCreatedAt(accountPubkey: string): Promise<number | undefined> {
     const account = normalizeAccountPubkey(accountPubkey);
