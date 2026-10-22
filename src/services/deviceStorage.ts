@@ -11,7 +11,7 @@ function trackWrite(write: Promise<void>) {
 }
 export async function flushDeviceWrites() { await Promise.all([...pendingWrites]); }
 
-const privateDeviceKey = /^(?:nostr_(?:inbox|outbox|post_draft|settings|connection_health|relay_session|notifications(?:_dismissed|_meta)?)|interactions)_([0-9a-f]{64})$/i;
+const privateDeviceKey = /^(?:nostr_(?:inbox|outbox|post_draft|settings|connection_health|relay_session|turn_servers|notifications(?:_dismissed|_meta)?)|interactions)_([0-9a-f]{64})$/i;
 function privateAccount(key: string) { return key.match(privateDeviceKey)?.[1]?.toLowerCase(); }
 export function clearPrivateDeviceValues(account: string) {
  for(const key of values.keys()) if(privateAccount(key)===account)values.delete(key);

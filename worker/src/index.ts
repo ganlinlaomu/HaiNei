@@ -2,6 +2,7 @@ import { createChallenge, verifyAndConsumeChallenge } from "./auth";
 import { createDevicePair, pollDevicePair, offerDevicePair, deliverDevicePair, finishDevicePair } from "./devicePair";
 import { createMediaSession } from "./media";
 import { createRelaySession, relayPublicConfig } from "./relay";
+import { createTurnCredentials } from "./turn";
 import {
   getPushPublicKey,
   removePushSubscription,
@@ -82,6 +83,13 @@ export async function handleRequest(request: Request, env: Env) {
         env, payload.challenge, payload.event, undefined, "hainei_media_session", authBinding(request, payload),
       );
       return json(await createMediaSession(env, pubkey, payload.fileSize, payload.contentHash), 201);
+    }
+    if (path === "/api/turn/credentials") {
+      const payload = await body(request, env, 16 * 1024);
+      const pubkey = await verifyAndConsumeChallenge(
+        env, payload.challenge, payload.event, undefined, "hainei_turn", authBinding(request, payload),
+      );
+      return json(await createTurnCredentials(env, pubkey), 201);
     }
     if (path === "/api/relay/session") {
       const payload = await body(request, env, 16 * 1024);
