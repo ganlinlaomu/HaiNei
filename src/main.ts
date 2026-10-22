@@ -12,6 +12,7 @@ import { initVersionTracking, handleVersionUpdate } from "@/utils/versionManager
 import { migrateLegacyLocalStorage } from "@/services/legacyLocalStorageMigration";
 import { initTheme } from "@/services/theme";
 import { installChunkLoadRecovery } from "@/utils/chunkLoadRecovery";
+import { installRuntimeDiagnostics } from "@/services/runtimeDiagnostics";
 
 let serviceWorkerRegistration: Promise<ServiceWorkerRegistration> | null = null;
 let serviceWorkerLoadListenerAttached = false;
@@ -95,6 +96,7 @@ async function bootstrap() {
   app.use(pinia);
   app.use(router);
   installChunkLoadRecovery(router);
+  installRuntimeDiagnostics(app);
 
   // 🚀 优先渲染：先 mount，再恢复会话（避免首屏白屏）
   app.mount("#app");
