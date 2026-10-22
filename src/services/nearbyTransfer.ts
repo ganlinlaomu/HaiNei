@@ -1,7 +1,7 @@
 import type { Room } from "trystero";
 import { DEFAULT_RELAY_URLS, getOrCreateDeviceId } from "@/services/connectionSettings";
 import { deviceStorage } from "@/services/deviceStorage";
-import { cachedManagedRelaySession, getManagedRelaySessionForUrl, managedRelayUrlFromCache } from "@/services/relaySession";
+import { cachedManagedRelaySession, getManagedRelaySessionForUrl, managedRelayUrlFromCache, turnIceServers } from "@/services/relaySession";
 import { createNearbyRtcDiagnostics } from "@/services/nearbyRtcDiagnostics";
 import { NearbyChunkReceiver, NEARBY_CHUNK_BYTES, sendChunkedFiles, type ChunkMeta, type TransferControl } from "./nearbyChunks";
 
@@ -24,6 +24,15 @@ const DEVICE_NAME_KEY = "hainei_nearby_device_name";
 export const NEARBY_UNNAMED_PEER = "正在识别…";
 const HELLO_RETRY_MS = 4_000;
 const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }];
+const TURN_WAIT_MS = 3_000;
+
+/** TURN servers if they arrive in time, else none; leaves no timer behind. */
+function turnServersWithin(ms: number): Promise<RTCIceServer[]> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve([]), ms);
+    void turnIceServers().then(servers => { clearTimeout(timer); resolve(servers); }, () => { clearTimeout(timer); resolve([]); });
+  });
+}
 
 export type NearbyRoomKey = { roomId: string; password: string };
 export type NearbyFileMeta = { name: string; size: number; type: string };
@@ -361,7 +370,13 @@ export class NearbyRoom {
   async join(key: NearbyRoomKey) {
     const generation = ++this.generation;
     this.key = key;
-    const [{ joinRoom, getRelaySockets }] = await Promise.all([import("trystero"), prepareNearbyRelaySession().catch(() => undefined)]);
+    const [{ joinRoom, getRelaySockets }, , turn] = await Promise.all([
+      import("trystero"),
+      prepareNearbyRelaySession().catch(() => undefined),
+      // A TURN relay connects peers whose networks block a direct path; a
+      // slow or missing answer must not hold up joining.
+      turnServersWithin(TURN_WAIT_MS),
+    ]);
     if (generation !== this.generation) return;
     const active = () => generation === this.generation;
     this.rtcDiagnostics = createNearbyRtcDiagnostics(RTCPeerConnection);
@@ -370,7 +385,7 @@ export class NearbyRoom {
       password: key.password,
       maxReceiveBytes: NEARBY_MAX_BATCH_BYTES,
       relayConfig: { urls: [...DEFAULT_RELAY_URLS], redundancy: DEFAULT_RELAY_URLS.length },
-      rtcConfig: { iceServers: ICE_SERVERS },
+      rtcConfig: { iceServers: [...ICE_SERVERS, ...turn] },
       rtcPolyfill: this.rtcDiagnostics.PeerConnection,
     }, key.roomId, {
       onJoinError: ({ error }) => { if (active()) this.handlers.onError(error); },
