@@ -776,9 +776,9 @@ describe("privacy-preserving push and badge", () => {
     expect(source).not.toMatch(/(?:from|require\s*\()\s*["'](?:node:)?web-push["']/);
   });
 
-  it("keeps service-worker notification wording and click target private-message only", () => {
+  it("keeps service-worker notification wording generic (message or call) and private", () => {
     const source = readFileSync(new URL("../public/service-worker.js", import.meta.url), "utf8");
-    expect(source).toContain("body:'你有新的私信消息'");
+    expect(source).toContain("body: isCall ? '你有一个语音来电' : '你有新的私信消息'");
     expect(source).toContain("JSON.parse(event.data?.text() || '{}')");
     expect(source).toContain("const path = '/#/conversations'");
     expect(source).not.toMatch(/sender|pubkey|private-message content|post content/);

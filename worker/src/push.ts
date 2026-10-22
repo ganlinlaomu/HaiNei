@@ -27,6 +27,14 @@ export const MESSAGE_PUSH_PAYLOAD = Object.freeze({
   url: "/#/conversations",
 });
 export const GENERIC_PUSH_PAYLOAD = MESSAGE_PUSH_PAYLOAD;
+// Like messages, carries no caller name: the encrypted invite (push hint)
+// tells the app who is calling once it opens.
+export const CALL_PUSH_PAYLOAD = Object.freeze({
+  type: "call" as const,
+  title: "HaiNei",
+  body: "你有一个语音来电",
+  url: "/#/conversations",
+});
 const MAX_PUSH_HINTS = 8;
 const MAX_PUSH_HINT_EVENT_BYTES = 8_000;
 export type WorkerEncryptedPushHint = {
@@ -70,7 +78,7 @@ export function sanitizeEncryptedPushHints(value: unknown): WorkerEncryptedPushH
 
 
 export function pushPayloadForType(value: unknown) {
-  return value === "message" ? MESSAGE_PUSH_PAYLOAD : null;
+  return value === "message" ? MESSAGE_PUSH_PAYLOAD : value === "call" ? CALL_PUSH_PAYLOAD : null;
 }
 
 type PushSubscriptionRow = {
@@ -493,7 +501,7 @@ export async function triggerGenericPush(
   diagnostics.subscriptionsFound = rows.results.length;
   if (!rows.results.length) return diagnostics;
 
-  return deliverPushRows(env, senderPubkey, messageId, rows.results, diagnostics, now, sanitizeEncryptedPushHints(hintsValue));
+  return deliverPushRows(env, senderPubkey, messageId, rows.results, diagnostics, now, sanitizeEncryptedPushHints(hintsValue), pushPayload);
 }
 
 // The authenticated account can inspect delivery only to its own browser endpoint.
@@ -521,8 +529,8 @@ async function deliverPushRows(
   diagnostics: PushDiagnostics,
   now: number,
   hints: WorkerEncryptedPushHint[] = [],
+  pushPayload: typeof MESSAGE_PUSH_PAYLOAD | typeof CALL_PUSH_PAYLOAD = MESSAGE_PUSH_PAYLOAD,
 ) {
-  const pushPayload = MESSAGE_PUSH_PAYLOAD;
   const config = pushConfig(env);
   const timeoutMs = integerSetting(env.PUSH_FETCH_TIMEOUT_MS, 8000, 1000, 30000);
 
@@ -576,6 +584,8 @@ async function deliverPushRows(
             "Content-Encoding": "aes128gcm",
             "Content-Type": "application/octet-stream",
             TTL: "60",
+            // A ringing call is worthless a minute later; ask for prompt delivery.
+            ...(pushPayload.type === "call" ? { Urgency: "high" } : {}),
           },
           body: arrayBuffer(body),
         });

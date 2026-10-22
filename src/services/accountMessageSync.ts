@@ -3,6 +3,8 @@ import { getActivePinia } from "pinia";
 import { getRelaysFromStorage, inspectRelays, onRelayConnectionState, releaseUnusedRelayConnections } from "@/nostr/relays";
 import { managedReceivedSinceRelay, managedRelayUrlFromCache } from "@/services/relaySession";
 import { negentropyCapableRelays } from "@/services/relayCapabilities";
+import { parseCallSignal } from "@/nostr/messaging/callControl";
+import { loadCallEngine } from "@/stores/call";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
 import { MessageSyncManager } from "@/nostr/messaging/sync";
@@ -427,6 +429,16 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
         isReceipt: isDmReceiptMessage,
         processReceipt: message => directMessages.processReceipt(message),
         processBurnControl: message => directMessages.processBurnControl(message),
+        // The call engine (WebRTC, media) loads only when a call signal arrives.
+        processCallControl: message => {
+          const signal = parseCallSignal(message);
+          if (!signal) return;
+          const sender = message.senderPubkey.toLowerCase();
+          const recipient = message.recipientPubkeys.map(value => value.toLowerCase()).find(value => value !== account) || account;
+          void loadCallEngine()
+            .then(engine => engine.handleCallSignal(sender, recipient, signal, message.createdAt))
+            .catch(error => debugLog("system", "call_signal_unhandled", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn"));
+        },
         isInteraction: isInteractionMessage,
         processInteraction: async message => {
           await interactions.processCanonicalInteraction(message, account);

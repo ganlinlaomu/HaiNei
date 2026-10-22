@@ -1,5 +1,6 @@
 import { DM_RECEIPT_TYPE, isDmReceiptPayload } from "./dmReceipts";
 import { DM_BURN_CONTROL_TYPE, isBurnControlPayload } from "./dmBurnControl";
+import { CALL_CONTROL_TYPE, isCallPayload } from "./callControl";
 
 // Until 2026-10-10 18:30 JST, an unmarked NIP-17 rumor was a HaiNei Feed
 // post. Afterwards, newly authored posts have an explicit encrypted tag.
@@ -39,8 +40,10 @@ export function isHomeControl(tags: string[][] | undefined, content?: string) {
     || values.has("t:hainei-tombstone")
     || values.has(`t:${DM_RECEIPT_TYPE}`)
     || values.has(`t:${DM_BURN_CONTROL_TYPE}`)
+    || values.has(`t:${CALL_CONTROL_TYPE}`)
     || isDmReceiptPayload(content)
-    || isBurnControlPayload(content);
+    || isBurnControlPayload(content)
+    || isCallPayload(content);
 }
 
 export type MessageRoute = "feed" | "direct" | "control" | "unsupported";

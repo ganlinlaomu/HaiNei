@@ -11,7 +11,7 @@ const PUSH_SUBSCRIBE_TIMEOUT_MS = 15_000;
 const FETCH_TIMEOUT_MS = 15_000;
 
 type SignEvent = (event: EventTemplate) => Promise<VerifiedEvent>;
-export type PushCategory = "message" | "activity";
+export type PushCategory = "message" | "call" | "activity";
 export type EncryptedPushHint = { recipient: string; eventId: string; relays: string[]; event?: NostrEvent };
 
 export { DEFAULT_HAINEI_WORKER_URL };
@@ -248,7 +248,7 @@ export async function triggerGenericPush(
   messageId?: string,
   hints: EncryptedPushHint[] = [],
 ) {
-  if (type !== "message") return;
+  if (type !== "message" && type !== "call") return;
   const recipients = [...new Set(recipientPubkeys.map(value => value.toLowerCase()))]
     .filter(value => value !== pubkey.toLowerCase());
   if (!recipients.length) return;
