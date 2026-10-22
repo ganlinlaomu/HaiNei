@@ -74,7 +74,8 @@ import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { usePostsStore } from "@/stores/posts";
 import { isInteractionMessage, useInteractionsStore } from "@/stores/interactions";
 import { logger } from "@/utils/logger";
-import { startupMark } from "@/utils/debugLog";
+import { debugLog, startupMark } from "@/utils/debugLog";
+import { onAppResume } from "@/services/appResumeCoordinator";
 import PostCard from "@/components/PostCard.vue";
 import PrivateNoteCard from "@/components/PrivateNoteCard.vue";
 import { usePrivateFeedCards } from "@/composables/usePrivateFeedCards";
@@ -451,6 +452,7 @@ export default defineComponent({
       displayedMessages.value = messagesRef.value.slice(0, PAGE_SIZE);
       isInitialLoad.value = false;
       startupMark("home_feed_ready", { durationMs: Date.now() - started, inboxMs, items: displayedMessages.value.length });
+      scheduleBlankCheck("startup");
 
       const storedLastSeen = getLastSeenCreatedAt(accountPk) || 0;
       const newestInUI = displayedMessages.value[0]?.created_at || 0;
@@ -818,6 +820,32 @@ async function safeUpdateLocalRefs() {
      }
    }
 
+   // Diagnostics for a blank Home with posts loaded (seen after resume): record
+   // the virtual list state when no post is actually inside the viewport.
+   let blankCheckTimer: ReturnType<typeof setTimeout> | null = null;
+   function scheduleBlankCheck(reason: string) {
+     if (blankCheckTimer) clearTimeout(blankCheckTimer);
+     blankCheckTimer = setTimeout(() => {
+       blankCheckTimer = null;
+       if (route.path !== "/" || document.visibilityState !== "visible" || !displayedMessages.value.length || !feedElement.value) return;
+       const viewportHeight = window.innerHeight;
+       const visible = [...feedElement.value.querySelectorAll(".post-card, .private-card")].filter(card => {
+         const rect = card.getBoundingClientRect();
+         return rect.height > 0 && rect.bottom > 0 && rect.top < viewportHeight;
+       }).length;
+       if (visible) return;
+       debugLog("ui", "home_viewport_empty", {
+         reason, displayed: displayedMessages.value.length, start: virtualStart.value, end: virtualEnd.value,
+         rendered: feedElement.value.querySelectorAll(".post-card, .private-card").length,
+         scrollTop: Math.round(scrollContainer?.scrollTop || 0), clientHeight: scrollContainer?.clientHeight || 0,
+         scrollHeight: scrollContainer?.scrollHeight || 0, feedTop: feedElement.value.offsetTop,
+         topSpacer: Math.round(topSpacerHeight.value), bottomSpacer: Math.round(bottomSpacerHeight.value),
+         viewportHeight, attached: virtualScrollActive,
+       }, "warn");
+     }, 1_500);
+   }
+   const stopBlankCheckOnResume = onAppResume(() => scheduleBlankCheck("resume"));
+
    onMounted(() => {
      stopSyncStatusListener = onAccountMessageSyncStatus(applyAccountSyncStatus);
      applyAccountSyncStatus();
@@ -827,6 +855,8 @@ async function safeUpdateLocalRefs() {
    watch(() => keys.accountStoresReadyFor, () => { void initializeHomeWhenReady(); });
 
    onBeforeUnmount(() => {
+     stopBlankCheckOnResume();
+     if (blankCheckTimer) clearTimeout(blankCheckTimer);
      saveCurrentHomeScroll();
      detachLoadMoreObserver();
      detachVirtualScroll();
@@ -836,6 +866,7 @@ async function safeUpdateLocalRefs() {
      clearHomeRuntimeState();
    });
    onActivated(() => {
+     scheduleBlankCheck("activated");
      attachVirtualScroll();
      if (readyForPending.value && homeAccountPk === keys.pkHex) void nextTick(attachLoadMoreObserver);
      void restoreCurrentHomeScroll();

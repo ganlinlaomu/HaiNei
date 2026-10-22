@@ -1,5 +1,5 @@
 import { timedJsonFetch } from "@/utils/timedFetch";
-import { signWorkerRequest } from "@/services/workerAuth";
+import { signedWorkerPost } from "@/services/workerAuth";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 const SESSION_SCOPE = "upload";
 const EXPIRY_SKEW_SECONDS = 5;
@@ -100,34 +100,30 @@ export async function getMediaSession(
 
   const pending = (async () => {
     const base = workerBaseUrl();
-    const challengeResponse = await timedJsonFetch(`${base}/api/auth/challenge`, {
-      method: "POST",
-      headers: { Accept: "application/json" },
-      signal,
-    });
-    const challengeBody = await json(challengeResponse, "获取身份验证 challenge 失败");
-    const challenge = String(challengeBody?.challenge || "").trim().toLowerCase();
-    const challengeExpiresAt = Number(challengeBody?.expiresAt);
-    if (!/^[0-9a-f]{64}$/.test(challenge) || !Number.isSafeInteger(challengeExpiresAt)) {
-      throw new Error("HaiNei Worker 返回了无效 challenge");
-    }
-
     const url = `${base}/api/media/session`;
     const payload = { ...(fileSize === undefined ? {} : { fileSize }), ...(contentHash === undefined ? {} : { contentHash }) };
-    const event = await withAbort(signWorkerRequest(signEvent, pubkey, {
+    const sessionResponse = await signedWorkerPost(template => withAbort(signEvent(template), signal), pubkey, {
       action: "hainei_media_session",
-      challenge,
-      expiresAt: challengeExpiresAt,
       url,
-      method: "POST",
       payload,
       content: "Authorize HaiNei media session",
-    }), signal);
-    const sessionResponse = await timedJsonFetch(url, {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, challenge, event }),
-      signal,
+      challenge: async () => {
+        const body = await json(await timedJsonFetch(`${base}/api/auth/challenge`, {
+          method: "POST",
+          headers: { Accept: "application/json" },
+          signal,
+        }), "获取身份验证 challenge 失败");
+        const challenge = String(body?.challenge || "").trim().toLowerCase();
+        const expiresAt = Number(body?.expiresAt);
+        if (!/^[0-9a-f]{64}$/.test(challenge) || !Number.isSafeInteger(expiresAt)) throw new Error("HaiNei Worker 返回了无效 challenge");
+        return { challenge, expiresAt };
+      },
+      send: body => timedJsonFetch(url, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      }),
     });
     const body = await json(sessionResponse, "获取媒体上传会话失败");
     const session: MediaSession = {

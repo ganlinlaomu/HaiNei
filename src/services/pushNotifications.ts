@@ -1,7 +1,7 @@
 import type { EventTemplate, VerifiedEvent, NostrEvent } from "nostr-tools";
 import { deviceStorage } from "@/services/deviceStorage";
 import { debugLog } from "@/utils/debugLog";
-import { signWorkerRequest } from "@/services/workerAuth";
+import { signedWorkerPost } from "@/services/workerAuth";
 import { DEFAULT_HAINEI_WORKER_URL, haineiWorkerBaseUrl, resolveHaiNeiWorkerBaseUrl } from "@/services/workerUrl";
 import { friendRepository } from "@/repositories/friendRepository";
 
@@ -78,24 +78,18 @@ export function pushServiceErrorMessage(status: number, code: unknown, fallback:
 }
 
 async function authenticatedPost(path: string, payload: Record<string, unknown>, pubkey: string, signEvent: SignEvent) {
-  const challengeResponse = await pushFetch(`${baseUrl()}/api/auth/challenge`, { method: "POST" });
-  const challengeBody = await responseJson(challengeResponse, "获取推送授权失败");
-  const challenge = String(challengeBody?.challenge || "");
-  const expiresAt = Number(challengeBody?.expiresAt || 0);
   const url = `${baseUrl()}${path}`;
-  const event = await signWorkerRequest(signEvent, pubkey, {
+  const response = await signedWorkerPost(signEvent, pubkey, {
     action: PUSH_ACTION,
-    challenge,
-    expiresAt,
     url,
-    method: "POST",
     payload,
     content: "Authorize HaiNei push action",
-  });
-  const response = await pushFetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, challenge, event }),
+    challenge: async () => responseJson(await pushFetch(`${baseUrl()}/api/auth/challenge`, { method: "POST" }), "获取推送授权失败"),
+    send: body => pushFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   });
   return responseJson(response, "推送服务请求失败");
 }

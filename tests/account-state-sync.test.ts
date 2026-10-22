@@ -65,7 +65,6 @@ describe("encrypted account-state materialization", () => {
   it("restores accepted friendship before Relay history and Friends does not require legacy metadata", async () => {
     vi.stubGlobal("window", { location: { origin: "https://app.test" } });
     vi.stubGlobal("fetch", vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: 100 }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ snapshots: [{
         namespace: "friendships", version: 3, ciphertext: envelope("friendships", [friendship("accepted", 20, "accept")]), updatedAt: 20,
       }] }), { status: 200 })));
@@ -88,7 +87,6 @@ describe("encrypted account-state materialization", () => {
     const testKeys = keys();
     vi.stubGlobal("window", { location: { origin: "https://app.test" } });
     vi.stubGlobal("fetch", vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 60 }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ snapshots: [{
         namespace: "friend_metadata",
         version: 2,

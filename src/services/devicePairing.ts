@@ -1,6 +1,6 @@
 import { getPublicKey, utils } from "nostr-tools";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
-import { signWorkerRequest } from "@/services/workerAuth";
+import { signedWorkerPost } from "@/services/workerAuth";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 import { timedJsonFetch } from "@/utils/timedFetch";
 
@@ -77,15 +77,16 @@ async function post(path: string, payload: Record<string, unknown>) {
 }
 async function signedPost(path: string, signer: PairSigner, payload: Record<string, unknown>) {
   const account = signer.pkHex;
-  const challenge = await postChallenge();
-  if (signer.pkHex !== account) throw new Error("account_changed");
-  const event = await signWorkerRequest(signer.signEvent.bind(signer), account, {
-    action: "hainei_device_pair", challenge: challenge.challenge, expiresAt: challenge.expiresAt,
-    url: endpoint(path), method: "POST", payload,
+  return json(await signedWorkerPost(signer.signEvent.bind(signer), account, {
+    action: "hainei_device_pair",
+    url: endpoint(path), payload,
     content: "Authorize one-time encrypted HaiNei device pairing",
-  });
-  if (signer.pkHex !== account) throw new Error("account_changed");
-  return post(path, { ...payload, challenge: challenge.challenge, event });
+    ensureCurrent: () => { if (signer.pkHex !== account) throw new Error("account_changed"); },
+    challenge: postChallenge,
+    send: body => timedJsonFetch(endpoint(path), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }, 8_000),
+  }));
 }
 async function postChallenge(): Promise<{ challenge: string; expiresAt: number }> {
   return json(await timedJsonFetch(`${haineiWorkerBaseUrl()}/api/auth/challenge`, { method: "POST" }));

@@ -56,6 +56,7 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
   let previousLaunch: unknown = null;
   let previousLoaded: Promise<void> | null = null;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastAliveAt = 0;
 
   async function saveLaunch() {
     try {
@@ -65,7 +66,7 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
         if (saved && saved.startedAt !== launchStartedAt) previousLaunch = saved;
       }).catch(() => undefined);
       await previousLoaded;
-      await putDeviceValue(LAUNCH_LOG_KEY, JSON.stringify({ startedAt: launchStartedAt, startup: startupBuffer, notable: notableBuffer }));
+      await putDeviceValue(LAUNCH_LOG_KEY, JSON.stringify({ startedAt: launchStartedAt, lastAliveAt, startup: startupBuffer, notable: notableBuffer }));
     } catch {
       // Diagnostics only; never disturb the app.
     }
@@ -122,6 +123,12 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
     return startupBuffer.slice();
   }
 
+  /** Periodic "page still responsive" stamp, saved with the launch log. */
+  function noteAlive() {
+    lastAliveAt = Date.now();
+    scheduleSave();
+  }
+
   /** The previous launch's saved milestones and warnings, if any. */
   async function previousLaunchLog() {
     previousLoaded ??= import("@/services/deviceStorage")
@@ -145,5 +152,5 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
     return JSON.stringify(entries.value, null, 2);
   }
 
-  return { entries, add, addSanitized, clear, exportJson, startupMarks, previousLaunchLog };
+  return { entries, add, addSanitized, clear, exportJson, startupMarks, previousLaunchLog, noteAlive };
 });

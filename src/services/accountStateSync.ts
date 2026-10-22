@@ -10,7 +10,7 @@ import {
 import { accountStateRepository } from "@/repositories/accountStateRepository";
 import { deviceStorage } from "@/services/deviceStorage";
 import { migrateConnectionSettings, SETTINGS_VERSION } from "@/services/connectionSettings";
-import { signWorkerRequest } from "@/services/workerAuth";
+import { signedWorkerPost } from "@/services/workerAuth";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 import { onAppResume } from "@/services/appResumeCoordinator";
 
@@ -56,25 +56,19 @@ async function responseJson(response: Response) {
 
 async function authenticatedPost(keys: AccountStateKeys, path: string, payload: Record<string, unknown>, isCurrent: () => boolean = () => true) {
   const signingAccount = keys.pkHex;
-  const challengeResponse = await timedJsonFetch(`${baseUrl()}/api/auth/challenge`, { method: "POST" });
-  const challengeBody = await responseJson(challengeResponse);
-  const challenge = String(challengeBody?.challenge || "");
-  if (keys.pkHex !== signingAccount || !isCurrent()) throw new Error("stale_account_session");
   const url = `${baseUrl()}${path}`;
-  const event = await signWorkerRequest(keys.signEvent.bind(keys), keys.pkHex, {
+  return responseJson(await signedWorkerPost(keys.signEvent.bind(keys), keys.pkHex, {
     action: ACCOUNT_STATE_ACTION,
-    challenge,
-    expiresAt: Number(challengeBody?.expiresAt || 0),
     url,
-    method: "POST",
     payload,
     content: "Authorize HaiNei encrypted account state",
-  });
-  if (keys.pkHex !== signingAccount || !isCurrent()) throw new Error("stale_account_session");
-  return responseJson(await timedJsonFetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, challenge, event }),
+    ensureCurrent: () => { if (keys.pkHex !== signingAccount || !isCurrent()) throw new Error("stale_account_session"); },
+    challenge: async () => responseJson(await timedJsonFetch(`${baseUrl()}/api/auth/challenge`, { method: "POST" })),
+    send: body => timedJsonFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   }));
 }
 

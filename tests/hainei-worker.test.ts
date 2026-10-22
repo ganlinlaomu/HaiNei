@@ -48,6 +48,11 @@ class MemoryD1 {
         if (sql.startsWith("DELETE FROM hainei_rate_limits") || sql.startsWith("DELETE FROM hainei_auth_challenges")) {
           return { meta: { changes: 1 } };
         }
+        if (sql.startsWith("INSERT OR IGNORE INTO hainei_auth_challenges")) {
+          if (this.challenges.has(String(bound[0]))) return { meta: { changes: 0 } };
+          this.challenges.set(String(bound[0]), { expires_at: Number(bound[3]), used_at: Number(bound[4]), pubkey: String(bound[1]) });
+          return { meta: { changes: 1 } };
+        }
         if (sql.startsWith("INSERT INTO hainei_auth_challenges")) {
           this.challenges.set(String(bound[0]), { expires_at: Number(bound[2]), used_at: null, pubkey: null });
           return { meta: { changes: 1 } };
@@ -109,6 +114,37 @@ describe("HaiNei Worker authentication and quota", () => {
     expect(pubkey).toBe(getPublicKey(secret));
     await expect(verifyAndConsumeChallenge(env, created.challenge, signed(created.challenge, secret, 1002), 1002))
       .rejects.toMatchObject({ status: 409, message: "challenge_already_used" });
+  });
+
+  it("accepts a fresh challenge-free request once, bound to its URL and payload", async () => {
+    const env = baseEnv();
+    const secret = generateSecretKey();
+    const pubkey = getPublicKey(secret);
+    const now = Math.floor(Date.now() / 1000);
+    const url = "https://worker.test/api/account-state/get";
+    const payload = { namespaces: ["read_state"] };
+    const binding = { url, method: "POST", payload };
+    const sign = (options: Record<string, unknown> = {}) => signWorkerRequest(async template => finalizeEvent(template, secret), pubkey, {
+      action: "hainei_account_state", url, method: "POST", payload, content: "Authorize test request", ...options,
+    });
+    const event = await sign();
+    expect(event.tags.some(tag => tag[0] === "challenge")).toBe(false);
+    await expect(verifyAndConsumeChallenge(env, undefined, event, now, "hainei_account_state", binding)).resolves.toBe(pubkey);
+    // The same signed request cannot be replayed.
+    await expect(verifyAndConsumeChallenge(env, undefined, event, now + 1, "hainei_account_state", binding))
+      .rejects.toMatchObject({ status: 409, message: "auth_event_replayed" });
+    // A device clock off by more than a minute gets a code the client falls back on.
+    await expect(verifyAndConsumeChallenge(env, undefined, await sign(), now + 90, "hainei_account_state", binding))
+      .rejects.toMatchObject({ status: 401, message: "auth_clock_skew" });
+    // Still bound to the payload, and never accepted without a binding.
+    await expect(verifyAndConsumeChallenge(env, undefined, await sign(), now, "hainei_account_state", { ...binding, payload: { namespaces: ["friendships"] } }))
+      .rejects.toMatchObject({ status: 401, message: "auth_payload_mismatch" });
+    await expect(verifyAndConsumeChallenge(env, undefined, await sign(), now, "hainei_account_state"))
+      .rejects.toMatchObject({ status: 400, message: "invalid_challenge" });
+    // A long-lived challenge-free signature is refused.
+    const longLived = finalizeEvent({ ...event, created_at: now, tags: event.tags.map(tag => tag[0] === "expiration" ? ["expiration", String(now + 3600)] : tag) }, secret);
+    await expect(verifyAndConsumeChallenge(env, undefined, longLived, now, "hainei_account_state", binding))
+      .rejects.toMatchObject({ status: 401, message: "auth_event_expired" });
   });
 
   it("binds authorization to exact URL, method, and business payload", async () => {

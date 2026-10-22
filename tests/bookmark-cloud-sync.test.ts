@@ -99,10 +99,6 @@ describe("bookmark local-first cloud sync", () => {
     });
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        challenge: "bookmark-sync",
-        expiresAt: Math.floor(Date.now() / 1000) + 60,
-      }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
         namespace: "bookmarks",
         version: 1,
       }), { status: 200 })));
@@ -141,10 +137,6 @@ describe("bookmark local-first cloud sync", () => {
       clearTimeout: vi.fn(),
     });
     vi.stubGlobal("fetch", vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        challenge: "bookmark-sync-fail",
-        expiresAt: Math.floor(Date.now() / 1000) + 60,
-      }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         error: "temporary_failure",
       }), { status: 503 })));

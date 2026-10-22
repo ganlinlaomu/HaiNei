@@ -356,13 +356,14 @@ describe("privacy-preserving push and badge", () => {
     expect(await missing.json()).toEqual({ error: "push_not_configured" });
   });
 
-  it("requires signed challenge authentication for subscriptions", async () => {
+  it("requires a signed request for subscriptions", async () => {
     const env = pushEnv();
     const response = await handleRequest(new Request("https://worker.test/api/push/subscribe", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ subscription: { endpoint: "https://push.test", keys: { p256dh: "x", auth: "y" } } })
     }), env);
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "invalid_nostr_signature" });
   });
 
   it("persists and removes a subscription through authenticated routes", async () => {
@@ -734,7 +735,7 @@ describe("privacy-preserving push and badge", () => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ endpoint: "https://web.push.apple.com/test" }),
     }), pushEnv());
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(401);
   });
 
   it("reports no subscription without attempting delivery", async () => {
@@ -929,7 +930,7 @@ describe("privacy-preserving push and badge", () => {
     expect(existing.unsubscribe.mock.invocationCallOrder[0]).toBeLessThan(subscribe.mock.invocationCallOrder[0]);
   });
 
-  it("reaches the auth challenge after browser subscription succeeds", async () => {
+  it("sends the signed subscription after browser subscription succeeds", async () => {
     const notification = { permission: "granted", requestPermission: vi.fn() };
     const subscription = { toJSON: () => ({ endpoint: "https://push.test/new", keys: { p256dh: "x", auth: "y" } }) };
     vi.stubGlobal("window", { location: { origin: "https://app.test" }, PushManager: function PushManager() {}, Notification: notification });
@@ -937,15 +938,16 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("Notification", notification);
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
 
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://app.test/api/auth/challenge");
+    // Single-trip auth: no separate challenge request.
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://app.test/api/push/subscribe");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({ event: expect.any(Object) });
+    expect(fetchMock.mock.calls.some(call => String(call[0]).endsWith("/api/auth/challenge"))).toBe(false);
   });
 
   it("sets the local enabled flag only after subscribe succeeds", async () => {
@@ -960,14 +962,12 @@ describe("privacy-preserving push and badge", () => {
     const subscribeResponse = new Promise<Response>(resolve => { finishSubscribe = resolve; });
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
       .mockImplementationOnce(() => subscribeResponse)
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const enabling = enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(pushEnabledForAccount(ACCOUNT)).toBe(false);
     finishSubscribe(new Response(JSON.stringify({ subscribed: true }), { status: 201 }));
     await enabling;
@@ -984,9 +984,7 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { getSubscription: vi.fn(async () => subscription) } }) } });
     vi.stubGlobal("Notification", notification);
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     localStorage.setItem(`hainei_push_enabled_${ACCOUNT}`, "1");
@@ -997,8 +995,8 @@ describe("privacy-preserving push and badge", () => {
       async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any,
     )).resolves.toBe(true);
 
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://app.test/api/push/subscribe");
-    expect(fetchMock.mock.calls[3]?.[0]).toBe("https://app.test/api/push/policy");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://app.test/api/push/subscribe");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://app.test/api/push/policy");
   });
 
   it("clears a stale local opt-in when the browser subscription disappeared", async () => {

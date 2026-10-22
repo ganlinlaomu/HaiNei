@@ -1,7 +1,7 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { normalizeRelayUrl } from "@/services/connectionSettings";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
-import { signWorkerRequest } from "@/services/workerAuth";
+import { signedWorkerPost } from "@/services/workerAuth";
 import { timedJsonFetch } from "@/utils/timedFetch";
 import { deviceStorage } from "@/services/deviceStorage";
 import { startupMark } from "@/utils/debugLog";
@@ -193,34 +193,28 @@ export async function getManagedRelaySessionForUrl(url: string, force = false): 
   const tokenStarted = Date.now();
   const pending = (async () => {
     const base = workerBaseUrl();
-    const challengeResponse = await timedJsonFetch(`${base}/api/auth/challenge`, {
-      method: "POST",
-      headers: { Accept: "application/json" },
-    });
-    const challengeBody = await json(challengeResponse, "获取 Relay 身份验证 challenge 失败");
-    const challenge = String(challengeBody?.challenge || "").trim().toLowerCase();
-    const challengeExpiresAt = Number(challengeBody?.expiresAt);
-    if (!/^[0-9a-f]{64}$/.test(challenge) || !Number.isSafeInteger(challengeExpiresAt)) {
-      throw new Error("HaiNei Worker 返回了无效 challenge");
-    }
-
     const endpoint = `${base}/api/relay/session`;
-    const payload = {};
-    const event = await signWorkerRequest(currentIdentity.signEvent, currentIdentity.pubkey, {
+    const response = await signedWorkerPost(currentIdentity.signEvent, currentIdentity.pubkey, {
       action: "hainei_relay_session",
-      challenge,
-      expiresAt: challengeExpiresAt,
       url: endpoint,
-      method: "POST",
-      payload,
+      payload: {},
       content: "Authorize HaiNei relay session",
-    });
-    if (identity !== currentIdentity) throw new Error("relay_session_account_changed");
-
-    const response = await timedJsonFetch(endpoint, {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ challenge, event }),
+      ensureCurrent: () => { if (identity !== currentIdentity) throw new Error("relay_session_account_changed"); },
+      challenge: async () => {
+        const body = await json(await timedJsonFetch(`${base}/api/auth/challenge`, {
+          method: "POST",
+          headers: { Accept: "application/json" },
+        }), "获取 Relay 身份验证 challenge 失败");
+        const challenge = String(body?.challenge || "").trim().toLowerCase();
+        const expiresAt = Number(body?.expiresAt);
+        if (!/^[0-9a-f]{64}$/.test(challenge) || !Number.isSafeInteger(expiresAt)) throw new Error("HaiNei Worker 返回了无效 challenge");
+        return { challenge, expiresAt };
+      },
+      send: body => timedJsonFetch(endpoint, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
     });
     const body = await json(response, "获取 Relay 会话失败");
     const session: ManagedRelaySession = {
