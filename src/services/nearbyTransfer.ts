@@ -24,6 +24,15 @@ const DEVICE_NAME_KEY = "hainei_nearby_device_name";
 export const NEARBY_UNNAMED_PEER = "正在识别…";
 const HELLO_RETRY_MS = 4_000;
 const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }];
+const TURN_WAIT_MS = 3_000;
+
+/** TURN servers if they arrive in time, else none; leaves no timer behind. */
+function turnServersWithin(ms: number): Promise<RTCIceServer[]> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve([]), ms);
+    void turnIceServers().then(servers => { clearTimeout(timer); resolve(servers); }, () => { clearTimeout(timer); resolve([]); });
+  });
+}
 
 export type NearbyRoomKey = { roomId: string; password: string };
 export type NearbyFileMeta = { name: string; size: number; type: string };
@@ -366,7 +375,7 @@ export class NearbyRoom {
       prepareNearbyRelaySession().catch(() => undefined),
       // A TURN relay connects peers whose networks block a direct path; a
       // slow or missing answer must not hold up joining.
-      Promise.race([turnIceServers(), new Promise<[]>(resolve => setTimeout(() => resolve([]), 3_000))]),
+      turnServersWithin(TURN_WAIT_MS),
     ]);
     if (generation !== this.generation) return;
     const active = () => generation === this.generation;

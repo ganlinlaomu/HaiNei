@@ -72,6 +72,7 @@ describe("client TURN servers", () => {
   it("is passed to the file transfer's WebRTC config without delaying the join", () => {
     const nearby = readFileSync("src/services/nearbyTransfer.ts", "utf8");
     expect(nearby).toContain("rtcConfig: { iceServers: [...ICE_SERVERS, ...turn] }");
-    expect(nearby).toContain("Promise.race([turnIceServers(), new Promise<[]>(resolve => setTimeout(() => resolve([]), 3_000))])");
+    expect(nearby).toContain("turnServersWithin(TURN_WAIT_MS)");
+    expect(nearby).toContain("clearTimeout(timer); resolve(servers);");
   });
 });
