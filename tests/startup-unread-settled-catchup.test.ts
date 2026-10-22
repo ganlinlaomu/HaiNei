@@ -198,6 +198,19 @@ describe("conversation list sync phase", async () => {
     // After startup, a background continuation does not keep the title busy.
     expect(messageSyncPhase(snapshot({ catchup: "pending" }), false)).toBe("idle");
     expect(messageSyncPhase(snapshot({}), false)).toBe("idle");
+    // A slow secondary relay paging after the managed relay caught up is
+    // background work: the title no longer says 同步中 for seconds.
+    expect(messageSyncPhase(snapshot({ status: "catching-up", catchup: "running", preferredCaughtUp: true }), false)).toBe("idle");
+    expect(messageSyncPhase(snapshot({ status: "catching-up", catchup: "running", preferredCaughtUp: false }), false)).toBe("syncing");
+  });
+
+  it("marks the managed relay caught up per pass and debounces the title", async () => {
+    const { readFileSync } = await import("node:fs");
+    const sync = readFileSync("src/services/accountMessageSync.ts", "utf8");
+    expect(sync).toContain("setAccountMessageSyncStatus(account, accountSyncSnapshot.status, { preferredCaughtUp: true })");
+    expect(sync).toContain('...(status === "catching-up" ? { preferredCaughtUp: false } : {})');
+    const view = readFileSync("src/views/Conversations.vue", "utf8");
+    expect(view).toContain("const SYNC_LABEL_DELAY_MS = 700;");
   });
 
   it("shows the phase next to the 私信 title", async () => {

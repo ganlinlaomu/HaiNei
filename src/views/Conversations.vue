@@ -91,7 +91,7 @@
 
 <script setup lang="ts">
 import { nearbyPresence, nearbyUnread } from "@/services/nearbyUnread";
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import NewConversationSheet from "@/components/NewConversationSheet.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
@@ -127,13 +127,30 @@ const profiles = useProfilesStore();
 const ui = useUIStore();
 const searchQuery = ref("");
 const syncSnapshot = ref<AccountMessageSyncSnapshot>(getAccountMessageSyncStatus());
-const syncLabel = computed(() => {
+const currentSyncLabel = computed(() => {
   const snapshot = syncSnapshot.value;
   if (!keys.pkHex || snapshot.accountPubkey !== keys.pkHex.toLowerCase()) return "";
   const phase = messageSyncPhase(snapshot, directMessages.historyHydrationPhase === "hydrating");
   if (!networkOnline.value) return "离线";
   return phase === "connecting" ? "连接中…" : phase === "syncing" ? "同步中…" : "";
 });
+// Every foreground return runs a short catch-up; show the label only when it
+// lasts, so a sub-second pass does not flash "同步中…". Offline shows at once.
+const SYNC_LABEL_DELAY_MS = 700;
+const syncLabel = ref("");
+let syncLabelTimer: ReturnType<typeof setTimeout> | null = null;
+watch(currentSyncLabel, label => {
+  if (syncLabelTimer) clearTimeout(syncLabelTimer);
+  syncLabelTimer = null;
+  if (!label || label === "离线" || syncLabel.value) {
+    syncLabel.value = label;
+    return;
+  }
+  syncLabelTimer = setTimeout(() => {
+    syncLabelTimer = null;
+    syncLabel.value = currentSyncLabel.value;
+  }, SYNC_LABEL_DELAY_MS);
+}, { immediate: true });
 const stopSyncStatusListener = onAccountMessageSyncStatus(snapshot => { syncSnapshot.value = snapshot; });
 const filterMode = ref<"all" | "unread">("all");
 // Four 64px actions: pin, mute, hide, delete.
@@ -288,6 +305,7 @@ onActivated(() => {
   scheduleConversationWarmup();
 });
 onBeforeUnmount(() => {
+  if (syncLabelTimer) clearTimeout(syncLabelTimer);
   stopSyncStatusListener();
 });
 onDeactivated(() => {
