@@ -327,6 +327,12 @@ export default defineComponent({
       error.value = null;
       postType.value = type;
     }
+    // Opened as 新待办 / 新笔记 from elsewhere: preselect that type once.
+    watch(() => [ui.showPostEditor, ui.postEditorType] as const, ([shown, type]) => {
+      if (!shown || !type) return;
+      ui.postEditorType = null;
+      selectComposerType(type);
+    }, { immediate: true });
 
     // recipients selection state
     const allFriends = ref(false);
