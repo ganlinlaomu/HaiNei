@@ -13,6 +13,7 @@ import { migrateLegacyLocalStorage } from "@/services/legacyLocalStorageMigratio
 import { initTheme } from "@/services/theme";
 import { installChunkLoadRecovery } from "@/utils/chunkLoadRecovery";
 import { installRuntimeDiagnostics } from "@/services/runtimeDiagnostics";
+import { restoreWithWatchdog } from "@/utils/restoreWatchdog";
 
 let serviceWorkerRegistration: Promise<ServiceWorkerRegistration> | null = null;
 let serviceWorkerLoadListenerAttached = false;
@@ -106,7 +107,7 @@ async function bootstrap() {
   (async () => {
     const keys = useKeyStore();
     try {
-      await keys.restoreSession();
+      await restoreWithWatchdog(() => keys.restoreSession());
       startupMark("session_restored", { loggedIn: keys.isLoggedIn, unlocked: keys.isUnlocked });
     } catch (e) {
       console.error("[main] restoreSession failed", e);
