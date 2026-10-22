@@ -67,7 +67,7 @@ import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { preloadBottomTabViews } from "@/router/lazyViews";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useDirectMessagesStore } from "@/stores/directMessages";
-import { useCallStore } from "@/stores/call";
+import { loadCallEngine, useCallStore } from "@/stores/call";
 import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appBadge";
 import { installBackgroundLock } from "@/services/autoLock";
 import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
@@ -77,8 +77,9 @@ import { onAppResume } from "@/services/appResumeCoordinator";
 import { cancelBackgroundTask, installForegroundActivityMonitor, scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
-// Loaded only when a call starts or rings, so it never weighs on startup.
-const CallOverlay = defineAsyncComponent(() => import("@/components/CallOverlay.vue"));
+// Kept in a separate chunk, then warmed during foreground idle time.
+const loadCallOverlay = () => import("@/components/CallOverlay.vue");
+const CallOverlay = defineAsyncComponent(loadCallOverlay);
 
 export default defineComponent({
   components: { HeaderBar, ToastContainer, PostEditorModal, UpdateNotification, AndroidUpdateNotification, CallOverlay },
@@ -265,6 +266,11 @@ export default defineComponent({
       stopActivityMonitor = installForegroundActivityMonitor();
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked && keys.credentialMode !== "device",lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
+      // Incoming calls must never wait on first-use chunks. Warm both the
+      // signal handler and full-screen UI after the initial interaction work.
+      scheduleBackgroundTask("preload-call-ui", async () => {
+        await Promise.allSettled([loadCallEngine(), loadCallOverlay()]);
+      }, { priority: "idle", timeoutMs: 3_000 });
       stopForegroundResume = onAppResume(reason => {
         // Friendship authorization stays urgent. Bookmark reconciliation can
         // wait for foreground idle time so NIP-17 catch-up wins on app resume.
@@ -286,6 +292,7 @@ export default defineComponent({
       stopForegroundResume?.();
       stopActivityMonitor?.();
       cancelBackgroundTask("preload-post-editor");
+      cancelBackgroundTask("preload-call-ui");
       cancelBackgroundTask("preload-bottom-tabs");
       cancelBackgroundTask("foreground-bookmark-sync");
       cancelBackgroundTask("nearby-own-devices");

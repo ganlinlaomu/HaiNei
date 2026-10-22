@@ -24,17 +24,18 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@/nostr/messaging/service", async original => ({ ...(await original() as object), sendDirectMessage: mocks.send }));
 vi.mock("@/nostr/relays", () => ({ getRelaysFromStorage: () => ["wss://relay.test"] }));
-vi.mock("@/services/nearbyTransfer", () => ({ prepareNearbyRelaySession: mocks.relaySession }));
+vi.mock("@/services/nearbyTransfer", () => ({ refreshNearbyRelaySockets: mocks.relaySession }));
 vi.mock("@/services/relaySession", () => ({ turnIceServers: async () => [] }));
 vi.mock("@/stores/keys", () => ({ useKeyStore: () => ({ pkHex: ME, nip44Encrypt: vi.fn(), signEvent: vi.fn() }) }));
 vi.mock("@/stores/friendships", () => ({ useFriendshipsStore: () => ({ isAccepted: () => mocks.accepted }) }));
 vi.mock("trystero", () => ({
-  joinRoom: (config: any, id: string) => {
+  joinRoom: (config: any, id: string, callbacks?: any) => {
     if (mocks.joinError) throw mocks.joinError;
     const actions: Record<string, any> = {};
     const room = {
       config,
       id,
+      callbacks,
       actions,
       leave: vi.fn(async () => undefined),
       addStream: vi.fn(() => [Promise.resolve()]),
@@ -89,12 +90,14 @@ describe("call signaling", () => {
     expect(sw).toContain("event.data?.type === 'CLOSE_CALL_NOTIFICATION'");
   });
 
-  it("keeps call code out of startup: lazy engine and overlay", () => {
+  it("keeps call code chunked but warms the engine and overlay before the first call", () => {
     const app = readFileSync("src/App.vue", "utf8");
-    expect(app).toContain('defineAsyncComponent(() => import("@/components/CallOverlay.vue"))');
+    expect(app).toContain('const loadCallOverlay = () => import("@/components/CallOverlay.vue")');
+    expect(app).toContain('scheduleBackgroundTask("preload-call-ui"');
     expect(app).toContain(`<CallOverlay v-if="call.phase !== 'idle'" />`);
     expect(readFileSync("src/stores/call.ts", "utf8")).toContain('return import("@/services/callEngine");');
-    expect(readFileSync("src/services/accountMessageSync.ts", "utf8")).toContain("void loadCallEngine()");
+    expect(readFileSync("src/services/accountMessageSync.ts", "utf8")).toContain("await loadCallEngine()");
+    expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("z-index:200000");
   });
 });
 
@@ -161,6 +164,17 @@ describe("call engine", () => {
     await handleCallSignal(ME, FRIEND, { action: "accept", callId: CALL_ID }, now());
     expect(store).toMatchObject({ phase: "ended", endReason: "answered_elsewhere" });
     expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("does not ring for an invite that arrives after its cancellation", async () => {
+    const { handleCallSignal } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const callId = "5".repeat(32);
+
+    await handleCallSignal(FRIEND, ME, { action: "cancel", callId }, now());
+    await handleCallSignal(FRIEND, ME, { ...invite, callId }, now());
+
+    expect(useCallStore().phase).toBe("idle");
   });
 
   it("calls a friend over a one-time room and records a declined call", async () => {
@@ -240,6 +254,35 @@ describe("call engine", () => {
     await hangup();
   });
 
+  it("ignores a late decline or busy signal after another device connected", async () => {
+    const { handleCallSignal, hangup, startCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    await startCall(FRIEND);
+    const store = useCallStore();
+    const callId = store.callId;
+    const joined = mocks.rooms[0];
+    joined.onPeerJoin("answering-device");
+    joined.onPeerStream({} as MediaStream, "answering-device");
+    expect(store.phase).toBe("active");
+
+    await handleCallSignal(FRIEND, ME, { action: "reject", callId }, now());
+    await handleCallSignal(FRIEND, ME, { action: "busy", callId }, now());
+
+    expect(store).toMatchObject({ phase: "active", callId });
+    await hangup();
+  });
+
+  it("stops another device ringing when the accepting device already ended", async () => {
+    const { handleCallSignal } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const callId = "6".repeat(32);
+    await handleCallSignal(FRIEND, ME, { ...invite, callId }, now());
+
+    await handleCallSignal(ME, FRIEND, { action: "end", callId, durationSeconds: 0 }, now());
+
+    expect(useCallStore()).toMatchObject({ phase: "ended", endReason: "answered_elsewhere" });
+  });
+
   it("does not join or signal after the call is cancelled during relay preparation", async () => {
     let releaseRelay: (() => void) | undefined;
     mocks.relaySession.mockImplementationOnce(() => new Promise<void>(resolve => { releaseRelay = resolve; }));
@@ -255,6 +298,80 @@ describe("call engine", () => {
     expect(useCallStore()).toMatchObject({ phase: "ended", endReason: "cancelled" });
     expect(mocks.rooms).toHaveLength(0);
     expect(sentActions()).toEqual(["cancel", "📞 语音通话 · 未接听"]);
+  });
+
+  it("stops a microphone stream that arrives after the caller already cancelled", async () => {
+    let resolveMicrophone: ((stream: any) => void) | undefined;
+    const stop = vi.fn();
+    (navigator.mediaDevices.getUserMedia as any).mockImplementationOnce(() => new Promise(resolve => {
+      resolveMicrophone = resolve;
+    }));
+    const { hangup, startCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+
+    const starting = startCall(FRIEND);
+    expect(useCallStore().phase).toBe("outgoing");
+    await hangup();
+    resolveMicrophone?.({ getTracks: () => [{ stop }], getAudioTracks: () => [] });
+    await starting;
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(mocks.rooms).toHaveLength(0);
+    expect(useCallStore()).toMatchObject({ phase: "ended", endReason: "cancelled" });
+  });
+
+  it("stops a late microphone stream when an accepted call is hung up while permission is pending", async () => {
+    let resolveMicrophone: ((stream: any) => void) | undefined;
+    const stop = vi.fn();
+    (navigator.mediaDevices.getUserMedia as any).mockImplementationOnce(() => new Promise(resolve => {
+      resolveMicrophone = resolve;
+    }));
+    const { acceptCall, handleCallSignal, hangup } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    await handleCallSignal(FRIEND, ME, { ...invite, callId: "4".repeat(32) }, now());
+
+    const accepting = acceptCall();
+    expect(useCallStore().phase).toBe("connecting");
+    await hangup();
+    resolveMicrophone?.({ getTracks: () => [{ stop }], getAudioTracks: () => [] });
+    await accepting;
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(mocks.rooms).toHaveLength(0);
+    expect(useCallStore()).toMatchObject({ phase: "ended", endReason: "hangup" });
+  });
+
+  it("isolates a new call from callbacks and teardown belonging to the previous room", async () => {
+    const firstStop = vi.fn();
+    const secondStop = vi.fn();
+    (navigator.mediaDevices.getUserMedia as any)
+      .mockResolvedValueOnce({ getTracks: () => [{ stop: firstStop }], getAudioTracks: () => [] })
+      .mockResolvedValueOnce({ getTracks: () => [{ stop: secondStop }], getAudioTracks: () => [] });
+    const { hangup, startCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const store = useCallStore();
+
+    await startCall(FRIEND);
+    const firstRoom = mocks.rooms[0];
+    firstRoom.onPeerJoin("first-peer");
+    firstRoom.onPeerStream({} as MediaStream, "first-peer");
+    const staleStream = firstRoom.onPeerStream;
+    const staleLeave = firstRoom.onPeerLeave;
+    const staleTaken = firstRoom.actions.taken.onMessage;
+    await hangup();
+    expect(firstStop).toHaveBeenCalledOnce();
+
+    store.reset();
+    await startCall(FRIEND);
+    const secondCallId = store.callId;
+    staleStream({} as MediaStream, "first-peer");
+    staleLeave("first-peer");
+    await staleTaken(true, { peerId: "first-peer" });
+
+    expect(store).toMatchObject({ phase: "outgoing", callId: secondCallId });
+    expect(secondStop).not.toHaveBeenCalled();
+    await hangup();
+    expect(secondStop).toHaveBeenCalledOnce();
   });
 
   it("cleans up the microphone when creating the Trystero room fails", async () => {

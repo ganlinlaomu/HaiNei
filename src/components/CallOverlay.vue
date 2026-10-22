@@ -8,11 +8,11 @@
 
     <div class="call-actions">
       <template v-if="call.phase === 'incoming'">
-        <button class="call-button decline" type="button" aria-label="拒绝" @click="decline">
+        <button class="call-button decline" type="button" aria-label="拒绝" :disabled="acting" @click="decline">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
           <span>拒绝</span>
         </button>
-        <button class="call-button accept" type="button" aria-label="接听" @click="accept">
+        <button class="call-button accept" type="button" aria-label="接听" :disabled="acting" @click="accept">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
           <span>接听</span>
         </button>
@@ -22,7 +22,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/><path v-if="call.muted" d="M4 4l16 16"/></svg>
           <span>{{ call.muted ? "已静音" : "静音" }}</span>
         </button>
-        <button class="call-button decline" type="button" aria-label="挂断" @click="hangup">
+        <button class="call-button decline" type="button" aria-label="挂断" :disabled="acting" @click="hangup">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
           <span>{{ call.phase === "outgoing" ? "取消" : "挂断" }}</span>
         </button>
@@ -42,6 +42,7 @@ import { useFriendsStore } from "@/stores/friends";
 const call = useCallStore();
 const profiles = useProfilesStore();
 const friends = useFriendsStore();
+const acting = ref(false);
 const now = ref(Date.now());
 const ticker = setInterval(() => { now.value = Date.now(); }, 1_000);
 onBeforeUnmount(() => clearInterval(ticker));
@@ -73,14 +74,21 @@ const status = computed(() => {
   }
 });
 
-async function accept() { await (await loadCallEngine()).acceptCall(); }
-async function decline() { await (await loadCallEngine()).declineCall(); }
-async function hangup() { await (await loadCallEngine()).hangup(); }
+async function once(run: (engine: Awaited<ReturnType<typeof loadCallEngine>>) => Promise<void>) {
+  if (acting.value) return;
+  acting.value = true;
+  try { await run(await loadCallEngine()); }
+  finally { acting.value = false; }
+}
+
+async function accept() { await once(engine => engine.acceptCall()); }
+async function decline() { await once(engine => engine.declineCall()); }
+async function hangup() { await once(engine => engine.hangup()); }
 async function mute() { (await loadCallEngine()).toggleMute(); }
 </script>
 
 <style scoped>
-.call-overlay{position:fixed;inset:0;z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:calc(env(safe-area-inset-top) + 72px) 24px calc(env(safe-area-inset-bottom) + 48px);background:linear-gradient(180deg,#1e293b,#0f172a);color:#f8fafc}
+.call-overlay{position:fixed;inset:0;z-index:200000;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:calc(env(safe-area-inset-top) + 72px) 24px calc(env(safe-area-inset-bottom) + 48px);background:linear-gradient(180deg,#1e293b,#0f172a);color:#f8fafc}
 .call-peer{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center}
 .call-name{max-width:80vw;overflow:hidden;font-size:24px;text-overflow:ellipsis;white-space:nowrap}
 .call-status{color:#cbd5e1;font-size:16px;font-variant-numeric:tabular-nums}
