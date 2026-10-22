@@ -58,6 +58,31 @@ describe("relay reconnect", () => {
     expect(MockWebSocket.instances).toHaveLength(1);
   });
 
+  it("reconnects when a subscription arrives after a failed connect left no retry", async () => {
+    // Device log: the managed relay failed (slow network) before anything
+    // subscribed, so no retry was scheduled; later REQs only queued and the
+    // relay stayed offline for the rest of the session.
+    vi.useFakeTimers();
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: MockWebSocket });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, addEventListener: vi.fn() } });
+    const { inspectRelays, subscribe, warmRelays } = await import("@/nostr/relays");
+    warmRelays(["wss://idle.test"]);
+    MockWebSocket.instances[0].emit("close", {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(inspectRelays()["wss://idle.test"].retryAt).toBeNull();
+
+    const subscription = subscribe(["wss://idle.test"], [{ kinds: [1059] }]);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    MockWebSocket.instances[1].emit("open", {});
+    expect(MockWebSocket.instances[1].sent.some(frame => JSON.parse(frame)[0] === "REQ")).toBe(true);
+    // An already-connecting relay is not opened twice by more demand.
+    subscribe(["wss://idle.test"], [{ kinds: [1] }]).unsub();
+    expect(MockWebSocket.instances).toHaveLength(2);
+    subscription.unsub();
+  });
+
   it("foreground restores a failed relay without duplicate sockets or losing subscriptions", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0.5);

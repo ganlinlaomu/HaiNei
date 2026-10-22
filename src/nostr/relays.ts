@@ -120,6 +120,21 @@ function hasRelayDemand(conn: RelayConn) {
   return conn.subs.size > 0 || conn.activePublishes > 0 || conn.okHandlers.size > 0;
 }
 
+/**
+ * A failed connect with no demand at that moment schedules no retry (see
+ * scheduleReconnect). Demand added later only queued its frames, so the relay
+ * stayed disconnected for the rest of the session. Reconnect when new demand
+ * finds the socket closed and nothing pending.
+ */
+function wakeForDemand(conn: RelayConn) {
+  if (conn.ready || conn.connecting || conn.reconnectTimer || conn.ws?.readyState === 0 || conn.ws?.readyState === 1) return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  debugLog("relay", "relay_woken_by_demand", { relay: conn.url }, "info");
+  conn.retryAt = null;
+  conn.shouldReconnect = true;
+  conn.connect();
+}
+
 function cancelRelayIdleTimer(conn: RelayConn) {
   if (conn.idleTimer !== null) clearTimeout(conn.idleTimer);
   conn.idleTimer = null;
@@ -725,6 +740,7 @@ export function subscribe(relays: string[], filtersArray: any[]) {
     updateRelayIdleLease(conn);
     debugLog("subscription", "subscription_created", subscriptionDiagnostic(conn, subId, filters), "info");
     sendRaw(conn, ["REQ", subId, ...filters]);
+    wakeForDemand(conn);
     const timer = setTimeout(() => {
       settleSubscription(conn, subId, "failure", "timeout");
     }, EOSE_TIMEOUT);
@@ -831,6 +847,7 @@ export async function publish(relays: string[], event: any): Promise<Array<{ rel
     const conn = ensureRelayConn(url);
     conn.activePublishes++;
     updateRelayIdleLease(conn);
+    wakeForDemand(conn);
     const diagnostic = eventDiagnostic(conn, event);
     const id = event.id || Math.random().toString(36).slice(2, 10);
     let confirmationTimer: ReturnType<typeof setTimeout> | null = null;

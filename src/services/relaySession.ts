@@ -180,6 +180,17 @@ export async function getManagedRelayConfig(force = false): Promise<ManagedRelay
 export async function getManagedRelaySessionForUrl(url: string, force = false): Promise<ManagedRelaySession | null> {
   const normalizedUrl = normalizeRelayUrl(url);
   if (!normalizedUrl) return null;
+  // A saved session for the relay last configured as managed is enough to
+  // connect. Fetching the config first cost a worker round trip on every
+  // start, and on a slow network its 3 s timeout kept the relay offline.
+  if (
+    !force && identity && usable(sessionCache)
+    && sessionCache?.pubkey === identity.pubkey && sessionCache.relayUrl === normalizedUrl
+    && managedRelayUrlFromCache() === normalizedUrl
+  ) {
+    void getManagedRelayConfig().catch(() => undefined);
+    return sessionCache;
+  }
   const config = await getManagedRelayConfig();
   if (!config.enabled || config.relayUrl !== normalizedUrl) return null;
   if (!identity) throw new Error("relay_session_identity_unavailable");
