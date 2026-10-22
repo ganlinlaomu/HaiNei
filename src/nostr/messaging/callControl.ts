@@ -15,8 +15,9 @@ export const CALL_MISSED_TYPE = "hainei-call-missed";
 /** An invite older than this rings no more: it is recorded as missed. */
 export const CALL_RING_WINDOW_SECONDS = 60;
 
-export type CallAction = "invite" | "accept" | "reject" | "busy" | "cancel" | "end";
-const ACTIONS = new Set<CallAction>(["invite", "accept", "reject", "busy", "cancel", "end"]);
+// ringing: the callee's device is ringing (caller shows 对方响铃中 instead of 正在呼叫).
+export type CallAction = "invite" | "ringing" | "accept" | "reject" | "busy" | "cancel" | "end";
+const ACTIONS = new Set<CallAction>(["invite", "ringing", "accept", "reject", "busy", "cancel", "end"]);
 const CALL_ID = /^[0-9a-f]{32}$/;
 const ROOM = /^[0-9a-f]{32}$/;
 const SECRET = /^[0-9a-f]{64}$/;

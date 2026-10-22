@@ -21,6 +21,12 @@ export const useCallStore = defineStore("call", () => {
   const connectedAt = ref(0);
   const muted = ref(false);
   const endReason = ref<CallEndReason | null>(null);
+  /** Outgoing: a callee device confirmed it is ringing. */
+  const remoteRinging = ref(false);
+  /** Active call lost its peer and is trying to reconnect. */
+  const reconnecting = ref(false);
+  /** Recent network quality from WebRTC stats. */
+  const quality = ref<"good" | "poor">("good");
   /** Calls already handled, so relay duplicates or a late invite after cancel never ring twice. */
   const seen = new Set<string>();
 
@@ -32,6 +38,9 @@ export const useCallStore = defineStore("call", () => {
     connectedAt.value = 0;
     muted.value = false;
     endReason.value = null;
+    remoteRinging.value = false;
+    reconnecting.value = false;
+    quality.value = "good";
   }
 
   function markSeen(id: string) {
@@ -39,7 +48,7 @@ export const useCallStore = defineStore("call", () => {
     if (seen.size > 200) seen.delete(seen.values().next().value!);
   }
 
-  return { phase, peer, callId, direction, invite, connectedAt, muted, endReason, seen, reset, markSeen };
+  return { phase, peer, callId, direction, invite, connectedAt, muted, endReason, remoteRinging, reconnecting, quality, seen, reset, markSeen };
 });
 
 /** Lazily load the call engine (WebRTC, Trystero, media). */

@@ -7,6 +7,7 @@ import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
 import { debugLog, startupMark } from "@/utils/debugLog";
+import { sharedAudioContext } from "@/utils/audioUnlock";
 import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
@@ -21,7 +22,12 @@ import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/messageRouting";
 const CALL_APP_ID = "hainei-call-v1";
 const RING_TIMEOUT_MS = 45_000;
 const CONNECT_TIMEOUT_MS = 25_000;
-const PEER_LOSS_GRACE_MS = 8_000;
+// A network switch (Wi-Fi <-> cellular) drops the peer; Trystero re-discovers
+// it through the relays. Show 重新连接中 and wait this long before ending.
+const PEER_LOSS_GRACE_MS = 20_000;
+const STATS_INTERVAL_MS = 4_000;
+// Long enough to tap 重拨 / 回拨 on the ended screen.
+const ENDED_SCREEN_MS = 4_000;
 const STUN: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }];
 
 // Trystero 0.26: handlers are assigned properties, actions are objects.
@@ -41,6 +47,9 @@ type CallSession = {
   peerLossTimer: ReturnType<typeof setTimeout> | null;
   ringtone: { stop(): void } | null;
   wakeLock: { release(): Promise<void> } | null;
+  statsTimer: ReturnType<typeof setInterval> | null;
+  /** Connection summary for the call's diagnostics. */
+  quality: { route: string; rttMs: number; lost: number; received: number; poorSamples: number; samples: number };
 };
 
 let activeSession: CallSession | null = null;
@@ -53,6 +62,7 @@ function createSession(id: string, peer: string, direction: CallDirection): Call
   const session: CallSession = {
     id, peer, direction, owner: account(), room: null, localStream: null, remoteAudio: null,
     mediaPeer: "", timers: new Set(), peerLossTimer: null, ringtone: null, wakeLock: null,
+    statsTimer: null, quality: { route: "", rttMs: 0, lost: 0, received: 0, poorSamples: 0, samples: 0 },
   };
   activeSession = session;
   return session;
@@ -81,6 +91,51 @@ function clearTimers(session: CallSession) {
   session.timers.clear();
   if (session.peerLossTimer) clearTimeout(session.peerLossTimer);
   session.peerLossTimer = null;
+  if (session.statsTimer) clearInterval(session.statsTimer);
+  session.statsTimer = null;
+}
+
+/**
+ * Sample WebRTC stats while connected: the route (direct vs TURN relay),
+ * round-trip time and packet loss. Flags 网络不佳 in the call screen and
+ * leaves a summary in the call's diagnostics.
+ */
+function startQualitySampling(session: CallSession, room: Room) {
+  if (session.statsTimer) return;
+  let lastLost = 0;
+  let lastReceived = 0;
+  session.statsTimer = setInterval(async () => {
+    const store = useCallStore();
+    if (!isCurrent(session)) return;
+    const connection = room.getPeers()[session.mediaPeer];
+    if (!connection) return;
+    try {
+      const report: any = await connection.getStats();
+      let pair: any = null;
+      let inbound: any = null;
+      report.forEach((entry: any) => {
+        if (entry.type === "candidate-pair" && entry.state === "succeeded" && (entry.nominated || entry.selected)) pair = entry;
+        if (entry.type === "inbound-rtp" && entry.kind === "audio") inbound = entry;
+      });
+      const rttMs = pair?.currentRoundTripTime ? Math.round(pair.currentRoundTripTime * 1000) : 0;
+      const local = pair ? report.get(pair.localCandidateId)?.candidateType || "" : "";
+      const remote = pair ? report.get(pair.remoteCandidateId)?.candidateType || "" : "";
+      const route = local === "relay" || remote === "relay" ? "relay" : local ? "direct" : "";
+      if (route && !session.quality.route) startupMark("call_route", { route, local, remote, rttMs });
+      if (route) session.quality.route = route;
+      const lost = Math.max(0, (inbound?.packetsLost || 0) - lastLost);
+      const received = Math.max(0, (inbound?.packetsReceived || 0) - lastReceived);
+      lastLost = inbound?.packetsLost || 0;
+      lastReceived = inbound?.packetsReceived || 0;
+      const lossPct = lost + received ? (lost / (lost + received)) * 100 : 0;
+      const poor = lossPct > 5 || rttMs > 400 || (inbound?.jitter || 0) > 0.06;
+      Object.assign(session.quality, {
+        rttMs: rttMs || session.quality.rttMs, lost: session.quality.lost + lost, received: session.quality.received + received,
+        poorSamples: session.quality.poorSamples + Number(poor), samples: session.quality.samples + 1,
+      });
+      store.quality = poor ? "poor" : "good";
+    } catch { /* stats unavailable this round */ }
+  }, STATS_INTERVAL_MS);
 }
 
 function closeCallNotification() {
@@ -145,10 +200,19 @@ function recordCall(session: CallSession, reason: CallEndReason, durationSeconds
 
 function startTone(session: CallSession, kind: "ring" | "ringback") {
   stopTone(session);
+  // Android: vibrate with the ring (iOS web has no vibration).
+  let vibration: ReturnType<typeof setInterval> | null = null;
+  if (kind === "ring" && typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+    navigator.vibrate([400, 200, 400]);
+    vibration = setInterval(() => navigator.vibrate?.([400, 200, 400]), 2_000);
+  }
   try {
+    // The shared context was unlocked by an earlier tap; a fresh one created
+    // now (no gesture) would stay silent on iOS.
+    const shared = sharedAudioContext();
     const Context = (window as any).AudioContext || (window as any).webkitAudioContext;
-    if (!Context) return;
-    const context: AudioContext = new Context();
+    const context: AudioContext | null = shared || (Context ? new Context() : null);
+    if (!context) throw new Error("no_audio");
     void context.resume?.().catch(() => undefined);
     const gain = context.createGain();
     gain.gain.value = 0;
@@ -158,16 +222,22 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
     oscillator.connect(gain);
     oscillator.start();
     // Ring: two short bursts every 2 s. Ringback: 1 s on, 3 s off.
-    let on = false;
     let step = 0;
     const interval = setInterval(() => {
       step = (step + 1) % (kind === "ring" ? 8 : 16);
-      on = kind === "ring" ? step === 0 || step === 2 : step < 4;
+      const on = kind === "ring" ? step === 0 || step === 2 : step < 4;
       gain.gain.setTargetAtTime(on ? 0.12 : 0, context.currentTime, 0.01);
     }, 250);
-    session.ringtone = { stop() { clearInterval(interval); try { oscillator.stop(); void context.close(); } catch { /* closed */ } } };
+    session.ringtone = { stop() {
+      clearInterval(interval);
+      if (vibration) { clearInterval(vibration); navigator.vibrate?.(0); }
+      try { oscillator.stop(); oscillator.disconnect(); gain.disconnect(); } catch { /* stopped */ }
+      // Never close the shared context: later calls ring through it.
+      if (context !== shared) void context.close().catch(() => undefined);
+    } };
+    if (context.state !== "running") startupMark("call_ring_audio_locked", { kind, state: context.state });
   } catch {
-    // Autoplay may be blocked until a tap (iOS); the call screen still shows.
+    session.ringtone = vibration ? { stop() { clearInterval(vibration!); navigator.vibrate?.(0); } } : null;
   }
 }
 
@@ -274,6 +344,8 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
         clearTimeout(session.peerLossTimer);
         session.peerLossTimer = null;
         session.mediaPeer = peerId;
+        store.reconnecting = false;
+        startupMark("call_reconnected", { newPeer: true });
         addLocalStream(peerId);
         return;
       }
@@ -285,17 +357,24 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
       return;
     }
     session.mediaPeer = peerId;
-    if (session.peerLossTimer) { clearTimeout(session.peerLossTimer); session.peerLossTimer = null; }
+    if (session.peerLossTimer) {
+      clearTimeout(session.peerLossTimer);
+      session.peerLossTimer = null;
+      store.reconnecting = false;
+      startupMark("call_reconnected", { newPeer: false });
+    }
     addLocalStream(peerId);
   };
   currentRoom.onPeerStream = (stream, peerId) => {
     if (!active() || peerId !== session.mediaPeer) return;
     playRemote(session, stream);
     stopTone(session);
+    store.reconnecting = false;
     if (store.phase !== "active") {
       store.phase = "active";
       store.connectedAt = Date.now();
       startupMark("call_connected", { direction: session.direction });
+      startQualitySampling(session, currentRoom);
     }
   };
   currentRoom.onPeerLeave = peerId => {
@@ -304,7 +383,11 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
       session.mediaPeer = "";
       return;
     }
-    // A brief network switch can drop and rejoin; give it a moment.
+    // A brief network switch can drop and rejoin; give it a moment, and
+    // re-check our relay sockets so the peer can be re-discovered.
+    store.reconnecting = true;
+    startupMark("call_peer_lost", {});
+    void refreshNearbyRelaySockets().catch(() => 0);
     if (session.peerLossTimer) clearTimeout(session.peerLossTimer);
     session.peerLossTimer = setTimeout(() => {
       session.peerLossTimer = null;
@@ -377,10 +460,15 @@ async function finish(session: CallSession, reason: CallEndReason, notify: boole
     sendSignalBestEffort(peer, { action, callId: id, ...(action === "end" ? { durationSeconds: duration } : {}) });
   }
   if (peer && options.log !== false) recordCall(session, reason, duration);
-  startupMark("call_ended", { reason, durationSeconds: duration, direction: session.direction });
+  const q = session.quality;
+  startupMark("call_ended", {
+    reason, durationSeconds: duration, direction: session.direction,
+    route: q.route, rttMs: q.rttMs, lossPct: q.lost + q.received ? Math.round((q.lost / (q.lost + q.received)) * 1000) / 10 : 0,
+    poorPct: q.samples ? Math.round((q.poorSamples / q.samples) * 100) : 0,
+  });
   await releasing;
   // Leave the outcome on screen briefly, then close the overlay.
-  setTimeout(() => { if (useCallStore().callId === id && useCallStore().phase === "ended") useCallStore().reset(); }, 1_800);
+  setTimeout(() => { if (useCallStore().callId === id && useCallStore().phase === "ended") useCallStore().reset(); }, ENDED_SCREEN_MS);
 }
 
 export async function startCall(peerPubkey: string) {
@@ -519,6 +607,8 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     store.invite = { room: signal.room!, secret: signal.secret! };
     const session = createSession(signal.callId, peer, "incoming");
     startTone(session, "ring");
+    // Tell the caller this device is ringing (对方响铃中).
+    sendSignalBestEffort(peer, { action: "ringing", callId: signal.callId });
     later(session, RING_TIMEOUT_MS, () => { if (store.phase === "incoming") void finish(session, "no_answer", false); });
     return;
   }
@@ -536,6 +626,12 @@ export async function handleCallSignal(sender: string, recipient: string, signal
       signal.action === "accept" || signal.action === "reject" || signal.action === "busy" || signal.action === "end"
     )) {
       await finish(session, "answered_elsewhere", false);
+    }
+    return;
+  }
+  if (signal.action === "ringing") {
+    if (session.direction === "outgoing" && store.phase === "outgoing" && !store.remoteRinging) {
+      store.remoteRinging = true;
     }
     return;
   }
