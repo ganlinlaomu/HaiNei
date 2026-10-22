@@ -33,3 +33,14 @@ describe("startup timing marks", () => {
     }
   });
 });
+
+describe("startup step timing", () => {
+  it("times local account stores, the DM refresh and the deferred nearby join", () => {
+    const keys = readFileSync("src/stores/keys.ts", "utf8");
+    expect(keys).toContain('startupMark("account_stores_loaded"');
+    expect(keys).toContain('startupMark("dm_refresh"');
+    const app = readFileSync("src/App.vue", "utf8");
+    // The transfer room waits until the startup message restore has finished.
+    expect(app.indexOf("await waitForStartupMessages();")).toBeLessThan(app.indexOf('await import("@/services/nearbySession")'));
+  });
+});

@@ -163,6 +163,35 @@ describe("opt-in disappearing NIP-17", () => {
     expect((await repo.list(receiver)).length).toBe(25 - temporary.length);
   });
 
+  it("indexes expiry once, then purges by index instead of decrypting history", async () => {
+    const repo = repository();
+    const now = Date.now();
+    const ids: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const message = (await nip17Adapter.encode!({
+        recipientPubkeys: [receiver], plaintext: `m${i}`, tags: [["t", "hainei-dm"]],
+        ...(i < 2 ? { burnAfterSeconds: 30 } : {}),
+      }, context)).message;
+      await repo.insertMessageIfAbsent(receiver, message);
+      ids.push(message.id);
+    }
+    const db = (repo as any).database as HaiNeiDatabase;
+    // New rows carry the expiry outside the sealed tags.
+    expect((await db.syncedMessages.get([receiver, ids[0]]))?.disappearingExpiresAt).toBeGreaterThan(Math.floor(now / 1000));
+    expect((await db.syncedMessages.get([receiver, ids[3]]))?.disappearingExpiresAt).toBeUndefined();
+    // A row stored before the index existed.
+    await db.syncedMessages.update([receiver, ids[1]], { disappearingExpiresAt: undefined });
+
+    expect(await repo.purgeExpiredDisappearing(receiver, now)).toBe(0);
+    expect((await db.syncedMessages.get([receiver, ids[1]]))?.disappearingExpiresAt).toBeGreaterThan(0);
+
+    // Indexed from now on: no full scan, and both temporary messages expire.
+    const scan = vi.spyOn(db.syncedMessages, "where");
+    expect(await repo.purgeExpiredDisappearing(receiver, now + 49 * 3600 * 1000)).toBe(2);
+    expect(scan.mock.calls.map(call => call[0])).not.toContain("[accountPubkey+id]");
+    expect((await repo.list(receiver)).map(item => item.id).sort()).toEqual(ids.slice(2).sort());
+  });
+
   it("sender independently destroys a read temporary message at the peer's durable deadline", async () => {
     const repo = repository();
     const temporary = (await nip17Adapter.encode!({

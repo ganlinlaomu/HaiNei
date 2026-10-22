@@ -196,13 +196,20 @@ export const useKeyStore = defineStore("keys", {
       // Local-first phase: finish the local IndexedDB/vault restore before
       // returning to Login.vue. Do not make navigation wait for Worker/network
       // account-state restoration.
+      const storesStarted = Date.now();
+      const storeMs: Record<string, number> = {};
       await Promise.all(accountLoads.map(async ([label, load]) => {
+        const started = Date.now();
         try {
           await load();
         } catch (e) {
           console.error(`[account] ${label} load failed account=${account}`, e);
+        } finally {
+          storeMs[label] = Date.now() - started;
         }
       }));
+      // Home waits for all of these; shows which local store holds it back.
+      startupMark("account_stores_loaded", { durationMs: Date.now() - storesStarted, ...storeMs });
       if (!isCurrent()) return;
       this.accountStoresReadyFor = pk;
       // Start note sync independently; never delay DM read-state recovery or first paint.
@@ -237,7 +244,10 @@ export const useKeyStore = defineStore("keys", {
       }
 
       const directMessages = useDirectMessagesStore();
+      const dmRefreshStarted = Date.now();
       await directMessages.refresh(pk);
+      // Message sync (and the push inbox) start only after this.
+      startupMark("dm_refresh", { durationMs: Date.now() - dmRefreshStarted });
       if (!isCurrent()) return;
       // Start message sync now so messages already delivered by Push (stored
       // encrypted by the service worker) appear without waiting for the Worker

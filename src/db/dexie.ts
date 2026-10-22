@@ -3,8 +3,8 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.101";
-export const DB_VERSION = 22;
+export const APP_VERSION = "0.1.102";
+export const DB_VERSION = 23;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -78,6 +78,12 @@ export type SyncedMessageRecord = {
   tags?: string[][];
   firstSeenAt: number;
   lastSeenAt: number;
+  /**
+   * Unix seconds a disappearing message expires (0 when its metadata is
+   * malformed). Kept outside the sealed tags so the burn purge can use an
+   * index instead of decrypting every stored message.
+   */
+  disappearingExpiresAt?: number;
 };
 
 export type ConversationStateRecord = {
@@ -768,6 +774,12 @@ export class HaiNeiDatabase extends Dexie {
 
     this.version(22).stores({
       seenGiftWraps: "[accountPubkey+id], accountPubkey, [accountPubkey+createdAt]"
+    });
+
+    // Existing rows get disappearingExpiresAt from the purge's one-time scan
+    // (tags are sealed and cannot be read during the schema upgrade).
+    this.version(23).stores({
+      syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+conversationId+createdAt+id], [accountPubkey+createdAt+id], [accountPubkey+conversationId+messageClass+createdAt+id], [accountPubkey+createdAt], [accountPubkey+senderPubkey], *transportEventIds, [accountPubkey+disappearingExpiresAt]"
     });
 
 
