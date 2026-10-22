@@ -46,6 +46,11 @@ export type AccountMessageSyncSnapshot = {
   relay: "idle" | "connecting" | "connected" | "offline";
   live: "idle" | "subscribing" | "active";
   catchup: "idle" | "running" | "pending" | "settled" | "error";
+  /**
+   * The managed relay finished this pass's catch-up; slower relays may still
+   * be paging in the background. Reset when a new pass starts.
+   */
+  preferredCaughtUp?: boolean;
 };
 
 /** What the conversation list title shows: 连接中… / 同步中… / nothing. */
@@ -54,7 +59,9 @@ export type MessageSyncPhase = "connecting" | "syncing" | "idle";
 export function messageSyncPhase(snapshot: AccountMessageSyncSnapshot, startupHydrating: boolean): MessageSyncPhase {
   if (snapshot.status === "connecting") return "connecting";
   if (snapshot.status === "offline" && snapshot.relay !== "connected") return "connecting";
-  if (snapshot.status === "catching-up" || snapshot.catchup === "running") return "syncing";
+  // Once the managed relay is caught up the list is current; a slow secondary
+  // relay finishing in the background used to keep "同步中…" up for seconds.
+  if (snapshot.status === "catching-up" || snapshot.catchup === "running") return snapshot.preferredCaughtUp ? "idle" : "syncing";
   // Startup history that is still paging in keeps the unread count provisional.
   if (snapshot.catchup === "pending" && startupHydrating) return "syncing";
   return "idle";
@@ -488,6 +495,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
       receivedSinceRelay: managedReceivedSinceRelay,
       negentropyRelays: negentropyCapableRelays,
       onPreferredRelayCaughtUp: () => {
+        if (isCurrent()) setAccountMessageSyncStatus(account, accountSyncSnapshot.status, { preferredCaughtUp: true });
         if (!isCurrent() || directMessages.historyHydrationPhase !== "hydrating") return;
         clearStartupUnreadGraceTimer();
         settleStartupUnread("live");
@@ -500,6 +508,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
       onStatus: status => {
         if (!isCurrent()) return;
         setAccountMessageSyncStatus(account, status, {
+          ...(status === "catching-up" ? { preferredCaughtUp: false } : {}),
           live: status === "connecting" ? "subscribing" : status === "live" || status === "catching-up" ? "active" : "idle",
           catchup: status === "catching-up" ? "running" : status === "error" ? "error" : accountSyncSnapshot.catchup,
         });
