@@ -34,7 +34,10 @@ export const useUIStore = defineStore("ui", () => {
   const showNewConversation = ref(false);
   const blockingOverlays = ref(new Set<string>());
 
-  function openPostEditor() {
+  /** Composer type to preselect on the next open (e.g. 新待办 from the to-do bar). */
+  const postEditorType = ref<"post" | "note" | "todo" | null>(null);
+  function openPostEditor(type?: "post" | "note" | "todo") {
+    postEditorType.value = type || null;
     showPostEditor.value = true;
   }
 
@@ -63,6 +66,7 @@ export const useUIStore = defineStore("ui", () => {
     removeToast,
     showPostEditor,
     openPostEditor,
+    postEditorType,
     closePostEditor,
     showNewConversation,
     openNewConversation,

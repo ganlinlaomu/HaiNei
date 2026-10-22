@@ -30,6 +30,8 @@
     </div>
 
 
+    <HomeTodoBar :tasks="privateTodos" />
+
     <div ref="feedElement" class="feed">
       <div v-if="!isInitialLoad && displayedMessages.length === 0" class="empty-feed">
         <template v-if="acceptedFriends.length === 0">
@@ -79,6 +81,7 @@ import { onAppResume } from "@/services/appResumeCoordinator";
 import PostCard from "@/components/PostCard.vue";
 import PrivateNoteCard from "@/components/PrivateNoteCard.vue";
 import { usePrivateFeedCards } from "@/composables/usePrivateFeedCards";
+import HomeTodoBar from "@/components/HomeTodoBar.vue";
 import { useRoute, useRouter } from "vue-router";
 import { usePullToRefresh } from "@/components/usePullToRefresh";
 import { getLastSeenCreatedAt, updateLastSeenToNewest } from "@/utils/lastSeen";
@@ -113,7 +116,7 @@ function compareHomeMessages(a: { id: string; created_at?: number }, b: { id: st
 
 export default defineComponent({
   name: "Home",
-  components: { PostCard, PrivateNoteCard },
+  components: { PostCard, PrivateNoteCard, HomeTodoBar },
   setup() {
     const friends = useFriendsStore();
     const friendships = useFriendshipsStore();
@@ -136,7 +139,7 @@ export default defineComponent({
     let historyCursor: {createdAt:number;id:string} | undefined;
     const historyExhausted = ref(false);
     // The owner's own notes and open to-dos, visible to nobody else.
-    const { cards: privateCards, revision: privateCardsRevision } = usePrivateFeedCards(() => applyPrivateCards());
+    const { cards: privateCards, todos: privateTodos, revision: privateCardsRevision } = usePrivateFeedCards(() => applyPrivateCards());
     const visibleInbox = () => [
       ...[...new Map([...storedHistory.value,...msgs.inbox].map(m=>[m.id,m])).values()].filter(message => isHomeRenderable(message) && feedPreferences.isVisible(message)),
       ...privateCards.value,
@@ -958,6 +961,7 @@ async function safeUpdateLocalRefs() {
       loadMoreSentinel,
       autoLoadSupported,
       virtualMessages,
+      privateTodos,
       topSpacerHeight,
       bottomSpacerHeight,
       feedElement,
