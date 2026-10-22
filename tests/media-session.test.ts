@@ -63,9 +63,8 @@ describe("HaiNei Worker media sessions", () => {
   });
 
   function queueSession(pubkey: string, token: string, expiresAt = 1_893_459_600) {
-    fetchMock
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "c".repeat(64), expiresAt: 1_893_456_300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ token, pubkey, scope: "upload", expiresAt }), { status: 201 }));
+    // Single-trip auth: the signed request goes straight to the session endpoint.
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ token, pubkey, scope: "upload", expiresAt }), { status: 201 }));
   }
 
   it("creates a fresh single-use Worker session for each upload", async () => {
@@ -76,13 +75,13 @@ describe("HaiNei Worker media sessions", () => {
     const second = await getMediaSession("https://media.example", A, sign);
     expect(second.token).toBe("imgbed_upload_two");
     expect(second.token).not.toBe(first.token);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(fetchMock.mock.calls[0][0]).toBe("https://app.example/api/auth/challenge");
+    // One round trip per session: no separate challenge request.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://app.example/api/media/session");
     expect(fetchMock.mock.calls[1][0]).toBe("https://app.example/api/media/session");
-    expect(sign.mock.calls[0][0]).toMatchObject({
-      kind: 27235,
-      tags: expect.arrayContaining([["t", "hainei_media_session"], ["challenge", "c".repeat(64)]]),
-    });
+    expect(sign.mock.calls[0][0]).toMatchObject({ kind: 27235, tags: expect.arrayContaining([["t", "hainei_media_session"]]) });
+    expect(sign.mock.calls[0][0].tags.some((tag: string[]) => tag[0] === "challenge")).toBe(false);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).not.toHaveProperty("challenge");
   });
 
   it("never reuses Account A's token for Account B and refreshes expired sessions", async () => {

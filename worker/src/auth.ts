@@ -58,6 +58,14 @@ export async function createChallenge(env: Env, now = Math.floor(Date.now() / 10
   return { challenge, expiresAt };
 }
 
+/**
+ * A request signed without a challenge must be this fresh. It saves the
+ * separate /api/auth/challenge round trip; replay is blocked by recording the
+ * signed event id. Clients whose clock is further off fall back to a challenge.
+ */
+const TIMESTAMP_AUTH_SKEW_SECONDS = 60;
+const TIMESTAMP_AUTH_MAX_LIFETIME_SECONDS = 120;
+
 export async function verifyAndConsumeChallenge(
   env: Env,
   challengeValue: unknown,
@@ -67,7 +75,9 @@ export async function verifyAndConsumeChallenge(
   binding?: WorkerAuthBinding,
 ) {
   const challenge = typeof challengeValue === "string" ? challengeValue.trim().toLowerCase() : "";
-  if (!CHALLENGE.test(challenge)) throw new HttpError(400, "invalid_challenge");
+  // Timestamp mode only for requests bound to their URL, method and payload.
+  const timestamped = challengeValue === undefined && !!binding;
+  if (!timestamped && !CHALLENGE.test(challenge)) throw new HttpError(400, "invalid_challenge");
   const event = eventValue as Event;
   if (!event || event.kind !== 27235 || !PUBKEY.test(event.pubkey || "") || !verifyEvent(event)) {
     throw new HttpError(401, "invalid_nostr_signature");
@@ -81,10 +91,16 @@ export async function verifyAndConsumeChallenge(
   if (actions.length !== 1 || actions[0] !== expectedAction) {
     throw new HttpError(401, "invalid_auth_action");
   }
-  if (challenges.length !== 1 || challenges[0] !== challenge) {
+  if (timestamped) {
+    if (challenges.length !== 0) throw new HttpError(401, "challenge_mismatch");
+    if (Math.abs(event.created_at - now) > TIMESTAMP_AUTH_SKEW_SECONDS) throw new HttpError(401, "auth_clock_skew");
+  } else if (challenges.length !== 1 || challenges[0] !== challenge) {
     throw new HttpError(401, "challenge_mismatch");
   }
   if (expirations.length !== 1 || !/^\d+$/.test(expirations[0]) || Number(expirations[0]) <= now) {
+    throw new HttpError(401, "auth_event_expired");
+  }
+  if (timestamped && Number(expirations[0]) > event.created_at + TIMESTAMP_AUTH_MAX_LIFETIME_SECONDS) {
     throw new HttpError(401, "auth_event_expired");
   }
 
@@ -102,6 +118,17 @@ export async function verifyAndConsumeChallenge(
 
   const authLimit = integerSetting(env.AUTH_REQUESTS_PER_MINUTE_PER_PUBKEY, 480, 10, 2000);
   await consumeRateLimit(env, `auth:${expectedAction}:${event.pubkey}`, authLimit, 60, now);
+
+  if (timestamped) {
+    // Each signed event authorizes one request. The row expires with the
+    // event and is removed by the daily cleanup like a used challenge.
+    const replay = await env.DB.prepare(`
+      INSERT OR IGNORE INTO hainei_auth_challenges (challenge_hash, pubkey, created_at, expires_at, used_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(await sha256(`event:${event.id}`), event.pubkey, now, event.created_at + TIMESTAMP_AUTH_MAX_LIFETIME_SECONDS + TIMESTAMP_AUTH_SKEW_SECONDS, now).run();
+    if (Number(replay.meta?.changes || 0) !== 1) throw new HttpError(409, "auth_event_replayed");
+    return event.pubkey;
+  }
 
   const challengeHash = await sha256(challenge);
   const record = await env.DB.prepare(`

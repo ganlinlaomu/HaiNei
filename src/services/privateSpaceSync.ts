@@ -2,7 +2,7 @@ import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { privateSpaceRepository } from "@/repositories/privateSpaceRepository";
 import type { PrivateSpaceRecord } from "@/db/dexie";
 import { validatePrivateSpaceSource, validatePrivateSpaceAttachments } from "@/services/privateSpaceContent";
-import { signWorkerRequest } from "@/services/workerAuth";
+import { signedWorkerPost } from "@/services/workerAuth";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 import { timedJsonFetch } from "@/utils/timedFetch";
 
@@ -64,22 +64,18 @@ async function post(
 ): Promise<any> {
   ensureCurrent(isCurrent);
   const base = haineiWorkerBaseUrl();
-  const authResponse = await timedJsonFetch(base + "/api/auth/challenge", { method: "POST", signal });
-  const challenge = await responseJson(authResponse);
-  ensureCurrent(isCurrent);
   const url = base + path;
-  const event = await signWorkerRequest(keys.signEvent.bind(keys), keys.pkHex, {
+  const response = await signedWorkerPost(keys.signEvent.bind(keys), keys.pkHex, {
     action: "hainei_private_space",
-    challenge: String(challenge.challenge || ""),
-    expiresAt: Number(challenge.expiresAt || 0),
-    url, method: "POST", payload,
+    url, payload,
     content: "Authorize encrypted private notes sync",
-  });
-  ensureCurrent(isCurrent);
-  const response = await timedJsonFetch(url, {
-    method: "POST", signal,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, event, challenge: challenge.challenge }),
+    ensureCurrent: () => ensureCurrent(isCurrent),
+    challenge: async () => responseJson(await timedJsonFetch(base + "/api/auth/challenge", { method: "POST", signal })),
+    send: body => timedJsonFetch(url, {
+      method: "POST", signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   });
   ensureCurrent(isCurrent);
   return responseJson(response);
