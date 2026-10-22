@@ -60,9 +60,13 @@ function toRecord(accountPubkey: string, message: CanonicalMessage, nowMs: numbe
     rootId: message.rootId,
     tags: message.tags,
     firstSeenAt: nowMs,
-    lastSeenAt: nowMs
+    lastSeenAt: nowMs,
+    ...(hasDisappearingMarker(message.tags) ? { disappearingExpiresAt: disappearingMetadata(message.tags)?.expiresAt ?? 0 } : {}),
   };
 }
+
+// Marks that every stored message of the account carries disappearingExpiresAt.
+const DISAPPEARING_INDEX_META = "disappearing-index:v1";
 
 export class SyncedMessageRepository {
   private visiblePolicies = new Map<string, { policy: string; test: (message: SyncedMessageRecord) => boolean }>();
@@ -350,16 +354,33 @@ export class SyncedMessageRepository {
   async purgeExpiredDisappearing(accountPubkey: string, nowMs = Date.now(), batchSize = 100) {
     const account = normalizeAccountPubkey(accountPubkey);
     const nowSeconds = Math.floor(nowMs / 1000);
-    const expired: SyncedMessageRecord[] = [];
-    let after = "";
-    for (;;) {
-      const batch = await this.database.syncedMessages.where("[accountPubkey+id]")
-        .between([account, after], [account, Dexie.maxKey], false, true)
-        .limit(batchSize).toArray();
-      for (const record of batch) if (isExpiredDisappearing(record.tags, nowSeconds)) expired.push(record);
-      if (batch.length < batchSize) break;
-      after = batch[batch.length - 1].id;
-      await new Promise(resolve => setTimeout(resolve, 0));
+    let expired: SyncedMessageRecord[];
+    if (await this.database.accountMeta.get([account, DISAPPEARING_INDEX_META])) {
+      expired = await this.database.syncedMessages.where("[accountPubkey+disappearingExpiresAt]")
+        .between([account, Dexie.minKey], [account, nowSeconds], true, true).toArray();
+    } else {
+      // One-time scan for rows stored before the index existed: read every
+      // message in batches, record its expiry, then mark the account indexed.
+      expired = [];
+      let after = "";
+      for (;;) {
+        const batch = await this.database.syncedMessages.where("[accountPubkey+id]")
+          .between([account, after], [account, Dexie.maxKey], false, true)
+          .limit(batchSize).toArray();
+        for (const record of batch) {
+          if (!hasDisappearingMarker(record.tags)) continue;
+          if (record.disappearingExpiresAt === undefined) {
+            await this.database.syncedMessages.update([account, record.id], {
+              disappearingExpiresAt: disappearingMetadata(record.tags)?.expiresAt ?? 0,
+            });
+          }
+          if (isExpiredDisappearing(record.tags, nowSeconds)) expired.push(record);
+        }
+        if (batch.length < batchSize) break;
+        after = batch[batch.length - 1].id;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      await this.database.accountMeta.put({ accountPubkey: account, key: DISAPPEARING_INDEX_META, value: { at: nowMs } });
     }
     const openedDue = await this.listDueOpenedDisappearing(account, nowMs);
     const toBurn = new Map<string, string>();

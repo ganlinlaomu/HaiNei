@@ -164,6 +164,18 @@ export function yieldToMainThread() {
   return new Promise<void>(resolve => setTimeout(resolve, 0));
 }
 
+let idleWaitSequence = 0;
+/**
+ * Resolve at the next idle moment, honouring recent foreground activity
+ * (touch/scroll). Long background sequences call this between steps so a
+ * user who starts interacting midway is not competed with.
+ */
+export function waitForIdle(timeoutMs = 2_000) {
+  return new Promise<void>(resolve => {
+    scheduleBackgroundTask(`idle-wait:${++idleWaitSequence}`, resolve, { priority: "idle", timeoutMs });
+  });
+}
+
 export function scheduleBackgroundTask(
   key: string,
   run: () => void | Promise<void>,

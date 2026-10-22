@@ -99,9 +99,12 @@ describe("bottom-tab activation loading", () => {
     expect(lazyViews).toContain("loadMessagesView,");
     expect(lazyViews).toContain("loadFriendsView,");
     expect(lazyViews).toContain("loadSystemSettingsView,");
-    expect(lazyViews).toContain("await yieldToMainThread()");
+    // Each view waits for a fresh idle moment, so scrolling postpones the rest.
+    expect(lazyViews).toContain("await waitForIdle()");
     expect(lazyViews).toContain('import("@/views/SystemSettings.vue")');
-    expect(lazyViews.indexOf("loadSettingsView,")).toBeLessThan(lazyViews.indexOf("loadConversationsView,"));
+    // Conversations and chat first: the next tap after a notification.
+    expect(lazyViews.indexOf("    loadConversationsView,")).toBeLessThan(lazyViews.indexOf("    loadMessagesView,"));
+    expect(lazyViews.indexOf("    loadMessagesView,")).toBeLessThan(lazyViews.indexOf("    loadSettingsView,"));
     expect(header).toContain('@pointerdown="preloadBottomTab(\'conversations\')"');
     expect(header).toContain('@pointerdown="preloadBottomTab(\'notifications\')"');
     expect(header).toContain('@pointerdown="preloadBottomTab(\'settings\')"');

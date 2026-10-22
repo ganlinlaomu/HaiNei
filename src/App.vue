@@ -229,6 +229,15 @@ export default defineComponent({
       },
       { immediate: true }
     );
+    const STARTUP_MESSAGES_WAIT_MS = 15_000;
+    function waitForStartupMessages() {
+      if (directMessages.historyHydrationPhase !== "hydrating") return Promise.resolve();
+      return new Promise<void>(resolve => {
+        const timer = window.setTimeout(done, STARTUP_MESSAGES_WAIT_MS);
+        const stop = watch(() => directMessages.historyHydrationPhase, phase => { if (phase !== "hydrating") done(); });
+        function done() { window.clearTimeout(timer); stop(); resolve(); }
+      });
+    }
     // 文件传输助手: join the own-devices room once per session, so this
     // device can receive (and be found) without opening the assistant first.
     watch(
@@ -237,6 +246,9 @@ export default defineComponent({
         if (!account || method !== "private-key" || !unlocked || !/^[0-9a-f]{64}$/.test(secret)) return;
         const current = () => keys.pkHex === account && keys.skHex === secret && keys.isUnlocked;
         scheduleBackgroundTask("nearby-own-devices", async () => {
+          // Joining loads the transfer module and opens signaling; let the
+          // startup message restore (until unread is shown) finish first.
+          await waitForStartupMessages();
           if (!current()) return;
           const { ensureOwnDevicesRoom } = await import("@/services/nearbySession");
           if (current()) await ensureOwnDevicesRoom(account, secret);
