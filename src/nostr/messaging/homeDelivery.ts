@@ -6,6 +6,7 @@ import { isHaiNeiProfileMessage, isHaiNeiProfileRequest } from "@/nostr/messagin
 import type { NotificationItem } from "@/stores/notifications";
 import { isTombstoneMessage } from "@/nostr/messaging/feedControl";
 import { isBurnControl } from "@/nostr/messaging/dmBurnControl";
+import { isCallControl } from "@/nostr/messaging/callControl";
 
 export function incomingFriendRequestNotification(message: CanonicalMessage, accountPubkey: string): NotificationItem | null {
   const control = decodeFriendshipControl(message);
@@ -33,6 +34,7 @@ export type HomeMessageDelivery = {
   isReceipt?: (message: CanonicalMessage) => boolean;
   processReceipt?: (message: CanonicalMessage) => boolean | void | Promise<boolean | void>;
   processBurnControl?: (message: CanonicalMessage) => boolean | void | Promise<boolean | void>;
+  processCallControl?: (message: CanonicalMessage) => void | Promise<void>;
   isInteraction: (message: CanonicalMessage) => boolean;
   processInteraction: (message: CanonicalMessage) => void | Promise<void>;
   mirrorMessage: (message: CanonicalMessage) => void;
@@ -87,6 +89,11 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
     if (isTombstoneMessage(message)) {
       await delivery.processFeedControlMessage?.(message);
       debugLog("ui", "ui_feed_control_routed", diagnostic, "info");
+      return false;
+    }
+    if (isCallControl(message)) {
+      await delivery.processCallControl?.(message);
+      debugLog("ui", "ui_call_control_routed", diagnostic, "info");
       return false;
     }
     if (isBurnControl(message)) {

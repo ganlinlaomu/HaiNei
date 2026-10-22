@@ -2,6 +2,7 @@
   <div class="app-root" :class="{ 'login-route': hideAppChrome, 'compose-fab-page': isPrimaryRoute }">
     <UpdateNotification />
     <AndroidUpdateNotification />
+    <CallOverlay v-if="call.phase !== 'idle'" />
     <HeaderBar v-if="!hideAppChrome" />
     <router-view v-slot="{ Component }">
       <keep-alive :key="`${keys.pkHex}:${keys.sessionGeneration}:${keys.isUnlocked}`" :include="['Home', 'Friends', 'Conversations', 'Notifications', 'Settings', 'SystemSettings']">
@@ -66,6 +67,7 @@ import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { preloadBottomTabViews } from "@/router/lazyViews";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useDirectMessagesStore } from "@/stores/directMessages";
+import { useCallStore } from "@/stores/call";
 import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appBadge";
 import { installBackgroundLock } from "@/services/autoLock";
 import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
@@ -75,9 +77,11 @@ import { onAppResume } from "@/services/appResumeCoordinator";
 import { cancelBackgroundTask, installForegroundActivityMonitor, scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
+// Loaded only when a call starts or rings, so it never weighs on startup.
+const CallOverlay = defineAsyncComponent(() => import("@/components/CallOverlay.vue"));
 
 export default defineComponent({
-  components: { HeaderBar, ToastContainer, PostEditorModal, UpdateNotification, AndroidUpdateNotification },
+  components: { HeaderBar, ToastContainer, PostEditorModal, UpdateNotification, AndroidUpdateNotification, CallOverlay },
   setup() {
     const route = useRoute();
     const router = useRouter();
@@ -88,6 +92,7 @@ export default defineComponent({
     const keys = useKeyStore();
     const notifications = useNotificationsStore();
     const directMessages = useDirectMessagesStore();
+    const call = useCallStore();
     const bookmarks = useBookmarksStore();
     const postEditorReady = ref(false);
     const postEditorLoadError = ref(false);
@@ -288,6 +293,7 @@ export default defineComponent({
       document.body.classList.remove("login-page", "post-editor-open");
     });
     return {
+      call,
       keys,
       ui,
       hideAppChrome,

@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.105"; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.106"; // ⚠️ 更新代码时同步修改此版本号
 const BUILD_ID = "source-08655ebf22d057a4"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
@@ -14,6 +14,7 @@ const PUSH_HINT_TTL_MS = 24 * 60 * 60 * 1000;
 const PUSH_HINT_MAX_ITEMS = 32;
 // One replaceable DM notification instead of one per message.
 const DM_NOTIFICATION_TAG = 'hainei-dm';
+const CALL_NOTIFICATION_TAG = 'hainei-call';
 // Lie-fi (signal but no throughput) must not hold the app shell hostage.
 // Every built JS/CSS chunk, so lazily loaded pages open offline too.
 const PRECACHE_ASSETS = []; // filled in by build-plugins/swPrecache.ts
@@ -233,6 +234,12 @@ self.addEventListener('message', (event) => {
     event.waitUntil(self.skipWaiting());
     return;
   }
+  if (event.data?.type === 'CLOSE_CALL_NOTIFICATION') {
+    // The call was answered, declined or ended (possibly on another device).
+    event.waitUntil(self.registration.getNotifications({ tag: CALL_NOTIFICATION_TAG })
+      .then(notifications => { for (const notification of notifications) notification.close(); }));
+    return;
+  }
   if (event.data?.type === 'SYNC_APP_BADGE') {
     // Close inside the same queue so a push queued right after this sync
     // cannot have its fresh notification closed.
@@ -338,10 +345,13 @@ self.addEventListener('push', (event) => {
       // Every push must still display a notification: WebKit revokes the
       // subscription for silent pushes. While the app is on screen it shows
       // its own unread state, so stay quiet; otherwise re-alert on replace.
+      // A call keeps its own notification and stays until acted on; the
+      // encrypted invite in the hint tells the app who is calling.
+      const isCall = payload.type === 'call';
       await self.registration.showNotification('HaiNei', {
-        body:'你有新的私信消息', icon:'/icon-192.png', badge:'/icon-192.png',
-        tag: DM_NOTIFICATION_TAG, data:{type:'message'},
-        ...(appVisible ? { silent: true } : { renotify: true })
+        body: isCall ? '你有一个语音来电' : '你有新的私信消息', icon:'/icon-192.png', badge:'/icon-192.png',
+        tag: isCall ? CALL_NOTIFICATION_TAG : DM_NOTIFICATION_TAG, data:{type: isCall ? 'call' : 'message'},
+        ...(isCall ? { requireInteraction: true, renotify: true } : appVisible ? { silent: true } : { renotify: true })
       });
       // Notification delivery must survive CacheStorage quota failures.
       try { await cacheEncryptedPushHint(payload); } catch {}

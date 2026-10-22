@@ -5,6 +5,7 @@ import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./proto
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import type { OutgoingEventRoute, OutgoingQueueRecord, OutgoingQueueState, OutgoingRelayResult } from "@/db/dexie";
 import { triggerGenericPush } from "@/services/pushNotifications";
+import { CALL_LOG_TYPE, CALL_MISSED_TYPE, isCallInviteTags } from "@/nostr/messaging/callControl";
 import type { EncryptedPushHint, PushCategory } from "@/services/pushNotifications";
 import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/directMessages";
 import {
@@ -237,12 +238,19 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
 }
 
 export function shouldTriggerGenericPush(tags: string[][] | undefined) {
-  return tags?.some(tag => tag[0] === "t" && tag[1] === DIRECT_MESSAGE_TYPE) === true;
+  const has = (type: string) => tags?.some(tag => tag[0] === "t" && tag[1] === type) === true;
+  // A call record notifies only when the call was missed.
+  if (has(CALL_LOG_TYPE) && !has(CALL_MISSED_TYPE)) return false;
+  return has(DIRECT_MESSAGE_TYPE) || isCallInviteTags(tags);
 }
 
-export function pushCategoryForMessage(tags: string[][] | undefined): "message" | null {
+export function pushCategoryForMessage(tags: string[][] | undefined): "message" | "call" | null {
+  if (isCallInviteTags(tags)) return "call";
   return shouldTriggerGenericPush(tags) ? "message" : null;
 }
+
+// A call push past the ring window would wake the callee for nothing.
+const CALL_PUSH_LIFETIME_MS = 60_000;
 
 const activePublishes = new Map<string, Promise<PublishedMessage>>();
 const accountGenerations = new Map<string, number>();
@@ -410,7 +418,7 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     const needsPush = shouldTriggerGenericPush((record.message as CanonicalMessage).tags);
     const sent = await outgoingQueueRepository.update(accountPubkey, outgoingId, {
       state: "sent", relayResults, nextAttemptAt: undefined, lastError: undefined, updatedAt: Date.now(),
-      ...(needsPush ? { pushState: "pending", pushAttempts: 0, pushExpiresAt: Date.now() + 24 * 60 * 60 * 1000 } : {}),
+      ...(needsPush ? { pushState: "pending", pushAttempts: 0, pushExpiresAt: Date.now() + (isCallInviteTags((record.message as CanonicalMessage).tags) ? CALL_PUSH_LIFETIME_MS : 24 * 60 * 60 * 1000) } : {}),
     });
     emitOutgoingQueueState(sent);
     if (sent) await deliverQueuedPush(sent);
@@ -453,7 +461,7 @@ async function deliverQueuedPush(record: OutgoingQueueRecord) {
         ...(JSON.stringify(event).length <= 6_000 ? { event } : {}),
       }];
     });
-    await triggerGenericPush(recipients, record.accountPubkey, signer, "message", (record.message as CanonicalMessage).id, hints);
+    await triggerGenericPush(recipients, record.accountPubkey, signer, pushCategoryForMessage((record.message as CanonicalMessage).tags) || "message", (record.message as CanonicalMessage).id, hints);
     await outgoingQueueRepository.update(record.accountPubkey, record.outgoingId, {
       pushState: "accepted", pushNextAttemptAt: undefined,
     });
