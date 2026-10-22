@@ -24,14 +24,8 @@ const CONNECT_TIMEOUT_MS = 25_000;
 const PEER_LOSS_GRACE_MS = 8_000;
 const STUN: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }];
 
-type Room = {
-  leave(): Promise<void> | void;
-  addStream(stream: MediaStream, target?: string | string[]): unknown;
-  onPeerJoin(handler: (peerId: string) => void): void;
-  onPeerLeave(handler: (peerId: string) => void): void;
-  onPeerStream(handler: (stream: MediaStream, peerId: string) => void): void;
-  makeAction<T>(name: string): [(data: T, target?: string | string[]) => unknown, (handler: (data: T, peerId: string) => void) => void];
-};
+// Trystero 0.26: handlers are assigned properties, actions are objects.
+type Room = import("trystero").Room;
 
 let room: Room | null = null;
 let localStream: MediaStream | null = null;
@@ -41,7 +35,7 @@ let timers: Array<ReturnType<typeof setTimeout>> = [];
 let peerLossTimer: ReturnType<typeof setTimeout> | null = null;
 let ringtone: { stop(): void } | null = null;
 let wakeLock: { release(): Promise<void> } | null = null;
-let sendTaken: ((data: true, target?: string) => unknown) | null = null;
+let sendTaken: ((peerId: string) => void) | null = null;
 
 function account() {
   return useKeyStore().pkHex.toLowerCase();
@@ -157,34 +151,43 @@ function playRemote(stream: MediaStream) {
   void remoteAudio.play().catch(() => undefined);
 }
 
-async function joinCallRoom(roomId: string, secret: string) {
+async function joinCallRoom(roomId: string, secret: string, callId: string) {
   const [{ joinRoom }, , turn] = await Promise.all([
     import("trystero"),
     prepareNearbyRelaySession().catch(() => undefined),
     turnIceServers().catch(() => []),
   ]);
   const store = useCallStore();
-  const joined = joinRoom({
+  // TURN/session preparation is asynchronous. The user may have cancelled or
+  // another device may have handled the call while it was in flight; never
+  // recreate a room (or send an invite) for that finished call.
+  if (store.callId !== callId || store.phase === "idle" || store.phase === "ended") {
+    throw new Error("call_cancelled");
+  }
+  const joined: Room = joinRoom({
     appId: CALL_APP_ID,
     password: secret,
     relayConfig: { urls: [...DEFAULT_RELAY_URLS], redundancy: DEFAULT_RELAY_URLS.length },
     rtcConfig: { iceServers: [...STUN, ...turn] },
-  } as any, roomId) as unknown as Room;
+  }, roomId);
   room = joined;
-  const [takenSend, onTaken] = joined.makeAction<true>("taken");
-  sendTaken = takenSend as typeof sendTaken;
   // A second device of the callee joined after another one answered.
-  onTaken(() => finish("answered_elsewhere", false));
-  joined.onPeerJoin(peerId => {
+  const taken = joined.makeAction<boolean>("taken", { onMessage: () => { void finish("answered_elsewhere", false); } });
+  sendTaken = peerId => { void taken.send(true, { target: peerId }).catch(() => undefined); };
+  joined.onPeerJoin = peerId => {
     if (mediaPeer && mediaPeer !== peerId) {
-      void sendTaken?.(true, peerId);
+      // The caller is the room's arbiter. An answering device must not mark
+      // another answering device as taken: in a near-simultaneous answer that
+      // would make both callees dismiss each other. The caller joined before
+      // sending the invite and keeps the first callee only.
+      if (store.direction === "outgoing") sendTaken?.(peerId);
       return;
     }
     mediaPeer = peerId;
     if (peerLossTimer) { clearTimeout(peerLossTimer); peerLossTimer = null; }
-    if (localStream) joined.addStream(localStream, peerId);
-  });
-  joined.onPeerStream((stream, peerId) => {
+    if (localStream) for (const sending of joined.addStream(localStream, { target: peerId })) void sending.catch(() => undefined);
+  };
+  joined.onPeerStream = (stream, peerId) => {
     if (peerId !== mediaPeer) return;
     playRemote(stream);
     stopTone();
@@ -193,12 +196,12 @@ async function joinCallRoom(roomId: string, secret: string) {
       store.connectedAt = Date.now();
       debugLog("system", "call_connected", { direction: store.direction }, "info");
     }
-  });
-  joined.onPeerLeave(peerId => {
+  };
+  joined.onPeerLeave = peerId => {
     if (peerId !== mediaPeer || store.phase !== "active") return;
     // A brief network switch can drop and rejoin; give it a moment.
     peerLossTimer = setTimeout(() => finish("remote_hangup", false), PEER_LOSS_GRACE_MS);
-  });
+  };
 }
 
 /** Tear everything down; `notify` sends the matching signal to the peer. */
@@ -258,10 +261,11 @@ export async function startCall(peerPubkey: string) {
   if (store.callId !== id) return;
   void keepScreenOn();
   startTone("ringback");
-  await joinCallRoom(roomId, secret);
   try {
+    await joinCallRoom(roomId, secret, id);
     await sendSignal(peer, { action: "invite", callId: id, room: roomId, secret });
-  } catch {
+  } catch (error) {
+    debugLog("system", "call_start_failed", { reason: error instanceof Error ? error.message.slice(0, 120) : "unknown" }, "error");
     await finish("failed", false);
     return;
   }
@@ -285,7 +289,13 @@ export async function acceptCall() {
   void keepScreenOn();
   // The self-copy of this accept stops our other devices from ringing.
   sendSignalBestEffort(store.peer, { action: "accept", callId: id });
-  await joinCallRoom(store.invite.room, store.invite.secret);
+  try {
+    await joinCallRoom(store.invite.room, store.invite.secret, id);
+  } catch (error) {
+    debugLog("system", "call_join_failed", { reason: error instanceof Error ? error.message.slice(0, 120) : "unknown" }, "error");
+    await finish("failed", true);
+    return;
+  }
   later(CONNECT_TIMEOUT_MS, () => { if (store.callId === id && store.phase === "connecting") void finish("failed", true); });
 }
 
