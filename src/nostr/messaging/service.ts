@@ -5,6 +5,7 @@ import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./proto
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import type { OutgoingEventRoute, OutgoingQueueRecord, OutgoingQueueState, OutgoingRelayResult } from "@/db/dexie";
 import { triggerGenericPush } from "@/services/pushNotifications";
+import { normalizeRelayUrl } from "@/services/connectionSettings";
 import { CALL_LOG_TYPE, CALL_MISSED_TYPE, isCallInviteTags } from "@/nostr/messaging/callControl";
 import type { EncryptedPushHint, PushCategory } from "@/services/pushNotifications";
 import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/directMessages";
@@ -235,6 +236,50 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
   const published = await publishQueuedOutgoing(accountPubkey, queued.message.id, options.pushCategory);
   if ((accountGenerations.get(accountPubkey) || 0) !== accountGeneration) throw new Error("账号已切换");
   return published;
+}
+
+/**
+ * Latency-critical, ephemeral control messages (voice call signaling). The
+ * durable outgoing queue first looks up the recipient's relay list and waits
+ * for every relay (a slow one held a call invite, and its push, for seconds).
+ * Here every copy goes to all given relays at once, the call resolves as soon
+ * as any relay accepts the recipient's copy, and a call push goes out right
+ * away carrying the encrypted wrap, so a closed app can ring without a fetch.
+ * No retries: a lost call signal is superseded by the call's own timeouts.
+ */
+export async function sendFastControl(options: SendDirectMessageOptions & { push?: "call"; selfOnly?: boolean }) {
+  const account = options.context.senderPubkey.toLowerCase();
+  const encoded = await buildMessageEvents(options);
+  const relays = [...new Set(options.relays.map(url => normalizeRelayUrl(url)).filter(Boolean))];
+  if (!relays.length) throw new Error("没有可用的 relay");
+  const events = encoded.events as NostrEvent[];
+  // selfOnly: a private record for this account's devices (never the peer).
+  const recipientEvents = options.selfOnly
+    ? events.filter(event => eventTarget(event) === account)
+    : events.filter(event => eventTarget(event) !== account);
+  if (options.push && !options.selfOnly) {
+    const hints: EncryptedPushHint[] = recipientEvents.map(event => ({
+      recipient: eventTarget(event)!, eventId: event.id, relays: relays.slice(0, 2),
+      ...(JSON.stringify(event).length <= 6_000 ? { event } : {}),
+    }));
+    const recipients = [...new Set(hints.map(hint => hint.recipient))];
+    void triggerGenericPush(recipients, account, options.context.signEvent, options.push, encoded.message.id, hints)
+      .catch(error => debugLog("system", "push_trigger_failed", { reason: error instanceof Error ? error.message : "unknown_error" }, "warn"));
+  }
+  // Our own copies (other devices) are best effort and never awaited.
+  if (!options.selfOnly) for (const event of events.filter(event => eventTarget(event) === account)) {
+    for (const relay of relays) void nostrClient.publish(event, [relay]).catch(() => undefined);
+  }
+  await Promise.all(recipientEvents.map(event => new Promise<void>((resolve, reject) => {
+    let pending = relays.length;
+    for (const relay of relays) {
+      void nostrClient.publish(event, [relay]).then(results => results.some(result => result.ok), () => false).then(ok => {
+        if (ok) resolve();
+        else if (--pending === 0) reject(new Error("没有 relay 接收通话信令"));
+      });
+    }
+  })));
+  return encoded.message;
 }
 
 export function shouldTriggerGenericPush(tags: string[][] | undefined) {

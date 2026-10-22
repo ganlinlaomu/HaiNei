@@ -1,12 +1,12 @@
 import { useCallStore, type CallEndReason } from "@/stores/call";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendshipsStore } from "@/stores/friendships";
-import { sendDirectMessage } from "@/nostr/messaging/service";
+import { sendDirectMessage, sendFastControl } from "@/nostr/messaging/service";
 import { getRelaysFromStorage } from "@/nostr/relays";
 import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
-import { debugLog } from "@/utils/debugLog";
+import { debugLog, startupMark } from "@/utils/debugLog";
 import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
@@ -87,15 +87,20 @@ function closeCallNotification() {
   try { navigator.serviceWorker?.controller?.postMessage({ type: "CLOSE_CALL_NOTIFICATION" }); } catch { /* best effort */ }
 }
 
+// Signals take the fast path: all relays at once, first accept wins, and the
+// invite's push leaves immediately with the encrypted wrap inside.
 async function sendSignal(peer: string, signal: CallSignal) {
   const keys = useKeyStore();
-  await sendDirectMessage({
+  const started = Date.now();
+  await sendFastControl({
     recipientPubkeys: [peer],
     content: serializeCallSignal(signal),
     tags: callControlTags(signal),
-    relays: getRelaysFromStorage("write"),
+    relays: [...new Set([...DEFAULT_RELAY_URLS, ...getRelaysFromStorage("write")])],
     context: { senderPubkey: keys.pkHex, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
+    ...(signal.action === "invite" ? { push: "call" as const } : {}),
   });
+  startupMark("call_signal_sent", { action: signal.action, ms: Date.now() - started });
 }
 
 function sendSignalBestEffort(peer: string, signal: CallSignal) {
@@ -109,24 +114,33 @@ function formatDuration(seconds: number) {
   return minutes ? `${minutes}分${String(seconds % 60).padStart(2, "0")}秒` : `${seconds}秒`;
 }
 
-/** The caller leaves one ordinary DM as the call's record in both chats. */
-function sendCallLog(peer: string, reason: CallEndReason, durationSeconds: number) {
-  const missed = reason === "no_answer" || reason === "cancelled";
+/**
+ * Call records in the chat. Only a missed call is sent to the peer (it counts
+ * as unread and notifies). Every other outcome is a private note each side
+ * keeps for itself: self-authored, it never adds to anyone's unread count.
+ */
+function recordCall(session: CallSession, reason: CallEndReason, durationSeconds: number) {
+  const outgoing = session.direction === "outgoing";
+  const missed = outgoing && (reason === "no_answer" || reason === "cancelled");
   const outcome = durationSeconds > 0 ? formatDuration(durationSeconds)
     : missed ? "未接听"
-      : reason === "remote_declined" ? "已拒绝"
-        : reason === "remote_busy" ? "对方忙"
-          : reason === "answered_elsewhere" ? "已在其他设备接听"
-            : "未接通";
+      : outgoing && reason === "remote_declined" ? "对方已拒绝"
+        : outgoing && reason === "remote_busy" ? "对方忙"
+          : !outgoing && reason === "declined" ? "已拒绝"
+            : outgoing && (reason === "failed" || reason === "remote_hangup") ? "未接通"
+              : "";
+  // Incoming calls the caller records as missed, or another device handled.
+  if (!outcome) return;
   const keys = useKeyStore();
-  void sendDirectMessage({
-    recipientPubkeys: [peer],
+  const options = {
+    recipientPubkeys: [session.peer],
     content: `📞 语音通话 · ${outcome}`,
-    // A missed call notifies the callee like a message; other outcomes do not.
     tags: [["t", DIRECT_MESSAGE_TYPE], ["t", CALL_LOG_TYPE], ...(missed ? [["t", CALL_MISSED_TYPE]] : [])],
-    relays: getRelaysFromStorage("write"),
+    relays: [...new Set([...DEFAULT_RELAY_URLS, ...getRelaysFromStorage("write")])],
     context: { senderPubkey: keys.pkHex, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
-  }).catch(() => undefined);
+  };
+  const sent = missed ? sendDirectMessage(options) : sendFastControl({ ...options, selfOnly: true });
+  void sent.catch(() => undefined);
 }
 
 function startTone(session: CallSession, kind: "ring" | "ringback") {
@@ -222,7 +236,7 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
       // the room reference is installed before deciding whether it is current.
       queueMicrotask(() => {
         if (!joined || session.room !== joined || !isCurrent(session) || store.phase === "active") return;
-        debugLog("system", "call_peer_connection_failed", { reason: error.slice(0, 120) }, "warn");
+        startupMark("call_peer_connection_failed", { reason: error.slice(0, 120) });
         void finish(session, "failed", true);
       });
     },
@@ -281,7 +295,7 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
     if (store.phase !== "active") {
       store.phase = "active";
       store.connectedAt = Date.now();
-      debugLog("system", "call_connected", { direction: session.direction }, "info");
+      startupMark("call_connected", { direction: session.direction });
     }
   };
   currentRoom.onPeerLeave = peerId => {
@@ -362,8 +376,8 @@ async function finish(session: CallSession, reason: CallEndReason, notify: boole
         : "end";
     sendSignalBestEffort(peer, { action, callId: id, ...(action === "end" ? { durationSeconds: duration } : {}) });
   }
-  if (session.direction === "outgoing" && peer && options.log !== false) sendCallLog(peer, reason, duration);
-  debugLog("system", "call_ended", { reason, durationSeconds: duration, direction: session.direction }, "info");
+  if (peer && options.log !== false) recordCall(session, reason, duration);
+  startupMark("call_ended", { reason, durationSeconds: duration, direction: session.direction });
   await releasing;
   // Leave the outcome on screen briefly, then close the overlay.
   setTimeout(() => { if (useCallStore().callId === id && useCallStore().phase === "ended") useCallStore().reset(); }, 1_800);
@@ -411,7 +425,7 @@ export async function startCall(peerPubkey: string) {
       return;
     }
   } catch (error) {
-    debugLog("system", "call_start_failed", { reason: error instanceof Error ? error.message.slice(0, 120) : "unknown" }, "error");
+    startupMark("call_start_failed", { reason: error instanceof Error ? error.message.slice(0, 120) : "unknown" });
     if (isCurrent(session)) await finish(session, "failed", false);
     return;
   }
@@ -445,7 +459,7 @@ export async function acceptCall() {
   try {
     await joinCallRoom(session, invite.room, invite.secret);
   } catch (error) {
-    debugLog("system", "call_join_failed", { reason: error instanceof Error ? error.message.slice(0, 120) : "unknown" }, "error");
+    startupMark("call_join_failed", { reason: error instanceof Error ? error.message.slice(0, 120) : "unknown" });
     if (isCurrent(session)) await finish(session, "failed", true);
     return;
   }
@@ -487,6 +501,7 @@ export async function handleCallSignal(sender: string, recipient: string, signal
   const fromSelf = normalizedSender === me;
   const peer = fromSelf ? normalizedRecipient : normalizedSender;
   discardOrphanedSession();
+  startupMark("call_signal_received", { action: signal.action, fromSelf, ageSeconds: Math.floor(Date.now() / 1000) - createdAt, phase: store.phase });
   if (signal.action === "invite") {
     // Our own outgoing invite seen on another of our devices: not a call for us.
     if (fromSelf || store.seen.has(signal.callId)) return;
