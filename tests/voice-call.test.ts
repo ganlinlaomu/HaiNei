@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   joinError: null as Error | null,
   relaySession: vi.fn(async () => undefined),
 }));
-vi.mock("@/nostr/messaging/service", async original => ({ ...(await original() as object), sendDirectMessage: mocks.send }));
+vi.mock("@/nostr/messaging/service", async original => ({ ...(await original() as object), sendDirectMessage: mocks.send, sendFastControl: mocks.send }));
 vi.mock("@/nostr/relays", () => ({ getRelaysFromStorage: () => ["wss://relay.test"] }));
 vi.mock("@/services/nearbyTransfer", () => ({ refreshNearbyRelaySockets: mocks.relaySession }));
 vi.mock("@/services/relaySession", () => ({ turnIceServers: async () => [] }));
@@ -194,9 +194,28 @@ describe("call engine", () => {
     await handleCallSignal(FRIEND, ME, { action: "reject", callId: store.callId }, now());
     expect(store).toMatchObject({ phase: "ended", endReason: "remote_declined" });
     expect(mocks.rooms[0].leave).toHaveBeenCalled();
+    // The caller's record is private to its own devices: no unread for the callee.
     const log = (mocks.send.mock.calls.at(-1) as any[])[0];
-    expect(log.content).toBe("📞 语音通话 · 已拒绝");
+    expect(log.content).toBe("📞 语音通话 · 对方已拒绝");
     expect(log.tags).toEqual([["t", "hainei-dm"], ["t", CALL_LOG_TYPE]]);
+    expect(log.selfOnly).toBe(true);
+  });
+
+  it("sends signals on the fast path, the invite with an immediate call push", async () => {
+    const { startCall } = await import("@/services/callEngine");
+    await startCall(FRIEND);
+    const [inviteOptions] = mocks.send.mock.calls[0] as any[];
+    expect(inviteOptions.push).toBe("call");
+    expect(inviteOptions.relays).toEqual(expect.arrayContaining(["wss://cloudflare-nostr-relay.noster.workers.dev"]));
+  });
+
+  it("records a declined incoming call privately on the callee side", async () => {
+    const { declineCall, handleCallSignal } = await import("@/services/callEngine");
+    await handleCallSignal(FRIEND, ME, invite, now());
+    await declineCall();
+    const records = mocks.send.mock.calls.map((call: any) => call[0]).filter((options: any) => options.tags?.some((tag: string[]) => tag[1] === CALL_LOG_TYPE));
+    expect(records).toEqual([expect.objectContaining({ content: "📞 语音通话 · 已拒绝", selfOnly: true })]);
+    expect(sentActions()).toContain("reject");
   });
 
   it("uses the Trystero 0.26 room API to target media and handle peer lifecycle", async () => {

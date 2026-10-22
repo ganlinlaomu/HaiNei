@@ -437,7 +437,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
           const recipient = message.recipientPubkeys.map(value => value.toLowerCase()).find(value => value !== account) || account;
           try {
             const engine = await loadCallEngine();
-            await engine.handleCallSignal(sender, recipient, signal, message.createdAt);
+            // Do not hold message ingestion while a call tears down its room.
+            void engine.handleCallSignal(sender, recipient, signal, message.createdAt).catch(error => {
+              debugLog("system", "call_signal_unhandled", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
+            });
           } catch (error) {
             debugLog("system", "call_signal_unhandled", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
           }
