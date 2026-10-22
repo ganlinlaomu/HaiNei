@@ -34,6 +34,8 @@ function normalizeDeliveryResult(result: MessageDeliveryResult): "persist" | "di
 const MAX_PENDING_PERSISTENCE_RETRIES = 64;
 const MAX_PERSISTENCE_RETRY_ATTEMPTS = 3;
 const PERSISTENCE_RETRY_DELAY_MS = 500;
+// Matches the seen-wrap log retention in MessageSyncManager.
+const SEEN_WRAP_LOOKBACK_SECONDS = 10 * 24 * 60 * 60;
 
 export class MessageIngestionPipeline {
   private readonly deliveredLogicalIds = new BoundedSet<string>();
@@ -42,12 +44,30 @@ export class MessageIngestionPipeline {
   private firstInsertMarked = false;
   private storedTransportIdsFlight: Promise<Set<string>> | null = null;
 
-  /** Loaded once per session; new inserts are tracked by finalizedTransportIds. */
+  /**
+   * Wraps handled in an earlier session, loaded once: those stored as messages
+   * plus every other fully processed wrap (receipts, controls, invalid ones)
+   * from the seen-wrap log. NIP-17 backdating re-delivers them at each start;
+   * skipping them saves two NIP-44 decryptions each.
+   */
   private storedTransportIds() {
-    return this.storedTransportIdsFlight ??= (this.repository.listTransportEventIds?.(this.accountPubkey) ?? Promise.resolve(new Set<string>()))
-      .catch(() => new Set<string>());
+    return this.storedTransportIdsFlight ??= (async () => {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const [stored, seen] = await Promise.all([
+        this.repository.listTransportEventIds?.(this.accountPubkey) ?? Promise.resolve(new Set<string>()),
+        (this.repository.listSeenGiftWraps?.(this.accountPubkey, nowSeconds - SEEN_WRAP_LOOKBACK_SECONDS, nowSeconds + 86_400) ?? Promise.resolve([]))
+          .catch(() => []),
+      ]);
+      for (const wrap of seen) stored.add(wrap.id);
+      return stored;
+    })().catch(() => new Set<string>());
   }
-  private readonly logicalFlights = new Map<string, Promise<{ inserted: boolean; discarded: boolean; deferred: boolean }>>();
+
+  /** True once this wrap was fully handled and need not be fetched again. */
+  isTransportFinalized(eventId: string) {
+    return this.finalizedTransportIds.has(eventId);
+  }
+  private readonly logicalFlights = new Map<string, Promise<{ inserted: boolean; discarded: boolean; deferred: boolean; retryLater?: boolean }>>();
   private readonly pendingPersistenceRetries = new Map<string, {
     message: CanonicalMessage;
     metadata: MessageIngestionMetadata;
@@ -189,6 +209,8 @@ export class MessageIngestionPipeline {
     }
     if (!message) {
       debugLog("sync", "decode_null", diagnostic);
+      // Not a valid wrap for this account; that will not change on refetch.
+      if (this.isSessionCurrent()) this.finalizedTransportIds.add(eventId);
       return { inserted: false, discarded: false, deferred: false };
     }
     debugLog("sync", "decode_success", {
@@ -214,7 +236,7 @@ export class MessageIngestionPipeline {
         }, "warn");
       }
     }
-    if (this.isSessionCurrent()) this.finalizeTransport(message, eventId);
+    if (this.isSessionCurrent() && !("retryLater" in result && result.retryLater)) this.finalizeTransport(message, eventId);
     // Decoded and handled: the caller may drop any copy it was holding.
     return { ...result, known: true };
   }
@@ -316,7 +338,7 @@ export class MessageIngestionPipeline {
         // completing, so senders stayed unresolved and every launch refilled the
         // queue. Leave the wrap unfinalized; a later sync fetches it again.
         debugLog("sync", "authorization_deferred_overflow", diagnostic, "warn");
-        return { inserted: false, discarded: false, deferred: false };
+        return { inserted: false, discarded: false, deferred: false, retryLater: true };
       }
       this.finalizeTransport(message);
       debugLog("sync", "authorization_deferred", diagnostic, "info");

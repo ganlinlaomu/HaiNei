@@ -437,6 +437,36 @@ describe("startup catch-up of already stored messages", () => {
     expect((await repo.listTransportEventIds(ACCOUNT_A)).has("wrap-a")).toBe(true);
     expect((await repo.listTransportEventIds(ACCOUNT_B)).has("wrap-a")).toBe(false);
   });
+
+  it("skips decrypting wraps handled without storing a message, but not ones parked for retry", async () => {
+    // Read receipts and controls are routed, not stored, so they used to be
+    // decrypted again on every launch (about 70 per start in device logs).
+    const repo = new SyncedMessageRepository(database());
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const wrap = (id: string) => ({ id, kind: 1059, created_at: nowSeconds - 60 }) as any;
+    const decode = vi.fn(async (event: any) => event.id === "invalid" ? null : message(`logical-${event.id}`, nowSeconds, { transportEventId: event.id }));
+    const deliver = (value: CanonicalMessage) => value.id === "logical-overflow" ? "defer" as const : false;
+    const first = new MessageIngestionPipeline(ACCOUNT_A, { accountPubkey: ACCOUNT_A }, () => true, deliver, repo, decode);
+    vi.spyOn(repo, "deferAuthorizationMessage").mockRejectedValue(new Error("deferred_queue_full"));
+    for (const id of ["receipt", "invalid", "overflow"]) await first.ingestNostrEvent(wrap(id), { source: "realtime" });
+    expect(first.isTransportFinalized("receipt")).toBe(true);
+    expect(first.isTransportFinalized("invalid")).toBe(true);
+    // A full deferred queue parks the wrap so a later sync fetches it again.
+    expect(first.isTransportFinalized("overflow")).toBe(false);
+    // What MessageSyncManager records for finalized wraps.
+    await repo.markGiftWrapsSeen(ACCOUNT_A, ["receipt", "invalid"].map(id => ({ id, createdAt: nowSeconds - 60 })));
+
+    decryptedEventCache.clear();
+    eventCache.clear();
+    decode.mockClear();
+    const relaunched = new MessageIngestionPipeline(ACCOUNT_A, { accountPubkey: ACCOUNT_A }, () => true, deliver, repo, decode);
+    for (const id of ["receipt", "invalid"]) {
+      expect(await relaunched.ingestNostrEvent(wrap(id), { source: "realtime" })).toMatchObject({ known: true, inserted: false });
+    }
+    expect(decode).not.toHaveBeenCalled();
+    await relaunched.ingestNostrEvent(wrap("overflow"), { source: "realtime" });
+    expect(decode).toHaveBeenCalledOnce();
+  });
 });
 
 describe("relay catch-up", () => {
