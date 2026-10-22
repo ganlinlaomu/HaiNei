@@ -916,6 +916,8 @@ export class MessageSyncManager {
   /** Catch-up passes flush once at their end; realtime arrivals on a timer. */
   private noteSeenWrap(account: string, event: NostrEvent, flushLater = false) {
     if (event?.kind !== 1059 || typeof event.id !== "string" || !Number.isInteger(event.created_at)) return;
+    // Only fully handled wraps: one parked for a later retry must be refetched.
+    if (!this.pipeline?.isTransportFinalized(event.id)) return;
     // Only the recent window is ever reconciled; skip deep history imports.
     if (event.created_at < Math.floor(this.now() / 1000) - SEEN_WRAP_WINDOW_SECONDS) return;
     this.seenWraps.push({ account, id: event.id, createdAt: event.created_at });

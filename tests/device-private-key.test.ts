@@ -1,5 +1,6 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it } from "vitest";
+import { unlockRemoteSignerCredential } from "@/services/remoteSignerCredential";
 
 import {
   hasDevicePrivateKey,
@@ -50,5 +51,40 @@ describe("device private-key storage", () => {
     expect(record.ciphertext).toBeInstanceOf(ArrayBuffer);
     expect(record.wrappingKey.extractable).toBe(false);
     await expect(crypto.subtle.exportKey("raw", record.wrappingKey)).rejects.toBeDefined();
+  });
+
+  describe("iOS WebKit failing to restore the stored CryptoKey", () => {
+    // WebKit throws from IDBRequest.result ("UnknownError: Cannot inject key
+    // into script value") when it cannot unwrap the stored CryptoKey. That
+    // used to leave the read pending forever and freeze session restore.
+    const descriptor = Object.getOwnPropertyDescriptor(IDBRequest.prototype, "result")!;
+    function failResultReads(times: number) {
+      let remaining = times;
+      Object.defineProperty(IDBRequest.prototype, "result", {
+        configurable: true,
+        get(this: IDBRequest) {
+          if (remaining > 0 && (this as any).source?.name === "privateKeys" || remaining > 0 && (this as any).source?.name === "credentials") {
+            remaining -= 1;
+            throw Object.assign(new Error("Cannot inject key into script value"), { name: "UnknownError" });
+          }
+          return descriptor.get!.call(this);
+        },
+      });
+    }
+    afterEach(() => { Object.defineProperty(IDBRequest.prototype, "result", descriptor); });
+
+    it("retries and unlocks when the failure is transient", async () => {
+      await storeDevicePrivateKey(ACCOUNT_A, PRIVATE_A);
+      failResultReads(1);
+      expect(await unlockDevicePrivateKey(ACCOUNT_A)).toBe(PRIVATE_A);
+    });
+
+    it("rejects instead of hanging when it keeps failing", async () => {
+      await storeDevicePrivateKey(ACCOUNT_A, PRIVATE_A);
+      failResultReads(10);
+      await expect(unlockDevicePrivateKey(ACCOUNT_A)).rejects.toMatchObject({ name: "UnknownError" });
+      failResultReads(10);
+      await expect(unlockRemoteSignerCredential(ACCOUNT_A)).rejects.toMatchObject({ name: "UnknownError" });
+    });
   });
 });

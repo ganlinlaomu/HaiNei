@@ -1,3 +1,4 @@
+import { retryStorageRead } from "@/utils/storageRetry";
 const DATABASE_NAME = "hainei_device_credentials";
 const STORE_NAME = "privateKeys";
 const VERSION = 1;
@@ -29,7 +30,13 @@ function associatedData(pubkey: string) {
 
 function requestResult<T>(request: IDBRequest<T>) {
   return new Promise<T>((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
+    // iOS WebKit can fail to restore the stored non-extractable CryptoKey and
+    // then throws from the result getter ("UnknownError: Cannot inject key
+    // into script value"). Uncaught here, this promise never settled and
+    // session restore hung forever.
+    request.onsuccess = () => {
+      try { resolve(request.result); } catch (error) { reject(error); }
+    };
     request.onerror = () => reject(request.error || new Error("device_credential_request_failed"));
   });
 }
@@ -56,7 +63,8 @@ async function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStor
       transaction.onabort = () => reject(transaction.error || new Error("device_credential_transaction_aborted"));
       transaction.onerror = () => reject(transaction.error || new Error("device_credential_transaction_failed"));
     });
-    const result = await requestResult(run(transaction.objectStore(STORE_NAME)));
+    // An aborted transaction rejects `completed`; never wait on the request alone.
+    const result = await Promise.race([requestResult(run(transaction.objectStore(STORE_NAME))), completed.then(() => new Promise<never>(() => undefined))]);
     await completed;
     return result;
   } finally {
@@ -65,7 +73,8 @@ async function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStor
 }
 
 async function readRecord(pubkey: string) {
-  return withStore("readonly", store => store.get(normalize(pubkey))) as Promise<DevicePrivateKeyRecord | undefined>;
+  return retryStorageRead("device_private_key", () =>
+    withStore("readonly", store => store.get(normalize(pubkey))) as Promise<DevicePrivateKeyRecord | undefined>);
 }
 
 export async function storeDevicePrivateKey(pubkey: string, privateKeyHex: string) {
