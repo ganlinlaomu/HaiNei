@@ -17,17 +17,41 @@ const invite = { action: "invite" as const, callId: CALL_ID, room: "d".repeat(32
 const mocks = vi.hoisted(() => ({
   send: vi.fn(async () => ({})),
   rooms: [] as any[],
+  audioElements: [] as any[],
   accepted: true,
+  joinError: null as Error | null,
+  relaySession: vi.fn(async () => undefined),
 }));
 vi.mock("@/nostr/messaging/service", async original => ({ ...(await original() as object), sendDirectMessage: mocks.send }));
 vi.mock("@/nostr/relays", () => ({ getRelaysFromStorage: () => ["wss://relay.test"] }));
-vi.mock("@/services/nearbyTransfer", () => ({ prepareNearbyRelaySession: async () => undefined }));
+vi.mock("@/services/nearbyTransfer", () => ({ prepareNearbyRelaySession: mocks.relaySession }));
 vi.mock("@/services/relaySession", () => ({ turnIceServers: async () => [] }));
 vi.mock("@/stores/keys", () => ({ useKeyStore: () => ({ pkHex: ME, nip44Encrypt: vi.fn(), signEvent: vi.fn() }) }));
 vi.mock("@/stores/friendships", () => ({ useFriendshipsStore: () => ({ isAccepted: () => mocks.accepted }) }));
 vi.mock("trystero", () => ({
   joinRoom: (config: any, id: string) => {
-    const room = { config, id, leave: vi.fn(), addStream: vi.fn(), onPeerJoin: vi.fn(), onPeerLeave: vi.fn(), onPeerStream: vi.fn(), makeAction: () => [vi.fn(), vi.fn()] };
+    if (mocks.joinError) throw mocks.joinError;
+    const actions: Record<string, any> = {};
+    const room = {
+      config,
+      id,
+      actions,
+      leave: vi.fn(async () => undefined),
+      addStream: vi.fn(() => [Promise.resolve()]),
+      onPeerJoin: null as ((peerId: string) => void) | null,
+      onPeerLeave: null as ((peerId: string) => void) | null,
+      onPeerStream: null as ((stream: MediaStream, peerId: string) => void) | null,
+      makeAction: vi.fn((name: string, actionConfig: any = {}) => {
+        const action = {
+          send: vi.fn(async () => undefined),
+          onMessage: actionConfig.onMessage || null,
+          onReceive: actionConfig.onReceive || null,
+          onReceiveProgress: actionConfig.onReceiveProgress || null,
+        };
+        actions[name] = action;
+        return action;
+      }),
+    };
     mocks.rooms.push(room);
     return room;
   },
@@ -80,9 +104,28 @@ describe("call engine", () => {
     setActivePinia(createPinia());
     mocks.send.mockClear();
     mocks.rooms.length = 0;
+    mocks.audioElements.length = 0;
     mocks.accepted = true;
+    mocks.joinError = null;
+    mocks.relaySession.mockReset();
+    mocks.relaySession.mockResolvedValue(undefined);
     vi.stubGlobal("window", {});
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [], getAudioTracks: () => [] })) } });
+    vi.stubGlobal("document", {
+      createElement: vi.fn(() => {
+        const audio = {
+          autoplay: false,
+          setAttribute: vi.fn(),
+          style: {},
+          srcObject: null as MediaStream | null,
+          play: vi.fn(async () => undefined),
+          remove: vi.fn(),
+        };
+        mocks.audioElements.push(audio);
+        return audio;
+      }),
+      body: { appendChild: vi.fn() },
+    });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -140,6 +183,96 @@ describe("call engine", () => {
     const log = (mocks.send.mock.calls.at(-1) as any[])[0];
     expect(log.content).toBe("📞 语音通话 · 已拒绝");
     expect(log.tags).toEqual([["t", "hainei-dm"], ["t", CALL_LOG_TYPE]]);
+  });
+
+  it("uses the Trystero 0.26 room API to target media and handle peer lifecycle", async () => {
+    const { startCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    (navigator.mediaDevices.getUserMedia as any).mockResolvedValueOnce(localStream);
+
+    await startCall(FRIEND);
+    const store = useCallStore();
+    const joined = mocks.rooms[0];
+    expect(joined.makeAction).toHaveBeenCalledWith("taken", expect.objectContaining({ onMessage: expect.any(Function) }));
+    expect(joined.onPeerJoin).toEqual(expect.any(Function));
+    expect(joined.onPeerLeave).toEqual(expect.any(Function));
+    expect(joined.onPeerStream).toEqual(expect.any(Function));
+
+    joined.onPeerJoin("callee-device");
+    expect(joined.addStream).toHaveBeenCalledWith(localStream, { target: "callee-device" });
+
+    const remoteStream = {} as MediaStream;
+    joined.onPeerStream(remoteStream, "callee-device");
+    await Promise.resolve();
+    expect(store.phase).toBe("active");
+    expect(store.connectedAt).toBeGreaterThan(0);
+    expect(mocks.audioElements[0]).toMatchObject({ autoplay: true, srcObject: remoteStream });
+    expect(mocks.audioElements[0].play).toHaveBeenCalled();
+
+    joined.onPeerJoin("second-device");
+    expect(joined.actions.taken.send).toHaveBeenCalledWith(true, { target: "second-device" });
+    expect(joined.addStream).toHaveBeenCalledTimes(1);
+
+    joined.onPeerLeave("callee-device");
+    await vi.advanceTimersByTimeAsync(7_999);
+    expect(store.phase).toBe("active");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store).toMatchObject({ phase: "ended", endReason: "remote_hangup" });
+    expect(joined.leave).toHaveBeenCalled();
+  });
+
+  it("lets only the caller reject a second answering device", async () => {
+    const { acceptCall, handleCallSignal, hangup } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    await handleCallSignal(FRIEND, ME, invite, now());
+    await acceptCall();
+
+    const joined = mocks.rooms[0];
+    joined.onPeerJoin("caller-device");
+    joined.onPeerJoin("other-answering-device");
+    expect(joined.addStream).toHaveBeenCalledTimes(1);
+    expect(joined.actions.taken.send).not.toHaveBeenCalled();
+
+    await joined.actions.taken.onMessage(true, { peerId: "caller-device" });
+    expect(useCallStore()).toMatchObject({ phase: "ended", endReason: "answered_elsewhere" });
+    expect(joined.leave).toHaveBeenCalled();
+    await hangup();
+  });
+
+  it("does not join or signal after the call is cancelled during relay preparation", async () => {
+    let releaseRelay: (() => void) | undefined;
+    mocks.relaySession.mockImplementationOnce(() => new Promise<void>(resolve => { releaseRelay = resolve; }));
+    const { hangup, startCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+
+    const starting = startCall(FRIEND);
+    await vi.waitFor(() => expect(mocks.relaySession).toHaveBeenCalled());
+    await hangup();
+    releaseRelay?.();
+    await starting;
+
+    expect(useCallStore()).toMatchObject({ phase: "ended", endReason: "cancelled" });
+    expect(mocks.rooms).toHaveLength(0);
+    expect(sentActions()).toEqual(["cancel", "📞 语音通话 · 未接听"]);
+  });
+
+  it("cleans up the microphone when creating the Trystero room fails", async () => {
+    const stop = vi.fn();
+    (navigator.mediaDevices.getUserMedia as any).mockResolvedValueOnce({
+      getTracks: () => [{ stop }],
+      getAudioTracks: () => [],
+    });
+    mocks.joinError = new Error("join_failed");
+    const { startCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+
+    await startCall(FRIEND);
+
+    expect(useCallStore()).toMatchObject({ phase: "ended", endReason: "failed" });
+    expect(mocks.rooms).toHaveLength(0);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(sentActions()).toEqual(["📞 语音通话 · 未接通"]);
   });
 
   it("gives up after 45 s unanswered and leaves a missed-call record", async () => {
