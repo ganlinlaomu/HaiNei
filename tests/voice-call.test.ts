@@ -39,6 +39,8 @@ vi.mock("trystero", () => ({
       actions,
       leave: vi.fn(async () => undefined),
       addStream: vi.fn(() => [Promise.resolve()]),
+      peers: {} as Record<string, unknown>,
+      getPeers() { return this.peers; },
       onPeerJoin: null as ((peerId: string) => void) | null,
       onPeerLeave: null as ((peerId: string) => void) | null,
       onPeerStream: null as ((stream: MediaStream, peerId: string) => void) | null,
@@ -152,7 +154,8 @@ describe("call engine", () => {
     // A second invite while ringing gets a busy reply.
     await handleCallSignal(FRIEND, ME, { ...invite, callId: "3".repeat(32) }, now());
     await vi.advanceTimersByTimeAsync(0);
-    expect(sentActions()).toEqual(["busy"]);
+    // The ringing acknowledgement for the first call, then busy for the second.
+    expect(sentActions()).toEqual(["ringing", "busy"]);
     expect(store.callId).toBe("2".repeat(32));
   });
 
@@ -163,7 +166,8 @@ describe("call engine", () => {
     await handleCallSignal(FRIEND, ME, invite, now());
     await handleCallSignal(ME, FRIEND, { action: "accept", callId: CALL_ID }, now());
     expect(store).toMatchObject({ phase: "ended", endReason: "answered_elsewhere" });
-    expect(mocks.send).not.toHaveBeenCalled();
+    // Only this device's ringing acknowledgement; nothing after the other answered.
+    expect(sentActions()).toEqual(["ringing"]);
   });
 
   it("does not ring for an invite that arrives after its cancellation", async () => {
@@ -248,7 +252,7 @@ describe("call engine", () => {
     expect(joined.addStream).toHaveBeenCalledTimes(1);
 
     joined.onPeerLeave("callee-device");
-    await vi.advanceTimersByTimeAsync(7_999);
+    await vi.advanceTimersByTimeAsync(19_999);
     expect(store.phase).toBe("active");
     await vi.advanceTimersByTimeAsync(1);
     expect(store).toMatchObject({ phase: "ended", endReason: "remote_hangup" });
@@ -432,5 +436,73 @@ describe("call engine", () => {
     mocks.accepted = false;
     useCallStore().reset();
     await expect(startCall(FRIEND)).rejects.toThrow("只能和已接受的好友通话");
+  });
+
+  it("tells the caller the callee is ringing", async () => {
+    const { handleCallSignal, startCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    // Callee side: a fresh invite rings and acknowledges.
+    await handleCallSignal(FRIEND, ME, invite, now());
+    expect(sentActions()).toContain("ringing");
+    useCallStore().reset();
+    mocks.send.mockClear();
+    // Caller side: 正在呼叫 becomes 对方响铃中.
+    await startCall(FRIEND);
+    const store = useCallStore();
+    expect(store.remoteRinging).toBe(false);
+    await handleCallSignal(FRIEND, ME, { action: "ringing", callId: store.callId }, now());
+    expect(store).toMatchObject({ phase: "outgoing", remoteRinging: true });
+  });
+
+  it("shows reconnecting when the peer drops, recovers on rejoin, ends after the grace", async () => {
+    const { startCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const store = useCallStore();
+    await startCall(FRIEND);
+    const room = mocks.rooms.at(-1);
+    room.onPeerJoin("peer-1");
+    room.onPeerStream({} as MediaStream, "peer-1");
+    expect(store.phase).toBe("active");
+    room.onPeerLeave("peer-1");
+    expect(store.reconnecting).toBe(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    room.onPeerJoin("peer-2");
+    expect(store).toMatchObject({ phase: "active", reconnecting: false });
+    room.onPeerLeave("peer-2");
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(store).toMatchObject({ phase: "ended", endReason: "remote_hangup" });
+  });
+
+  it("samples route, latency and loss while connected and flags a poor network", async () => {
+    const { startCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const store = useCallStore();
+    await startCall(FRIEND);
+    const room = mocks.rooms.at(-1);
+    let lost = 0;
+    let received = 0;
+    room.peers["peer-1"] = { getStats: async () => {
+      lost += 10; received += 90;
+      return new Map<string, any>([
+        ["pair", { type: "candidate-pair", state: "succeeded", nominated: true, currentRoundTripTime: 0.12, localCandidateId: "l", remoteCandidateId: "r" }],
+        ["l", { candidateType: "relay" }], ["r", { candidateType: "srflx" }],
+        ["in", { type: "inbound-rtp", kind: "audio", packetsLost: lost, packetsReceived: received, jitter: 0.01 }],
+      ]);
+    } };
+    room.onPeerJoin("peer-1");
+    room.onPeerStream({} as MediaStream, "peer-1");
+    await vi.advanceTimersByTimeAsync(4_100);
+    expect(store.quality).toBe("poor");
+  });
+
+  it("rings through the tap-unlocked audio and offers call back", () => {
+    const engine = readFileSync("src/services/callEngine.ts", "utf8");
+    expect(engine).toContain("const shared = sharedAudioContext();");
+    expect(engine).toContain("if (context !== shared) void context.close()");
+    expect(readFileSync("src/main.ts", "utf8")).toContain("installAudioUnlock();");
+    const overlay = readFileSync("src/components/CallOverlay.vue", "utf8");
+    expect(overlay).toContain('call.remoteRinging ? "对方响铃中…" : "正在呼叫…"');
+    expect(overlay).toContain('call.direction === "outgoing" ? "重拨" : "回拨"');
+    expect(readFileSync("src/views/Messages.vue", "utf8")).toContain('v-if="isCallRecord(message) && accepted" class="call-back-link"');
   });
 });

@@ -14,6 +14,7 @@ import { initTheme } from "@/services/theme";
 import { installChunkLoadRecovery } from "@/utils/chunkLoadRecovery";
 import { installRuntimeDiagnostics } from "@/services/runtimeDiagnostics";
 import { restoreWithWatchdog } from "@/utils/restoreWatchdog";
+import { installAudioUnlock } from "@/utils/audioUnlock";
 
 let serviceWorkerRegistration: Promise<ServiceWorkerRegistration> | null = null;
 let serviceWorkerLoadListenerAttached = false;
@@ -98,6 +99,7 @@ async function bootstrap() {
   app.use(router);
   installChunkLoadRecovery(router);
   installRuntimeDiagnostics(app);
+  installAudioUnlock();
 
   // 🚀 优先渲染：先 mount，再恢复会话（避免首屏白屏）
   app.mount("#app");

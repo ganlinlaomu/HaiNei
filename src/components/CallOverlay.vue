@@ -17,7 +17,13 @@
           <span>接听</span>
         </button>
       </template>
-      <template v-else-if="call.phase !== 'ended'">
+      <template v-else-if="call.phase === 'ended'">
+        <button v-if="canCallBack" class="call-button accept" type="button" :disabled="acting" @click="callBack">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
+          <span>{{ call.direction === "outgoing" ? "重拨" : "回拨" }}</span>
+        </button>
+      </template>
+      <template v-else>
         <button class="call-button mute" :class="{ on: call.muted }" type="button" :aria-pressed="call.muted" aria-label="静音" :disabled="call.phase === 'outgoing'" @click="mute">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/><path v-if="call.muted" d="M4 4l16 16"/></svg>
           <span>{{ call.muted ? "已静音" : "静音" }}</span>
@@ -65,10 +71,11 @@ const ENDED_TEXT: Record<string, string> = {
 
 const status = computed(() => {
   switch (call.phase) {
-    case "outgoing": return "正在呼叫…";
+    case "outgoing": return call.remoteRinging ? "对方响铃中…" : "正在呼叫…";
     case "incoming": return "邀请你语音通话";
     case "connecting": return "正在连接…";
-    case "active": return clock(now.value - call.connectedAt);
+    case "active": return call.reconnecting ? "网络中断，正在重新连接…"
+      : `${clock(now.value - call.connectedAt)}${call.quality === "poor" ? " · 网络不佳" : ""}`;
     case "ended": return ENDED_TEXT[call.endReason || "hangup"] || "通话已结束";
     default: return "";
   }
@@ -85,6 +92,15 @@ async function accept() { await once(engine => engine.acceptCall()); }
 async function decline() { await once(engine => engine.declineCall()); }
 async function hangup() { await once(engine => engine.hangup()); }
 async function mute() { (await loadCallEngine()).toggleMute(); }
+// Not after another device handled it, or when the microphone is blocked.
+const canCallBack = computed(() => !!call.peer && call.endReason !== "answered_elsewhere" && call.endReason !== "microphone_denied");
+async function callBack() {
+  const peer = call.peer;
+  await once(async engine => {
+    call.reset();
+    await engine.startCall(peer);
+  });
+}
 </script>
 
 <style scoped>
