@@ -430,14 +430,17 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
         processReceipt: message => directMessages.processReceipt(message),
         processBurnControl: message => directMessages.processBurnControl(message),
         // The call engine (WebRTC, media) loads only when a call signal arrives.
-        processCallControl: message => {
+        processCallControl: async message => {
           const signal = parseCallSignal(message);
           if (!signal) return;
           const sender = message.senderPubkey.toLowerCase();
           const recipient = message.recipientPubkeys.map(value => value.toLowerCase()).find(value => value !== account) || account;
-          void loadCallEngine()
-            .then(engine => engine.handleCallSignal(sender, recipient, signal, message.createdAt))
-            .catch(error => debugLog("system", "call_signal_unhandled", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn"));
+          try {
+            const engine = await loadCallEngine();
+            await engine.handleCallSignal(sender, recipient, signal, message.createdAt);
+          } catch (error) {
+            debugLog("system", "call_signal_unhandled", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
+          }
         },
         isInteraction: isInteractionMessage,
         processInteraction: async message => {

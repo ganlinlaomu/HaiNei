@@ -21,7 +21,7 @@ export const useCallStore = defineStore("call", () => {
   const connectedAt = ref(0);
   const muted = ref(false);
   const endReason = ref<CallEndReason | null>(null);
-  /** Calls already handled, so a duplicate invite (several relays, push) never rings twice. */
+  /** Calls already handled, so relay duplicates or a late invite after cancel never ring twice. */
   const seen = new Set<string>();
 
   function reset() {
