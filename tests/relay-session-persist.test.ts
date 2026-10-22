@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { deviceStorage } from "@/services/deviceStorage";
 import {
-  cachedManagedRelaySession, invalidateRestoredRelaySession, registerRelaySessionSigner, resetManagedRelaySessionForTests,
+  cachedManagedRelaySession, getManagedRelaySessionForUrl, invalidateRestoredRelaySession, registerRelaySessionSigner, resetManagedRelaySessionForTests,
 } from "@/services/relaySession";
 
 const PUBKEY = "a".repeat(64);
@@ -32,6 +32,18 @@ describe("saved relay session", () => {
     registerRelaySessionSigner(PUBKEY, signer);
     expect(cachedManagedRelaySession(RELAY)?.token).toBe("nrs_saved");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("connects with the saved session without waiting for the relay config", async () => {
+    // On a slow network the config request timed out after 3 s and the
+    // managed relay stayed offline although a valid session was saved.
+    save(20 * 60 * 60);
+    deviceStorage.setItem("hainei_managed_relay_url", RELAY);
+    const fetchMock = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+    registerRelaySessionSigner(PUBKEY, signer);
+    expect((await getManagedRelaySessionForUrl(RELAY))?.token).toBe("nrs_saved");
+    deviceStorage.removeItem("hainei_managed_relay_url");
   });
 
   it("ignores expired, foreign or malformed saved sessions", () => {
