@@ -99,11 +99,13 @@ async function bootstrap() {
   app.use(router);
   installChunkLoadRecovery(router);
   installRuntimeDiagnostics(app);
-  installAudioUnlock();
 
-  // 🚀 优先渲染：先 mount，再恢复会话（避免首屏白屏）
+  // Keep audio initialization away from the critical first-paint path.
+  // Register the lightweight gesture listeners after Vue is mounted; the
+  // ringtone media itself is created only on demand / user interaction.
   app.mount("#app");
   startupMark("mounted", { bootMs });
+  installAudioUnlock();
 
   // 异步恢复登录态，不阻塞首屏渲染
   (async () => {
