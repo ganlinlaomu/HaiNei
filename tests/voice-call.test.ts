@@ -89,8 +89,13 @@ describe("call signaling", () => {
     expect(worker).toContain('...(pushPayload.type === "call" ? { Urgency: "high" } : {})');
     const sw = readFileSync("public/service-worker.js", "utf8");
     expect(sw).toContain("body: isCall ? '你有一个语音来电' : '你有新的私信消息'");
-    expect(sw).toContain("event.data?.type === 'CLOSE_CALL_NOTIFICATION'");
-    expect(sw).toContain("event.data?.type === 'INCOMING_RINGTONE_BLOCKED'");
+    expect(sw).toContain("type === 'CLOSE_CALL_NOTIFICATION'");
+    expect(sw).toContain("type === 'INCOMING_RINGTONE_BLOCKED'");
+    expect(sw).toContain("type === 'INCOMING_RINGTONE_START'");
+    expect(sw).toContain("visibleIncomingCallId && visibleIncomingCallId !== id");
+    expect(sw).toContain("hasBlockedVisibleRing()");
+    expect(sw).toContain("if (revision !== callAlertRevision");
+    expect(sw).toContain("callId: blockedIncomingCallId");
   });
 
   it("keeps call code and ringtone media out of the startup path", () => {
@@ -191,7 +196,7 @@ describe("call engine", () => {
     const store = useCallStore();
     expect(store.phase).toBe("incoming");
     expect(store.ringtoneBlocked).toBe(true);
-    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('postMessage({ type: "INCOMING_RINGTONE_BLOCKED" })');
+    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('signalCallNotification("INCOMING_RINGTONE_BLOCKED", session.id);');
     expect(element.play).toHaveBeenCalledTimes(1);
     retryIncomingRingtone();
     await Promise.resolve();
