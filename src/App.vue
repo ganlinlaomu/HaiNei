@@ -68,6 +68,7 @@ import { preloadBottomTabViews } from "@/router/lazyViews";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useDirectMessagesStore } from "@/stores/directMessages";
 import { loadCallEngine, useCallStore } from "@/stores/call";
+import { installPushPresence } from "@/services/pushPresence";
 import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appBadge";
 import { installBackgroundLock } from "@/services/autoLock";
 import { reconcileForegroundFriendState } from "@/services/foregroundFriendStateSync";
@@ -94,6 +95,8 @@ export default defineComponent({
     const notifications = useNotificationsStore();
     const directMessages = useDirectMessagesStore();
     const call = useCallStore();
+    let pushPresence: ReturnType<typeof installPushPresence> | null = null;
+    watch(() => [keys.pkHex, keys.isUnlocked] as const, () => pushPresence?.refresh());
     const bookmarks = useBookmarksStore();
     const postEditorReady = ref(false);
     const postEditorLoadError = ref(false);
@@ -264,6 +267,7 @@ export default defineComponent({
     );
     onMounted(() => {
       stopActivityMonitor = installForegroundActivityMonitor();
+      pushPresence = installPushPresence(keys);
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked && keys.credentialMode !== "device",lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
       // Incoming calls must never wait on first-use chunks. Warm both the
@@ -291,6 +295,7 @@ export default defineComponent({
       stopAutoLock?.();
       stopForegroundResume?.();
       stopActivityMonitor?.();
+      pushPresence?.stop();
       cancelBackgroundTask("preload-post-editor");
       cancelBackgroundTask("preload-call-ui");
       cancelBackgroundTask("preload-bottom-tabs");

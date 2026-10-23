@@ -273,3 +273,25 @@ export async function testPushNotification(pubkey: string, signEvent: SignEvent)
   if (!result.sent) throw new Error("推送服务发送失败，请检查 Worker 日志中的 VAPID 或推送服务响应");
   return "系统推送服务已接受测试通知；请确认本机是否弹出提醒。此结果不代表通知已经显示。";
 }
+
+let presenceEndpoint: string | null | undefined;
+
+/**
+ * Tell the worker whether this device is on screen, so pushes skip it while
+ * the app already shows messages and calls itself (a pushed system banner
+ * stayed on top of the open app). Best effort: the worker expires a
+ * foreground report after 40 s anyway.
+ */
+export async function reportPushForeground(pubkey: string, signEvent: SignEvent, foreground: boolean) {
+  if (!supportsPushNotifications() || !pushEnabledForAccount(pubkey)) return;
+  if (presenceEndpoint === undefined) {
+    try {
+      const registration = await withTimeout(navigator.serviceWorker.ready, SERVICE_WORKER_TIMEOUT_MS, "service worker 未就绪");
+      presenceEndpoint = (await registration.pushManager.getSubscription())?.endpoint || null;
+    } catch {
+      return;
+    }
+  }
+  if (!presenceEndpoint) return;
+  await authenticatedPost("/api/push/presence", { endpoint: presenceEndpoint, foreground }, pubkey, signEvent);
+}
