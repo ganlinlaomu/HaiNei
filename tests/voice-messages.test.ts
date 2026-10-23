@@ -5,6 +5,7 @@ import { encodeEncryptedImageRef } from "@/utils/encryptedImageRef";
 import { decryptDmAudio, prepareEncryptedDmAudio } from "@/utils/encryptedDmAudio";
 import { parsePrivateAudioMessage, serializePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { createVoiceRecordingSession, selectVoiceRecordingMime } from "@/utils/voiceRecorder";
+import { setCallAudioActive } from "@/utils/audioUnlock";
 
 class FakeTrack extends EventTarget {
   kind = "audio";
@@ -437,6 +438,32 @@ describe("voice recording lifecycle", () => {
     expect(audioSession.type).toBe("auto");
     expect(firstHarness.track.stop).toHaveBeenCalledOnce();
     expect(secondHarness.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not let a delayed voice-note finish reset an incoming call's audio session", async () => {
+    vi.useFakeTimers();
+    const audioSession = { type: "auto" };
+    vi.stubGlobal("navigator", { audioSession });
+    const harness = recorderHarness();
+    const recording = await createVoiceRecordingSession({
+      mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+      Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+    });
+    expect(audioSession.type).toBe("play-and-record");
+    try {
+      setCallAudioActive(true);
+      const finished = recording.finish();
+      await vi.advanceTimersByTimeAsync(20);
+      await finished;
+      // The call controls audioSession until it hangs up.
+      expect(audioSession.type).toBe("play-and-record");
+      await expect(createVoiceRecordingSession({
+        mediaDevices: { getUserMedia: harness.getUserMedia } as Pick<MediaDevices, "getUserMedia">,
+        Recorder: FakeRecorder as unknown as typeof MediaRecorder,
+      })).rejects.toThrow("通话期间不能录制语音消息");
+    } finally {
+      setCallAudioActive(false);
+    }
   });
 
   it("automatically finishes at the five-minute limit", async () => {
