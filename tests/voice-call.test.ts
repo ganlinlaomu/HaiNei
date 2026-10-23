@@ -97,7 +97,7 @@ describe("call signaling", () => {
     expect(app).toContain('const loadCallOverlay = () => import("@/components/CallOverlay.vue")');
     expect(app).not.toContain('scheduleBackgroundTask("preload-call-ui"');
     expect(app).toContain(`<CallOverlay v-if="call.phase !== 'idle'" />`);
-    expect(readFileSync("src/stores/call.ts", "utf8")).toContain('return import("@/services/callEngine");');
+    expect(readFileSync("src/stores/call.ts", "utf8")).toContain('return import("@/services/callEngine").then(module => {');
     expect(readFileSync("src/services/accountMessageSync.ts", "utf8")).toContain("await loadCallEngine()");
     expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("z-index:200000");
     expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("function restoreAudio() { loadedCallEngine()?.recoverCallAudio(); }");
