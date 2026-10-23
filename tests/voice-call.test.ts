@@ -90,6 +90,7 @@ describe("call signaling", () => {
     const sw = readFileSync("public/service-worker.js", "utf8");
     expect(sw).toContain("body: isCall ? '你有一个语音来电' : '你有新的私信消息'");
     expect(sw).toContain("event.data?.type === 'CLOSE_CALL_NOTIFICATION'");
+    expect(sw).toContain("event.data?.type === 'INCOMING_RINGTONE_BLOCKED'");
   });
 
   it("keeps call code and ringtone media out of the startup path", () => {
@@ -190,6 +191,7 @@ describe("call engine", () => {
     const store = useCallStore();
     expect(store.phase).toBe("incoming");
     expect(store.ringtoneBlocked).toBe(true);
+    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('postMessage({ type: "INCOMING_RINGTONE_BLOCKED" })');
     expect(element.play).toHaveBeenCalledTimes(1);
     retryIncomingRingtone();
     await Promise.resolve();
