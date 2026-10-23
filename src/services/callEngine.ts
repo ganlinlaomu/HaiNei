@@ -7,7 +7,7 @@ import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
 import { debugLog, startupMark } from "@/utils/debugLog";
-import { reloadRingtoneElement, ringtoneElement, setCallAudioActive, setRingAudioSession } from "@/utils/audioUnlock";
+import { incomingRingtoneArmed, reloadRingtoneElement, ringtoneElement, setCallAudioActive, setRingAudioSession } from "@/utils/audioUnlock";
 import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
@@ -243,6 +243,8 @@ function recordCall(session: CallSession, reason: CallEndReason, durationSeconds
 
 function startTone(session: CallSession, kind: "ring" | "ringback") {
   stopTone(session);
+  const store = useCallStore();
+  if (kind === "ring") store.ringtoneBlocked = false;
   // Android: vibrate with the ring (iOS web has no vibration).
   let vibration: ReturnType<typeof setInterval> | null = null;
   if (kind === "ring" && typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
@@ -274,15 +276,25 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
     } };
     session.ringtone = handle;
     void playing.then(
-      () => startupMark("call_ring_audio", { kind, via: "element", attempt }),
+      () => {
+        if (session.ringtone === handle && isCurrent(session)) {
+          startupMark("call_ring_audio", { kind, via: "element", attempt, primed: incomingRingtoneArmed() });
+        }
+      },
       error => {
         const name = error instanceof Error ? error.name : "unknown";
-        startupMark("call_ring_audio_failed", { kind, via: "element", attempt, error: name, mediaError: element.error?.code ?? 0 });
+        startupMark("call_ring_audio_failed", {
+          kind, via: "element", attempt, error: name,
+          mediaError: element.error?.code ?? 0, primed: incomingRingtoneArmed(),
+        });
         if (session.ringtone !== handle || !isCurrent(session)) return;
         // Gesture-less autoplay denial cannot be fixed by another synthetic
         // oscillator; rely on the incoming-call UI / system push notification.
         if (name === "NotAllowedError") {
-          startupMark("call_ring_requires_interaction", { kind });
+          startupMark("call_ring_requires_interaction", { kind, primed: incomingRingtoneArmed() });
+          // Keep the incoming banner and expose a one-tap retry. A timer
+          // or fresh AudioContext cannot manufacture an iOS user activation.
+          if (kind === "ring") store.ringtoneBlocked = true;
           stopTone(session);
           return;
         }
@@ -341,6 +353,15 @@ function startWebAudioTone(session: CallSession, kind: "ring" | "ringback", vibr
 function stopTone(session: CallSession) {
   session.ringtone?.stop();
   session.ringtone = null;
+}
+
+/** Must run directly in the ringtone retry button's trusted click event. */
+export function retryIncomingRingtone() {
+  const session = activeSession;
+  const store = useCallStore();
+  if (!session || !isCurrent(session) || session.direction !== "incoming" || store.phase !== "incoming" || !store.ringtoneBlocked) return;
+  startupMark("call_ring_manual_retry", { primed: incomingRingtoneArmed() });
+  startTone(session, "ring");
 }
 
 async function keepScreenOn(session: CallSession) {
