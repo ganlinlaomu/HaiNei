@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.119"; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.122"; // ⚠️ 更新代码时同步修改此版本号
 const BUILD_ID = "source-08655ebf22d057a4"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
@@ -221,9 +221,34 @@ async function setBadgeScope(scope) {
   }
 }
 
-// Foreground call playback is denied by WebKit: preserve the system alert
-// even if the matching encrypted call push arrives a few milliseconds later.
-let foregroundRingBlocked = false;
+// Call notification fallback belongs to a single verified incoming call.
+// The push itself contains encrypted NIP-17 data, not a plaintext callId;
+// this state comes exclusively from the visible call engine. A short TTL
+// prevents a stale fallback from affecting an unrelated subsequent push.
+let visibleIncomingCallId = null;
+let blockedIncomingCallId = null;
+let blockedIncomingUntil = 0;
+let callAlertRevision = 0;
+const BLOCKED_RING_TTL_MS = 45_000;
+function validCallId(id) {
+  return typeof id === 'string' && /^[a-f0-9]{32}$/i.test(id);
+}
+function hasBlockedVisibleRing() {
+  return !!visibleIncomingCallId
+    && blockedIncomingCallId === visibleIncomingCallId
+    && Date.now() < blockedIncomingUntil;
+}
+async function closeCallAlertsIfCurrent(revision, callId, includeOldCalls = false) {
+  try {
+    const alerts = await self.registration.getNotifications({ tag: CALL_NOTIFICATION_TAG });
+    if (revision !== callAlertRevision || hasBlockedVisibleRing()) return;
+    for (const notification of alerts) {
+      // Leave an alert from a different/current call alone.
+      if (!includeOldCalls && notification.data?.callId && notification.data.callId !== callId) continue;
+      notification.close();
+    }
+  } catch { /* notifications unavailable */ }
+}
 
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'GET_BUILD_INFO') {
@@ -238,30 +263,58 @@ self.addEventListener('message', (event) => {
     event.waitUntil(self.skipWaiting());
     return;
   }
-  if (event.data?.type === 'INCOMING_RINGTONE_BLOCKED') {
-    foregroundRingBlocked = true;
-    // When iOS rejects the in-app ringtone outside a user gesture, offer an
-    // OS-managed alert instead. Do not do this on successful ringtone play,
-    // which would double-notify. iOS/notification settings may still be quiet.
+  const type = event.data?.type;
+  if (type === 'INCOMING_RINGTONE_START') {
+    const id = event.data?.callId;
+    if (!validCallId(id)) return;
+    visibleIncomingCallId = id;
+    blockedIncomingCallId = null;
+    blockedIncomingUntil = 0;
+    const revision = ++callAlertRevision;
+    // This is the new visible call; clear any leftover alert from an older call.
+    event.waitUntil(closeCallAlertsIfCurrent(revision, id, true));
+    return;
+  }
+  if (type === 'INCOMING_RINGTONE_BLOCKED') {
+    const id = event.data?.callId;
+    if (!validCallId(id) || (visibleIncomingCallId && visibleIncomingCallId !== id)) return;
+    visibleIncomingCallId = id; // Recover after service-worker restart.
+    blockedIncomingCallId = id;
+    blockedIncomingUntil = Date.now() + BLOCKED_RING_TTL_MS;
+    const revision = ++callAlertRevision;
+    // iOS may deny both the ringtone and the OS notification depending on
+    // permission/focus settings. This is best-effort, not a VoIP entitlement.
     event.waitUntil((async () => {
       try {
         const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
         if (!clients.some(client => client.visibilityState === 'visible')) return;
         if (self.Notification && self.Notification.permission !== 'granted') return;
+        if (revision !== callAlertRevision || !hasBlockedVisibleRing()) return;
         await self.registration.showNotification('HaiNei', {
           body: '你有一个语音来电', icon: '/icon-192.png', badge: '/icon-192.png',
-          tag: CALL_NOTIFICATION_TAG, data: { type: 'call' },
+          tag: CALL_NOTIFICATION_TAG, data: { type: 'call', callId: id },
           requireInteraction: true, renotify: true
         });
+        // A late async notification creation must not revive a finished call.
+        if (revision !== callAlertRevision) {
+          try {
+            const alerts = await self.registration.getNotifications({ tag: CALL_NOTIFICATION_TAG });
+            for (const alert of alerts) if (alert.data?.callId === id) alert.close();
+          } catch {}
+        }
       } catch { /* notification permission or platform policy denied */ }
     })());
     return;
   }
-  if (event.data?.type === 'CLOSE_CALL_NOTIFICATION') {
-    foregroundRingBlocked = false;
-    // The call was answered, declined or ended (possibly on another device).
-    event.waitUntil(self.registration.getNotifications({ tag: CALL_NOTIFICATION_TAG })
-      .then(notifications => { for (const notification of notifications) notification.close(); }));
+  if (type === 'INCOMING_RINGTONE_PLAYING' || type === 'CLOSE_CALL_NOTIFICATION') {
+    const id = event.data?.callId;
+    if (!validCallId(id) || (visibleIncomingCallId && visibleIncomingCallId !== id)) return;
+    // A stale END for an old call must not cancel a newer blocked ringtone.
+    blockedIncomingCallId = null;
+    blockedIncomingUntil = 0;
+    if (type === 'CLOSE_CALL_NOTIFICATION') visibleIncomingCallId = null;
+    const revision = ++callAlertRevision;
+    event.waitUntil(closeCallAlertsIfCurrent(revision, id));
     return;
   }
   if (event.data?.type === 'SYNC_APP_BADGE') {
@@ -373,15 +426,16 @@ self.addEventListener('push', (event) => {
       // encrypted invite in the hint tells the app who is calling.
       const isCall = payload.type === 'call';
       const tag = isCall ? CALL_NOTIFICATION_TAG : DM_NOTIFICATION_TAG;
+      const blockedCallAlert = isCall && appVisible && hasBlockedVisibleRing();
       await self.registration.showNotification('HaiNei', {
         body: isCall ? '你有一个语音来电' : '你有新的私信消息', icon:'/icon-192.png', badge:'/icon-192.png',
-        tag, data:{type: isCall ? 'call' : 'message'},
-        ...(appVisible ? { silent: true } : isCall ? { requireInteraction: true, renotify: true } : { renotify: true })
+        tag, data:{type: isCall ? 'call' : 'message', ...(blockedCallAlert ? { callId: blockedIncomingCallId } : {})},
+        ...(appVisible && !blockedCallAlert ? { silent: true } : isCall ? { requireInteraction: true, renotify: true } : { renotify: true })
       });
       // WebKit requires every push to show a notification, but while the app
       // is on screen it shows its own call banner / unread state: withdraw the
       // system one at once instead of covering the app with it.
-      if (appVisible && !(isCall && foregroundRingBlocked)) {
+      if (appVisible && !(isCall && hasBlockedVisibleRing())) {
         try {
           for (const notification of await self.registration.getNotifications({ tag })) notification.close();
         } catch {}

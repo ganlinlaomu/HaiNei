@@ -181,8 +181,11 @@ function startQualitySampling(session: CallSession, room: Room) {
   }, STATS_INTERVAL_MS);
 }
 
-function closeCallNotification() {
-  try { navigator.serviceWorker?.controller?.postMessage({ type: "CLOSE_CALL_NOTIFICATION" }); } catch { /* best effort */ }
+function signalCallNotification(type: "INCOMING_RINGTONE_START" | "INCOMING_RINGTONE_BLOCKED" | "INCOMING_RINGTONE_PLAYING" | "CLOSE_CALL_NOTIFICATION", callId: string) {
+  try { navigator.serviceWorker?.controller?.postMessage({ type, callId }); } catch { /* best effort */ }
+}
+function closeCallNotification(callId: string) {
+  signalCallNotification("CLOSE_CALL_NOTIFICATION", callId);
 }
 
 // Signals take the fast path: all relays at once, first accept wins, and the
@@ -279,7 +282,8 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
       () => {
         if (session.ringtone === handle && isCurrent(session)) {
           startupMark("call_ring_audio", { kind, via: "element", attempt, primed: incomingRingtoneArmed() });
-          if (kind === "ring") closeCallNotification();
+          startupMark("ring_autoplay_result", { callId: session.id, kind, result: "played", primed: incomingRingtoneArmed() });
+          if (kind === "ring") signalCallNotification("INCOMING_RINGTONE_PLAYING", session.id);
         }
       },
       error => {
@@ -289,6 +293,7 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
           mediaError: element.error?.code ?? 0, primed: incomingRingtoneArmed(),
         });
         if (session.ringtone !== handle || !isCurrent(session)) return;
+        startupMark("ring_autoplay_result", { callId: session.id, kind, result: "rejected", error: name, primed: incomingRingtoneArmed() });
         // Gesture-less autoplay denial cannot be fixed by another synthetic
         // oscillator; rely on the incoming-call UI / system push notification.
         if (name === "NotAllowedError") {
@@ -299,9 +304,8 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
             store.ringtoneBlocked = true;
             // Foreground push notifications are intentionally silent/closed.
             // Ask the service worker for an OS alert ONLY if audio was denied.
-            try {
-              navigator.serviceWorker?.controller?.postMessage({ type: "INCOMING_RINGTONE_BLOCKED" });
-            } catch { /* no active service worker */ }
+            signalCallNotification("INCOMING_RINGTONE_BLOCKED", session.id);
+            startupMark("ring_fallback_result", { callId: session.id, result: "os_alert_requested" });
           }
           stopTone(session);
           return;
@@ -822,7 +826,7 @@ function discardOrphanedSession() {
   const store = useCallStore();
   if (store.callId === session.id && store.phase !== "idle" && store.phase !== "ended" && account() === session.owner) return;
   activeSession = null;
-  closeCallNotification();
+  closeCallNotification(session.id);
   void releaseSessionResources(session);
 }
 
@@ -842,7 +846,7 @@ async function finish(session: CallSession, reason: CallEndReason, notify: boole
   // Invalidate every callback before any asynchronous room teardown. Old
   // rooms can no longer stop tracks or mutate the next call.
   activeSession = null;
-  closeCallNotification();
+  closeCallNotification(session.id);
   store.phase = "ended";
   store.endReason = reason;
   const releasing = releaseSessionResources(session);
@@ -927,7 +931,7 @@ export async function acceptCall() {
   if (!session || !isCurrent(session) || session.direction !== "incoming" || store.phase !== "incoming" || !store.invite) return;
   const invite = { ...store.invite };
   stopTone(session);
-  closeCallNotification();
+  closeCallNotification(session.id);
   store.phase = "connecting";
   setCallAudioActive(true);
   setCallAudioSession(session, "play-and-record", "call_accept");
@@ -1012,8 +1016,9 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     // Do not let a tap on the incoming-call banner prime unrelated ringtone
     // media or a Web Audio context just as WebKit starts microphone capture.
     setCallAudioActive(true);
-    // The app shows its own call banner: withdraw the system notification.
-    closeCallNotification();
+    // Announce this exact call before playback. Stale close messages from
+    // a previous call must not hide this call's OS fallback notification.
+    signalCallNotification("INCOMING_RINGTONE_START", session.id);
     startTone(session, "ring");
     // Tell the caller this device is ringing (对方响铃中).
     sendSignalBestEffort(peer, { action: "ringing", callId: signal.callId });

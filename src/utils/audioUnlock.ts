@@ -1,3 +1,5 @@
+import { startupMark } from "@/utils/debugLog";
+
 // A user gesture can grant an HTMLAudioElement permission to play later on
 // iOS. Prime ONE persistent incoming-ring element using an all-zero PCM clip,
 // never a seek into an audible ringtone (which can cause the first-tap "dong").
@@ -113,17 +115,20 @@ export function incomingRingtoneArmed() {
  * Reuse the EXACT same audio element for the next incoming ringtone.
  * A 100%-silent WAV means loading/seek delays can never leak a tone.
  */
-export function armIncomingRingtoneFromGesture() {
+export function armIncomingRingtoneFromGesture(gesture = "manual") {
   if (callAudioActive || typeof document === "undefined" || incomingArmPending || !needsIncomingArm) return;
   const element = elements.get("ring") || document.createElement("audio");
   if (typeof element.play !== "function" || typeof element.pause !== "function") return;
   elements.set("ring", element);
   try {
-    // A previous incoming ring may have left the same element on its tone URL.
-    if (element.src?.startsWith("blob:")) {
+    // A previous ring may have left its audible source on this element.
+    // Invalidate the old media URL only after preparing the zero-sample WAV.
+    const nextSource = silentClipSource();
+    if (incomingUsingSilence) releaseSilentSource();
+    else if (element.src?.startsWith("blob:")) {
       try { URL.revokeObjectURL(element.src); } catch { /* ignored */ }
     }
-    incomingSilentSource = silentClipSource();
+    incomingSilentSource = nextSource;
     incomingUsingSilence = true;
     element.src = incomingSilentSource;
     element.preload = "auto";
@@ -138,42 +143,69 @@ export function armIncomingRingtoneFromGesture() {
       if (attempt !== incomingArmAttempt) return;
       incomingArmPending = false;
       if (callAudioActive || elements.get("ring") !== element || !incomingUsingSilence) return;
-      element.pause();
-      element.currentTime = 0;
-      needsIncomingArm = false;
-      incomingArmSucceeded = true;
-    }, () => {
+      try {
+        element.pause();
+        element.currentTime = 0;
+        needsIncomingArm = false;
+        incomingArmSucceeded = true;
+        // Only an arm result; a later audible play() can still be denied by WebKit.
+        startupMark("ring_arm_result", { result: "primed", gesture });
+      } catch {
+        needsIncomingArm = true;
+        incomingArmSucceeded = false;
+        startupMark("ring_arm_result", { result: "pause_failed", gesture });
+      }
+    }, error => {
       if (attempt !== incomingArmAttempt) return;
       incomingArmPending = false;
       needsIncomingArm = true;
       incomingArmSucceeded = false;
+      startupMark("ring_arm_result", { result: "rejected", gesture, error: error instanceof Error ? error.name : "unknown" });
     });
-  } catch {
+  } catch (error) {
     incomingArmPending = false;
     needsIncomingArm = true;
     incomingArmSucceeded = false;
+    startupMark("ring_arm_result", { result: "exception", gesture, error: error instanceof Error ? error.name : "unknown" });
   }
 }
 
-/** After a background interruption, try quiet arming on the NEXT trusted tap. */
+/**
+ * Only capture gestures WebKit recognizes as media activations. On iOS, the
+ * pointerup preceding touchend is deliberately ignored so it cannot consume
+ * the only activation opportunity with an early rejected play(). Native
+ * keyboard, mouse/pen and assistive click actions remain supported.
+ */
 export function installIncomingRingtoneActivation() {
   if (activationInstalled || typeof window === "undefined") return;
   activationInstalled = true;
+  let lastGestureAt = -Infinity;
   const gesture = (event: Event) => {
-    if (!event.isTrusted || callAudioActive) return;
+    if (!event.isTrusted || callAudioActive || document.visibilityState === "hidden") return;
+    if (event.type === "pointerup" && (event as PointerEvent).pointerType === "touch") return;
     if ((event.target as Element | null)?.closest?.("[data-live-audio-action]")) return;
     const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
     if (session?.type === "play-and-record") return;
-    armIncomingRingtoneFromGesture();
+    // touchend + synthetic click from the same gesture must not cause two
+    // consecutive play() attempts if the first settles unusually quickly.
+    const now = Date.now();
+    if (now - lastGestureAt < 450) return;
+    if (incomingArmPending || !needsIncomingArm) return;
+    lastGestureAt = now;
+    armIncomingRingtoneFromGesture(event.type);
   };
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
+      ++incomingArmAttempt;
+      incomingArmPending = false;
       needsIncomingArm = true;
       incomingArmSucceeded = false;
     }
   });
-  window.addEventListener("pointerdown", gesture, { capture: true, passive: true });
+  window.addEventListener("touchend", gesture, { capture: true, passive: true });
+  window.addEventListener("pointerup", gesture, { capture: true, passive: true });
   window.addEventListener("keydown", gesture, { capture: true });
+  window.addEventListener("click", gesture, { capture: true });
 }
 
 /** Recreate an element whose source failed to load (MediaError), once per failure. */
