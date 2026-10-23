@@ -234,6 +234,24 @@ self.addEventListener('message', (event) => {
     event.waitUntil(self.skipWaiting());
     return;
   }
+  if (event.data?.type === 'INCOMING_RINGTONE_BLOCKED') {
+    // When iOS rejects the in-app ringtone outside a user gesture, offer an
+    // OS-managed alert instead. Do not do this on successful ringtone play,
+    // which would double-notify. iOS/notification settings may still be quiet.
+    event.waitUntil((async () => {
+      try {
+        const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        if (!clients.some(client => client.visibilityState === 'visible')) return;
+        if (self.Notification?.permission !== 'granted') return;
+        await self.registration.showNotification('HaiNei', {
+          body: '你有一个语音来电', icon: '/icon-192.png', badge: '/icon-192.png',
+          tag: CALL_NOTIFICATION_TAG, data: { type: 'call' },
+          requireInteraction: true, renotify: true
+        });
+      } catch { /* notification permission or platform policy denied */ }
+    })());
+    return;
+  }
   if (event.data?.type === 'CLOSE_CALL_NOTIFICATION') {
     // The call was answered, declined or ended (possibly on another device).
     event.waitUntil(self.registration.getNotifications({ tag: CALL_NOTIFICATION_TAG })
