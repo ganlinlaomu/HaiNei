@@ -62,7 +62,7 @@
         <button type="button" @click="selectFilter('trash')">最近删除</button>
         <button type="button" @click="moreOpen = false; backupOpen = true">笔记与待办备份 / 恢复</button>
       </div>
-      <TodoPlanner v-if="filter === 'todo' && !loading && !query.trim()" :records="notes" @open="openTodoById" @changed="refreshAfterSync" />
+      <TodoPlanner v-if="filter === 'todo' && !loading && !query.trim()" :records="notes" @open="openTodoById" @add="createTodoForDate" @changed="refreshAfterSync" />
       <p v-if="filter === 'todo' && !loading && !query.trim() && filtered.length" class="lists-label">全部待办清单</p>
       <SavedPosts v-if="filter === 'saved'" :query="query" />
       <p v-else-if="loading" class="empty-state">正在读取本地笔记…</p>
@@ -698,6 +698,15 @@ async function create(kind: "note" | "todo", duringLoad = false) {
   } catch (cause) { handleError(cause); }
   finally { editorTransitionBusy.value = false; }
 }
+/** A planner date creates an unsaved list with one editable dated task.
+ * Blank text is never written to IndexedDB or cloud sync. */
+async function createTodoForDate(due: number) {
+  if (!Number.isSafeInteger(due) || !keys.isUnlocked) return;
+  await create("todo");
+  if (editor.value?.kind !== "todo" || !isUnsavedDraft.value) return;
+  editor.value.tasks.push({ id: crypto.randomUUID(), text: "", done: false, due });
+}
+
 async function open(note: PrivateSpaceRecord) {
   if (backupBusy.value || editorTransitionBusy.value || editor.value) return;
   editorTransitionBusy.value = true;
