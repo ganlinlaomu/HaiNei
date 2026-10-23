@@ -12,6 +12,13 @@ let primedAt = 0;
 // iOS withdraws playback permission after backgrounding or another app's
 // audio. Re-prime on the next tap after that, or at least once a minute.
 let primeStale = true;
+// During a live call, priming the ringtone on every tap can steal iOS audio focus.
+let callAudioActive = false;
+
+export function setCallAudioActive(active: boolean) {
+  callAudioActive = active;
+  if (!active) primeStale = true;
+}
 const REPRIME_AFTER_MS = 60_000;
 // A point inside each tone's silent stretch: priming plays real (unmuted)
 // audio there, which iOS treats as a stronger unlock than muted playback.
@@ -156,6 +163,7 @@ export function installAudioUnlock() {
   ringtoneElement("ring");
   ringtoneElement("ringback");
   const onGesture = () => {
+    if (callAudioActive) return;
     if (!primed || primeStale || Date.now() - primedAt > REPRIME_AFTER_MS || context?.state !== "running") unlock();
   };
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") primeStale = true; });
