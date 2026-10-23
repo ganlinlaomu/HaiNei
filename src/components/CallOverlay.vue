@@ -64,6 +64,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import { loadCallEngine, useCallStore } from "@/stores/call";
+import { recoverCallAudio } from "@/services/callEngine";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { useFriendsStore } from "@/stores/friends";
 
@@ -118,7 +119,9 @@ async function accept() { await once(engine => engine.acceptCall()); }
 async function decline() { await once(engine => engine.declineCall()); }
 async function hangup() { await once(engine => engine.hangup()); }
 async function mute() { (await loadCallEngine()).toggleMute(); }
-async function restoreAudio() { (await loadCallEngine()).recoverCallAudio(); }
+// Do not await a dynamic import here: iOS may expire the trusted click
+// activation before HTMLAudioElement.play() executes.
+function restoreAudio() { recoverCallAudio(); }
 // The ended screen closes itself shortly; tapping closes it at once.
 function dismissEnded() { if (call.phase === "ended") call.reset(); }
 // Not after another device handled it, or when the microphone is blocked.
