@@ -5,7 +5,7 @@ import { createRelaySession, relayPublicConfig } from "./relay";
 import { createTurnCredentials } from "./turn";
 import {
   getPushPublicKey,
-  removePushSubscription,
+  removePushSubscription, setPushForeground,
   replacePushAuthorizationPolicy,
   savePushSubscription,
   triggerGenericPush,
@@ -128,6 +128,13 @@ export async function handleRequest(request: Request, env: Env) {
         env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
       );
       return json(await savePushSubscription(env, pubkey, payload.subscription), 201);
+    }
+    if (path === "/api/push/presence") {
+      const payload = await body(request, env, 16 * 1024);
+      const pubkey = await verifyAndConsumeChallenge(
+        env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
+      );
+      return json(await setPushForeground(env, pubkey, payload.endpoint, payload.foreground));
     }
     if (path === "/api/push/unsubscribe") {
       const payload = await body(request, env, 16 * 1024);

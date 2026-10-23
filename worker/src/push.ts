@@ -354,6 +354,23 @@ export async function removePushSubscription(env: Env, accountPubkey: string, en
   return { subscribed: false };
 }
 
+/** How long a foreground report holds pushes back if the app never says it left. */
+export const PUSH_FOREGROUND_TTL_SECONDS = 40;
+
+/**
+ * The app reports that this device is on screen (it gets messages and calls
+ * over its own relay connection) or has left. Pushes skip the device while
+ * foreground; the short TTL bounds a missed "left" report.
+ */
+export async function setPushForeground(env: Env, accountPubkey: string, endpointValue: unknown, foreground: unknown, now = Math.floor(Date.now() / 1000)) {
+  const endpoint = validatedPushEndpoint(env, endpointValue);
+  const until = foreground === true ? now + PUSH_FOREGROUND_TTL_SECONDS : 0;
+  await env.DB.prepare(`
+    UPDATE hainei_push_subscriptions SET foreground_until = ? WHERE account_pubkey = ? AND endpoint = ?
+  `).bind(until, accountPubkey, endpoint).run();
+  return { foregroundUntil: until };
+}
+
 export function sanitizePushAuthorizedSenders(value: unknown, recipientPubkey: string) {
   if (!Array.isArray(value)) throw new HttpError(400, "invalid_push_authorization");
   const senders = [...new Set(value
@@ -497,7 +514,8 @@ export async function triggerGenericPush(
       AND a.sender_pubkey = ?
       AND a.expires_at > ?
     WHERE s.account_pubkey IN (${placeholders})
-  `).bind(senderPubkey, now, ...recipients).all<PushSubscriptionRow>();
+      AND s.foreground_until <= ?
+  `).bind(senderPubkey, now, ...recipients, now).all<PushSubscriptionRow>();
   diagnostics.subscriptionsFound = rows.results.length;
   if (!rows.results.length) return diagnostics;
 
