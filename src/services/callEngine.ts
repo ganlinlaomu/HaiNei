@@ -636,6 +636,8 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     store.direction = "incoming";
     store.invite = { room: signal.room!, secret: signal.secret! };
     const session = createSession(signal.callId, peer, "incoming");
+    // The app shows its own call banner: withdraw the system notification.
+    closeCallNotification();
     startTone(session, "ring");
     // Tell the caller this device is ringing (对方响铃中).
     sendSignalBestEffort(peer, { action: "ringing", callId: signal.callId });

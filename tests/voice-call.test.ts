@@ -523,5 +523,13 @@ describe("call engine", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(store.phase).toBe("idle");
   });
-});
 
+  it("shows an in-app incoming call as a banner and withdraws system notifications", () => {
+    const overlay = readFileSync("src/components/CallOverlay.vue", "utf8");
+    expect(overlay).toContain('const showBanner = computed(() => call.phase === "incoming" && !expanded.value);');
+    expect(overlay).toContain('<div v-if="showBanner" class="call-banner"');
+    const sw = readFileSync("public/service-worker.js", "utf8");
+    expect(sw).toContain("for (const notification of await self.registration.getNotifications({ tag })) notification.close();");
+    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain("// The app shows its own call banner: withdraw the system notification.");
+  });
+});
