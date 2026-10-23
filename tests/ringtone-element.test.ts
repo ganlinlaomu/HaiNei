@@ -23,20 +23,51 @@ describe("ringtone audio", () => {
     }
   });
 
-  it("never primes a ringtone on first tap or on app startup", () => {
+  it("never plays an audible sample on a tap or at app startup", () => {
     const unlock = readFileSync("src/utils/audioUnlock.ts", "utf8");
     const main = readFileSync("src/main.ts", "utf8");
     const engine = readFileSync("src/services/callEngine.ts", "utf8");
     expect(unlock).not.toContain("installAudioUnlock");
     expect(unlock).not.toContain("primeElements");
     expect(unlock).not.toContain("SILENT_OFFSET");
-    expect(unlock).not.toContain("pointerdown");
     expect(main).not.toContain("installAudioUnlock");
+    expect(main).not.toContain("armIncomingRingtoneOnTap");
+    // Taps only arm the incoming ringtone muted, from an idle task.
+    expect(unlock).toContain("element.muted = true;");
+    expect(unlock).not.toContain("setRingAudioSession(true)");
+    expect(readFileSync("src/App.vue", "utf8")).toContain('scheduleBackgroundTask("arm-incoming-ringtone"');
     expect(engine).toContain('ringtoneElement("ringback");');
     expect(engine).toContain('const first = ringtoneElement(kind);');
     expect(engine).toContain('if (name === "NotAllowedError")');
     expect(engine).toContain('startupMark("call_ring_requires_interaction"');
     expect(unlock).toContain("URL.createObjectURL(new Blob([toneWavBytes(kind)");
+  });
+
+  it("arms the incoming ringtone muted on a tap so a later call can ring (iOS NotAllowedError)", async () => {
+    vi.resetModules();
+    const listeners = new Map<string, () => void>();
+    const element: any = {
+      src: "", loop: false, preload: "", muted: false, paused: true, currentTime: 0, setAttribute: vi.fn(),
+      play: vi.fn(async function () { expect(element.muted).toBe(true); }),
+      pause: vi.fn(),
+    };
+    vi.stubGlobal("document", { createElement: () => element, addEventListener: vi.fn(), visibilityState: "visible" });
+    vi.stubGlobal("window", { addEventListener: (type: string, fn: () => void) => listeners.set(type, fn) });
+    try {
+      const { armIncomingRingtoneOnTap } = await import("@/utils/audioUnlock");
+      armIncomingRingtoneOnTap();
+      expect(element.play).not.toHaveBeenCalled();
+      listeners.get("pointerup")!();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(element.play).toHaveBeenCalledTimes(1);
+      expect(element.pause).toHaveBeenCalledTimes(1);
+      expect(element.muted).toBe(false);
+      listeners.get("pointerup")!(); // already armed
+      expect(element.play).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
   });
 
   it("creates a ringtone resource without playing any sample", async () => {

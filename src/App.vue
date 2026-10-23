@@ -136,6 +136,13 @@ export default defineComponent({
       scheduleBackgroundTask("preload-post-editor", preparePostEditor, { priority: "idle", timeoutMs: 2_500 });
     }
 
+    function scheduleRingtoneArming() {
+      // Not on the startup path; only listens for taps (see audioUnlock).
+      scheduleBackgroundTask("arm-incoming-ringtone", async () => {
+        (await import("@/utils/audioUnlock")).armIncomingRingtoneOnTap();
+      }, { priority: "idle", timeoutMs: 3_000 });
+    }
+
     function scheduleBottomTabWarmup() {
       if (bottomTabsPreloaded || !keys.isLoggedIn || !keys.isUnlocked) return;
       scheduleBackgroundTask("preload-bottom-tabs", async () => {
@@ -270,6 +277,7 @@ export default defineComponent({
       pushPresence = installPushPresence(keys);
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked && keys.credentialMode !== "device",lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
+      scheduleRingtoneArming();
       // Do not parse the WebRTC engine and call overlay during startup.
       // Incoming call signals load the engine on demand; the overlay
       // follows reactively when the call becomes visible.

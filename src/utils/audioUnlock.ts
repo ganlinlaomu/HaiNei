@@ -90,6 +90,41 @@ export function setRingAudioSession(ringing: boolean) {
   } catch { /* unsupported */ }
 }
 
+let ringArmed = false;
+let armListening = false;
+
+/**
+ * iOS refuses play() on an <audio> that was never started by a tap
+ * (NotAllowedError), so a call arriving while the app is open stayed silent.
+ * On a real tap, play the incoming ringtone MUTED and pause at once: nothing
+ * is heard, other apps' audio and the AudioSession are untouched, yet WebKit
+ * then lets that element ring later. Re-armed after the app was hidden.
+ * Installed from an idle task, never on the startup path.
+ */
+export function ringtoneArmed() {
+  return ringArmed;
+}
+
+export function armIncomingRingtoneOnTap() {
+  if (armListening || typeof window === "undefined" || typeof document === "undefined") return;
+  armListening = true;
+  const arm = () => {
+    if (ringArmed || callAudioActive) return;
+    const element = ringtoneElement("ring");
+    if (!element || !element.paused) return;
+    element.muted = true;
+    let playing: Promise<void>;
+    try { playing = Promise.resolve(element.play()); } catch { element.muted = false; return; }
+    void playing.then(() => {
+      // A call may have started this element meanwhile; leave it ringing.
+      if (element.muted) { element.pause(); element.currentTime = 0; }
+      ringArmed = true;
+    }, () => undefined).finally(() => { element.muted = false; });
+  };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") ringArmed = false; });
+  for (const type of ["pointerup", "touchend", "keydown"]) window.addEventListener(type, arm, { capture: true, passive: true });
+}
+
 export function ringtoneElement(kind: RingKind): HTMLAudioElement | null {
   if (typeof document === "undefined") return null;
   let element = elements.get(kind);

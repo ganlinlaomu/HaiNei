@@ -7,7 +7,7 @@ import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
 import { debugLog, startupMark } from "@/utils/debugLog";
-import { reloadRingtoneElement, ringtoneElement, setCallAudioActive, setRingAudioSession } from "@/utils/audioUnlock";
+import { reloadRingtoneElement, ringtoneArmed, ringtoneElement, setCallAudioActive, setRingAudioSession } from "@/utils/audioUnlock";
 import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
@@ -277,7 +277,7 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
       () => startupMark("call_ring_audio", { kind, via: "element", attempt }),
       error => {
         const name = error instanceof Error ? error.name : "unknown";
-        startupMark("call_ring_audio_failed", { kind, via: "element", attempt, error: name, mediaError: element.error?.code ?? 0 });
+        startupMark("call_ring_audio_failed", { kind, via: "element", attempt, error: name, mediaError: element.error?.code ?? 0, armed: ringtoneArmed() });
         if (session.ringtone !== handle || !isCurrent(session)) return;
         // Gesture-less autoplay denial cannot be fixed by another synthetic
         // oscillator; rely on the incoming-call UI / system push notification.
