@@ -158,10 +158,9 @@ function unlock() {
 export function installAudioUnlock() {
   if (installed || typeof window === "undefined") return;
   installed = true;
-  // Create and start loading the tones now, so a call that arrives before
-  // the first tap (cold start from the call notification) finds them ready.
-  ringtoneElement("ring");
-  ringtoneElement("ringback");
+  // Do not synthesize WAV data or instantiate audio media before Vue mounts.
+  // On iOS this synchronous work can stall cold start; the first user gesture
+  // primes the tones and an incoming call still creates its ringtone on demand.
   const onGesture = () => {
     if (callAudioActive) return;
     if (!primed || primeStale || Date.now() - primedAt > REPRIME_AFTER_MS || context?.state !== "running") unlock();
