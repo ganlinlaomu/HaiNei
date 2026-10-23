@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.119",
-  "releaseSummary": "待办可以取消已设的时间",
+  "version": "0.1.120",
+  "releaseSummary": "修复 iPhone 语音电话无声与播放恢复",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
