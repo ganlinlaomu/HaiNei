@@ -42,6 +42,8 @@ describe("ringtone audio", () => {
     expect(install).not.toContain('ringtoneElement("ringback");');
     const main = readFileSync("src/main.ts", "utf8");
     expect(main.indexOf("app.mount(\"#app\")")).toBeLessThan(main.indexOf("installAudioUnlock();"));
+    expect(unlock).toContain('if (callAudioActive) return;');
+    expect(unlock).toContain('closest?.("[data-live-audio-action]")');
     expect(engine).toContain('startupMark("call_ring_audio_failed"');
   });
 });
