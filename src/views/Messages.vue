@@ -28,7 +28,7 @@
           <ProfileAvatar :pubkey="peerPubkey" :local-name="localName" :size="34" />
         </button>
         <button class="peer-profile name-profile-link" type="button" @click="openPeerProfile">{{ displayName }}</button>
-        <button v-if="accepted" class="header-search-button" type="button" aria-label="语音通话" @pointerdown="preloadCall" @click="startVoiceCall">
+        <button v-if="accepted" class="header-search-button" type="button" aria-label="语音通话" data-live-audio-action @pointerdown="preloadCall" @click="startVoiceCall">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
         </button>
         <button class="header-search-button" type="button" aria-label="搜索当前聊天" @click="openSearch">
@@ -170,7 +170,7 @@
               </template>
               <template v-else>
                 <MentionText v-if="messageText(message.content)" class="bubble-text" :text="messageText(message.content)" />
-                <button v-if="isCallRecord(message) && accepted" class="call-back-link" type="button" @pointerdown.stop="preloadCall" @click.stop="startVoiceCall">回拨</button>
+                <button v-if="isCallRecord(message) && accepted" class="call-back-link" type="button" data-live-audio-action @pointerdown.stop="preloadCall" @click.stop="startVoiceCall">回拨</button>
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else-if="hasImage(message.content)" :content="message.content" :show-all="true" alt-text="私信图片" />
               </template>
@@ -339,6 +339,7 @@
           <button
             v-show="voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImage)"
             class="composer-icon-button microphone-button persistent-microphone"
+            data-live-audio-action
             :class="{ active: voiceCaptureOwnsAudioSession }"
             type="button"
             aria-label="按住录音"
@@ -424,7 +425,7 @@ import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
-import { loadCallEngine } from "@/stores/call";
+import { loadCallEngine, loadedCallEngine } from "@/stores/call";
 import { CALL_LOG_TYPE } from "@/nostr/messaging/callControl";
 import { useMessagesStore, type InboxItem, type InboxMutation } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
@@ -447,6 +448,7 @@ import { quotedMessageExcerpt } from "@/utils/quotedMessageExcerpt";
 import { canMarkConversationTailRead } from "@/utils/messageReadVisibility";
 import type { MentionCandidate } from "@/utils/mentions";
 import { loadAccountStoresOnce, waitForFirstPaint } from "@/utils/bottomTabActivation";
+import { scheduleBackgroundTask, cancelBackgroundTask } from "@/services/backgroundWorkScheduler";
 
 const route = useRoute();
 const router = useRouter();
@@ -460,7 +462,9 @@ function isCallRecord(message: { tags?: string[][] }) {
 }
 async function startVoiceCall() {
   try {
-    await (await loadCallEngine()).startCall(peerPubkey.value);
+    const engine = loadedCallEngine();
+    if (engine) await engine.startCall(peerPubkey.value);
+    else await (await loadCallEngine()).startCall(peerPubkey.value);
   } catch (error) {
     ui.addToast(error instanceof Error ? error.message : "无法发起通话", 2_400, "error");
   }
@@ -2043,6 +2047,9 @@ onMounted(() => {
   window.addEventListener("pagehide", handlePageHide);
   messageList.value?.addEventListener("load", handleMessageMediaLoad, true);
   void load();
+  // Chat-only idle warming: never parse WebRTC while the home screen boots,
+  // but normally have its methods ready before the user presses call.
+  scheduleBackgroundTask("chat-call-warmup", () => loadCallEngine(), { priority: "idle", timeoutMs: 1_500 });
 });
 watch([draft, replyingToId], scheduleDraftSave);
 watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
@@ -2156,6 +2163,7 @@ watch(() => messages.value.map(message => message.id), async (nextIds, previousI
   }
 });
 onBeforeUnmount(() => {
+  cancelBackgroundTask("chat-call-warmup");
   stopBeforeLock();
   disposed = true;
   flushDraft();
