@@ -55,6 +55,14 @@ export const useCallStore = defineStore("call", () => {
 });
 
 /** Lazily load the call engine (WebRTC, Trystero, media). */
+let loadedEngine: typeof import("@/services/callEngine") | null = null;
 export function loadCallEngine() {
-  return import("@/services/callEngine");
+  return import("@/services/callEngine").then(module => {
+    loadedEngine = module;
+    return module;
+  });
+}
+/** A call is already active when recovery is tapped; keep iOS user activation. */
+export function loadedCallEngine() {
+  return loadedEngine;
 }
