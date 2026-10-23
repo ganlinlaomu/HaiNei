@@ -1,5 +1,4 @@
-// The standalone PWA stayed silent with Web Audio while a Safari tab rang;
-// ringing now prefers <audio> elements primed on the first tap.
+// A fully silent, gesture-activated incoming ring media element is reused later.
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { toneWav } from "@/utils/audioUnlock";
@@ -23,37 +22,57 @@ describe("ringtone audio", () => {
     }
   });
 
-  it("never primes a ringtone on first tap or on app startup", () => {
+  it("registers silent activation only after Vue mounts, never at cold start", () => {
     const unlock = readFileSync("src/utils/audioUnlock.ts", "utf8");
     const main = readFileSync("src/main.ts", "utf8");
-    const engine = readFileSync("src/services/callEngine.ts", "utf8");
-    expect(unlock).not.toContain("installAudioUnlock");
-    expect(unlock).not.toContain("primeElements");
+    expect(main.indexOf('app.mount("#app")')).toBeLessThan(main.indexOf("installIncomingRingtoneActivation();"));
+    expect(unlock).toContain('window.addEventListener("pointerdown", gesture');
+    expect(unlock).toContain('if (!event.isTrusted || callAudioActive) return;');
+    expect(unlock).toContain('closest?.("[data-live-audio-action]")');
+    expect(unlock).toContain('if (session?.type === "play-and-record") return;');
     expect(unlock).not.toContain("SILENT_OFFSET");
-    expect(unlock).not.toContain("pointerdown");
-    expect(main).not.toContain("installAudioUnlock");
-    expect(engine).toContain('ringtoneElement("ringback");');
-    expect(engine).toContain('const first = ringtoneElement(kind);');
-    expect(engine).toContain('if (name === "NotAllowedError")');
-    expect(engine).toContain('startupMark("call_ring_requires_interaction"');
-    expect(unlock).toContain("URL.createObjectURL(new Blob([toneWavBytes(kind)");
+    expect(unlock).not.toContain("primeElements");
+    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('const first = ringtoneElement(kind);');
+    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('startupMark("call_ring_requires_interaction"');
   });
 
-  it("creates a ringtone resource without playing any sample", async () => {
-    const { ringtoneElement } = await import("@/utils/audioUnlock");
+  it("primes only with an all-zero clip, then reuses that audio element for a real ring", async () => {
+    const { armIncomingRingtoneFromGesture, incomingRingtoneArmed, ringtoneElement } = await import("@/utils/audioUnlock");
+    const blobs: Blob[] = [];
+    const createObjectURL = vi.fn((blob: Blob) => {
+      blobs.push(blob);
+      return `blob:ringer-${blobs.length}`;
+    });
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
     const play = vi.fn(async () => undefined);
     const pause = vi.fn();
-    const createElement = vi.fn(() => ({
-      src: "", loop: false, preload: "", setAttribute: vi.fn(), play, pause,
-    }));
+    const audio = {
+      src: "", loop: false, preload: "", muted: false, currentTime: 0,
+      setAttribute: vi.fn(), play, pause,
+    };
+    const createElement = vi.fn(() => audio);
     vi.stubGlobal("document", { createElement });
     try {
-      const ringtone = ringtoneElement("ring");
-      expect(ringtone).toBeTruthy();
+      armIncomingRingtoneFromGesture();
+      expect(play).toHaveBeenCalledTimes(1);
+      expect(audio.muted).toBe(false);
+      expect(audio.loop).toBe(false);
+      expect(blobs.length).toBe(1);
+      const first = new Uint8Array(await blobs[0].arrayBuffer());
+      expect(first.slice(0, 4)).toEqual(Buffer.from("RIFF"));
+      expect(Array.from(first.slice(44)).every(sample => sample === 0)).toBe(true);
+      await Promise.resolve();
+      expect(incomingRingtoneArmed()).toBe(true);
+      expect(pause).toHaveBeenCalledOnce();
+
+      const ring = ringtoneElement("ring");
+      expect(ring).toBe(audio);
       expect(createElement).toHaveBeenCalledTimes(1);
-      expect(ringtone?.preload).toBe("auto");
-      expect(play).not.toHaveBeenCalled();
-      expect(pause).not.toHaveBeenCalled();
+      expect(audio.loop).toBe(true);
+      expect(audio.src).toBe("blob:ringer-2");
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:ringer-1");
+      expect(play).toHaveBeenCalledTimes(1); // the call engine, not arming, starts audible playback
     } finally {
       vi.unstubAllGlobals();
     }
