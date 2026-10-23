@@ -703,6 +703,6 @@ describe("call engine", () => {
     expect(overlay).toContain('<div v-if="showBanner" class="call-banner"');
     const sw = readFileSync("public/service-worker.js", "utf8");
     expect(sw).toContain("for (const notification of await self.registration.getNotifications({ tag })) notification.close();");
-    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain("// The app shows its own call banner: withdraw the system notification.");
+    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('signalCallNotification("INCOMING_RINGTONE_START", session.id);');
   });
 });
