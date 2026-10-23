@@ -32,7 +32,7 @@ describe("ringtone audio", () => {
     expect(unlock).toContain('window.addEventListener("click", gesture');
     expect(unlock).toContain('(event as PointerEvent).pointerType === "touch"');
     expect(unlock).toContain('if (now - lastGestureAt < 450) return;');
-    expect(unlock).toContain('if (!event.isTrusted || callAudioActive) return;');
+    expect(unlock).toContain('if (!event.isTrusted || callAudioActive || document.visibilityState === "hidden") return;');
     expect(unlock).toContain('closest?.("[data-live-audio-action]")');
     expect(unlock).toContain('if (session?.type === "play-and-record") return;');
     expect(unlock).not.toContain("SILENT_OFFSET");
