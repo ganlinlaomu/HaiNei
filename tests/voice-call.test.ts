@@ -505,4 +505,22 @@ describe("call engine", () => {
     expect(overlay).toContain('call.direction === "outgoing" ? "重拨" : "回拨"');
     expect(readFileSync("src/views/Messages.vue", "utf8")).toContain('v-if="isCallRecord(message) && accepted" class="call-back-link"');
   });
+
+  it("closes at once when you end the call, briefly shows why when the other side did", async () => {
+    const { declineCall, handleCallSignal, startCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const store = useCallStore();
+    await handleCallSignal(FRIEND, ME, invite, now());
+    await declineCall();
+    await vi.advanceTimersByTimeAsync(600);
+    expect(store.phase).toBe("idle");
+
+    await startCall(FRIEND);
+    await handleCallSignal(FRIEND, ME, { action: "reject", callId: store.callId }, now());
+    await vi.advanceTimersByTimeAsync(600);
+    expect(store).toMatchObject({ phase: "ended", endReason: "remote_declined" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(store.phase).toBe("idle");
+  });
 });
+
