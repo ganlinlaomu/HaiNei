@@ -295,6 +295,26 @@ describe("call engine", () => {
     expect(remoteAudio.removeEventListener).toHaveBeenCalledWith("playing", expect.any(Function));
   });
 
+  it("offers an explicit output picker without renegotiating the WebRTC call", async () => {
+    const { startCall, selectCallOutput, hangup } = await import("@/services/callEngine");
+    await startCall(FRIEND);
+    const room = mocks.rooms.at(-1);
+    room.onPeerJoin("iphone15");
+    const stream = { getAudioTracks: () => [] } as unknown as MediaStream;
+    room.onPeerStream(stream, "iphone15");
+    await Promise.resolve();
+    const audio = mocks.audioElements.find((element: any) => element.srcObject === stream);
+    expect(audio).toBeTruthy();
+    const setSinkId = vi.fn(async (id: string) => { audio.sinkId = id; });
+    audio.setSinkId = setSinkId;
+    (navigator.mediaDevices as any).selectAudioOutput = vi.fn(async () => ({ deviceId: "chosen-output" }));
+    await selectCallOutput();
+    expect((navigator.mediaDevices as any).selectAudioOutput).toHaveBeenCalledOnce();
+    expect(setSinkId).toHaveBeenCalledWith("chosen-output");
+    expect(room.addStream).toHaveBeenCalledTimes(1);
+    await hangup();
+  });
+
   it("does not rebind a healthy remote stream when the track unmutes", async () => {
     const { startCall, hangup } = await import("@/services/callEngine");
     const { useCallStore } = await import("@/stores/call");
