@@ -8,7 +8,7 @@
     <div class="week" role="tablist" aria-label="选择日期">
       <button v-for="day in days" :key="day.start" type="button" role="tab" class="day"
         :class="{ selected: day.start === selectedDay, today: day.isToday, future: day.future }"
-        :aria-selected="day.start === selectedDay" :aria-label="`${day.label}，${day.summary}`" @click="selectedDay = day.start">
+        :aria-selected="day.start === selectedDay" :aria-label="`${day.label}，${day.summary}`" :aria-current="day.isToday ? 'date' : undefined" @click="selectedDay = day.start">
         <span class="weekday">{{ day.weekday }}</span>
         <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
           <circle cx="18" cy="18" r="14" class="ring-track" :class="{ empty: !day.total }" />
@@ -21,7 +21,7 @@
 
     <div class="plan-head">
       <strong>{{ selectedIsToday ? "今日计划" : selectedLabel }}</strong>
-      <button type="button" class="add" @click="ui.openPostEditor('todo')">添加 ＋</button>
+      <button type="button" class="add" @click="addForSelectedDay">添加 ＋</button>
     </div>
     <p v-if="!planned.length && !unscheduled.length" class="plan-empty">{{ selectedIsToday ? "今天没有安排，点「添加」写下要做的事" : "这一天没有安排" }}</p>
     <ul class="cards">
@@ -41,23 +41,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, ref } from "vue";
+import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from "vue";
 import type { PrivateSpaceRecord, PrivateSpaceTask } from "@/db/dexie";
 import { useKeyStore } from "@/stores/keys";
-import { useUIStore } from "@/stores/ui";
 import { describeDue, openTaskInCalendar, sameDay, startOfDay, startOfWeek, timeOfDay, todoIcon } from "@/utils/todoPlanning";
 
 type PlanItem = { task: PrivateSpaceTask; record: PrivateSpaceRecord };
 const props = defineProps<{ records: PrivateSpaceRecord[] }>();
-const emit = defineEmits<{ open: [recordId: string]; changed: [] }>();
+const emit = defineEmits<{ open: [recordId: string]; changed: []; add: [due: number] }>();
 const keys = useKeyStore();
-const ui = useUIStore();
-const DAY = 24 * 60 * 60 * 1000;
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
 
-const today = startOfDay(Date.now());
-const weekStart = ref(startOfWeek(today));
-const selectedDay = ref(today);
+const today = ref(startOfDay(Date.now()));
+const weekStart = ref(startOfWeek(today.value));
+const selectedDay = ref(today.value);
 const saving = ref("");
 
 const items = computed<PlanItem[]>(() => props.records
@@ -65,29 +62,31 @@ const items = computed<PlanItem[]>(() => props.records
   .flatMap(record => record.tasks.filter(task => task.text.trim()).map(task => ({ task, record }))));
 
 const days = computed(() => Array.from({ length: 7 }, (_, index) => {
-  // Offset by two hours so a daylight-saving shift cannot land on the wrong day.
-  const dayStart = startOfDay(weekStart.value + index * DAY + 2 * 60 * 60 * 1000);
+  // Calendar days are not always 24 hours across daylight saving changes.
+  const dateAtIndex = new Date(weekStart.value);
+  dateAtIndex.setDate(dateAtIndex.getDate() + index);
+  const dayStart = startOfDay(dateAtIndex.getTime());
   const due = items.value.filter(item => item.task.due && sameDay(item.task.due, dayStart));
   const done = due.filter(item => item.task.done).length;
   const date = new Date(dayStart);
   return {
     start: dayStart, weekday: WEEKDAYS[index], date: date.getDate(), total: due.length, done,
-    isToday: dayStart === today, future: dayStart > today,
+    isToday: dayStart === today.value, future: dayStart > today.value,
     label: `${date.getMonth() + 1}月${date.getDate()}日 星期${WEEKDAYS[index]}`,
     summary: due.length ? `${done}/${due.length} 已完成` : "没有安排",
   };
 }));
 const weekLabel = computed(() => {
   const first = new Date(weekStart.value);
-  return weekStart.value === startOfWeek(today) ? "本周" : `${first.getMonth() + 1}月${first.getDate()}日 这一周`;
+  return weekStart.value === startOfWeek(today.value) ? "本周" : `${first.getMonth() + 1}月${first.getDate()}日 这一周`;
 });
-const selectedIsToday = computed(() => selectedDay.value === today);
+const selectedIsToday = computed(() => selectedDay.value === today.value);
 const selectedLabel = computed(() => days.value.find(day => day.start === selectedDay.value)?.label || "");
 
 // The selected day's timed tasks; today also gathers overdue open tasks.
 const planned = computed(() => items.value
   .filter(item => item.task.due && (sameDay(item.task.due, selectedDay.value)
-    || (selectedIsToday.value && !item.task.done && item.task.due < today)))
+    || (selectedIsToday.value && !item.task.done && item.task.due < today.value)))
   .sort((a, b) => Number(a.task.done) - Number(b.task.done) || a.task.due! - b.task.due!));
 // Untimed open tasks belong to "today".
 const unscheduled = computed(() => selectedIsToday.value
@@ -97,7 +96,7 @@ const unscheduled = computed(() => selectedIsToday.value
 function shiftWeek(delta: number) {
   weekStart.value = startOfWeek(weekStart.value + delta * 7 * DAY + 12 * 60 * 60 * 1000);
   // Back to this week selects today; other weeks start on their Monday.
-  selectedDay.value = weekStart.value === startOfWeek(today) ? today : weekStart.value;
+  selectedDay.value = weekStart.value === startOfWeek(today.value) ? today : weekStart.value;
 }
 
 async function updateTask(item: PlanItem, change: Partial<PrivateSpaceTask>) {
