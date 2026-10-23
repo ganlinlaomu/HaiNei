@@ -279,6 +279,7 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
       () => {
         if (session.ringtone === handle && isCurrent(session)) {
           startupMark("call_ring_audio", { kind, via: "element", attempt, primed: incomingRingtoneArmed() });
+          if (kind === "ring") closeCallNotification();
         }
       },
       error => {
@@ -294,7 +295,14 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
           startupMark("call_ring_requires_interaction", { kind, primed: incomingRingtoneArmed() });
           // Keep the incoming banner and expose a one-tap retry. A timer
           // or fresh AudioContext cannot manufacture an iOS user activation.
-          if (kind === "ring") store.ringtoneBlocked = true;
+          if (kind === "ring") {
+            store.ringtoneBlocked = true;
+            // Foreground push notifications are intentionally silent/closed.
+            // Ask the service worker for an OS alert ONLY if audio was denied.
+            try {
+              navigator.serviceWorker?.controller?.postMessage({ type: "INCOMING_RINGTONE_BLOCKED" });
+            } catch { /* no active service worker */ }
+          }
           stopTone(session);
           return;
         }
