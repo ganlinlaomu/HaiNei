@@ -244,8 +244,9 @@ describe("call engine", () => {
     await Promise.resolve();
     expect(store.phase).toBe("active");
     expect(store.connectedAt).toBeGreaterThan(0);
-    expect(mocks.audioElements[0]).toMatchObject({ autoplay: true, srcObject: remoteStream });
-    expect(mocks.audioElements[0].play).toHaveBeenCalled();
+    // Ringtone elements are created too; find the one playing the peer.
+    expect(mocks.audioElements.find((audio: any) => audio.srcObject === remoteStream)).toMatchObject({ autoplay: true, srcObject: remoteStream });
+    expect(mocks.audioElements.find((audio: any) => audio.srcObject === remoteStream).play).toHaveBeenCalled();
 
     joined.onPeerJoin("second-device");
     expect(joined.actions.taken.send).toHaveBeenCalledWith(true, { target: "second-device" });
