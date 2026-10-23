@@ -7,7 +7,7 @@ import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
 import { debugLog, startupMark } from "@/utils/debugLog";
-import { sharedAudioContext } from "@/utils/audioUnlock";
+import { ringtoneElement, sharedAudioContext } from "@/utils/audioUnlock";
 import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
@@ -210,6 +210,31 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
     navigator.vibrate([400, 200, 400]);
     vibration = setInterval(() => navigator.vibrate?.([400, 200, 400]), 2_000);
   }
+  // Preferred: the <audio> element primed by an earlier tap (works in the
+  // standalone PWA, where Web Audio may stay silent after backgrounding).
+  const element = ringtoneElement(kind);
+  if (element) {
+    element.currentTime = 0;
+    element.muted = false;
+    const playing = element.play();
+    session.ringtone = { stop() {
+      element.pause();
+      element.currentTime = 0;
+      if (vibration) { clearInterval(vibration); navigator.vibrate?.(0); }
+    } };
+    void playing.then(
+      () => startupMark("call_ring_audio", { kind, via: "element" }),
+      () => {
+        // Not primed yet (no tap since launch): try Web Audio instead.
+        if (session.ringtone && isCurrent(session)) startWebAudioTone(session, kind, vibration);
+      },
+    );
+    return;
+  }
+  startWebAudioTone(session, kind, vibration);
+}
+
+function startWebAudioTone(session: CallSession, kind: "ring" | "ringback", vibration: ReturnType<typeof setInterval> | null) {
   try {
     // The shared context was unlocked by an earlier tap; a fresh one created
     // now (no gesture) would stay silent on iOS.
