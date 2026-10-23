@@ -57,5 +57,10 @@ describe("to-do planning", () => {
     const planner = readFileSync("src/components/TodoPlanner.vue", "utf8");
     expect(planner).toContain("今日计划");
     expect(planner).toContain("todoIcon");
+    // The invisible iOS date input is clipped to its button and never covers the check.
+    expect(planner).toMatch(/\.time-button\)\{[^}]*overflow:hidden/);
+    expect(planner).toMatch(/\.time-button input\)\{[^}]*min-width:0/);
+    expect(view).toMatch(/\.task-due\{[^}]*overflow:hidden/);
+    expect(view).toContain(".task>button{position:relative;z-index:1");
   });
 });
