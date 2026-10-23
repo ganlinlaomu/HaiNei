@@ -174,6 +174,32 @@ describe("call engine", () => {
     expect(store.callId).toBe("2".repeat(32));
   });
 
+  it("offers an explicit trusted-tap retry when iOS denies incoming ringtone autoplay", async () => {
+    const { handleCallSignal, retryIncomingRingtone, declineCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const element = {
+      src: "", currentTime: 0, paused: true, loop: false, muted: false, error: null,
+      setAttribute: vi.fn(), pause: vi.fn(),
+      play: vi.fn()
+        .mockRejectedValueOnce(new DOMException("autoplay denied", "NotAllowedError"))
+        .mockResolvedValue(undefined),
+    };
+    (document.createElement as ReturnType<typeof vi.fn>).mockImplementationOnce(() => element);
+    await handleCallSignal(FRIEND, ME, { ...invite, callId: "8".repeat(32) }, now());
+    await Promise.resolve();
+    const store = useCallStore();
+    expect(store.phase).toBe("incoming");
+    expect(store.ringtoneBlocked).toBe(true);
+    expect(element.play).toHaveBeenCalledTimes(1);
+    retryIncomingRingtone();
+    await Promise.resolve();
+    expect(element.play).toHaveBeenCalledTimes(2);
+    expect(store.ringtoneBlocked).toBe(false);
+    expect(store.phase).toBe("incoming");
+    await declineCall();
+    expect(store.phase).toBe("ended");
+  });
+
   it("stops ringing when another of our devices answers", async () => {
     const { handleCallSignal } = await import("@/services/callEngine");
     const { useCallStore } = await import("@/stores/call");
