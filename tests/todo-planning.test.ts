@@ -57,6 +57,21 @@ describe("to-do planning", () => {
     const planner = readFileSync("src/components/TodoPlanner.vue", "utf8");
     expect(planner).toContain("今日计划");
     expect(planner).toContain("todoIcon");
+    // Selected day has a visible container highlight, distinct from today's dot.
+    expect(planner).toContain(".day.selected{border-color:");
+    expect(planner).toContain(".day.today:not(.selected)::after");
+    expect(planner).toContain(':aria-current="day.isToday');
+    // Creating from a selected date uses the private-space unsaved draft,
+    // with the selected date at an editable 09:00 instead of an undated composer.
+    expect(planner).toContain('emit("add", date.getTime());');
+    expect(planner).toContain('date.setHours(9, 0, 0, 0);');
+    expect(view).toContain('@add="createTodoForDate"');
+    expect(view).toContain('editor.value.tasks.push({ id: crypto.randomUUID(), text: "", done: false, due });');
+    expect(planner).toContain('document.addEventListener("visibilitychange", refreshToday)');
+    expect(planner).toContain('refreshTimer = setInterval(refreshToday, 60_000)');
+    expect(planner).toContain('dateAtIndex.setDate(dateAtIndex.getDate() + index)');
+    expect(planner).toContain('white-space:pre-wrap;overflow-wrap:anywhere');
+
     // The invisible iOS date input is clipped to its button and never covers the check.
     expect(planner).toMatch(/\.time-button\)\{[^}]*overflow:hidden/);
     expect(planner).toMatch(/\.time-button input\)\{[^}]*min-width:0/);

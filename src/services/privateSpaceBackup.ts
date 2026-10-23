@@ -1,5 +1,6 @@
 import type { PrivateSpaceRecord } from "@/db/dexie";
 import { validatePrivateSpaceSource, validatePrivateSpaceAttachments } from "@/services/privateSpaceContent";
+import { validTaskDue } from "@/utils/todoPlanning";
 
 export const PRIVATE_BACKUP_FORMAT = "hainei-private-space-backup";
 export const PRIVATE_BACKUP_VERSION = 1;
@@ -72,10 +73,13 @@ function validateNote(item: any): PrivateBackupNote {
   const tasks = item.tasks.map((task: any) => {
     if (!task || typeof task.id !== "string" || !task.id ||
       taskIds.has(task.id) || typeof task.text !== "string" ||
-      task.text.length > 2_000 || typeof task.done !== "boolean")
+      task.text.length > 2_000 || typeof task.done !== "boolean" ||
+      (task.due !== undefined && !validTaskDue(task.due)))
       throw new Error("invalid_backup_task");
     taskIds.add(task.id);
-    return { id: task.id, text: task.text, done: task.done };
+    return { id: task.id, text: task.text, done: task.done,
+      ...(validTaskDue(task.due) ? { due: task.due } : {}),
+    };
   });
   return {
     id: item.id, kind: item.kind, title: item.title, body: item.body,
@@ -195,7 +199,8 @@ export function exportPlainMarkdown(account: string, records: PrivateSpaceRecord
     "## " + escapeMarkdown(item.title || "无标题"),
     "",
     item.kind === "todo"
-      ? item.tasks.map(task => "- [" + (task.done ? "x" : " ") + "] " + task.text).join("\n")
+      ? item.tasks.map(task => "- [" + (task.done ? "x" : " ") + "] " + task.text +
+        (task.due ? " · " + new Date(task.due).toLocaleString() : "")).join("\n")
       : item.body,
     "",
     "_状态：" + (item.deletedAt ? "最近删除" : item.archivedAt ? "已归档" : "正常") + "_",
