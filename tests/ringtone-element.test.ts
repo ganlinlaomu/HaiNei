@@ -60,7 +60,7 @@ describe("ringtone audio", () => {
       expect(audio.loop).toBe(false);
       expect(blobs.length).toBe(1);
       const first = new Uint8Array(await blobs[0].arrayBuffer());
-      expect(first.slice(0, 4)).toEqual(Buffer.from("RIFF"));
+      expect(Buffer.from(first.slice(0, 4)).toString()).toBe("RIFF");
       expect(Array.from(first.slice(44)).every(sample => sample === 0)).toBe(true);
       await Promise.resolve();
       expect(incomingRingtoneArmed()).toBe(true);
