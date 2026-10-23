@@ -92,15 +92,16 @@ describe("call signaling", () => {
     expect(sw).toContain("event.data?.type === 'CLOSE_CALL_NOTIFICATION'");
   });
 
-  it("keeps call code chunked but warms the engine and overlay before the first call", () => {
+  it("keeps call code and ringtone media out of the startup path", () => {
     const app = readFileSync("src/App.vue", "utf8");
     expect(app).toContain('const loadCallOverlay = () => import("@/components/CallOverlay.vue")');
-    expect(app).toContain('scheduleBackgroundTask("preload-call-ui"');
+    expect(app).not.toContain('scheduleBackgroundTask("preload-call-ui"');
     expect(app).toContain(`<CallOverlay v-if="call.phase !== 'idle'" />`);
     expect(readFileSync("src/stores/call.ts", "utf8")).toContain('return import("@/services/callEngine");');
     expect(readFileSync("src/services/accountMessageSync.ts", "utf8")).toContain("await loadCallEngine()");
     expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("z-index:200000");
-    expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("function restoreAudio() { recoverCallAudio(); }");
+    expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("function restoreAudio() { loadedCallEngine()?.recoverCallAudio(); }");
+    expect(readFileSync("src/components/CallOverlay.vue", "utf8")).not.toContain('from "@/services/callEngine"');
   });
 });
 
