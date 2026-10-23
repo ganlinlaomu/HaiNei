@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.118",
-  "releaseSummary": "修复待办完成按钮点不了",
+  "version": "0.1.119",
+  "releaseSummary": "待办可以取消已设的时间",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

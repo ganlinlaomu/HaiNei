@@ -158,6 +158,12 @@ const ItemCard = defineComponent({
             },
           }),
         ]),
+        // iOS's picker "reset" restores the old time instead of clearing it.
+        task.due ? h("button", {
+          type: "button", class: "clear-due", "aria-label": `取消「${task.text}」的时间`,
+          disabled: saving.value === task.id,
+          onClick: () => void updateTask(cardProps.item, { due: undefined }),
+        }, "取消时间") : null,
         task.due && !task.done ? h("button", {
           type: "button", class: "calendar-button", "aria-label": `把「${task.text}」加入系统日历`,
           onClick: () => openTaskInCalendar({ id: task.id, text: task.text, due: task.due! }, record.title.trim()),
@@ -208,6 +214,7 @@ const ItemCard = defineComponent({
 .card :deep(.time-button){position:relative;display:grid;width:32px;height:32px;flex:0 0 32px;place-items:center;overflow:hidden;border-radius:50%;font-size:16px;cursor:pointer}
 .card :deep(.time-button input){position:absolute;inset:0;width:100%;min-width:0;max-width:100%;height:100%;margin:0;padding:0;border:0;opacity:0;-webkit-appearance:none;appearance:none;cursor:pointer}
 .card :deep(.calendar-button){width:32px;height:32px;padding:0;border:0;border-radius:50%;background:transparent;font-size:16px;cursor:pointer}
+.card :deep(.clear-due){position:relative;z-index:1;flex:0 0 auto;min-height:32px;padding:0 8px;border:0;border-radius:10px;background:var(--bg-eff3f4);color:var(--fg-64748b);font:inherit;font-size:12px;white-space:nowrap;cursor:pointer}
 .card :deep(.check){position:relative;z-index:1;display:grid;width:30px;height:30px;flex:0 0 30px;place-items:center;padding:0;border:2px solid var(--bd-d8dee5);border-radius:50%;background:transparent;color:#fff;font-size:16px;font-weight:700;cursor:pointer}
 .card :deep(.check.on){border-color:#3fa86b;background:#3fa86b}
 </style>
