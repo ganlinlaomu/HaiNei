@@ -94,10 +94,42 @@ const unscheduled = computed(() => selectedIsToday.value
   : []);
 
 function shiftWeek(delta: number) {
-  weekStart.value = startOfWeek(weekStart.value + delta * 7 * DAY + 12 * 60 * 60 * 1000);
-  // Back to this week selects today; other weeks start on their Monday.
-  selectedDay.value = weekStart.value === startOfWeek(today.value) ? today : weekStart.value;
+  const next = new Date(weekStart.value);
+  next.setDate(next.getDate() + delta * 7);
+  weekStart.value = startOfWeek(next.getTime());
+  selectedDay.value = weekStart.value === startOfWeek(today.value) ? today.value : weekStart.value;
 }
+
+/** Create one unsaved item dated to the selected day (09:00 is editable). */
+function addForSelectedDay() {
+  const date = new Date(selectedDay.value);
+  date.setHours(9, 0, 0, 0);
+  emit("add", date.getTime());
+}
+
+/** Recompute the day after midnight or when the PWA returns to the foreground. */
+function refreshToday() {
+  const next = startOfDay(Date.now());
+  if (next === today.value) return;
+  const wasToday = selectedDay.value === today.value;
+  today.value = next;
+  if (wasToday) {
+    selectedDay.value = next;
+    weekStart.value = startOfWeek(next);
+  }
+}
+let refreshTimer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  refreshToday();
+  refreshTimer = setInterval(refreshToday, 60_000);
+  document.addEventListener("visibilitychange", refreshToday);
+  window.addEventListener("pageshow", refreshToday);
+});
+onBeforeUnmount(() => {
+  if (refreshTimer) clearInterval(refreshTimer);
+  document.removeEventListener("visibilitychange", refreshToday);
+  window.removeEventListener("pageshow", refreshToday);
+});
 
 async function updateTask(item: PlanItem, change: Partial<PrivateSpaceTask>) {
   const account = keys.pkHex;
@@ -184,9 +216,12 @@ const ItemCard = defineComponent({
 .week-head strong{font-size:14px;color:var(--fg-64748b)}
 .week-nav{width:32px;height:32px;border:0;border-radius:50%;background:transparent;color:var(--fg-64748b);font-size:20px;cursor:pointer}
 .week{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
-.day{display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;border:0;border-radius:14px;background:transparent;color:var(--fg-0f1419);font:inherit;cursor:pointer}
-.day.selected .weekday{padding:0 6px;border-radius:8px;background:var(--bg-eff3f4)}
-.day.future{color:var(--fg-b0bac4)}
+.day{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0 12px;border:2px solid transparent;border-radius:14px;background:transparent;color:var(--fg-0f1419);font:inherit;cursor:pointer}
+.day.selected{border-color:var(--fg-334155);background:var(--bg-dfe8f4);color:var(--fg-0f1419);box-shadow:0 1px 3px rgba(15,23,42,.12)}
+.day.today:not(.selected)::after{content:"";position:absolute;bottom:4px;width:5px;height:5px;border-radius:50%;background:var(--fg-334155)}
+.day.selected::after{content:"";position:absolute;bottom:4px;width:14px;height:3px;border-radius:3px;background:var(--fg-334155)}
+.day:focus-visible{outline:2px solid var(--fg-2563eb);outline-offset:2px}
+.day.future:not(.selected){color:var(--fg-b0bac4)}
 .weekday{font-size:12px;font-weight:600}
 .date{font-size:13px}
 .day.today .date{font-weight:700}
@@ -206,7 +241,7 @@ const ItemCard = defineComponent({
 .card.done{opacity:.45}
 .card :deep(.icon){display:grid;width:44px;height:44px;flex:0 0 44px;place-items:center;border-radius:14px;background:var(--bg-f7f9f9);font-size:22px}
 .card :deep(.card-main){display:flex;flex:1;min-width:0;flex-direction:column;gap:3px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
-.card :deep(.card-text){overflow:hidden;color:var(--fg-0f1419);font-size:16px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.card :deep(.card-text){color:var(--fg-0f1419);font-size:16px;font-weight:600;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.45}
 .card :deep(.card-meta){overflow:hidden;color:var(--fg-8b98a5);font-size:13px;text-overflow:ellipsis;white-space:nowrap}
 .card :deep(.overdue){color:#e5484d}
 /* iOS gives datetime-local an intrinsic min width that ignores width:100%; clip it to the button so it never covers the check. */
