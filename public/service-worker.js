@@ -238,13 +238,13 @@ function hasBlockedVisibleRing() {
     && blockedIncomingCallId === visibleIncomingCallId
     && Date.now() < blockedIncomingUntil;
 }
-async function closeCallAlertsIfCurrent(revision, callId) {
+async function closeCallAlertsIfCurrent(revision, callId, includeOldCalls = false) {
   try {
     const alerts = await self.registration.getNotifications({ tag: CALL_NOTIFICATION_TAG });
     if (revision !== callAlertRevision || hasBlockedVisibleRing()) return;
     for (const notification of alerts) {
       // Leave an alert from a different/current call alone.
-      if (notification.data?.callId && notification.data.callId !== callId) continue;
+      if (!includeOldCalls && notification.data?.callId && notification.data.callId !== callId) continue;
       notification.close();
     }
   } catch { /* notifications unavailable */ }
@@ -271,7 +271,8 @@ self.addEventListener('message', (event) => {
     blockedIncomingCallId = null;
     blockedIncomingUntil = 0;
     const revision = ++callAlertRevision;
-    event.waitUntil(closeCallAlertsIfCurrent(revision, id));
+    // This is the new visible call; clear any leftover alert from an older call.
+    event.waitUntil(closeCallAlertsIfCurrent(revision, id, true));
     return;
   }
   if (type === 'INCOMING_RINGTONE_BLOCKED') {
