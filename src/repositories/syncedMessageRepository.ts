@@ -1,6 +1,7 @@
 import { directMessagePeer, isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { isConversationMessage } from "@/nostr/messaging/messageRouting";
 import { disappearingMetadata, hasDisappearingMarker, isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
+import { isCallControl } from "@/nostr/messaging/callControl";
 import Dexie from "dexie";
 import {
   db,
@@ -30,7 +31,9 @@ export const legacyDmReadStateMigrationMetaKey = (
   version = LEGACY_DM_READ_STATE_MIGRATION_VERSION,
 ) => `migration:legacy-dm-read-state-v${version}`;
 
-export const UNSUPPORTED_MESSAGE_CLEANUP_VERSION = 1;
+// v2: also call signals that clients without call support stored as DMs
+// (they counted as unread but were never shown).
+export const UNSUPPORTED_MESSAGE_CLEANUP_VERSION = 2;
 export const unsupportedMessageCleanupMetaKey = (version = UNSUPPORTED_MESSAGE_CLEANUP_VERSION) =>
   `message-maintenance:unsupported-nip17-v${version}`;
 
@@ -580,7 +583,7 @@ export class SyncedMessageRepository {
     const keys = await this.database.syncedMessages
       .where("accountPubkey")
       .equals(account)
-      .filter(record => record.protocol !== "nip17" || record.transportKind !== 1059)
+      .filter(record => record.protocol !== "nip17" || record.transportKind !== 1059 || isCallControl(record as { tags: string[][] }))
       .primaryKeys();
     if (keys.length === 0) return 0;
     await this.database.syncedMessages.bulkDelete(keys);

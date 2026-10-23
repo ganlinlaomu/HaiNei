@@ -72,6 +72,20 @@ describe("reliable message persistence", () => {
     expect(await repo.list(ACCOUNT_A)).toEqual([]);
   });
 
+  it("purges call signals that older clients stored as messages, and their phantom unread", async () => {
+    const repo = new SyncedMessageRepository(database());
+    const signal = message("stored-call-signal", 100, {
+      tags: [["t", "hainei-call"], ["t", "hainei-call-invite"]],
+      plaintext: JSON.stringify({ type: "hainei-call", action: "invite", callId: "c".repeat(32), room: "d".repeat(32), secret: "e".repeat(64) }),
+    });
+    const record = message("call-record", 101, { tags: [["t", "hainei-dm"], ["t", "hainei-call-log"]], plaintext: "📞 语音通话 · 未接听" });
+    await repo.insertMessageIfAbsent(ACCOUNT_A, signal);
+    await repo.insertMessageIfAbsent(ACCOUNT_A, record);
+    expect(await repo.purgeUnsupportedMessages(ACCOUNT_A)).toBe(1);
+    // The visible call record stays; only the control was removed.
+    expect((await repo.list(ACCOUNT_A)).map(item => item.id)).toEqual(["call-record"]);
+  });
+
   it("runs unsupported-message cleanup once per account and only reruns for a new migration version", async () => {
     const db = database();
     const repo = new SyncedMessageRepository(db);
