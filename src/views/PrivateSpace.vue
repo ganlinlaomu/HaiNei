@@ -864,7 +864,7 @@ button{font:inherit;cursor:pointer}
 .task input[type="checkbox"]{width:19px;height:19px;accent-color:var(--fg-334155);flex:0 0 auto}
 .task textarea,.add-task textarea{display:block;box-sizing:border-box;min-width:0;width:0;flex:1;min-height:44px;border:0;background:transparent;color:inherit;font:inherit;font-size:16px;line-height:24px;outline:none;padding:10px 0;resize:none;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere}
 .task .done{text-decoration:line-through;color:var(--fg-94a3b8)}
-.task button,.add-task button{flex-shrink:0;border:0;background:transparent;color:var(--fg-64748b);padding:8px}
+.task button,.add-task button{flex-shrink:0;border:0;background:transparent;color:var(--fg-64748b);padding:8px}.task>button{position:relative;z-index:1;min-width:36px;min-height:36px}
 .add-task{display:flex;align-items:center;gap:8px;margin-top:12px}
 .task-counter{font-size:12px;color:var(--fg-94a3b8)}
 .editor-footer{display:flex;justify-content:space-between;border-top:1px solid var(--bd-edf0f2);margin-top:25px;padding-top:12px}

@@ -61,5 +61,6 @@ describe("to-do planning", () => {
     expect(planner).toMatch(/\.time-button\)\{[^}]*overflow:hidden/);
     expect(planner).toMatch(/\.time-button input\)\{[^}]*min-width:0/);
     expect(view).toMatch(/\.task-due\{[^}]*overflow:hidden/);
+    expect(view).toContain(".task>button{position:relative;z-index:1");
   });
 });
