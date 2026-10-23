@@ -81,7 +81,13 @@ export function setRingAudioSession(ringing: boolean) {
   const session = typeof navigator === "undefined" ? undefined
     : (navigator as Navigator & { audioSession?: BrowserAudioSession }).audioSession;
   if (!session) return;
-  try { session.type = ringing ? "playback" : "auto"; } catch { /* unsupported */ }
+  try {
+    // An in-progress voice recording or call already owns play-and-record.
+    // Its audio category must never be downgraded just to ring.
+    if (ringing && session.type !== "play-and-record") session.type = "playback";
+    // Only release the ringtone's own playback category, not a newer call's.
+    if (!ringing && session.type === "playback") session.type = "auto";
+  } catch { /* unsupported */ }
 }
 
 export function ringtoneElement(kind: RingKind): HTMLAudioElement | null {
