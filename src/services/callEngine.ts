@@ -149,7 +149,7 @@ function startQualitySampling(session: CallSession, room: Room) {
       // The audio element's play() promise can resolve even when iOS routes
       // sound to the receiver (or renders nothing). Record the RTP side
       // separately so a later no-sound report can distinguish the two.
-      if (inbound && session.quality.samples === 1) {
+      if (inbound && (session.quality.samples === 1 || session.quality.samples === 3)) {
         const track = session.remoteStream?.getAudioTracks?.()[0];
         startupMark("call_audio_media_stats", {
           packetsReceived: inbound.packetsReceived || 0,
@@ -890,6 +890,9 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     store.direction = "incoming";
     store.invite = { room: signal.room!, secret: signal.secret! };
     const session = createSession(signal.callId, peer, "incoming");
+    // Do not let a tap on the incoming-call banner prime unrelated ringtone
+    // media or a Web Audio context just as WebKit starts microphone capture.
+    setCallAudioActive(true);
     // The app shows its own call banner: withdraw the system notification.
     closeCallNotification();
     startTone(session, "ring");
