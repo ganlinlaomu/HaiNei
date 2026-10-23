@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.117",
-  "releaseSummary": "修复部分 iPhone 来电不响铃",
+  "version": "0.1.118",
+  "releaseSummary": "修复待办完成按钮点不了",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

@@ -204,9 +204,10 @@ const ItemCard = defineComponent({
 .card :deep(.card-text){overflow:hidden;color:var(--fg-0f1419);font-size:16px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .card :deep(.card-meta){overflow:hidden;color:var(--fg-8b98a5);font-size:13px;text-overflow:ellipsis;white-space:nowrap}
 .card :deep(.overdue){color:#e5484d}
-.card :deep(.time-button){position:relative;display:grid;width:32px;height:32px;place-items:center;border-radius:50%;font-size:16px;cursor:pointer}
-.card :deep(.time-button input){position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+/* iOS gives datetime-local an intrinsic min width that ignores width:100%; clip it to the button so it never covers the check. */
+.card :deep(.time-button){position:relative;display:grid;width:32px;height:32px;flex:0 0 32px;place-items:center;overflow:hidden;border-radius:50%;font-size:16px;cursor:pointer}
+.card :deep(.time-button input){position:absolute;inset:0;width:100%;min-width:0;max-width:100%;height:100%;margin:0;padding:0;border:0;opacity:0;-webkit-appearance:none;appearance:none;cursor:pointer}
 .card :deep(.calendar-button){width:32px;height:32px;padding:0;border:0;border-radius:50%;background:transparent;font-size:16px;cursor:pointer}
-.card :deep(.check){display:grid;width:30px;height:30px;flex:0 0 30px;place-items:center;padding:0;border:2px solid var(--bd-d8dee5);border-radius:50%;background:transparent;color:#fff;font-size:16px;font-weight:700;cursor:pointer}
+.card :deep(.check){position:relative;z-index:1;display:grid;width:30px;height:30px;flex:0 0 30px;place-items:center;padding:0;border:2px solid var(--bd-d8dee5);border-radius:50%;background:transparent;color:#fff;font-size:16px;font-weight:700;cursor:pointer}
 .card :deep(.check.on){border-color:#3fa86b;background:#3fa86b}
 </style>
