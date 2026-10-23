@@ -127,7 +127,7 @@ export async function handleRequest(request: Request, env: Env) {
       const pubkey = await verifyAndConsumeChallenge(
         env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
       );
-      return json(await savePushSubscription(env, pubkey, payload.subscription), 201);
+      return json(await savePushSubscription(env, pubkey, payload.subscription, payload.previousEndpoint), 201);
     }
     if (path === "/api/push/presence") {
       const payload = await body(request, env, 16 * 1024);
