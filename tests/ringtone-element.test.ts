@@ -37,7 +37,11 @@ describe("ringtone audio", () => {
     expect(engine).toContain('name === "NotSupportedError" && attempt === 1 ? reloadRingtoneElement(kind)');
     expect(engine).toContain("setRingAudioSession(true);");
     expect(unlock).toContain("URL.createObjectURL(new Blob([toneWavBytes(kind)");
-    expect(unlock.indexOf('ringtoneElement("ring");')).toBeGreaterThan(unlock.indexOf("export function installAudioUnlock"));
+    const install = unlock.slice(unlock.indexOf("export function installAudioUnlock"));
+    expect(install).not.toContain('ringtoneElement("ring");');
+    expect(install).not.toContain('ringtoneElement("ringback");');
+    const main = readFileSync("src/main.ts", "utf8");
+    expect(main.indexOf("app.mount(\"#app\")")).toBeLessThan(main.indexOf("installAudioUnlock();"));
     expect(engine).toContain('startupMark("call_ring_audio_failed"');
   });
 });
