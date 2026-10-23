@@ -50,6 +50,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5zM15 9a5 5 0 0 1 0 6M18 6a9 9 0 0 1 0 12"/><path d="M20 2v4h-4"/></svg>
           <span>恢复声音</span>
         </button>
+        <button v-if="canChooseOutput" class="call-button recover" type="button" aria-label="选择声音输出设备" data-live-audio-action @click="chooseOutput">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 7h6M10 15a2 2 0 1 0 4 0 2 2 0 0 0-4 0"/></svg>
+          <span>选择输出</span>
+        </button>
         <button class="call-button decline" type="button" aria-label="挂断" :disabled="acting" @click="hangup">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
           <span>{{ call.phase === "outgoing" ? "取消" : "挂断" }}</span>
@@ -71,6 +75,12 @@ const call = useCallStore();
 const profiles = useProfilesStore();
 const friends = useFriendsStore();
 const acting = ref(false);
+// Only offer the output picker on browsers that actually implement it.
+// iOS versions without selectAudioOutput cannot be forced to the speaker by a PWA.
+const canChooseOutput = typeof navigator !== "undefined"
+  && typeof (navigator.mediaDevices as MediaDevices & { selectAudioOutput?: () => Promise<MediaDeviceInfo> })?.selectAudioOutput === "function"
+  && typeof HTMLMediaElement !== "undefined"
+  && typeof (HTMLMediaElement.prototype as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId === "function";
 // An incoming call starts as a banner; expanded shows the full call screen.
 const expanded = ref(false);
 watch(() => call.callId, () => { expanded.value = false; });
@@ -125,6 +135,7 @@ async function mute() { (await loadCallEngine()).toggleMute(); }
 // Do not await a dynamic import here: iOS may expire the trusted click
 // activation before HTMLAudioElement.play() executes.
 function restoreAudio() { loadedCallEngine()?.recoverCallAudio(); }
+function chooseOutput() { void loadedCallEngine()?.selectCallOutput(); }
 // The ended screen closes itself shortly; tapping closes it at once.
 function dismissEnded() { if (call.phase === "ended") call.reset(); }
 // Not after another device handled it, or when the microphone is blocked.
