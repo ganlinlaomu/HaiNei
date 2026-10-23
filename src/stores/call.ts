@@ -27,6 +27,8 @@ export const useCallStore = defineStore("call", () => {
   const reconnecting = ref(false);
   /** Recent network quality from WebRTC stats. */
   const quality = ref<"good" | "poor">("good");
+  /** Remote media-element state; WebRTC connected does not guarantee audible playback. */
+  const audioStatus = ref<"waiting" | "playing" | "blocked">("waiting");
   /** Calls already handled, so relay duplicates or a late invite after cancel never ring twice. */
   const seen = new Set<string>();
 
@@ -41,6 +43,7 @@ export const useCallStore = defineStore("call", () => {
     remoteRinging.value = false;
     reconnecting.value = false;
     quality.value = "good";
+    audioStatus.value = "waiting";
   }
 
   function markSeen(id: string) {
@@ -48,7 +51,7 @@ export const useCallStore = defineStore("call", () => {
     if (seen.size > 200) seen.delete(seen.values().next().value!);
   }
 
-  return { phase, peer, callId, direction, invite, connectedAt, muted, endReason, remoteRinging, reconnecting, quality, seen, reset, markSeen };
+  return { phase, peer, callId, direction, invite, connectedAt, muted, endReason, remoteRinging, reconnecting, quality, audioStatus, seen, reset, markSeen };
 });
 
 /** Lazily load the call engine (WebRTC, Trystero, media). */
