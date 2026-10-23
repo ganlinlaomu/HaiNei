@@ -67,7 +67,7 @@ import { warmReadRelaysForSession } from "@/nostr/relayWarmup";
 import { preloadBottomTabViews } from "@/router/lazyViews";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useDirectMessagesStore } from "@/stores/directMessages";
-import { loadCallEngine, useCallStore } from "@/stores/call";
+import { useCallStore } from "@/stores/call";
 import { installPushPresence } from "@/services/pushPresence";
 import { accountBadgeCount, syncAppBadge, syncAppBadgeScope } from "@/utils/appBadge";
 import { installBackgroundLock } from "@/services/autoLock";
@@ -78,7 +78,7 @@ import { onAppResume } from "@/services/appResumeCoordinator";
 import { cancelBackgroundTask, installForegroundActivityMonitor, scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
 
 const PostEditorModal = defineAsyncComponent(loadPostEditor);
-// Kept in a separate chunk, then warmed during foreground idle time.
+// Kept in a separate chunk and loaded when a call actually appears.
 const loadCallOverlay = () => import("@/components/CallOverlay.vue");
 const CallOverlay = defineAsyncComponent(loadCallOverlay);
 
@@ -270,11 +270,9 @@ export default defineComponent({
       pushPresence = installPushPresence(keys);
       stopAutoLock=installBackgroundLock({account:()=>keys.pkHex,eligible:()=>keys.isEncrypted && keys.isUnlocked && keys.credentialMode !== "device",lock:async()=>{ui.closePostEditor();ui.closeNewConversation();await keys.selectRememberedAccount(keys.pkHex);await router.replace("/login");}});
       schedulePostEditorWarmup();
-      // Incoming calls must never wait on first-use chunks. Warm both the
-      // signal handler and full-screen UI after the initial interaction work.
-      scheduleBackgroundTask("preload-call-ui", async () => {
-        await Promise.allSettled([loadCallEngine(), loadCallOverlay()]);
-      }, { priority: "idle", timeoutMs: 3_000 });
+      // Do not parse the WebRTC engine and call overlay during startup.
+      // Incoming call signals load the engine on demand; the overlay
+      // follows reactively when the call becomes visible.
       stopForegroundResume = onAppResume(reason => {
         // Friendship authorization stays urgent. Bookmark reconciliation can
         // wait for foreground idle time so NIP-17 catch-up wins on app resume.
@@ -297,7 +295,6 @@ export default defineComponent({
       stopActivityMonitor?.();
       pushPresence?.stop();
       cancelBackgroundTask("preload-post-editor");
-      cancelBackgroundTask("preload-call-ui");
       cancelBackgroundTask("preload-bottom-tabs");
       cancelBackgroundTask("foreground-bookmark-sync");
       cancelBackgroundTask("nearby-own-devices");

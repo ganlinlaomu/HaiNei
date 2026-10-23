@@ -1,3 +1,5 @@
+import { isCallAudioActive } from "@/utils/audioUnlock";
+
 export const MAX_VOICE_RECORDING_MS = 5 * 60 * 1000;
 
 export type VoiceRecordingResult = {
@@ -49,6 +51,9 @@ function browserAudioSession(): BrowserAudioSession | undefined {
 }
 
 function setAudioSessionType(type: string) {
+  // A delayed voice-note stop must never reset an already active call's
+  // play-and-record session. The call is the higher priority audio owner.
+  if (isCallAudioActive()) return;
   const audioSession = browserAudioSession();
   if (!audioSession) return;
   try {
@@ -75,6 +80,7 @@ export async function createVoiceRecordingSession(options: {
   const mediaDevices = options.mediaDevices || navigator.mediaDevices;
   const Recorder = options.Recorder || globalThis.MediaRecorder;
   if (!mediaDevices?.getUserMedia || !Recorder) throw new Error("当前浏览器不支持录音");
+  if (isCallAudioActive()) throw new Error("通话期间不能录制语音消息");
 
   let stream: MediaStream;
   try {

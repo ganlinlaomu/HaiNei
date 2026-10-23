@@ -146,6 +146,22 @@ function startQualitySampling(session: CallSession, room: Room) {
         poorSamples: session.quality.poorSamples + Number(poor), samples: session.quality.samples + 1,
       });
       store.quality = poor ? "poor" : "good";
+      // The audio element's play() promise can resolve even when iOS routes
+      // sound to the receiver (or renders nothing). Record the RTP side
+      // separately so a later no-sound report can distinguish the two.
+      if (inbound && (session.quality.samples === 1 || session.quality.samples === 3)) {
+        const track = session.remoteStream?.getAudioTracks?.()[0];
+        startupMark("call_audio_media_stats", {
+          packetsReceived: inbound.packetsReceived || 0,
+          bytesReceived: inbound.bytesReceived || 0,
+          totalAudioEnergy: inbound.totalAudioEnergy || 0,
+          totalSamplesDuration: inbound.totalSamplesDuration || 0,
+          trackMuted: track?.muted ?? null,
+          trackState: track?.readyState ?? "unknown",
+          elementPaused: session.remoteAudio?.paused ?? null,
+          sessionType: browserCallAudioSession()?.type || "unknown",
+        });
+      }
       // Packet arrival alone does not prove that WebKit is rendering sound.
       if (inbound && received > 0 && session.remoteAudio?.paused) {
         if (session.quality.samples % 3 === 0) startupMark("call_audio_not_playing", {
@@ -417,7 +433,12 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
     scheduleAudioRetry(session, "element_error");
   };
   const trackMuted = () => { if (isCurrent(session)) startupMark("call_remote_track_muted"); };
-  const trackUnmuted = () => { if (isCurrent(session)) attemptRemotePlayback(session, "track_unmuted", true); };
+  const trackUnmuted = () => {
+    if (!isCurrent(session)) return;
+    // A late unmute often arrives milliseconds after the first stream/play.
+    // Rebinding srcObject here aborts WebKit's still-starting audio renderer.
+    if (audio.paused || store.audioStatus === "blocked") attemptRemotePlayback(session, "track_unmuted");
+  };
   const trackEnded = () => { if (isCurrent(session)) startupMark("call_remote_track_ended"); };
   const foreground = () => {
     if (document.visibilityState === "visible") {
@@ -476,7 +497,7 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
     browserCallAudioSession()?.removeEventListener?.("statechange", sessionChanged);
   };
 }
-function playRemote(session: CallSession, stream: MediaStream) {
+function playRemote(session: CallSession, stream: MediaStream, reason = "remote_stream") {
   if (!session.remoteAudio) {
     session.remoteAudio = document.createElement("audio");
     session.remoteAudio.autoplay = true;
@@ -490,12 +511,40 @@ function playRemote(session: CallSession, stream: MediaStream) {
   clearAudioRetry(session);
   session.remoteAudio.srcObject = stream;
   watchRemoteAudio(session, stream, session.remoteAudio);
-  attemptRemotePlayback(session, "remote_stream");
+  attemptRemotePlayback(session, reason);
 }
-/** User-initiated iOS audio route recovery without renegotiating the call. */
+/**
+ * Recover a WebKit audio renderer which reports play() success but stays
+ * silent. Replaying the same element is insufficient on some iPhones:
+ * recreate only the output element, keeping the live WebRTC transport,
+ * microphone, and peer connection untouched. Must run synchronously in
+ * the recovery button's user-gesture handler.
+ */
 export function recoverCallAudio() {
   const session = activeSession;
-  if (session && isCurrent(session)) attemptRemotePlayback(session, "manual_recovery", true);
+  if (!session || !isCurrent(session) || !session.remoteStream) return;
+  const stream = session.remoteStream;
+  const track = stream.getAudioTracks?.()[0];
+  startupMark("call_audio_output_recovery", {
+    strategy: "replace_element",
+    incomingPackets: session.quality.received,
+    trackMuted: track?.muted ?? null,
+    trackState: track?.readyState ?? "unknown",
+    elementPaused: session.remoteAudio?.paused ?? null,
+    sessionType: browserCallAudioSession()?.type || "unknown",
+  });
+  session.audioCleanup?.();
+  session.audioCleanup = null;
+  clearAudioRetry(session);
+  session.playRequest++;
+  const previous = session.remoteAudio;
+  session.remoteAudio = null;
+  if (previous) {
+    try { previous.pause(); } catch { /* unsupported browser shim */ }
+    previous.srcObject = null;
+    previous.remove();
+  }
+  playRemote(session, stream, "manual_recovery");
 }
 
 async function joinCallRoom(session: CallSession, roomId: string, secret: string) {
@@ -841,6 +890,9 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     store.direction = "incoming";
     store.invite = { room: signal.room!, secret: signal.secret! };
     const session = createSession(signal.callId, peer, "incoming");
+    // Do not let a tap on the incoming-call banner prime unrelated ringtone
+    // media or a Web Audio context just as WebKit starts microphone capture.
+    setCallAudioActive(true);
     // The app shows its own call banner: withdraw the system notification.
     closeCallNotification();
     startTone(session, "ring");

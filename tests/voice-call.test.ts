@@ -92,14 +92,28 @@ describe("call signaling", () => {
     expect(sw).toContain("event.data?.type === 'CLOSE_CALL_NOTIFICATION'");
   });
 
-  it("keeps call code chunked but warms the engine and overlay before the first call", () => {
+  it("keeps call code and ringtone media out of the startup path", () => {
     const app = readFileSync("src/App.vue", "utf8");
     expect(app).toContain('const loadCallOverlay = () => import("@/components/CallOverlay.vue")');
-    expect(app).toContain('scheduleBackgroundTask("preload-call-ui"');
+    expect(app).not.toContain('scheduleBackgroundTask("preload-call-ui"');
     expect(app).toContain(`<CallOverlay v-if="call.phase !== 'idle'" />`);
-    expect(readFileSync("src/stores/call.ts", "utf8")).toContain('return import("@/services/callEngine");');
+    expect(readFileSync("src/stores/call.ts", "utf8")).toContain('return import("@/services/callEngine").then(module => {');
     expect(readFileSync("src/services/accountMessageSync.ts", "utf8")).toContain("await loadCallEngine()");
     expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("z-index:200000");
+    expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("function restoreAudio() { loadedCallEngine()?.recoverCallAudio(); }");
+    expect(readFileSync("src/components/CallOverlay.vue", "utf8")).not.toContain('from "@/services/callEngine"');
+    const main = readFileSync("src/main.ts", "utf8");
+    expect(main).toContain("storageHydrationMs");
+    expect(main).toContain("versionTrackingMs");
+    expect(main).toContain("vueMountMs");
+    const chat = readFileSync("src/views/Messages.vue", "utf8");
+    expect(chat).toContain('scheduleBackgroundTask("chat-call-warmup"');
+    expect(chat).toContain("data-live-audio-action");
+    const unlock = readFileSync("src/utils/audioUnlock.ts", "utf8");
+    expect(unlock).toContain('closest?.("[data-live-audio-action]")');
+    const overlay = readFileSync("src/components/CallOverlay.vue", "utf8");
+    expect(overlay).toContain("const engine = loadedCallEngine()");
+    expect(overlay).toContain("data-live-audio-action");
   });
 });
 
@@ -263,13 +277,45 @@ describe("call engine", () => {
     expect(play).toHaveBeenCalledTimes(1); // autoplay cannot be retried without a gesture
     recoverCallAudio();
     await Promise.resolve();
-    expect(play).toHaveBeenCalledTimes(2);
+    // Recovery must create a fresh output renderer, not replay the element
+    // that WebKit may have left silent despite resolving play().
+    expect(play).toHaveBeenCalledTimes(1);
+    const replacement = mocks.audioElements.at(-1);
+    expect(replacement).toBeTruthy();
+    expect(replacement).not.toBe(remoteAudio);
+    expect(replacement.play).toHaveBeenCalledOnce();
     expect(useCallStore().audioStatus).toBe("playing");
-    expect(remoteAudio.srcObject).toBe(stream);
+    expect(remoteAudio.srcObject).toBeNull();
+    expect(replacement.srcObject).toBe(stream);
     expect(peer.addStream).toHaveBeenCalledTimes(1); // media negotiation unchanged
     await hangup();
     expect(remoteAudio.remove).toHaveBeenCalledOnce();
+    expect(replacement.remove).toHaveBeenCalledOnce();
     expect(remoteAudio.removeEventListener).toHaveBeenCalledWith("playing", expect.any(Function));
+  });
+
+  it("does not rebind a healthy remote stream when the track unmutes", async () => {
+    const { startCall, hangup } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    await startCall(FRIEND);
+    const peer = mocks.rooms.at(-1);
+    peer.onPeerJoin("iphone15");
+    const listeners: Record<string, () => void> = {};
+    const track = {
+      muted: false, readyState: "live",
+      addEventListener: vi.fn((name: string, fn: () => void) => { listeners[name] = fn; }),
+      removeEventListener: vi.fn(),
+    };
+    const stream = { getAudioTracks: () => [track] } as unknown as MediaStream;
+    peer.onPeerStream(stream, "iphone15");
+    await Promise.resolve();
+    const audio = mocks.audioElements.find((candidate: any) => candidate.srcObject === stream);
+    expect(audio).toBeTruthy();
+    expect(useCallStore().audioStatus).toBe("playing");
+    listeners.unmute();
+    expect(audio.srcObject).toBe(stream);
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    await hangup();
   });
 
   it("does not let a rejected playback promise revive a finished call", async () => {
