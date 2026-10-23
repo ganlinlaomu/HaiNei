@@ -9,7 +9,7 @@
     <button class="banner-action decline" type="button" aria-label="拒绝" :disabled="acting" @click="decline">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
     </button>
-    <button class="banner-action accept" type="button" aria-label="接听" :disabled="acting" @click="accept">
+    <button class="banner-action accept" type="button" aria-label="接听" data-live-audio-action :disabled="acting" @click="accept">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
     </button>
   </div>
@@ -26,7 +26,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
           <span>拒绝</span>
         </button>
-        <button class="call-button accept" type="button" aria-label="接听" :disabled="acting" @click="accept">
+        <button class="call-button accept" type="button" aria-label="接听" data-live-audio-action :disabled="acting" @click="accept">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
           <span>接听</span>
         </button>
@@ -36,7 +36,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
           <span>关闭</span>
         </button>
-        <button v-if="canCallBack" class="call-button accept" type="button" :disabled="acting" @click="callBack">
+        <button v-if="canCallBack" class="call-button accept" type="button" data-live-audio-action :disabled="acting" @click="callBack">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
           <span>{{ call.direction === "outgoing" ? "重拨" : "回拨" }}</span>
         </button>
@@ -46,7 +46,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/><path v-if="call.muted" d="M4 4l16 16"/></svg>
           <span>{{ call.muted ? "已静音" : "静音" }}</span>
         </button>
-        <button class="call-button recover" type="button" aria-label="恢复声音" :disabled="call.phase === 'outgoing'" @click="restoreAudio">
+        <button class="call-button recover" type="button" aria-label="恢复声音" data-live-audio-action :disabled="call.phase === 'outgoing'" @click="restoreAudio">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5zM15 9a5 5 0 0 1 0 6M18 6a9 9 0 0 1 0 12"/><path d="M20 2v4h-4"/></svg>
           <span>恢复声音</span>
         </button>
@@ -110,8 +110,12 @@ const status = computed(() => {
 async function once(run: (engine: Awaited<ReturnType<typeof loadCallEngine>>) => Promise<void>) {
   if (acting.value) return;
   acting.value = true;
-  try { await run(await loadCallEngine()); }
-  finally { acting.value = false; }
+  try {
+    const engine = loadedCallEngine();
+    // Start capture synchronously within the trusted click when preloaded.
+    if (engine) await run(engine);
+    else await run(await loadCallEngine());
+  } finally { acting.value = false; }
 }
 
 async function accept() { await once(engine => engine.acceptCall()); }
