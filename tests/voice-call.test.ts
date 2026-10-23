@@ -110,7 +110,8 @@ describe("call signaling", () => {
     expect(chat).toContain('scheduleBackgroundTask("chat-call-warmup"');
     expect(chat).toContain("data-live-audio-action");
     const unlock = readFileSync("src/utils/audioUnlock.ts", "utf8");
-    expect(unlock).toContain('closest?.("[data-live-audio-action]")');
+    expect(unlock).not.toContain("installAudioUnlock");
+    expect(main).not.toContain("installAudioUnlock");
     const overlay = readFileSync("src/components/CallOverlay.vue", "utf8");
     expect(overlay).toContain("const engine = loadedCallEngine()");
     expect(overlay).toContain("data-live-audio-action");
@@ -612,11 +613,14 @@ describe("call engine", () => {
     expect(store.quality).toBe("poor");
   });
 
-  it("rings through the tap-unlocked audio and offers call back", () => {
+  it("uses call-scoped tones, guarded output sessions and optional output switching", () => {
     const engine = readFileSync("src/services/callEngine.ts", "utf8");
-    expect(engine).toContain("const shared = sharedAudioContext();");
-    expect(engine).toContain("if (context !== shared) void context.close()");
-    expect(readFileSync("src/main.ts", "utf8")).toContain("installAudioUnlock();");
+    expect(engine).toContain('ringtoneElement("ringback");');
+    expect(engine).toContain('const ownsPlaybackSession = kind === "ring" && !session.localStream;');
+    expect(engine).toContain('if (previous !== type) native.type = type;');
+    expect(engine).toContain('async function selectCallOutput()');
+    expect(engine).toContain('if (audio.paused || store.audioStatus === "blocked")');
+    expect(engine).toContain('navigator.mediaDevices?.addEventListener?.("devicechange"');
     const overlay = readFileSync("src/components/CallOverlay.vue", "utf8");
     expect(overlay).toContain('call.remoteRinging ? "对方响铃中…" : "正在呼叫…"');
     expect(overlay).toContain('call.direction === "outgoing" ? "重拨" : "回拨"');
