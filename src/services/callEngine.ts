@@ -7,7 +7,7 @@ import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
 import { debugLog, startupMark } from "@/utils/debugLog";
-import { reloadRingtoneElement, ringtoneElement, setRingAudioSession, sharedAudioContext } from "@/utils/audioUnlock";
+import { reloadRingtoneElement, ringtoneElement, setCallAudioActive, setRingAudioSession, sharedAudioContext } from "@/utils/audioUnlock";
 import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
@@ -46,6 +46,11 @@ type CallSession = {
   room: Room | null;
   localStream: MediaStream | null;
   remoteAudio: HTMLAudioElement | null;
+  remoteStream: MediaStream | null;
+  audioCleanup: (() => void) | null;
+  audioRetryTimer: ReturnType<typeof setTimeout> | null;
+  audioFailures: number;
+  playRequest: number;
   mediaPeer: string;
   timers: Set<ReturnType<typeof setTimeout>>;
   peerLossTimer: ReturnType<typeof setTimeout> | null;
@@ -64,7 +69,8 @@ function account() {
 
 function createSession(id: string, peer: string, direction: CallDirection): CallSession {
   const session: CallSession = {
-    id, peer, direction, owner: account(), room: null, localStream: null, remoteAudio: null,
+    id, peer, direction, owner: account(), room: null, localStream: null, remoteAudio: null, remoteStream: null,
+    audioCleanup: null, audioRetryTimer: null, audioFailures: 0, playRequest: 0,
     mediaPeer: "", timers: new Set(), peerLossTimer: null, ringtone: null, wakeLock: null,
     statsTimer: null, quality: { route: "", rttMs: 0, lost: 0, received: 0, poorSamples: 0, samples: 0 },
   };
@@ -97,6 +103,8 @@ function clearTimers(session: CallSession) {
   session.peerLossTimer = null;
   if (session.statsTimer) clearInterval(session.statsTimer);
   session.statsTimer = null;
+  if (session.audioRetryTimer) clearTimeout(session.audioRetryTimer);
+  session.audioRetryTimer = null;
 }
 
 /**
@@ -250,7 +258,9 @@ function startWebAudioTone(session: CallSession, kind: "ring" | "ringback", vibr
     const Context = (window as any).AudioContext || (window as any).webkitAudioContext;
     const context: AudioContext | null = shared || (Context ? new Context() : null);
     if (!context) throw new Error("no_audio");
-    setRingAudioSession(true);
+    // Do not replace a live call\u0027s play-and-record session with playback.
+    const ownsRingingSession = !session.localStream;
+    if (ownsRingingSession) setRingAudioSession(true);
     void context.resume?.().catch(() => undefined);
     const gain = context.createGain();
     gain.gain.value = 0;
@@ -270,7 +280,7 @@ function startWebAudioTone(session: CallSession, kind: "ring" | "ringback", vibr
       clearInterval(interval);
       if (vibration) { clearInterval(vibration); navigator.vibrate?.(0); }
       try { oscillator.stop(); oscillator.disconnect(); gain.disconnect(); } catch { /* stopped */ }
-      setRingAudioSession(false);
+      if (ownsRingingSession) setRingAudioSession(false);
       // Never close the shared context: later calls ring through it.
       if (context !== shared) void context.close().catch(() => undefined);
     } };
