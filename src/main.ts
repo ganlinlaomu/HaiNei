@@ -74,10 +74,13 @@ async function bootstrap() {
   // Device/session storage must be hydrated before version checks and before
   // Vue Router runs its auth guard. Otherwise restoreSession() sees an empty
   // in-memory deviceStorage map and permanently marks the session as restored.
+  const migrationStartedAt = performance.now();
   await migrateLegacyLocalStorage();
+  const storageHydrationMs = Math.round(performance.now() - migrationStartedAt);
   // Device storage is hydrated now; apply an explicit light/dark choice before mount.
   initTheme();
 
+  const versionStartedAt = performance.now();
   const versionChanged = initVersionTracking();
   if (versionChanged) {
     // The running bundle is already the new version and no data is cleared, so
@@ -91,6 +94,7 @@ async function bootstrap() {
       console.error("[main] Failed to handle version update", e);
     }
   }
+  const versionTrackingMs = Math.round(performance.now() - versionStartedAt);
   // Normal app initialization
   const app = createApp(App);
   const pinia = createPinia();
@@ -103,8 +107,14 @@ async function bootstrap() {
   // Keep audio initialization away from the critical first-paint path.
   // Register the lightweight gesture listeners after Vue is mounted; the
   // ringtone media itself is created only on demand / user interaction.
+  const vueMountStartedAt = performance.now();
   app.mount("#app");
-  startupMark("mounted", { bootMs });
+  startupMark("mounted", {
+    bootMs,
+    storageHydrationMs,
+    versionTrackingMs,
+    vueMountMs: Math.round(performance.now() - vueMountStartedAt),
+  });
   installAudioUnlock();
 
   // 异步恢复登录态，不阻塞首屏渲染
