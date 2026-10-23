@@ -62,5 +62,8 @@ describe("to-do planning", () => {
     expect(planner).toMatch(/\.time-button input\)\{[^}]*min-width:0/);
     expect(view).toMatch(/\.task-due\{[^}]*overflow:hidden/);
     expect(view).toContain(".task>button{position:relative;z-index:1");
+    // A set time can be removed again (the iOS picker cannot clear it).
+    expect(planner).toContain('onClick: () => void updateTask(cardProps.item, { due: undefined })');
+    expect(view).toContain(`@click.prevent="setTaskDue(task, '')">取消时间</button>`);
   });
 });
