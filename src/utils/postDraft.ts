@@ -1,4 +1,5 @@
 import { deviceStorage } from "@/services/deviceStorage";
+import { validTaskDue } from "@/utils/todoPlanning";
 
 export interface PostDraftImage {
   id: string;
@@ -20,9 +21,47 @@ export interface PostDraftVideo {
 /** What the composer creates: a shared post, or a private note or to-do list. */
 export type ComposerType = "post" | "note" | "todo";
 
+/** Same task fields as the private-space to-do editor (including optional due). */
+export interface ComposerTodoTask {
+  id: string;
+  text: string;
+  done: boolean;
+  due?: number;
+}
+
+/** Normalize a stored draft without trusting corrupted or legacy task fields. */
+export function normalizeComposerTodoTasks(value: unknown): ComposerTodoTask[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const normalized: ComposerTodoTask[] = [];
+  for (const item of value) {
+    if (normalized.length >= 1000) break;
+    if (!item || typeof item !== "object") continue;
+    const task = item as Partial<ComposerTodoTask>;
+    if (typeof task.id !== "string" || !task.id.trim() || seen.has(task.id) || typeof task.text !== "string") continue;
+    seen.add(task.id);
+    normalized.push({
+      id: task.id,
+      text: task.text.slice(0, 2000),
+      done: task.done === true,
+      ...(validTaskDue(task.due) ? { due: task.due } : {}),
+    });
+  }
+  return normalized;
+}
+
+/** Existing editor drafts stored one task per line without stable IDs/due. */
+export function composerTodoTasksFromText(content: string): ComposerTodoTask[] {
+  return content.split("\\n").map(line => line.trim()).filter(Boolean).slice(0, 1000)
+    .map(text => ({ id: crypto.randomUUID(), text: text.slice(0, 2000), done: false }));
+}
+
 export interface PostDraft {
   type: ComposerType;
   content: string;
+  /** Title and per-item state are kept separately so dates survive editor restarts. */
+  todoTitle: string;
+  todoTasks: ComposerTodoTask[];
   allFriends: boolean;
   selectedGroups: string[];
   /** True only after the user explicitly chose an audience for this draft. */
@@ -32,7 +71,9 @@ export interface PostDraft {
   updatedAt: number;
 }
 
-export type PostDraftInput = Omit<PostDraft, "updatedAt" | "images" | "video" | "audienceChosen" | "type"> & {
+export type PostDraftInput = Omit<PostDraft, "updatedAt" | "images" | "video" | "audienceChosen" | "type" | "todoTitle" | "todoTasks"> & {
+  todoTitle?: string;
+  todoTasks?: ComposerTodoTask[];
   type?: ComposerType;
   audienceChosen?: boolean;
   images?: PostDraftImage[];
@@ -100,6 +141,11 @@ export function loadPostDraft(account?: string | null): PostDraft | null {
     return {
       type,
       content: value.content,
+      todoTitle: typeof value.todoTitle === "string" ? value.todoTitle.slice(0, 500) : "",
+      // Old text-only to-dos still open as editable rows.
+      todoTasks: Array.isArray(value.todoTasks)
+        ? normalizeComposerTodoTasks(value.todoTasks)
+        : type === "todo" ? composerTodoTasksFromText(value.content) : [],
       audienceChosen,
       allFriends,
       selectedGroups: audienceChosen && !allFriends && Array.isArray(value.selectedGroups)
@@ -121,6 +167,8 @@ export function savePostDraft(account: string | null | undefined, draft: PostDra
     deviceStorage.setItem(key, JSON.stringify({
       type: draft.type ?? "post",
       content: draft.content,
+      todoTitle: typeof draft.todoTitle === "string" ? draft.todoTitle.slice(0, 500) : "",
+      todoTasks: normalizeComposerTodoTasks(draft.todoTasks),
       audienceChosen: draft.audienceChosen === true,
       allFriends: draft.audienceChosen === true && draft.allFriends,
       selectedGroups: draft.audienceChosen === true && !draft.allFriends ? [...draft.selectedGroups] : [],
@@ -136,6 +184,8 @@ export function mergeCompletedPostDraftImage(account: string, image: PostDraftIm
   const images = [...(current?.images || []).filter(item => item.id !== image.id && item.encryptedRef !== image.encryptedRef), image];
   savePostDraft(account, {
     content: current?.content || "",
+    todoTitle: current?.todoTitle || "",
+    todoTasks: current?.todoTasks || [],
     audienceChosen: current?.audienceChosen ?? false,
     allFriends: current?.allFriends ?? false,
     selectedGroups: current?.selectedGroups || [],
@@ -148,6 +198,8 @@ export function mergeCompletedPostDraftVideo(account: string, video: PostDraftVi
   const current = loadPostDraft(account);
   savePostDraft(account, {
     content: current?.content || "",
+    todoTitle: current?.todoTitle || "",
+    todoTasks: current?.todoTasks || [],
     audienceChosen: current?.audienceChosen ?? false,
     allFriends: current?.allFriends ?? false,
     selectedGroups: current?.selectedGroups || [],
