@@ -14,6 +14,7 @@ import { initTheme } from "@/services/theme";
 import { installChunkLoadRecovery } from "@/utils/chunkLoadRecovery";
 import { installRuntimeDiagnostics } from "@/services/runtimeDiagnostics";
 import { restoreWithWatchdog } from "@/utils/restoreWatchdog";
+import { installIncomingRingtoneActivation } from "@/utils/audioUnlock";
 
 let serviceWorkerRegistration: Promise<ServiceWorkerRegistration> | null = null;
 let serviceWorkerLoadListenerAttached = false;
@@ -112,6 +113,9 @@ async function bootstrap() {
     versionTrackingMs,
     vueMountMs: Math.round(performance.now() - vueMountStartedAt),
   });
+  // Only add a lightweight listener now. A 100%-silent media prime happens
+  // on a later trusted gesture, never during cold start or first paint.
+  installIncomingRingtoneActivation();
 
   // 异步恢复登录态，不阻塞首屏渲染
   (async () => {
