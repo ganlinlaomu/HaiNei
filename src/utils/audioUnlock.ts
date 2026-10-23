@@ -19,6 +19,11 @@ export function setCallAudioActive(active: boolean) {
   callAudioActive = active;
   if (!active) primeStale = true;
 }
+
+/** Shared lightweight guard: calls own iOS playback/capture focus. */
+export function isCallAudioActive() {
+  return callAudioActive;
+}
 const REPRIME_AFTER_MS = 60_000;
 // A point inside each tone's silent stretch: priming plays real (unmuted)
 // audio there, which iOS treats as a stronger unlock than muted playback.
@@ -161,8 +166,11 @@ export function installAudioUnlock() {
   // Do not synthesize WAV data or instantiate audio media before Vue mounts.
   // On iOS this synchronous work can stall cold start; the first user gesture
   // primes the tones and an incoming call still creates its ringtone on demand.
-  const onGesture = () => {
+  const onGesture = (event: Event) => {
     if (callAudioActive) return;
+    // Live capture/playback must get the original iOS activation, without
+    // simultaneously priming ringtone elements and an AudioContext.
+    if ((event.target as Element | null)?.closest?.("[data-live-audio-action]")) return;
     if (!primed || primeStale || Date.now() - primedAt > REPRIME_AFTER_MS || context?.state !== "running") unlock();
   };
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") primeStale = true; });
