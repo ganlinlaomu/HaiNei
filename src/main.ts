@@ -14,7 +14,6 @@ import { initTheme } from "@/services/theme";
 import { installChunkLoadRecovery } from "@/utils/chunkLoadRecovery";
 import { installRuntimeDiagnostics } from "@/services/runtimeDiagnostics";
 import { restoreWithWatchdog } from "@/utils/restoreWatchdog";
-import { installAudioUnlock } from "@/utils/audioUnlock";
 
 let serviceWorkerRegistration: Promise<ServiceWorkerRegistration> | null = null;
 let serviceWorkerLoadListenerAttached = false;
@@ -104,9 +103,7 @@ async function bootstrap() {
   installChunkLoadRecovery(router);
   installRuntimeDiagnostics(app);
 
-  // Keep audio initialization away from the critical first-paint path.
-  // Register the lightweight gesture listeners after Vue is mounted; the
-  // ringtone media itself is created only on demand / user interaction.
+  // Do not initialize any ringtone or AudioContext during cold start.
   const vueMountStartedAt = performance.now();
   app.mount("#app");
   startupMark("mounted", {
@@ -115,7 +112,6 @@ async function bootstrap() {
     versionTrackingMs,
     vueMountMs: Math.round(performance.now() - vueMountStartedAt),
   });
-  installAudioUnlock();
 
   // 异步恢复登录态，不阻塞首屏渲染
   (async () => {

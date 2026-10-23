@@ -1,39 +1,20 @@
-// iOS only lets a page make sound after a user gesture. In a home-screen web
-// app (standalone PWA) a Web Audio context can even report "running" yet stay
-// silent after the app returns from the background, so ringing works in a
-// Safari tab but not in the PWA. Ring through <audio> elements instead: each
-// is "primed" (played muted and paused) on the first tap, which lets later
-// play() calls sound without a gesture. Web Audio stays as a fallback.
-let context: AudioContext | null = null;
-let installed = false;
+// Ring tones are created only for real calls. Playing a synthetic ringtone on
+// arbitrary taps to unlock iOS media can leak an audible burst before the WAV
+// has seeked to its silent section, and can steal call/recording audio focus.
+// WebRTC playback uses microphone capture and its own AudioSession instead.
 const elements = new Map<RingKind, HTMLAudioElement>();
-let primed = false;
-let primedAt = 0;
-// iOS withdraws playback permission after backgrounding or another app's
-// audio. Re-prime on the next tap after that, or at least once a minute.
-let primeStale = true;
-// During a live call, priming the ringtone on every tap can steal iOS audio focus.
 let callAudioActive = false;
 
 export function setCallAudioActive(active: boolean) {
   callAudioActive = active;
-  if (!active) primeStale = true;
 }
 
-/** Shared lightweight guard: calls own iOS playback/capture focus. */
+/** Recording must not reset an active voice call's audio session. */
 export function isCallAudioActive() {
   return callAudioActive;
 }
-const REPRIME_AFTER_MS = 60_000;
-// A point inside each tone's silent stretch: priming plays real (unmuted)
-// audio there, which iOS treats as a stronger unlock than muted playback.
-const SILENT_OFFSET: Record<RingKind, number> = { ring: 1.5, ringback: 2.5 };
 
 export type RingKind = "ring" | "ringback";
-
-export function sharedAudioContext(): AudioContext | null {
-  return context;
-}
 
 /** A looping tone pattern as a small 8 kHz mono 16-bit WAV file. */
 export function toneWavBytes(kind: RingKind): Uint8Array {
@@ -85,7 +66,6 @@ export function reloadRingtoneElement(kind: RingKind): HTMLAudioElement | null {
   if (element) {
     if (element.src.startsWith("blob:")) URL.revokeObjectURL(element.src);
     elements.delete(kind);
-    primed = false;
   }
   return ringtoneElement(kind);
 }
@@ -101,7 +81,13 @@ export function setRingAudioSession(ringing: boolean) {
   const session = typeof navigator === "undefined" ? undefined
     : (navigator as Navigator & { audioSession?: BrowserAudioSession }).audioSession;
   if (!session) return;
-  try { session.type = ringing ? "playback" : "auto"; } catch { /* unsupported */ }
+  try {
+    // An in-progress voice recording or call already owns play-and-record.
+    // Its audio category must never be downgraded just to ring.
+    if (ringing && session.type !== "play-and-record") session.type = "playback";
+    // Only release the ringtone's own playback category, not a newer call's.
+    if (!ringing && session.type === "playback") session.type = "auto";
+  } catch { /* unsupported */ }
 }
 
 export function ringtoneElement(kind: RingKind): HTMLAudioElement | null {
@@ -118,67 +104,4 @@ export function ringtoneElement(kind: RingKind): HTMLAudioElement | null {
     elements.set(kind, element);
   }
   return element;
-}
-
-function primeElements() {
-  for (const kind of ["ring", "ringback"] as const) {
-    const element = ringtoneElement(kind);
-    if (!element || !element.paused) continue;
-    element.muted = false;
-    try { element.currentTime = SILENT_OFFSET[kind]; } catch { /* not loaded yet */ }
-    void element.play().then(() => {
-      // An incoming call can begin while iOS is still resolving the earlier
-      // priming play(). Never let its late completion pause the real ringtone.
-      // Likewise, a replaced (failed) tone must not mark a new one as primed.
-      if (callAudioActive || elements.get(kind) !== element) return;
-      element.pause();
-      element.currentTime = 0;
-      primed = true;
-      primedAt = Date.now();
-      primeStale = false;
-    }, () => undefined);
-  }
-}
-
-export function ringtonePrimed() {
-  return primed;
-}
-
-function unlock() {
-  try {
-    const Context = (window as any).AudioContext || (window as any).webkitAudioContext;
-    if (Context) {
-      context ??= new Context();
-      const ctx = context!;
-      if (ctx.state !== "running") void ctx.resume().catch(() => undefined);
-      // Playing a silent buffer inside the gesture fully unlocks output on iOS.
-      const source = ctx.createBufferSource();
-      source.buffer = ctx.createBuffer(1, 1, 22_050);
-      source.connect(ctx.destination);
-      source.start(0);
-    }
-  } catch {
-    // Unsupported: calls still show their screen and system notification.
-  }
-  primeElements();
-}
-
-/** Keep listening: iOS suspends audio again after backgrounding. */
-export function installAudioUnlock() {
-  if (installed || typeof window === "undefined") return;
-  installed = true;
-  // Do not synthesize WAV data or instantiate audio media before Vue mounts.
-  // On iOS this synchronous work can stall cold start; the first user gesture
-  // primes the tones and an incoming call still creates its ringtone on demand.
-  const onGesture = (event: Event) => {
-    if (callAudioActive) return;
-    // Live capture/playback must get the original iOS activation, without
-    // simultaneously priming ringtone elements and an AudioContext.
-    if ((event.target as Element | null)?.closest?.("[data-live-audio-action]")) return;
-    if (!primed || primeStale || Date.now() - primedAt > REPRIME_AFTER_MS || context?.state !== "running") unlock();
-  };
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") primeStale = true; });
-  for (const type of ["pointerdown", "touchend", "keydown"]) {
-    window.addEventListener(type, onGesture, { capture: true, passive: true });
-  }
 }

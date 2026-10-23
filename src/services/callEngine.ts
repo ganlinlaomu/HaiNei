@@ -7,7 +7,7 @@ import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
 import { debugLog, startupMark } from "@/utils/debugLog";
-import { reloadRingtoneElement, ringtoneElement, setCallAudioActive, setRingAudioSession, sharedAudioContext } from "@/utils/audioUnlock";
+import { reloadRingtoneElement, ringtoneElement, setCallAudioActive, setRingAudioSession } from "@/utils/audioUnlock";
 import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
@@ -51,6 +51,8 @@ type CallSession = {
   audioRetryTimer: ReturnType<typeof setTimeout> | null;
   audioFailures: number;
   playRequest: number;
+  /** Explicit browser-selected output, if the speaker-selection API is available. */
+  outputDeviceId: string;
   mediaPeer: string;
   timers: Set<ReturnType<typeof setTimeout>>;
   peerLossTimer: ReturnType<typeof setTimeout> | null;
@@ -70,7 +72,7 @@ function account() {
 function createSession(id: string, peer: string, direction: CallDirection): CallSession {
   const session: CallSession = {
     id, peer, direction, owner: account(), room: null, localStream: null, remoteAudio: null, remoteStream: null,
-    audioCleanup: null, audioRetryTimer: null, audioFailures: 0, playRequest: 0,
+    audioCleanup: null, audioRetryTimer: null, audioFailures: 0, playRequest: 0, outputDeviceId: "",
     mediaPeer: "", timers: new Set(), peerLossTimer: null, ringtone: null, wakeLock: null,
     statsTimer: null, quality: { route: "", rttMs: 0, lost: 0, received: 0, poorSamples: 0, samples: 0 },
   };
@@ -159,7 +161,10 @@ function startQualitySampling(session: CallSession, room: Room) {
           trackMuted: track?.muted ?? null,
           trackState: track?.readyState ?? "unknown",
           elementPaused: session.remoteAudio?.paused ?? null,
+          elementMuted: session.remoteAudio?.muted ?? null,
+          sinkId: session.remoteAudio ? (session.remoteAudio as RoutedAudio).sinkId ?? "unsupported" : "no_element",
           sessionType: browserCallAudioSession()?.type || "unknown",
+          sessionState: browserCallAudioSession()?.state || "unknown",
         });
       }
       // Packet arrival alone does not prove that WebKit is rendering sound.
@@ -247,6 +252,10 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
   // Preferred: the <audio> element primed by an earlier tap (works in the
   // standalone PWA, where Web Audio may stay silent after backgrounding).
   const first = ringtoneElement(kind);
+  // Incoming ringtones own a playback session until capture starts. Ringback
+  // must never replace the active microphone's play-and-record session.
+  const ownsPlaybackSession = kind === "ring" && !session.localStream;
+  if (ownsPlaybackSession) setRingAudioSession(true);
   if (!first) {
     startWebAudioTone(session, kind, vibration);
     return;
@@ -254,22 +263,36 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
   const play = (element: HTMLAudioElement, attempt: number) => {
     element.currentTime = 0;
     element.muted = false;
-    const playing = element.play();
-    session.ringtone = { stop() {
+    let playing: Promise<void>;
+    try { playing = Promise.resolve(element.play()); }
+    catch (error) { playing = Promise.reject(error); }
+    const handle = { stop() {
       element.pause();
       element.currentTime = 0;
+      if (ownsPlaybackSession) setRingAudioSession(false);
       if (vibration) { clearInterval(vibration); navigator.vibrate?.(0); }
     } };
+    session.ringtone = handle;
     void playing.then(
       () => startupMark("call_ring_audio", { kind, via: "element", attempt }),
       error => {
         const name = error instanceof Error ? error.name : "unknown";
         startupMark("call_ring_audio_failed", { kind, via: "element", attempt, error: name, mediaError: element.error?.code ?? 0 });
-        if (!session.ringtone || !isCurrent(session)) return;
-        // The source failed to load (not a permission problem): rebuild it once.
+        if (session.ringtone !== handle || !isCurrent(session)) return;
+        // Gesture-less autoplay denial cannot be fixed by another synthetic
+        // oscillator; rely on the incoming-call UI / system push notification.
+        if (name === "NotAllowedError") {
+          startupMark("call_ring_requires_interaction", { kind });
+          stopTone(session);
+          return;
+        }
+        // Retry an unsupported blob source once, then use Web Audio fallback.
         const retry = name === "NotSupportedError" && attempt === 1 ? reloadRingtoneElement(kind) : null;
         if (retry) play(retry, 2);
-        else startWebAudioTone(session, kind, vibration);
+        else {
+          if (ownsPlaybackSession) setRingAudioSession(false);
+          startWebAudioTone(session, kind, vibration);
+        }
       },
     );
   };
@@ -278,11 +301,10 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
 
 function startWebAudioTone(session: CallSession, kind: "ring" | "ringback", vibration: ReturnType<typeof setInterval> | null) {
   try {
-    // The shared context was unlocked by an earlier tap; a fresh one created
-    // now (no gesture) would stay silent on iOS.
-    const shared = sharedAudioContext();
+    // Fallback is deliberately demand-driven. It may be suspended on iOS
+    // without activation; do not pretend a running context proves audibility.
     const Context = (window as any).AudioContext || (window as any).webkitAudioContext;
-    const context: AudioContext | null = shared || (Context ? new Context() : null);
+    const context: AudioContext | null = Context ? new Context() : null;
     if (!context) throw new Error("no_audio");
     // Do not replace a live call\u0027s play-and-record session with playback.
     const ownsRingingSession = !session.localStream;
@@ -307,11 +329,10 @@ function startWebAudioTone(session: CallSession, kind: "ring" | "ringback", vibr
       if (vibration) { clearInterval(vibration); navigator.vibrate?.(0); }
       try { oscillator.stop(); oscillator.disconnect(); gain.disconnect(); } catch { /* stopped */ }
       if (ownsRingingSession) setRingAudioSession(false);
-      // Never close the shared context: later calls ring through it.
-      if (context !== shared) void context.close().catch(() => undefined);
+      void context.close().catch(() => undefined);
     } };
     if (context.state !== "running") startupMark("call_ring_audio_locked", { kind, state: context.state });
-    else startupMark("call_ring_audio", { kind, via: "webaudio", shared: context === shared });
+    else startupMark("call_ring_audio", { kind, via: "webaudio" });
   } catch {
     session.ringtone = vibration ? { stop() { clearInterval(vibration!); navigator.vibrate?.(0); } } : null;
   }
@@ -340,6 +361,11 @@ async function getMicrophone() {
 }
 
 
+type RoutedAudio = HTMLAudioElement & {
+  sinkId?: string;
+  setSinkId?: (deviceId: string) => Promise<void>;
+};
+
 type BrowserCallAudioSession = {
   type: string;
   state?: string;
@@ -355,8 +381,11 @@ function setCallAudioSession(session: CallSession, type: "auto" | "play-and-reco
   const native = browserCallAudioSession();
   if (!native) return;
   try {
-    if (native.type !== type) native.type = type;
-    startupMark("call_audio_session", { type, state: native.state || "unknown", reason });
+    const previous = native.type;
+    // Reassert only when needed: flipping a healthy iOS call's audio category
+    // can move playback between the receiver and speaker.
+    if (previous !== type) native.type = type;
+    startupMark("call_audio_session", { previous, type: native.type, changed: previous !== type, state: native.state || "unknown", reason });
   } catch (error) {
     debugLog("system", "call_audio_session_failed", { name: error instanceof Error ? error.name : "unknown", reason }, "warn");
   }
@@ -441,9 +470,19 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
   };
   const trackEnded = () => { if (isCurrent(session)) startupMark("call_remote_track_ended"); };
   const foreground = () => {
-    if (document.visibilityState === "visible") {
-      later(session, 250, () => attemptRemotePlayback(session, "foreground_resume", true));
-    }
+    if (document.visibilityState !== "visible") return;
+    later(session, 250, () => {
+      // Returning to the app is not proof that WebKit lost the output track.
+      // Unnecessary srcObject rebinding can itself make iOS go silent.
+      if (audio.paused || store.audioStatus === "blocked") {
+        attemptRemotePlayback(session, "foreground_resume", true);
+      } else {
+        startupMark("call_audio_foreground_healthy", {
+          sessionState: browserCallAudioSession()?.state || "unknown",
+          sinkId: (audio as RoutedAudio).sinkId ?? "unsupported",
+        });
+      }
+    });
   };
   let wasInterrupted = false;
   const sessionChanged: EventListener = () => {
@@ -456,7 +495,7 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
     } else if (wasInterrupted && state === "active") {
       // Normal inactive/active transitions must not restart playback endlessly.
       wasInterrupted = false;
-      attemptRemotePlayback(session, "session_resumed", true);
+      attemptRemotePlayback(session, "session_resumed", audio.paused || store.audioStatus === "blocked");
     }
   };
   // Synchronous capture handler preserves the iOS user activation window.
@@ -466,6 +505,14 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
     if (isCurrent(session) && (audio.paused || store.audioStatus === "blocked")) {
       attemptRemotePlayback(session, "user_gesture", true);
     }
+  };
+  const deviceChanged = () => {
+    if (!isCurrent(session)) return;
+    startupMark("call_audio_device_changed", {
+      sinkId: (audio as RoutedAudio).sinkId ?? "unsupported",
+      sessionState: browserCallAudioSession()?.state || "unknown",
+      selectedOutput: !!session.outputDeviceId,
+    });
   };
   const tracks = stream.getAudioTracks?.() || [];
   audio.addEventListener?.("playing", playing);
@@ -481,6 +528,7 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
   window.addEventListener?.("pointerdown", gesture, { capture: true });
   window.addEventListener?.("touchend", gesture, { capture: true });
   browserCallAudioSession()?.addEventListener?.("statechange", sessionChanged);
+  navigator.mediaDevices?.addEventListener?.("devicechange", deviceChanged);
   session.audioCleanup = () => {
     audio.removeEventListener?.("playing", playing);
     audio.removeEventListener?.("pause", paused);
@@ -495,6 +543,7 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
     window.removeEventListener?.("pointerdown", gesture, { capture: true });
     window.removeEventListener?.("touchend", gesture, { capture: true });
     browserCallAudioSession()?.removeEventListener?.("statechange", sessionChanged);
+    navigator.mediaDevices?.removeEventListener?.("devicechange", deviceChanged);
   };
 }
 function playRemote(session: CallSession, stream: MediaStream, reason = "remote_stream") {
@@ -511,6 +560,15 @@ function playRemote(session: CallSession, stream: MediaStream, reason = "remote_
   clearAudioRetry(session);
   session.remoteAudio.srcObject = stream;
   watchRemoteAudio(session, stream, session.remoteAudio);
+  // A browser-selected output is preserved across renderer replacement.
+  const selected = session.outputDeviceId;
+  const routed = session.remoteAudio as RoutedAudio;
+  if (selected && routed.setSinkId) {
+    void routed.setSinkId(selected).then(
+      () => { if (isCurrent(session)) startupMark("call_audio_output_restored", { selected: true }); },
+      error => { if (isCurrent(session)) startupMark("call_audio_output_restore_failed", { name: error instanceof Error ? error.name : "unknown" }); },
+    );
+  }
   attemptRemotePlayback(session, reason);
 }
 /**
@@ -531,7 +589,9 @@ export function recoverCallAudio() {
     trackMuted: track?.muted ?? null,
     trackState: track?.readyState ?? "unknown",
     elementPaused: session.remoteAudio?.paused ?? null,
+    sinkId: session.remoteAudio ? (session.remoteAudio as RoutedAudio).sinkId ?? "unsupported" : "no_element",
     sessionType: browserCallAudioSession()?.type || "unknown",
+    sessionState: browserCallAudioSession()?.state || "unknown",
   });
   session.audioCleanup?.();
   session.audioCleanup = null;
@@ -545,6 +605,33 @@ export function recoverCallAudio() {
     previous.remove();
   }
   playRemote(session, stream, "manual_recovery");
+}
+
+/**
+ * Optional native browser output picker. Always invoke selectAudioOutput()
+ * directly from the user's click; some iOS builds don't implement it and
+ * a fulfilled setSinkId() does not prove the physical route changed.
+ */
+export async function selectCallOutput() {
+  const session = activeSession;
+  const media = navigator.mediaDevices as MediaDevices & {
+    selectAudioOutput?: () => Promise<{ deviceId: string }>;
+  };
+  const picker = media?.selectAudioOutput;
+  const output = session?.remoteAudio as RoutedAudio | null;
+  if (!session || !isCurrent(session) || !output?.setSinkId || !picker) return;
+  try {
+    const device = await picker.call(media);
+    if (!isCurrent(session) || session.remoteAudio !== output) return;
+    await output.setSinkId(device.deviceId);
+    if (!isCurrent(session)) return;
+    session.outputDeviceId = device.deviceId;
+    startupMark("call_audio_output_selected", { selected: true, reportedSinkId: output.sinkId ?? "unsupported" });
+  } catch (error) {
+    if (isCurrent(session)) startupMark("call_audio_output_select_failed", {
+      name: error instanceof Error ? error.name : "unknown",
+    });
+  }
 }
 
 async function joinCallRoom(session: CallSession, roomId: string, secret: string) {
@@ -765,6 +852,9 @@ export async function startCall(peerPubkey: string) {
   store.callId = id;
   store.direction = "outgoing";
   const session = createSession(id, peer, "outgoing");
+  // Load the small ringback resource only after the user starts a call.
+  // Merely loading media is not audio priming; no play() occurs here.
+  ringtoneElement("ringback");
   setCallAudioActive(true);
   setCallAudioSession(session, "play-and-record", "call_start");
   let stream: MediaStream;
