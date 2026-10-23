@@ -1,5 +1,5 @@
 <template>
-  <div class="call-overlay" role="dialog" aria-modal="true" :aria-label="`与 ${name} 的语音通话`">
+  <div class="call-overlay" role="dialog" aria-modal="true" :aria-label="`与 ${name} 的语音通话`" @click.self="dismissEnded">
     <div class="call-peer">
       <ProfileAvatar :pubkey="call.peer" :size="96" />
       <strong class="call-name">{{ name }}</strong>
@@ -18,6 +18,10 @@
         </button>
       </template>
       <template v-else-if="call.phase === 'ended'">
+        <button class="call-button close" type="button" @click="dismissEnded">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          <span>关闭</span>
+        </button>
         <button v-if="canCallBack" class="call-button accept" type="button" :disabled="acting" @click="callBack">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
           <span>{{ call.direction === "outgoing" ? "重拨" : "回拨" }}</span>
@@ -92,6 +96,8 @@ async function accept() { await once(engine => engine.acceptCall()); }
 async function decline() { await once(engine => engine.declineCall()); }
 async function hangup() { await once(engine => engine.hangup()); }
 async function mute() { (await loadCallEngine()).toggleMute(); }
+// The ended screen closes itself shortly; tapping closes it at once.
+function dismissEnded() { if (call.phase === "ended") call.reset(); }
 // Not after another device handled it, or when the microphone is blocked.
 const canCallBack = computed(() => !!call.peer && call.endReason !== "answered_elsewhere" && call.endReason !== "microphone_denied");
 async function callBack() {
@@ -113,7 +119,7 @@ async function callBack() {
 .call-button svg{width:64px;height:64px;padding:18px;border-radius:50%;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .call-button.accept svg{background:#16a34a}
 .call-button.decline svg{background:#dc2626}
-.call-button.mute svg{background:rgba(255,255,255,.14)}
+.call-button.mute svg,.call-button.close svg{background:rgba(255,255,255,.14)}
 .call-button.mute.on svg{background:#f8fafc;color:#0f172a}
 .call-button:disabled{opacity:.45}
 .call-hint{margin:0;color:#94a3b8;font-size:12px;text-align:center}

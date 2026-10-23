@@ -26,8 +26,12 @@ const CONNECT_TIMEOUT_MS = 25_000;
 // it through the relays. Show 重新连接中 and wait this long before ending.
 const PEER_LOSS_GRACE_MS = 20_000;
 const STATS_INTERVAL_MS = 4_000;
-// Long enough to tap 重拨 / 回拨 on the ended screen.
-const ENDED_SCREEN_MS = 4_000;
+// Ending the call yourself closes the screen almost at once (a lingering
+// screen looked frozen). When the other side or the network ended it, keep
+// the reason and 回拨 / 重拨 visible a little longer.
+const ENDED_BY_ME_MS = 500;
+const ENDED_SCREEN_MS = 2_500;
+const ENDED_BY_ME = new Set<CallEndReason>(["hangup", "declined", "cancelled", "answered_elsewhere"]);
 const STUN: RTCIceServer[] = [{ urls: "stun:stun.cloudflare.com:3478" }];
 
 // Trystero 0.26: handlers are assigned properties, actions are objects.
@@ -468,7 +472,8 @@ async function finish(session: CallSession, reason: CallEndReason, notify: boole
   });
   await releasing;
   // Leave the outcome on screen briefly, then close the overlay.
-  setTimeout(() => { if (useCallStore().callId === id && useCallStore().phase === "ended") useCallStore().reset(); }, ENDED_SCREEN_MS);
+  setTimeout(() => { if (useCallStore().callId === id && useCallStore().phase === "ended") useCallStore().reset(); },
+    ENDED_BY_ME.has(reason) ? ENDED_BY_ME_MS : ENDED_SCREEN_MS);
 }
 
 export async function startCall(peerPubkey: string) {
