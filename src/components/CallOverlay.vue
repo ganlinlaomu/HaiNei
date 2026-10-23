@@ -46,6 +46,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/><path v-if="call.muted" d="M4 4l16 16"/></svg>
           <span>{{ call.muted ? "已静音" : "静音" }}</span>
         </button>
+        <button class="call-button recover" type="button" aria-label="恢复声音" :disabled="call.phase === 'outgoing'" @click="restoreAudio">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5zM15 9a5 5 0 0 1 0 6M18 6a9 9 0 0 1 0 12"/><path d="M20 2v4h-4"/></svg>
+          <span>恢复声音</span>
+        </button>
         <button class="call-button decline" type="button" aria-label="挂断" :disabled="acting" @click="hangup">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
           <span>{{ call.phase === "outgoing" ? "取消" : "挂断" }}</span>
@@ -97,7 +101,7 @@ const status = computed(() => {
     case "incoming": return "邀请你语音通话";
     case "connecting": return "正在连接…";
     case "active": return call.reconnecting ? "网络中断，正在重新连接…"
-      : `${clock(now.value - call.connectedAt)}${call.quality === "poor" ? " · 网络不佳" : ""}`;
+      : `${clock(now.value - call.connectedAt)}${call.audioStatus === "blocked" ? " · 播放受限" : call.audioStatus === "waiting" ? " · 声音连接中" : ""}${call.quality === "poor" ? " · 网络不佳" : ""}`;
     case "ended": return ENDED_TEXT[call.endReason || "hangup"] || "通话已结束";
     default: return "";
   }
@@ -114,6 +118,7 @@ async function accept() { await once(engine => engine.acceptCall()); }
 async function decline() { await once(engine => engine.declineCall()); }
 async function hangup() { await once(engine => engine.hangup()); }
 async function mute() { (await loadCallEngine()).toggleMute(); }
+async function restoreAudio() { (await loadCallEngine()).recoverCallAudio(); }
 // The ended screen closes itself shortly; tapping closes it at once.
 function dismissEnded() { if (call.phase === "ended") call.reset(); }
 // Not after another device handled it, or when the microphone is blocked.
@@ -143,12 +148,12 @@ async function callBack() {
 .call-peer{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center}
 .call-name{max-width:80vw;overflow:hidden;font-size:24px;text-overflow:ellipsis;white-space:nowrap}
 .call-status{color:#cbd5e1;font-size:16px;font-variant-numeric:tabular-nums}
-.call-actions{display:flex;justify-content:center;gap:56px}
+.call-actions{display:flex;justify-content:center;gap:clamp(22px,8vw,44px)}
 .call-button{display:flex;flex-direction:column;align-items:center;gap:8px;padding:0;border:0;background:transparent;color:#f8fafc;font:inherit;font-size:13px;cursor:pointer}
 .call-button svg{width:64px;height:64px;padding:18px;border-radius:50%;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .call-button.accept svg{background:#16a34a}
 .call-button.decline svg{background:#dc2626}
-.call-button.mute svg,.call-button.close svg{background:rgba(255,255,255,.14)}
+.call-button.mute svg,.call-button.recover svg,.call-button.close svg{background:rgba(255,255,255,.14)}
 .call-button.mute.on svg{background:#f8fafc;color:#0f172a}
 .call-button:disabled{opacity:.45}
 .call-hint{margin:0;color:#94a3b8;font-size:12px;text-align:center}
