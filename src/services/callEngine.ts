@@ -224,8 +224,9 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
     } };
     void playing.then(
       () => startupMark("call_ring_audio", { kind, via: "element" }),
-      () => {
-        // Not primed yet (no tap since launch): try Web Audio instead.
+      error => {
+        // Not primed (no tap since launch or since returning): Web Audio instead.
+        startupMark("call_ring_audio_failed", { kind, via: "element", error: error instanceof Error ? error.name : "unknown" });
         if (session.ringtone && isCurrent(session)) startWebAudioTone(session, kind, vibration);
       },
     );

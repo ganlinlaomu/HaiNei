@@ -8,6 +8,14 @@ let context: AudioContext | null = null;
 let installed = false;
 const elements = new Map<RingKind, HTMLAudioElement>();
 let primed = false;
+let primedAt = 0;
+// iOS withdraws playback permission after backgrounding or another app's
+// audio. Re-prime on the next tap after that, or at least once a minute.
+let primeStale = true;
+const REPRIME_AFTER_MS = 60_000;
+// A point inside each tone's silent stretch: priming plays real (unmuted)
+// audio there, which iOS treats as a stronger unlock than muted playback.
+const SILENT_OFFSET: Record<RingKind, number> = { ring: 1.5, ringback: 2.5 };
 
 export type RingKind = "ring" | "ringback";
 
@@ -60,14 +68,16 @@ export function ringtoneElement(kind: RingKind): HTMLAudioElement | null {
 function primeElements() {
   for (const kind of ["ring", "ringback"] as const) {
     const element = ringtoneElement(kind);
-    if (!element) continue;
-    element.muted = true;
+    if (!element || !element.paused) continue;
+    element.muted = false;
+    try { element.currentTime = SILENT_OFFSET[kind]; } catch { /* not loaded yet */ }
     void element.play().then(() => {
       element.pause();
       element.currentTime = 0;
-      element.muted = false;
       primed = true;
-    }, () => { element.muted = false; });
+      primedAt = Date.now();
+      primeStale = false;
+    }, () => undefined);
   }
 }
 
@@ -91,14 +101,17 @@ function unlock() {
   } catch {
     // Unsupported: calls still show their screen and system notification.
   }
-  if (!primed) primeElements();
+  primeElements();
 }
 
 /** Keep listening: iOS suspends audio again after backgrounding. */
 export function installAudioUnlock() {
   if (installed || typeof window === "undefined") return;
   installed = true;
-  const onGesture = () => { if (!primed || context?.state !== "running") unlock(); };
+  const onGesture = () => {
+    if (!primed || primeStale || Date.now() - primedAt > REPRIME_AFTER_MS || context?.state !== "running") unlock();
+  };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") primeStale = true; });
   for (const type of ["pointerdown", "touchend", "keydown"]) {
     window.addEventListener(type, onGesture, { capture: true, passive: true });
   }

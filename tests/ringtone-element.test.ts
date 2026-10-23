@@ -25,9 +25,14 @@ describe("ringtone audio", () => {
 
   it("primes the elements on a tap and rings through them before Web Audio", () => {
     const unlock = readFileSync("src/utils/audioUnlock.ts", "utf8");
-    expect(unlock).toContain("if (!primed) primeElements();");
+    // Re-primed after backgrounding and at least every minute, unmuted on silence.
+    expect(unlock).toContain('if (document.visibilityState === "hidden") primeStale = true;');
+    expect(unlock).toContain("Date.now() - primedAt > REPRIME_AFTER_MS");
+    expect(unlock).toContain("element.currentTime = SILENT_OFFSET[kind];");
+    expect(unlock).not.toContain("element.muted = true;");
     const engine = readFileSync("src/services/callEngine.ts", "utf8");
     expect(engine.indexOf("const element = ringtoneElement(kind);")).toBeLessThan(engine.indexOf("startWebAudioTone(session, kind, vibration);"));
     expect(engine).toContain('startupMark("call_ring_audio", { kind, via: "element" })');
+    expect(engine).toContain('startupMark("call_ring_audio_failed"');
   });
 });
