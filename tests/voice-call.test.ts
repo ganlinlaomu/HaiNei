@@ -222,6 +222,76 @@ describe("call engine", () => {
     expect(sentActions()).toContain("reject");
   });
 
+
+  it("requests a call audio session before capture and releases it on hangup", async () => {
+    const { startCall, hangup } = await import("@/services/callEngine");
+    const audioSession = { type: "auto" };
+    (navigator as any).audioSession = audioSession;
+    const mic = navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>;
+    mic.mockImplementationOnce(async () => {
+      expect(audioSession.type).toBe("play-and-record");
+      return { getTracks: () => [], getAudioTracks: () => [] };
+    });
+    await startCall(FRIEND);
+    expect(audioSession.type).toBe("play-and-record");
+    await hangup();
+    expect(audioSession.type).toBe("auto");
+  });
+
+  it("recovers remote playback rejected by WebKit without renegotiating the call", async () => {
+    const { startCall, recoverCallAudio, hangup } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    await startCall(FRIEND);
+    const peer = mocks.rooms.at(-1);
+    peer.onPeerJoin("iphone15");
+    const play = vi.fn()
+      .mockRejectedValueOnce(new DOMException("requires a user gesture", "NotAllowedError"))
+      .mockResolvedValue(undefined);
+    const remoteAudio = {
+      autoplay: false, setAttribute: vi.fn(), style: {}, srcObject: null,
+      muted: false, volume: 1, paused: true, error: null, play,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      remove: vi.fn(), pause: vi.fn(),
+    };
+    (document.createElement as ReturnType<typeof vi.fn>).mockImplementationOnce(() => remoteAudio);
+    const stream = { getAudioTracks: () => [] } as unknown as MediaStream;
+    peer.onPeerStream(stream, "iphone15");
+    await Promise.resolve();
+    expect(useCallStore().phase).toBe("active");
+    expect(useCallStore().audioStatus).toBe("blocked");
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(play).toHaveBeenCalledTimes(1); // autoplay cannot be retried without a gesture
+    recoverCallAudio();
+    await Promise.resolve();
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(useCallStore().audioStatus).toBe("playing");
+    expect(remoteAudio.srcObject).toBe(stream);
+    expect(peer.addStream).toHaveBeenCalledTimes(1); // media negotiation unchanged
+    await hangup();
+    expect(remoteAudio.remove).toHaveBeenCalledOnce();
+    expect(remoteAudio.removeEventListener).toHaveBeenCalledWith("playing", expect.any(Function));
+  });
+
+  it("does not let a rejected playback promise revive a finished call", async () => {
+    const { startCall, hangup } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    await startCall(FRIEND);
+    const peer = mocks.rooms.at(-1);
+    peer.onPeerJoin("iphone15");
+    let rejectPlayback: ((error: Error) => void) | undefined;
+    const play = vi.fn(() => new Promise<void>((_, reject) => { rejectPlayback = reject; }));
+    (document.createElement as ReturnType<typeof vi.fn>).mockImplementationOnce(() => ({
+      autoplay: false, setAttribute: vi.fn(), style: {}, srcObject: null, play,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), remove: vi.fn(), pause: vi.fn(),
+    }));
+    peer.onPeerStream({ getAudioTracks: () => [] } as unknown as MediaStream, "iphone15");
+    await hangup();
+    rejectPlayback?.(new Error("late play failure"));
+    await Promise.resolve();
+    expect(useCallStore().phase).toBe("ended");
+    expect(useCallStore().audioStatus).toBe("waiting");
+  });
+
   it("uses the Trystero 0.26 room API to target media and handle peer lifecycle", async () => {
     const { startCall } = await import("@/services/callEngine");
     const { useCallStore } = await import("@/stores/call");
