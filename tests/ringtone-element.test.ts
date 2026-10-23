@@ -1,7 +1,7 @@
 // The standalone PWA stayed silent with Web Audio while a Safari tab rang;
 // ringing now prefers <audio> elements primed on the first tap.
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { toneWav } from "@/utils/audioUnlock";
 
 function decode(uri: string) {
