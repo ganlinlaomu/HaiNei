@@ -35,7 +35,7 @@ describe("PR3-B account-bound encrypted backups", () => {
     const created = await notes.create(A, "todo");
     const note = await notes.save(A, created.id, {
       kind: "todo", title: "机密备忘", body: "备份正文", pinned: true,
-      tasks: [{ id: "task1", text: "秘密待办", done: false }],
+      tasks: [{ id: "task1", text: "秘密待办", done: false, due: 1_792_886_400_000 }],
     });
     const output = await encryptPrivateBackup(A, [note], PASS);
     expect(output).not.toContain("机密备忘");
@@ -47,6 +47,7 @@ describe("PR3-B account-bound encrypted backups", () => {
     expect(restored.items).toHaveLength(1);
     expect(restored.items[0].title).toBe("机密备忘");
     expect(restored.items[0].tasks[0].text).toBe("秘密待办");
+    expect(restored.items[0].tasks[0].due).toBe(1_792_886_400_000);
     expect(restored.items[0].body).toBe("备份正文");
     const second = await encryptPrivateBackup(A, [note], PASS);
     expect(second).not.toBe(output); // independent salt and IV
@@ -111,6 +112,28 @@ describe("PR3-B account-bound encrypted backups", () => {
     obj.items[0].tasks = [{ id: "x", text: "one", done: false }, { id: "x", text: "two", done: true }];
     expect(() => parseBackupPayload(JSON.stringify(obj), A)).toThrow("invalid_backup_task");
     expect(() => createBackupPayload(B, [record])).toThrow("backup_account_mismatch");
+  });
+
+  it("keeps timed tasks in backup JSON and restored records, and still accepts legacy undated tasks", async () => {
+    const notes = setup();
+    await unlockLocalVault(A, "1".repeat(64));
+    const item = await notes.create(A, "todo");
+    const timed = await notes.save(A, item.id, {
+      kind: "todo", title: "预约清单", body: "", pinned: false,
+      tasks: [{ id: "due-task", text: "预约", done: false, due: 1_792_886_400_000 }],
+    });
+    const payload = createBackupPayload(A, [timed]);
+    expect(payload.items[0].tasks[0].due).toBe(1_792_886_400_000);
+    expect(parseBackupPayload(exportPlainJson(A, [timed]), A).items[0].tasks[0].due).toBe(1_792_886_400_000);
+    const clone = { ...payload.items[0], id: "f".repeat(64) };
+    await notes.restoreBackup(A, [clone]);
+    expect((await notes.get(A, clone.id))?.tasks[0].due).toBe(1_792_886_400_000);
+    const invalid = structuredClone(payload);
+    invalid.items[0].tasks[0].due = Number.NaN;
+    expect(() => parseBackupPayload(JSON.stringify(invalid), A)).toThrow("invalid_backup_task");
+    const legacy = structuredClone(payload);
+    delete legacy.items[0].tasks[0].due;
+    expect(parseBackupPayload(JSON.stringify(legacy), A).items[0].tasks[0].due).toBeUndefined();
   });
 
   it("parses PR3-A source headers without new plaintext indexes", () => {
