@@ -1,3 +1,4 @@
+import { validTaskDue } from "@/utils/todoPlanning";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { privateSpaceRepository } from "@/repositories/privateSpaceRepository";
 import type { PrivateSpaceRecord } from "@/db/dexie";
@@ -115,7 +116,7 @@ function decode(account: string, id: string, plaintext: string): PrivateSpaceRec
   // Explicitly discard untrusted synchronization fields even if injected into ciphertext.
   return {
     accountPubkey: account, id, kind: row.kind, title: row.title, body: row.body,
-    tasks: row.tasks.map(task => ({ id: task.id, text: task.text, done: task.done })),
+    tasks: row.tasks.map(task => ({ id: task.id, text: task.text, done: task.done, ...(validTaskDue(task.due) ? { due: task.due } : {}) })),
     pinned: row.pinned, createdAt: row.createdAt, updatedAt: row.updatedAt,
     revision: row.revision, archivedAt: row.archivedAt, deletedAt: row.deletedAt,
     ...(row.source ? { source: validatePrivateSpaceSource(row.source) } : {}),

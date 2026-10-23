@@ -118,6 +118,22 @@ describe("private space NIP-44 cloud reconciliation", () => {
     expect((await privateSpaceRepository.list(ACCOUNT))).toHaveLength(2);
   });
 
+  it("keeps to-do due times through save, cloud sync and a fresh-device restore", async () => {
+    const todo = await privateSpaceRepository.create(ACCOUNT, "todo");
+    const due = 1_792_000_000_000;
+    await privateSpaceRepository.save(ACCOUNT, todo.id, {
+      kind: "todo", title: "今日", body: "", pinned: false,
+      tasks: [{ id: "t1", text: "开会", done: false, due }, { id: "t2", text: "买菜", done: false, due: -5 as number }],
+    });
+    expect((await privateSpaceRepository.get(ACCOUNT, todo.id))?.tasks).toEqual([
+      { id: "t1", text: "开会", done: false, due }, { id: "t2", text: "买菜", done: false },
+    ]);
+    await syncPrivateSpace(keys());
+    await db.accountNotes.delete([ACCOUNT, todo.id]);
+    await syncPrivateSpace(keys());
+    expect((await privateSpaceRepository.get(ACCOUNT, todo.id))?.tasks[0]).toEqual({ id: "t1", text: "开会", done: false, due });
+  });
+
   it("roundtrips optional encrypted excerpt metadata across cloud and fresh device", async () => {
     const id = "d".repeat(64), author = "e".repeat(64);
     const created = await privateSpaceRepository.importNote(

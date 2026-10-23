@@ -2,11 +2,11 @@
   <section v-if="visibleTasks.length || recentlyDone.length" class="todo-bar" aria-label="待办">
     <button class="todo-head" type="button" :aria-expanded="expanded" @click="toggleExpanded">
       <span class="todo-icon" aria-hidden="true">☑</span>
-      <span class="todo-summary"><strong>待办 {{ tasks.length }} 项</strong></span>
+      <span class="todo-summary"><strong>待办 {{ tasks.length }} 项</strong><span v-if="overdueCount" class="due-chip">{{ overdueCount }} 项逾期</span></span>
       <span class="chevron">{{ expanded ? "收起 ▴" : "展开 ▾" }}</span>
     </button>
     <button v-if="!expanded && first" class="todo-peek" type="button" @click="openTask(first)">
-      <span v-if="first.pinned" aria-label="已置顶">📌 </span>{{ first.text }}<span v-if="first.listTitle" class="peek-list"> · {{ first.listTitle }}</span>
+      <span v-if="first.pinned" aria-label="已置顶">📌 </span>{{ first.text }}<span v-if="first.due" class="peek-list" :class="{ overdue: dueOf(first).overdue }"> · {{ dueOf(first).label }}</span><span v-else-if="first.listTitle" class="peek-list"> · {{ first.listTitle }}</span>
     </button>
 
     <template v-if="expanded">
@@ -16,7 +16,7 @@
             :aria-label="`${isDone(task) ? '取消完成' : '完成'}：${task.text}`" @change="toggle(task)" />
           <button class="todo-item" type="button" @click="openTask(task)">
             <span class="todo-text">{{ task.text }}</span>
-            <span v-if="task.pinned || task.listTitle" class="todo-meta"><span v-if="task.pinned">📌</span>{{ task.listTitle }}</span>
+            <span v-if="task.pinned || task.listTitle || task.due" class="todo-meta"><span v-if="task.pinned">📌</span><span v-if="task.due" :class="{ overdue: dueOf(task).overdue }">{{ dueOf(task).label }}{{ dueOf(task).overdue ? ' · 已逾期' : '' }}</span><span v-if="task.listTitle">{{ task.due ? ' · ' : '' }}{{ task.listTitle }}</span></span>
           </button>
         </li>
       </ul>
@@ -35,6 +35,7 @@ import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import { deviceStorage } from "@/services/deviceStorage";
 import type { OpenTodoTask } from "@/services/privateFeed";
+import { describeDue } from "@/utils/todoPlanning";
 
 const MAX_SHOWN = 5;
 // A ticked task stays (struck through) briefly so the tap has visible effect
@@ -60,6 +61,8 @@ const visibleTasks = computed(() => props.tasks.filter(task => !recentlyDone.val
 const first = computed(() => visibleTasks.value[0]);
 const shownTasks = computed(() => [...visibleTasks.value.slice(0, MAX_SHOWN), ...recentlyDone.value]);
 const hiddenCount = computed(() => Math.max(0, visibleTasks.value.length - MAX_SHOWN));
+const dueOf = (task: OpenTodoTask) => describeDue(task.due!);
+const overdueCount = computed(() => visibleTasks.value.filter(task => task.due && task.due < Date.now()).length);
 const isDone = (task: OpenTodoTask) => recentlyDone.value.some(done => done.taskId === task.taskId);
 
 function toggleExpanded() {
@@ -126,6 +129,8 @@ onBeforeUnmount(() => {
 .chevron{color:var(--fg-8b98a5);font-size:12px}
 .todo-peek{display:block;width:100%;margin-top:-6px;padding:0 16px 10px 46px;overflow:hidden;border:0;background:transparent;color:var(--fg-64748b);font:inherit;font-size:13px;text-align:left;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
 .peek-list{color:var(--fg-8b98a5)}
+.overdue{color:#e5484d!important}
+.due-chip{margin-left:6px;padding:1px 7px;border-radius:999px;background:rgba(229,72,77,.12);color:#e5484d;font-size:12px}
 .todo-list{margin:0;padding:0 16px;list-style:none}
 .todo-list li{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-top:1px solid var(--bd-edf1f5)}
 .todo-list input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#1d9bf0}

@@ -62,6 +62,8 @@
         <button type="button" @click="selectFilter('trash')">最近删除</button>
         <button type="button" @click="moreOpen = false; backupOpen = true">笔记与待办备份 / 恢复</button>
       </div>
+      <TodoPlanner v-if="filter === 'todo' && !loading && !query.trim()" :records="notes" @open="openTodoById" @changed="refreshAfterSync" />
+      <p v-if="filter === 'todo' && !loading && !query.trim() && filtered.length" class="lists-label">全部待办清单</p>
       <SavedPosts v-if="filter === 'saved'" :query="query" />
       <p v-else-if="loading" class="empty-state">正在读取本地笔记…</p>
       <div v-else-if="!filtered.length" class="empty-state" role="status">{{ emptyMessage }}</div>
@@ -116,6 +118,11 @@
             <input type="checkbox" v-model="task.done" :aria-label="'完成第 ' + (index + 1) + ' 项'" @change="queueSave" />
             <textarea v-model="task.text" v-auto-grow="task.text" rows="1" maxlength="2000" aria-label="待办内容"
               :class="{ done: task.done }" placeholder="待办事项" @input="queueSave"></textarea>
+            <label class="task-due" :class="{ set: !!task.due }" :title="task.due ? describeDue(task.due).label : '设置时间'">
+              <span aria-hidden="true">{{ task.due ? describeDue(task.due).label : '⏰' }}</span>
+              <input type="datetime-local" :aria-label="'第 ' + (index + 1) + ' 项的时间'" :value="task.due ? dueInputValue(task.due) : ''"
+                @change="setTaskDue(task, ($event.target as HTMLInputElement).value)" />
+            </label>
             <button type="button" :aria-label="'删除第 ' + (index + 1) + ' 项'"
               @click.prevent="removeTask(index)">×</button>
           </div>
@@ -165,6 +172,7 @@ import { getPrivateSpaceTab, rememberPrivateSpaceTab } from "@/services/privateS
 import { useSwipeActions } from "@/composables/useSwipeActions";
 import { vAutoGrow } from "@/directives/autoGrowTextarea";
 import { shouldSubmitTaskOnEnter } from "@/utils/taskInput";
+import { describeDue } from "@/utils/todoPlanning";
 import { privateSpaceSearchLabel, privateSpaceEmptyMessage, type SpaceFilter } from "@/utils/privateSpacePresentation";
 import {
   syncPrivateSpace, notePrivateSpaceMutation, setPrivateSpaceEditing,
@@ -172,6 +180,7 @@ import {
 
 const PostImagePreview = defineAsyncComponent(() => import("@/components/PostImagePreview.vue"));
 const SavedPosts = defineAsyncComponent(() => import("@/components/SavedPosts.vue"));
+const TodoPlanner = defineAsyncComponent(() => import("@/components/TodoPlanner.vue"));
 const keys = useKeyStore();
 const route = useRoute();
 const router = useRouter();
@@ -459,6 +468,18 @@ function toggleNoteActions(id: string) {
   if (blockedSwipeClickId.value === id) return;
   if (isSwipeOpen(id)) closeSwipe(id);
   else openSwipe(id);
+}
+function dueInputValue(ms: number) {
+  return new Date(ms - new Date(ms).getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+function setTaskDue(task: { due?: number }, value: string) {
+  if (value) task.due = new Date(value).getTime();
+  else delete task.due;
+  queueSave();
+}
+function openTodoById(id: string) {
+  const note = notes.value.find(item => item.id === id);
+  if (note) openFromList(note);
 }
 function openFromList(note: PrivateSpaceRecord) {
   if (blockedSwipeClickId.value === note.id) return;
@@ -838,7 +859,7 @@ button{font:inherit;cursor:pointer}
 .save-state{font-size:11px;color:var(--fg-64748b);white-space:nowrap}
 .title-input{width:100%;margin-top:20px;padding:8px 2px;font-weight:650;font-size:21px;border:0;outline:none}
 .body-input{width:100%;min-height:35vh;resize:vertical;border:0;outline:none;margin-top:16px;font:inherit;line-height:1.65;color:inherit}
-.tasks{margin-top:24px}
+.tasks{margin-top:24px}.lists-label{margin:18px 16px 6px;color:var(--fg-8b98a5);font-size:13px}.task-due{position:relative;display:inline-flex;flex:0 0 auto;align-items:center;min-height:32px;padding:0 6px;border-radius:10px;color:var(--fg-8b98a5);font-size:12px;white-space:nowrap;cursor:pointer}.task-due.set{background:var(--bg-eff3f4);color:var(--fg-0f1419)}.task-due input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
 .task{display:flex;align-items:center;gap:10px;min-height:48px;border-bottom:1px solid var(--bd-f1f3f5)}
 .task input[type="checkbox"]{width:19px;height:19px;accent-color:var(--fg-334155);flex:0 0 auto}
 .task textarea,.add-task textarea{display:block;box-sizing:border-box;min-width:0;width:0;flex:1;min-height:44px;border:0;background:transparent;color:inherit;font:inherit;font-size:16px;line-height:24px;outline:none;padding:10px 0;resize:none;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere}

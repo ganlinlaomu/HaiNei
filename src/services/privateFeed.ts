@@ -30,17 +30,25 @@ export type OpenTodoTask = {
   /** The to-do list's title, if any. */
   listTitle: string;
   pinned: boolean;
+  /** Optional due time (Unix ms). */
+  due?: number;
 };
 
 /**
- * Every unfinished task across to-do lists, for the Home to-do bar: pinned
- * lists first, then the most recently edited, tasks in their list order.
+ * Every unfinished task across to-do lists, for the Home to-do bar: timed
+ * tasks first (soonest, so overdue ones lead), then pinned lists, then the
+ * most recently edited, tasks in their list order.
  */
 export function openTodoTasks(records: PrivateSpaceRecord[]): OpenTodoTask[] {
-  return records
+  const tasks = records
     .filter(record => record.kind === "todo" && !record.deletedAt && !record.archivedAt)
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
     .flatMap(record => record.tasks
       .filter(task => !task.done && task.text.trim())
-      .map(task => ({ recordId: record.id, taskId: task.id, text: task.text.trim(), listTitle: record.title.trim(), pinned: record.pinned })));
+      .map(task => ({
+        recordId: record.id, taskId: task.id, text: task.text.trim(), listTitle: record.title.trim(), pinned: record.pinned,
+        ...(task.due ? { due: task.due } : {}),
+      })));
+  // Stable sort keeps the list order among untimed tasks.
+  return tasks.sort((a, b) => (a.due ? 0 : 1) - (b.due ? 0 : 1) || (a.due && b.due ? a.due - b.due : 0));
 }

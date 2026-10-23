@@ -2,6 +2,7 @@ import { db, type HaiNeiDatabase, type PrivateSpaceRecord, type PrivateSpaceTask
 import { normalizeAccountPubkey } from "@/repositories/accountScope";
 import { isLocalVaultUnlocked } from "@/services/localVault";
 import { validatePrivateSpaceAttachments, validatePrivateSpaceSource } from "@/services/privateSpaceContent";
+import { validTaskDue } from "@/utils/todoPlanning";
 
 export type PrivateSpaceDraft = Pick<PrivateSpaceRecord, "kind" | "title" | "body" | "tasks" | "pinned"> &
   Partial<Pick<PrivateSpaceRecord, "source" | "attachments">>;
@@ -21,7 +22,7 @@ function validateDraft(draft: PrivateSpaceDraft): PrivateSpaceDraft {
   const tasks: PrivateSpaceTask[] = draft.tasks.map(task => {
     if (!task.id || ids.has(task.id) || task.text.length > 2_000) throw new Error("invalid_private_space_task");
     ids.add(task.id);
-    return { id: task.id, text: task.text, done: !!task.done };
+    return { id: task.id, text: task.text, done: !!task.done, ...(validTaskDue(task.due) ? { due: task.due } : {}) };
   });
   return {
     kind: draft.kind, title: draft.title, body: draft.body, tasks, pinned: !!draft.pinned,
