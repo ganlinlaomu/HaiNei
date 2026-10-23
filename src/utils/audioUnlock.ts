@@ -1,12 +1,24 @@
-// Ring tones are created only for real calls. Playing a synthetic ringtone on
-// arbitrary taps to unlock iOS media can leak an audible burst before the WAV
-// has seeked to its silent section, and can steal call/recording audio focus.
-// WebRTC playback uses microphone capture and its own AudioSession instead.
+// A user gesture can grant an HTMLAudioElement permission to play later on
+// iOS. Prime ONE persistent incoming-ring element using an all-zero PCM clip,
+// never a seek into an audible ringtone (which can cause the first-tap "dong").
+// Nothing is synthesized or played on the app's cold-start path.
 const elements = new Map<RingKind, HTMLAudioElement>();
 let callAudioActive = false;
+let activationInstalled = false;
+let needsIncomingArm = true;
+let incomingArmPending = false;
+let incomingArmSucceeded = false;
+let incomingArmAttempt = 0;
+let incomingSilentSource: string | null = null;
+let incomingUsingSilence = false;
 
 export function setCallAudioActive(active: boolean) {
   callAudioActive = active;
+  if (active) {
+    // A pending silent prime must never pause or replace an actual call tone.
+    incomingArmAttempt++;
+    incomingArmPending = false;
+  }
 }
 
 /** Recording must not reset an active voice call's audio session. */
@@ -60,11 +72,125 @@ function toneSource(kind: RingKind) {
   return toneWav(kind);
 }
 
+/** 0.4 seconds of actual PCM silence, NOT a muted, volume-zero or seeking tone. */
+function silentClipSource(): string {
+  const rate = 8_000;
+  const samples = rate * 0.4;
+  const wav = new Uint8Array(44 + samples * 2);
+  const view = new DataView(wav.buffer);
+  const write = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
+  };
+  write(0, "RIFF"); view.setUint32(4, wav.length - 8, true);
+  write(8, "WAVE"); write(12, "fmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  write(36, "data"); view.setUint32(40, wav.length - 44, true);
+  try {
+    if (typeof Blob !== "undefined" && typeof URL?.createObjectURL === "function") {
+      return URL.createObjectURL(new Blob([wav], { type: "audio/wav" }));
+    }
+  } catch { /* data URI fallback */ }
+  let binary = "";
+  for (let i = 0; i < wav.length; i += 0x8000) binary += String.fromCharCode(...wav.subarray(i, i + 0x8000));
+  return `data:audio/wav;base64,${btoa(binary)}`;
+}
+
+function releaseSilentSource() {
+  if (incomingSilentSource?.startsWith("blob:")) {
+    try { URL.revokeObjectURL(incomingSilentSource); } catch { /* ignored */ }
+  }
+  incomingSilentSource = null;
+}
+
+export function incomingRingtoneArmed() {
+  return incomingArmSucceeded;
+}
+
+/**
+ * Called synchronously from a real gesture after the Vue UI has mounted.
+ * Reuse the EXACT same audio element for the next incoming ringtone.
+ * A 100%-silent WAV means loading/seek delays can never leak a tone.
+ */
+export function armIncomingRingtoneFromGesture() {
+  if (callAudioActive || typeof document === "undefined" || incomingArmPending || !needsIncomingArm) return;
+  const element = elements.get("ring") || document.createElement("audio");
+  if (typeof element.play !== "function" || typeof element.pause !== "function") return;
+  elements.set("ring", element);
+  try {
+    // A previous incoming ring may have left the same element on its tone URL.
+    if (element.src?.startsWith("blob:")) {
+      try { URL.revokeObjectURL(element.src); } catch { /* ignored */ }
+    }
+    incomingSilentSource = silentClipSource();
+    incomingUsingSilence = true;
+    element.src = incomingSilentSource;
+    element.preload = "auto";
+    element.loop = false;
+    element.muted = false;
+    element.setAttribute("playsinline", "");
+    const attempt = ++incomingArmAttempt;
+    incomingArmPending = true;
+    // IMPORTANT: .play() executes synchronously in the trusted user gesture.
+    const playing = Promise.resolve(element.play());
+    void playing.then(() => {
+      if (attempt !== incomingArmAttempt) return;
+      incomingArmPending = false;
+      if (callAudioActive || elements.get("ring") !== element || !incomingUsingSilence) return;
+      element.pause();
+      element.currentTime = 0;
+      needsIncomingArm = false;
+      incomingArmSucceeded = true;
+    }, () => {
+      if (attempt !== incomingArmAttempt) return;
+      incomingArmPending = false;
+      needsIncomingArm = true;
+      incomingArmSucceeded = false;
+    });
+  } catch {
+    incomingArmPending = false;
+    needsIncomingArm = true;
+    incomingArmSucceeded = false;
+  }
+}
+
+/** After a background interruption, try quiet arming on the NEXT trusted tap. */
+export function installIncomingRingtoneActivation() {
+  if (activationInstalled || typeof window === "undefined") return;
+  activationInstalled = true;
+  const gesture = (event: Event) => {
+    if (!event.isTrusted || callAudioActive) return;
+    if ((event.target as Element | null)?.closest?.("[data-live-audio-action]")) return;
+    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    if (session?.type === "play-and-record") return;
+    armIncomingRingtoneFromGesture();
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      needsIncomingArm = true;
+      incomingArmSucceeded = false;
+    }
+  });
+  window.addEventListener("pointerdown", gesture, { capture: true, passive: true });
+  window.addEventListener("keydown", gesture, { capture: true });
+}
+
 /** Recreate an element whose source failed to load (MediaError), once per failure. */
 export function reloadRingtoneElement(kind: RingKind): HTMLAudioElement | null {
   const element = elements.get(kind);
   if (element) {
-    if (element.src.startsWith("blob:")) URL.revokeObjectURL(element.src);
+    ++incomingArmAttempt;
+    incomingArmPending = false;
+    if (kind === "ring") {
+      incomingUsingSilence = false;
+      incomingArmSucceeded = false;
+      needsIncomingArm = true;
+      releaseSilentSource();
+    }
+    if (element.src.startsWith("blob:")) {
+      try { URL.revokeObjectURL(element.src); } catch { /* ignored */ }
+    }
     elements.delete(kind);
   }
   return ringtoneElement(kind);
@@ -95,13 +221,22 @@ export function ringtoneElement(kind: RingKind): HTMLAudioElement | null {
   let element = elements.get(kind);
   if (!element) {
     element = document.createElement("audio");
-    // Environments without media playback fall back to Web Audio.
     if (typeof element?.play !== "function" || typeof element?.pause !== "function") return null;
     element.src = toneSource(kind);
     element.loop = true;
     element.preload = "auto";
     element.setAttribute("playsinline", "");
     elements.set(kind, element);
+  } else if (kind === "ring" && incomingUsingSilence) {
+    // Switch the already-gesture-activated element to its real ring source;
+    // swapping source retains its identity. No new HTMLAudioElement is made.
+    ++incomingArmAttempt;
+    incomingArmPending = false;
+    incomingUsingSilence = false;
+    const old = incomingSilentSource;
+    element.src = toneSource("ring");
+    element.loop = true;
+    if (old) releaseSilentSource();
   }
   return element;
 }
