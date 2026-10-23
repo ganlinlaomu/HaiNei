@@ -221,6 +221,10 @@ async function setBadgeScope(scope) {
   }
 }
 
+// Foreground call playback is denied by WebKit: preserve the system alert
+// even if the matching encrypted call push arrives a few milliseconds later.
+let foregroundRingBlocked = false;
+
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'GET_BUILD_INFO') {
     event.ports?.[0]?.postMessage({
@@ -234,7 +238,27 @@ self.addEventListener('message', (event) => {
     event.waitUntil(self.skipWaiting());
     return;
   }
+  if (event.data?.type === 'INCOMING_RINGTONE_BLOCKED') {
+    foregroundRingBlocked = true;
+    // When iOS rejects the in-app ringtone outside a user gesture, offer an
+    // OS-managed alert instead. Do not do this on successful ringtone play,
+    // which would double-notify. iOS/notification settings may still be quiet.
+    event.waitUntil((async () => {
+      try {
+        const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        if (!clients.some(client => client.visibilityState === 'visible')) return;
+        if (self.Notification && self.Notification.permission !== 'granted') return;
+        await self.registration.showNotification('HaiNei', {
+          body: '你有一个语音来电', icon: '/icon-192.png', badge: '/icon-192.png',
+          tag: CALL_NOTIFICATION_TAG, data: { type: 'call' },
+          requireInteraction: true, renotify: true
+        });
+      } catch { /* notification permission or platform policy denied */ }
+    })());
+    return;
+  }
   if (event.data?.type === 'CLOSE_CALL_NOTIFICATION') {
+    foregroundRingBlocked = false;
     // The call was answered, declined or ended (possibly on another device).
     event.waitUntil(self.registration.getNotifications({ tag: CALL_NOTIFICATION_TAG })
       .then(notifications => { for (const notification of notifications) notification.close(); }));
@@ -357,7 +381,7 @@ self.addEventListener('push', (event) => {
       // WebKit requires every push to show a notification, but while the app
       // is on screen it shows its own call banner / unread state: withdraw the
       // system one at once instead of covering the app with it.
-      if (appVisible) {
+      if (appVisible && !(isCall && foregroundRingBlocked)) {
         try {
           for (const notification of await self.registration.getNotifications({ tag })) notification.close();
         } catch {}

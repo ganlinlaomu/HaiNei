@@ -90,6 +90,7 @@ describe("call signaling", () => {
     const sw = readFileSync("public/service-worker.js", "utf8");
     expect(sw).toContain("body: isCall ? '你有一个语音来电' : '你有新的私信消息'");
     expect(sw).toContain("event.data?.type === 'CLOSE_CALL_NOTIFICATION'");
+    expect(sw).toContain("event.data?.type === 'INCOMING_RINGTONE_BLOCKED'");
   });
 
   it("keeps call code and ringtone media out of the startup path", () => {
@@ -172,6 +173,33 @@ describe("call engine", () => {
     // The ringing acknowledgement for the first call, then busy for the second.
     expect(sentActions()).toEqual(["ringing", "busy"]);
     expect(store.callId).toBe("2".repeat(32));
+  });
+
+  it("offers an explicit trusted-tap retry when iOS denies incoming ringtone autoplay", async () => {
+    const { handleCallSignal, retryIncomingRingtone, declineCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const element = {
+      src: "", currentTime: 0, paused: true, loop: false, muted: false, error: null,
+      setAttribute: vi.fn(), pause: vi.fn(),
+      play: vi.fn()
+        .mockRejectedValueOnce(new DOMException("autoplay denied", "NotAllowedError"))
+        .mockResolvedValue(undefined),
+    };
+    (document.createElement as ReturnType<typeof vi.fn>).mockImplementationOnce(() => element);
+    await handleCallSignal(FRIEND, ME, { ...invite, callId: "8".repeat(32) }, now());
+    await Promise.resolve();
+    const store = useCallStore();
+    expect(store.phase).toBe("incoming");
+    expect(store.ringtoneBlocked).toBe(true);
+    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('postMessage({ type: "INCOMING_RINGTONE_BLOCKED" })');
+    expect(element.play).toHaveBeenCalledTimes(1);
+    retryIncomingRingtone();
+    await Promise.resolve();
+    expect(element.play).toHaveBeenCalledTimes(2);
+    expect(store.ringtoneBlocked).toBe(false);
+    expect(store.phase).toBe("incoming");
+    await declineCall();
+    expect(store.phase).toBe("ended");
   });
 
   it("stops ringing when another of our devices answers", async () => {

@@ -4,7 +4,10 @@
   <div v-if="showBanner" class="call-banner" role="dialog" :aria-label="`${name} 的语音来电`">
     <button class="banner-peer" type="button" aria-label="展开来电界面" @click="expanded = true">
       <ProfileAvatar :pubkey="call.peer" :size="40" />
-      <span class="banner-copy"><strong>{{ name }}</strong><span>语音来电…</span></span>
+      <span class="banner-copy"><strong>{{ name }}</strong><span>{{ call.ringtoneBlocked ? "来电静音 · 点铃铛播放" : "语音来电…" }}</span></span>
+    </button>
+    <button v-if="call.ringtoneBlocked" class="banner-action ring-retry" type="button" aria-label="点击开启来电铃声" data-live-audio-action @click="playRingtone">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
     </button>
     <button class="banner-action decline" type="button" aria-label="拒绝" :disabled="acting" @click="decline">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
@@ -20,6 +23,9 @@
       <span class="call-status" role="status" aria-live="polite">{{ status }}</span>
     </div>
 
+    <button v-if="call.phase === 'incoming' && call.ringtoneBlocked" class="ring-retry-button" type="button" data-live-audio-action @click="playRingtone">
+      <span aria-hidden="true">🔔</span> 点按播放来电铃声
+    </button>
     <div class="call-actions">
       <template v-if="call.phase === 'incoming'">
         <button class="call-button decline" type="button" aria-label="拒绝" :disabled="acting" @click="decline">
@@ -135,6 +141,9 @@ async function mute() { (await loadCallEngine()).toggleMute(); }
 // Do not await a dynamic import here: iOS may expire the trusted click
 // activation before HTMLAudioElement.play() executes.
 function restoreAudio() { loadedCallEngine()?.recoverCallAudio(); }
+// No async import before play(): iOS requires the real ringtone play() within
+// the user's direct click, not after a Promise or a timer.
+function playRingtone() { loadedCallEngine()?.retryIncomingRingtone(); }
 function chooseOutput() { void loadedCallEngine()?.selectCallOutput(); }
 // The ended screen closes itself shortly; tapping closes it at once.
 function dismissEnded() { if (call.phase === "ended") call.reset(); }
@@ -158,6 +167,7 @@ async function callBack() {
 .banner-copy span{color:#cbd5e1;font-size:13px}
 .banner-action{display:grid;width:44px;height:44px;flex:0 0 44px;place-items:center;padding:0;border:0;border-radius:50%;color:#fff;cursor:pointer}
 .banner-action svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.banner-action.ring-retry{background:#d97706}
 .banner-action.decline{background:#dc2626}
 .banner-action.accept{background:#16a34a}
 .banner-action:disabled{opacity:.5}
@@ -173,5 +183,6 @@ async function callBack() {
 .call-button.mute svg,.call-button.recover svg,.call-button.close svg{background:rgba(255,255,255,.14)}
 .call-button.mute.on svg{background:#f8fafc;color:#0f172a}
 .call-button:disabled{opacity:.45}
+.ring-retry-button{align-self:center;display:flex;gap:8px;align-items:center;background:#d97706;color:#fff;border:0;border-radius:12px;padding:10px 16px;font:inherit;font-size:14px;cursor:pointer}
 .call-hint{margin:0;color:#94a3b8;font-size:12px;text-align:center}
 </style>
