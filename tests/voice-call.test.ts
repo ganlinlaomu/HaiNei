@@ -102,6 +102,10 @@ describe("call signaling", () => {
     expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("z-index:200000");
     expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("function restoreAudio() { loadedCallEngine()?.recoverCallAudio(); }");
     expect(readFileSync("src/components/CallOverlay.vue", "utf8")).not.toContain('from "@/services/callEngine"');
+    const main = readFileSync("src/main.ts", "utf8");
+    expect(main).toContain("storageHydrationMs");
+    expect(main).toContain("versionTrackingMs");
+    expect(main).toContain("vueMountMs");
     const chat = readFileSync("src/views/Messages.vue", "utf8");
     expect(chat).toContain('scheduleBackgroundTask("chat-call-warmup"');
     expect(chat).toContain("data-live-audio-action");
