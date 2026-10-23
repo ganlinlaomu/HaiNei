@@ -127,6 +127,10 @@ function primeElements() {
     element.muted = false;
     try { element.currentTime = SILENT_OFFSET[kind]; } catch { /* not loaded yet */ }
     void element.play().then(() => {
+      // An incoming call can begin while iOS is still resolving the earlier
+      // priming play(). Never let its late completion pause the real ringtone.
+      // Likewise, a replaced (failed) tone must not mark a new one as primed.
+      if (callAudioActive || elements.get(kind) !== element) return;
       element.pause();
       element.currentTime = 0;
       primed = true;
