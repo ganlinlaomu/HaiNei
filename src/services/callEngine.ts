@@ -424,15 +424,24 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
       later(session, 250, () => attemptRemotePlayback(session, "foreground_resume", true));
     }
   };
+  let wasInterrupted = false;
   const sessionChanged: EventListener = () => {
     if (!isCurrent(session)) return;
     const state = browserCallAudioSession()?.state;
     startupMark("call_audio_session_state", { state: state || "unknown" });
-    if (state === "interrupted") store.audioStatus = "waiting";
-    else attemptRemotePlayback(session, "session_resumed", true);
+    if (state === "interrupted") {
+      wasInterrupted = true;
+      store.audioStatus = "waiting";
+    } else if (wasInterrupted && state === "active") {
+      // Normal inactive/active transitions must not restart playback endlessly.
+      wasInterrupted = false;
+      attemptRemotePlayback(session, "session_resumed", true);
+    }
   };
   // Synchronous capture handler preserves the iOS user activation window.
-  const gesture = () => {
+  const gesture = (event: Event) => {
+    // The explicit recovery button handles its own click; avoid double rebinding.
+    if ((event.target as Element | null)?.closest?.(".call-button.recover")) return;
     if (isCurrent(session) && (audio.paused || store.audioStatus === "blocked")) {
       attemptRemotePlayback(session, "user_gesture", true);
     }
