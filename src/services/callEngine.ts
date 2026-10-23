@@ -146,6 +146,16 @@ function startQualitySampling(session: CallSession, room: Room) {
         poorSamples: session.quality.poorSamples + Number(poor), samples: session.quality.samples + 1,
       });
       store.quality = poor ? "poor" : "good";
+      // Packet arrival alone does not prove that WebKit is rendering sound.
+      if (inbound && received > 0 && session.remoteAudio?.paused) {
+        if (session.quality.samples % 3 === 0) startupMark("call_audio_not_playing", {
+          packetsReceived: received, bytesReceived: inbound.bytesReceived || 0,
+          totalAudioEnergy: inbound.totalAudioEnergy || 0,
+          trackMuted: session.remoteStream?.getAudioTracks?.()[0]?.muted ?? false,
+          failures: session.audioFailures,
+        });
+        scheduleAudioRetry(session, "incoming_rtp_but_paused");
+      }
     } catch { /* stats unavailable this round */ }
   }, STATS_INTERVAL_MS);
 }
@@ -609,6 +619,11 @@ async function releaseSessionResources(session: CallSession) {
   const stream = session.localStream;
   session.localStream = null;
   for (const track of stream?.getTracks() || []) track.stop();
+  session.audioCleanup?.();
+  session.audioCleanup = null;
+  clearAudioRetry(session);
+  session.playRequest++;
+  session.remoteStream = null;
   const audio = session.remoteAudio;
   session.remoteAudio = null;
   if (audio) {
@@ -620,6 +635,10 @@ async function releaseSessionResources(session: CallSession) {
   session.wakeLock = null;
   void lock?.release().catch(() => undefined);
   session.mediaPeer = "";
+  if (!activeSession) {
+    setCallAudioActive(false);
+    setCallAudioSession(session, "auto", "call_ended");
+  }
   try { await leaving?.leave(); } catch { /* already gone */ }
 }
 
@@ -688,6 +707,8 @@ export async function startCall(peerPubkey: string) {
   store.callId = id;
   store.direction = "outgoing";
   const session = createSession(id, peer, "outgoing");
+  setCallAudioActive(true);
+  setCallAudioSession(session, "play-and-record", "call_start");
   let stream: MediaStream;
   try {
     stream = await getMicrophone();
@@ -702,6 +723,7 @@ export async function startCall(peerPubkey: string) {
     return;
   }
   session.localStream = stream;
+  setCallAudioSession(session, "play-and-record", "microphone_ready");
   void keepScreenOn(session);
   startTone(session, "ringback");
   try {
@@ -730,6 +752,8 @@ export async function acceptCall() {
   stopTone(session);
   closeCallNotification();
   store.phase = "connecting";
+  setCallAudioActive(true);
+  setCallAudioSession(session, "play-and-record", "call_accept");
   let stream: MediaStream;
   try {
     stream = await getMicrophone();
@@ -742,6 +766,7 @@ export async function acceptCall() {
     return;
   }
   session.localStream = stream;
+  setCallAudioSession(session, "play-and-record", "microphone_ready");
   void keepScreenOn(session);
   // The self-copy of this accept stops our other devices from ringing.
   sendSignalBestEffort(session.peer, { action: "accept", callId: session.id });
