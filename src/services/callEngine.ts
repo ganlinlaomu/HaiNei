@@ -7,7 +7,7 @@ import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
 import { debugLog, startupMark } from "@/utils/debugLog";
-import { ringtoneElement, sharedAudioContext } from "@/utils/audioUnlock";
+import { reloadRingtoneElement, ringtoneElement, setRingAudioSession, sharedAudioContext } from "@/utils/audioUnlock";
 import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
@@ -212,8 +212,12 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
   }
   // Preferred: the <audio> element primed by an earlier tap (works in the
   // standalone PWA, where Web Audio may stay silent after backgrounding).
-  const element = ringtoneElement(kind);
-  if (element) {
+  const first = ringtoneElement(kind);
+  if (!first) {
+    startWebAudioTone(session, kind, vibration);
+    return;
+  }
+  const play = (element: HTMLAudioElement, attempt: number) => {
     element.currentTime = 0;
     element.muted = false;
     const playing = element.play();
@@ -223,16 +227,19 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
       if (vibration) { clearInterval(vibration); navigator.vibrate?.(0); }
     } };
     void playing.then(
-      () => startupMark("call_ring_audio", { kind, via: "element" }),
+      () => startupMark("call_ring_audio", { kind, via: "element", attempt }),
       error => {
-        // Not primed (no tap since launch or since returning): Web Audio instead.
-        startupMark("call_ring_audio_failed", { kind, via: "element", error: error instanceof Error ? error.name : "unknown" });
-        if (session.ringtone && isCurrent(session)) startWebAudioTone(session, kind, vibration);
+        const name = error instanceof Error ? error.name : "unknown";
+        startupMark("call_ring_audio_failed", { kind, via: "element", attempt, error: name, mediaError: element.error?.code ?? 0 });
+        if (!session.ringtone || !isCurrent(session)) return;
+        // The source failed to load (not a permission problem): rebuild it once.
+        const retry = name === "NotSupportedError" && attempt === 1 ? reloadRingtoneElement(kind) : null;
+        if (retry) play(retry, 2);
+        else startWebAudioTone(session, kind, vibration);
       },
     );
-    return;
-  }
-  startWebAudioTone(session, kind, vibration);
+  };
+  play(first, 1);
 }
 
 function startWebAudioTone(session: CallSession, kind: "ring" | "ringback", vibration: ReturnType<typeof setInterval> | null) {
@@ -243,6 +250,7 @@ function startWebAudioTone(session: CallSession, kind: "ring" | "ringback", vibr
     const Context = (window as any).AudioContext || (window as any).webkitAudioContext;
     const context: AudioContext | null = shared || (Context ? new Context() : null);
     if (!context) throw new Error("no_audio");
+    setRingAudioSession(true);
     void context.resume?.().catch(() => undefined);
     const gain = context.createGain();
     gain.gain.value = 0;
@@ -262,10 +270,12 @@ function startWebAudioTone(session: CallSession, kind: "ring" | "ringback", vibr
       clearInterval(interval);
       if (vibration) { clearInterval(vibration); navigator.vibrate?.(0); }
       try { oscillator.stop(); oscillator.disconnect(); gain.disconnect(); } catch { /* stopped */ }
+      setRingAudioSession(false);
       // Never close the shared context: later calls ring through it.
       if (context !== shared) void context.close().catch(() => undefined);
     } };
     if (context.state !== "running") startupMark("call_ring_audio_locked", { kind, state: context.state });
+    else startupMark("call_ring_audio", { kind, via: "webaudio", shared: context === shared });
   } catch {
     session.ringtone = vibration ? { stop() { clearInterval(vibration!); navigator.vibrate?.(0); } } : null;
   }
