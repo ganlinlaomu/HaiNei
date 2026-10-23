@@ -176,7 +176,7 @@ export async function enablePushNotifications(pubkey: string, signEvent: SignEve
   }
   debugLog("system", "push_subscribe_ok");
   debugLog("system", "push_auth_start");
-  await authenticatedPost("/api/push/subscribe", { subscription: subscription.toJSON() }, pubkey, signEvent);
+  await registerSubscription(subscription, pubkey, signEvent);
   debugLog("system", "push_worker_subscribe_ok");
   await authenticatedPost("/api/push/policy", {
     senderPubkeys: [...new Set(authorizedSenderPubkeys.map(value => value.toLowerCase()))],
@@ -218,7 +218,7 @@ export async function syncPushAuthorizationPolicy(
     return false;
   }
 
-  await authenticatedPost("/api/push/subscribe", { subscription: subscription.toJSON() }, pubkey, signEvent);
+  await registerSubscription(subscription, pubkey, signEvent);
   debugLog("system", "push_worker_resubscribe_ok");
   // Muted conversations never wake this account. The mute flag is synced per
   // friend (friend_metadata), so every device computes the same policy.
@@ -230,6 +230,22 @@ export async function syncPushAuthorizationPolicy(
   return true;
 }
 
+const endpointKey = (pubkey: string) => `hainei_push_endpoint_${pubkey.toLowerCase()}`;
+
+/**
+ * Register this device's subscription with the worker, naming the endpoint
+ * it registered last time if the browser has since replaced it, so the
+ * worker drops the old one instead of notifying this device twice.
+ */
+async function registerSubscription(subscription: PushSubscription, pubkey: string, signEvent: SignEvent) {
+  const previous = deviceStorage.getItem(endpointKey(pubkey)) || "";
+  await authenticatedPost("/api/push/subscribe", {
+    subscription: subscription.toJSON(),
+    ...(previous && previous !== subscription.endpoint ? { previousEndpoint: previous } : {}),
+  }, pubkey, signEvent);
+  deviceStorage.setItem(endpointKey(pubkey), subscription.endpoint);
+}
+
 export async function disablePushNotifications(pubkey: string, signEvent: SignEvent) {
   if (!supportsPushNotifications()) return;
   const registration = await navigator.serviceWorker.ready;
@@ -238,6 +254,7 @@ export async function disablePushNotifications(pubkey: string, signEvent: SignEv
     await authenticatedPost("/api/push/unsubscribe", { endpoint: subscription.endpoint }, pubkey, signEvent);
   }
   deviceStorage.removeItem(`hainei_push_enabled_${pubkey.toLowerCase()}`);
+  deviceStorage.removeItem(endpointKey(pubkey));
 }
 
 export async function triggerGenericPush(

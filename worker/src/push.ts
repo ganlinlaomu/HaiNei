@@ -14,6 +14,13 @@ const PUBKEY = /^[0-9a-f]{64}$/;
 const EVENT_ID = /^[0-9a-f]{64}$/;
 const MAX_PUSH_ENDPOINT_LENGTH = 2048;
 const MAX_PUSH_SUBSCRIPTIONS_PER_ACCOUNT = 8;
+/**
+ * Every app launch re-registers its subscription, so a row untouched this
+ * long belongs to a device that got a new endpoint or is gone. Apple keeps
+ * delivering to some replaced endpoints, which showed duplicate banners.
+ * A device that comes back simply re-registers.
+ */
+export const PUSH_SUBSCRIPTION_STALE_SECONDS = 30 * 24 * 60 * 60;
 const MAX_PUSH_AUTHORIZED_SENDERS = 200;
 const DEFAULT_PUSH_PROVIDER_ORIGINS = [
   "https://web.push.apple.com",
@@ -308,12 +315,27 @@ export function getPushPublicKey(env: Env) {
   return { publicKey: pushConfig(env).publicKey };
 }
 
-export async function savePushSubscription(env: Env, accountPubkey: string, value: unknown) {
+export async function savePushSubscription(env: Env, accountPubkey: string, value: unknown, previousEndpointValue?: unknown) {
   const subscription = parseSubscription(env, value);
+  const now = Math.floor(Date.now() / 1000);
+  // The browser replaced this device's endpoint: drop the old row so the
+  // device is not notified twice (and the old one ignores foreground state).
+  if (typeof previousEndpointValue === "string" && previousEndpointValue && previousEndpointValue !== subscription.endpoint) {
+    let previous = "";
+    try { previous = validatedPushEndpoint(env, previousEndpointValue); } catch { /* ignore a bad hint */ }
+    if (previous) {
+      await env.DB.prepare(`
+        DELETE FROM hainei_push_subscriptions WHERE account_pubkey = ? AND endpoint = ?
+      `).bind(accountPubkey, previous).run();
+    }
+  }
+  await env.DB.prepare(`
+    DELETE FROM hainei_push_subscriptions
+    WHERE account_pubkey = ? AND endpoint <> ? AND updated_at < ?
+  `).bind(accountPubkey, subscription.endpoint, now - PUSH_SUBSCRIPTION_STALE_SECONDS).run();
   const existing = await env.DB.prepare(`
     SELECT endpoint FROM hainei_push_subscriptions WHERE account_pubkey = ? AND endpoint = ?
   `).bind(accountPubkey, subscription.endpoint).first<{ endpoint: string }>();
-  const now = Math.floor(Date.now() / 1000);
 
   if (!existing) {
     // Keep the newest devices and make room for this endpoint. Old PWA

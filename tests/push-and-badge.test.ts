@@ -7,6 +7,7 @@ import {
   encryptPushPayload,
   GENERIC_PUSH_PAYLOAD,
   MESSAGE_PUSH_PAYLOAD,
+  PUSH_SUBSCRIPTION_STALE_SECONDS,
   pushPayloadForType,
   replacePushAuthorizationPolicy,
   sanitizePushRecipients,
@@ -184,6 +185,16 @@ class PushD1 {
           let changes = 0;
           for (const [key, row] of [...this.subscriptions.entries()]) {
             if (row.account_pubkey === account && !keep.has(row.endpoint)) {
+              this.subscriptions.delete(key);
+              changes += 1;
+            }
+          }
+          return { meta: { changes } };
+        }
+        if (sql.startsWith("DELETE FROM hainei_push_subscriptions") && sql.includes("updated_at < ?")) {
+          let changes = 0;
+          for (const [key, row] of [...this.subscriptions.entries()]) {
+            if (row.account_pubkey === values[0] && row.endpoint !== values[1] && Number(row.updated_at) < Number(values[2])) {
               this.subscriptions.delete(key);
               changes += 1;
             }
@@ -392,6 +403,7 @@ describe("privacy-preserving push and badge", () => {
     const env = pushEnv(db);
     const secret = generateSecretKey();
     const account = getPublicKey(secret);
+    const recent = Math.floor(Date.now() / 1000) - 3_600;
 
     for (let index = 0; index < 8; index += 1) {
       const endpoint = `https://web.push.apple.com/old-${index}`;
@@ -400,8 +412,8 @@ describe("privacy-preserving push and badge", () => {
         endpoint,
         p256dh: subscriptionPublicKey,
         auth: subscriptionAuth,
-        created_at: 100 + index,
-        updated_at: 100 + index,
+        created_at: recent + index,
+        updated_at: recent + index,
       });
     }
 
@@ -422,6 +434,39 @@ describe("privacy-preserving push and badge", () => {
     expect(accountRows.some(row => row.endpoint.endsWith("/old-0"))).toBe(false);
     expect(accountRows.some(row => row.endpoint.endsWith("/old-7"))).toBe(true);
     expect(accountRows.some(row => row.endpoint.endsWith("/current-device"))).toBe(true);
+  });
+
+  it("drops the endpoint a device replaced and subscriptions not refreshed for 30 days", async () => {
+    const db = new PushD1();
+    const env = pushEnv(db);
+    const secret = generateSecretKey();
+    const account = getPublicKey(secret);
+    const now = Math.floor(Date.now() / 1000);
+    const row = (endpoint: string, updatedAt: number, owner = account) => db.subscriptions.set(`${owner}|${endpoint}`, {
+      account_pubkey: owner, endpoint, p256dh: subscriptionPublicKey, auth: subscriptionAuth, created_at: updatedAt, updated_at: updatedAt,
+    });
+    row("https://web.push.apple.com/replaced", now - 60);
+    row("https://web.push.apple.com/other-phone", now - 86_400);
+    row("https://web.push.apple.com/long-gone", now - PUSH_SUBSCRIPTION_STALE_SECONDS - 60);
+    row("https://web.push.apple.com/someone-else", now - PUSH_SUBSCRIPTION_STALE_SECONDS - 60, "f".repeat(64));
+
+    const subscription = { endpoint: "https://web.push.apple.com/new", keys: { p256dh: subscriptionPublicKey, auth: subscriptionAuth } };
+    const subscribeBody = await authenticatedBody(env, secret, "/api/push/subscribe", {
+      subscription, previousEndpoint: "https://web.push.apple.com/replaced",
+    });
+    const response = await handleRequest(new Request("https://worker.test/api/push/subscribe", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(subscribeBody),
+    }), env);
+    expect(response.status).toBe(201);
+    expect([...db.subscriptions.values()].map(item => item.endpoint.split("/").pop()).sort())
+      .toEqual(["new", "other-phone", "someone-else"]);
+  });
+
+  it("tells the worker which endpoint this device registered before", () => {
+    const source = readFileSync("src/services/pushNotifications.ts", "utf8");
+    expect(source).toContain("previousEndpoint: previous");
+    expect(source.match(/await registerSubscription\(subscription, pubkey, signEvent\)/g)).toHaveLength(2);
+    expect(source).toContain("deviceStorage.removeItem(endpointKey(pubkey))");
   });
 
   it("uses only the fixed privacy-safe private-message payload", () => {
