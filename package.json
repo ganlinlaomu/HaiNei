@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.116",
-  "releaseSummary": "清理旧推送订阅，前台不再弹系统横幅；待办支持时间和周进度",
+  "version": "0.1.117",
+  "releaseSummary": "修复部分 iPhone 来电不响铃",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

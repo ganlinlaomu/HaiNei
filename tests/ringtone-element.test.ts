@@ -32,7 +32,12 @@ describe("ringtone audio", () => {
     expect(unlock).not.toContain("element.muted = true;");
     const engine = readFileSync("src/services/callEngine.ts", "utf8");
     expect(engine.indexOf("const element = ringtoneElement(kind);")).toBeLessThan(engine.indexOf("startWebAudioTone(session, kind, vibration);"));
-    expect(engine).toContain('startupMark("call_ring_audio", { kind, via: "element" })');
+    expect(engine).toContain('startupMark("call_ring_audio", { kind, via: "element", attempt })');
+    // A source that failed to load is rebuilt once, then Web Audio in the media session.
+    expect(engine).toContain('name === "NotSupportedError" && attempt === 1 ? reloadRingtoneElement(kind)');
+    expect(engine).toContain("setRingAudioSession(true);");
+    expect(unlock).toContain("URL.createObjectURL(new Blob([toneWavBytes(kind)");
+    expect(unlock.indexOf('ringtoneElement("ring");')).toBeGreaterThan(unlock.indexOf("export function installAudioUnlock"));
     expect(engine).toContain('startupMark("call_ring_audio_failed"');
   });
 });

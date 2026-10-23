@@ -23,8 +23,8 @@ export function sharedAudioContext(): AudioContext | null {
   return context;
 }
 
-/** A looping tone pattern as a small 8 kHz mono WAV data URI. */
-export function toneWav(kind: RingKind): string {
+/** A looping tone pattern as a small 8 kHz mono 16-bit WAV file. */
+export function toneWavBytes(kind: RingKind): Uint8Array {
   const rate = 8_000;
   // ring: two 0.25 s bursts in a 2 s cycle; ringback: 1 s tone, 3 s silence.
   const seconds = kind === "ring" ? 2 : 4;
@@ -43,10 +43,53 @@ export function toneWav(kind: RingKind): string {
     const value = on(t) ? Math.sin(2 * Math.PI * frequency * t) * 0.35 : 0;
     view.setInt16(44 + i * 2, Math.round(value * 32_767), true);
   }
+  return new Uint8Array(buffer);
+}
+
+/** The same tone as a data URI. */
+export function toneWav(kind: RingKind): string {
   let binary = "";
-  const bytes = new Uint8Array(buffer);
+  const bytes = toneWavBytes(kind);
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return `data:audio/wav;base64,${btoa(binary)}`;
+}
+
+/**
+ * A blob URL where possible: an iPhone 15 PWA failed to load the data URI
+ * (play() rejected with NotSupportedError) while an iPhone 13 played it.
+ */
+function toneSource(kind: RingKind) {
+  try {
+    if (typeof Blob !== "undefined" && typeof URL?.createObjectURL === "function") {
+      return URL.createObjectURL(new Blob([toneWavBytes(kind) as BlobPart], { type: "audio/wav" }));
+    }
+  } catch { /* fall back to the data URI */ }
+  return toneWav(kind);
+}
+
+/** Recreate an element whose source failed to load (MediaError), once per failure. */
+export function reloadRingtoneElement(kind: RingKind): HTMLAudioElement | null {
+  const element = elements.get(kind);
+  if (element) {
+    if (element.src.startsWith("blob:")) URL.revokeObjectURL(element.src);
+    elements.delete(kind);
+    primed = false;
+  }
+  return ringtoneElement(kind);
+}
+
+type BrowserAudioSession = { type: string };
+
+/**
+ * Ring through the media ("playback") audio session: Web Audio otherwise uses
+ * the ambient session, which the ring/silent switch mutes. "auto" afterwards
+ * so the call's microphone session and other audio are unaffected.
+ */
+export function setRingAudioSession(ringing: boolean) {
+  const session = typeof navigator === "undefined" ? undefined
+    : (navigator as Navigator & { audioSession?: BrowserAudioSession }).audioSession;
+  if (!session) return;
+  try { session.type = ringing ? "playback" : "auto"; } catch { /* unsupported */ }
 }
 
 export function ringtoneElement(kind: RingKind): HTMLAudioElement | null {
@@ -56,7 +99,7 @@ export function ringtoneElement(kind: RingKind): HTMLAudioElement | null {
     element = document.createElement("audio");
     // Environments without media playback fall back to Web Audio.
     if (typeof element?.play !== "function" || typeof element?.pause !== "function") return null;
-    element.src = toneWav(kind);
+    element.src = toneSource(kind);
     element.loop = true;
     element.preload = "auto";
     element.setAttribute("playsinline", "");
@@ -108,6 +151,10 @@ function unlock() {
 export function installAudioUnlock() {
   if (installed || typeof window === "undefined") return;
   installed = true;
+  // Create and start loading the tones now, so a call that arrives before
+  // the first tap (cold start from the call notification) finds them ready.
+  ringtoneElement("ring");
+  ringtoneElement("ringback");
   const onGesture = () => {
     if (!primed || primeStale || Date.now() - primedAt > REPRIME_AFTER_MS || context?.state !== "running") unlock();
   };
