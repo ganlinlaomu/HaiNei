@@ -23,27 +23,39 @@ describe("ringtone audio", () => {
     }
   });
 
-  it("primes the elements on a tap and rings through them before Web Audio", () => {
+  it("never primes a ringtone on first tap or on app startup", () => {
     const unlock = readFileSync("src/utils/audioUnlock.ts", "utf8");
-    // Re-primed after backgrounding and at least every minute, unmuted on silence.
-    expect(unlock).toContain('if (document.visibilityState === "hidden") primeStale = true;');
-    expect(unlock).toContain("Date.now() - primedAt > REPRIME_AFTER_MS");
-    expect(unlock).toContain("element.currentTime = SILENT_OFFSET[kind];");
-    expect(unlock).not.toContain("element.muted = true;");
-    const engine = readFileSync("src/services/callEngine.ts", "utf8");
-    expect(engine.indexOf("const element = ringtoneElement(kind);")).toBeLessThan(engine.indexOf("startWebAudioTone(session, kind, vibration);"));
-    expect(engine).toContain('startupMark("call_ring_audio", { kind, via: "element", attempt })');
-    // A source that failed to load is rebuilt once, then Web Audio in the media session.
-    expect(engine).toContain('name === "NotSupportedError" && attempt === 1 ? reloadRingtoneElement(kind)');
-    expect(engine).toContain("setRingAudioSession(true);");
-    expect(unlock).toContain("URL.createObjectURL(new Blob([toneWavBytes(kind)");
-    const install = unlock.slice(unlock.indexOf("export function installAudioUnlock"));
-    expect(install).not.toContain('ringtoneElement("ring");');
-    expect(install).not.toContain('ringtoneElement("ringback");');
     const main = readFileSync("src/main.ts", "utf8");
-    expect(main.indexOf("app.mount(\"#app\")")).toBeLessThan(main.indexOf("installAudioUnlock();"));
-    expect(unlock).toContain('if (callAudioActive) return;');
-    expect(unlock).toContain('closest?.("[data-live-audio-action]")');
-    expect(engine).toContain('startupMark("call_ring_audio_failed"');
+    const engine = readFileSync("src/services/callEngine.ts", "utf8");
+    expect(unlock).not.toContain("installAudioUnlock");
+    expect(unlock).not.toContain("primeElements");
+    expect(unlock).not.toContain("SILENT_OFFSET");
+    expect(unlock).not.toContain("pointerdown");
+    expect(main).not.toContain("installAudioUnlock");
+    expect(engine).toContain('ringtoneElement("ringback");');
+    expect(engine).toContain('const first = ringtoneElement(kind);');
+    expect(engine).toContain('if (name === "NotAllowedError")');
+    expect(engine).toContain('startupMark("call_ring_requires_interaction"');
+    expect(unlock).toContain("URL.createObjectURL(new Blob([toneWavBytes(kind)");
+  });
+
+  it("creates a ringtone resource without playing any sample", async () => {
+    const { ringtoneElement } = await import("@/utils/audioUnlock");
+    const play = vi.fn(async () => undefined);
+    const pause = vi.fn();
+    const createElement = vi.fn(() => ({
+      src: "", loop: false, preload: "", setAttribute: vi.fn(), play, pause,
+    }));
+    vi.stubGlobal("document", { createElement });
+    try {
+      const ringtone = ringtoneElement("ring");
+      expect(ringtone).toBeTruthy();
+      expect(createElement).toHaveBeenCalledTimes(1);
+      expect(ringtone?.preload).toBe("auto");
+      expect(play).not.toHaveBeenCalled();
+      expect(pause).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
