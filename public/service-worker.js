@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.111"; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.112"; // ⚠️ 更新代码时同步修改此版本号
 const BUILD_ID = "source-08655ebf22d057a4"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
@@ -348,11 +348,20 @@ self.addEventListener('push', (event) => {
       // A call keeps its own notification and stays until acted on; the
       // encrypted invite in the hint tells the app who is calling.
       const isCall = payload.type === 'call';
+      const tag = isCall ? CALL_NOTIFICATION_TAG : DM_NOTIFICATION_TAG;
       await self.registration.showNotification('HaiNei', {
         body: isCall ? '你有一个语音来电' : '你有新的私信消息', icon:'/icon-192.png', badge:'/icon-192.png',
-        tag: isCall ? CALL_NOTIFICATION_TAG : DM_NOTIFICATION_TAG, data:{type: isCall ? 'call' : 'message'},
-        ...(isCall ? { requireInteraction: true, renotify: true } : appVisible ? { silent: true } : { renotify: true })
+        tag, data:{type: isCall ? 'call' : 'message'},
+        ...(appVisible ? { silent: true } : isCall ? { requireInteraction: true, renotify: true } : { renotify: true })
       });
+      // WebKit requires every push to show a notification, but while the app
+      // is on screen it shows its own call banner / unread state: withdraw the
+      // system one at once instead of covering the app with it.
+      if (appVisible) {
+        try {
+          for (const notification of await self.registration.getNotifications({ tag })) notification.close();
+        } catch {}
+      }
       // Notification delivery must survive CacheStorage quota failures.
       try { await cacheEncryptedPushHint(payload); } catch {}
       await acknowledge();

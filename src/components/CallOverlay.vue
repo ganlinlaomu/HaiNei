@@ -1,5 +1,19 @@
 <template>
-  <div class="call-overlay" role="dialog" aria-modal="true" :aria-label="`与 ${name} 的语音通话`" @click.self="dismissEnded">
+  <!-- In the app, an incoming call first appears as a top banner (like other
+       call apps) instead of covering what you are doing; tap to expand. -->
+  <div v-if="showBanner" class="call-banner" role="dialog" :aria-label="`${name} 的语音来电`">
+    <button class="banner-peer" type="button" aria-label="展开来电界面" @click="expanded = true">
+      <ProfileAvatar :pubkey="call.peer" :size="40" />
+      <span class="banner-copy"><strong>{{ name }}</strong><span>语音来电…</span></span>
+    </button>
+    <button class="banner-action decline" type="button" aria-label="拒绝" :disabled="acting" @click="decline">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
+    </button>
+    <button class="banner-action accept" type="button" aria-label="接听" :disabled="acting" @click="accept">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
+    </button>
+  </div>
+  <div v-else class="call-overlay" role="dialog" aria-modal="true" :aria-label="`与 ${name} 的语音通话`" @click.self="dismissEnded">
     <div class="call-peer">
       <ProfileAvatar :pubkey="call.peer" :size="96" />
       <strong class="call-name">{{ name }}</strong>
@@ -43,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import { loadCallEngine, useCallStore } from "@/stores/call";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
@@ -53,6 +67,10 @@ const call = useCallStore();
 const profiles = useProfilesStore();
 const friends = useFriendsStore();
 const acting = ref(false);
+// An incoming call starts as a banner; expanded shows the full call screen.
+const expanded = ref(false);
+watch(() => call.callId, () => { expanded.value = false; });
+const showBanner = computed(() => call.phase === "incoming" && !expanded.value);
 const now = ref(Date.now());
 const ticker = setInterval(() => { now.value = Date.now(); }, 1_000);
 onBeforeUnmount(() => clearInterval(ticker));
@@ -110,6 +128,17 @@ async function callBack() {
 </script>
 
 <style scoped>
+.call-banner{position:fixed;top:calc(env(safe-area-inset-top) + 8px);left:8px;right:8px;z-index:200000;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:18px;background:#0f172a;color:#f8fafc;box-shadow:0 12px 32px rgba(15,23,42,.35);animation:banner-in .2s ease-out}
+@keyframes banner-in{from{transform:translateY(-120%)}to{transform:none}}
+.banner-peer{display:flex;flex:1;min-width:0;align-items:center;gap:10px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.banner-copy{display:flex;min-width:0;flex-direction:column}
+.banner-copy strong{overflow:hidden;font-size:15px;text-overflow:ellipsis;white-space:nowrap}
+.banner-copy span{color:#cbd5e1;font-size:13px}
+.banner-action{display:grid;width:44px;height:44px;flex:0 0 44px;place-items:center;padding:0;border:0;border-radius:50%;color:#fff;cursor:pointer}
+.banner-action svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.banner-action.decline{background:#dc2626}
+.banner-action.accept{background:#16a34a}
+.banner-action:disabled{opacity:.5}
 .call-overlay{position:fixed;inset:0;z-index:200000;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:calc(env(safe-area-inset-top) + 72px) 24px calc(env(safe-area-inset-bottom) + 48px);background:linear-gradient(180deg,#1e293b,#0f172a);color:#f8fafc}
 .call-peer{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center}
 .call-name{max-width:80vw;overflow:hidden;font-size:24px;text-overflow:ellipsis;white-space:nowrap}
