@@ -52,7 +52,7 @@ export function normalizeComposerTodoTasks(value: unknown): ComposerTodoTask[] {
 
 /** Existing editor drafts stored one task per line without stable IDs/due. */
 export function composerTodoTasksFromText(content: string): ComposerTodoTask[] {
-  return content.split("\\n").map(line => line.trim()).filter(Boolean).slice(0, 1000)
+  return content.split("\n").map(line => line.trim()).filter(Boolean).slice(0, 1000)
     .map(text => ({ id: crypto.randomUUID(), text: text.slice(0, 2000), done: false }));
 }
 
