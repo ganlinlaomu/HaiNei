@@ -163,7 +163,8 @@
                     <time>{{ formatBubbleTime(message.created_at) }}</time>
                     <template v-if="isOwn(message)">
                       <span>{{ statusLabel(message) }}</span>
-                      <button v-if="message.outgoing && isFailed(message)" type="button" @click="directMessages.retry(message.outgoing.localId)">重试</button>
+                      <button v-if="message.outgoing && isFailed(message)" type="button" :disabled="retryingOutgoingIds.has(message.outgoing.localId)"
+                        :aria-label="'重试发送这条私信'" @click="retryOutgoingMessage(message.outgoing.localId)">{{ retryingOutgoingIds.has(message.outgoing.localId) ? "重试中…" : "重试" }}</button>
                     </template>
                   </span>
                 </div>
@@ -180,7 +181,8 @@
               <time>{{ formatBubbleTime(message.created_at) }}</time>
               <template v-if="isOwn(message)">
                 <span>{{ statusLabel(message) }}</span>
-                <button v-if="message.outgoing && isFailed(message)" type="button" @click="directMessages.retry(message.outgoing.localId)">重试</button>
+                <button v-if="message.outgoing && isFailed(message)" type="button" :disabled="retryingOutgoingIds.has(message.outgoing.localId)"
+                  :aria-label="'重试发送这条私信'" @click="retryOutgoingMessage(message.outgoing.localId)">{{ retryingOutgoingIds.has(message.outgoing.localId) ? "重试中…" : "重试" }}</button>
               </template>
             </span>
           </div>
@@ -444,6 +446,7 @@ import { createVoiceRecordingSession, type VoiceRecordingResult, type VoiceRecor
 import { openProfile } from "@/utils/profileNavigation";
 import { useMentionComposer } from "@/composables/useMentionComposer";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
+import { dmDeliveryLabel } from "@/utils/networkOperationFeedback";
 import { quotedMessageExcerpt } from "@/utils/quotedMessageExcerpt";
 import { canMarkConversationTailRead } from "@/utils/messageReadVisibility";
 import type { MentionCandidate } from "@/utils/mentions";
@@ -744,6 +747,25 @@ const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreview
 const isMediaCaption = (message: InboxItem) => hasMessageImage(message) && !!messageText(message.content);
 const isOwn = (message: InboxItem) => message.pubkey === keys.pkHex;
 const isFailed = (message: InboxItem) => message.outgoing?.state === "upload_failed" || message.outgoing?.state === "send_failed";
+const retryingOutgoingIds = ref(new Set<string>());
+async function retryOutgoingMessage(localId: string) {
+  if (retryingOutgoingIds.value.has(localId) || !keys.isUnlocked) return;
+  const account = keys.pkHex;
+  const generation = keys.sessionGeneration;
+  retryingOutgoingIds.value = new Set([...retryingOutgoingIds.value, localId]);
+  try {
+    // The existing durable queue owns retry and completion state.
+    await directMessages.retry(localId);
+  } catch {
+    if (keys.isUnlocked && keys.pkHex === account && keys.sessionGeneration === generation)
+      ui.addToast("重试发送失败，请稍后再试", 2_500, "error");
+  } finally {
+    const next = new Set(retryingOutgoingIds.value);
+    next.delete(localId);
+    retryingOutgoingIds.value = next;
+  }
+}
+
 function isDisappearing(message: InboxItem) {
   return hasDisappearingMarker(message.tags) || directMessages.burnedById[message.id]?.peerPubkey === peerPubkey.value;
 }
@@ -1127,16 +1149,7 @@ function waitingForNetwork(message: InboxItem) {
   return !networkOnline.value || message.outgoing?.lastError === WAITING_NETWORK_ERROR;
 }
 function statusLabel(message: InboxItem) {
-  switch (statusKind(message)) {
-    case "uploading": return waitingForNetwork(message) ? "等待联网" : "上传中…";
-    case "sending": return waitingForNetwork(message) ? "等待联网" : "发送中…";
-    case "sent": return "✓ Relay 已接受";
-    case "delivered": return "✓✓ 已送达";
-    case "read": return "✓✓ 已读";
-    case "upload_failed": return "上传失败 ·";
-    case "send_failed": return "发送失败 ·";
-    default: return "";
-  }
+  return dmDeliveryLabel(statusKind(message), waitingForNetwork(message));
 }
 function showWindowAvatar(index: number) {
   const current = windowMessages.value[index];
