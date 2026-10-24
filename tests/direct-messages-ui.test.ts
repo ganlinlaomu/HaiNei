@@ -208,7 +208,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('@touchmove="handleMessageTouchMove(message, $event)"');
     expect(chat).toContain("SWIPE_REPLY_THRESHOLD");
     expect(chat).toContain("LONG_PRESS_MS");
-    expect(chat).toContain('class="message-action-menu" :style="actionMenuStyle"');
+    expect(chat).toContain('class="message-action-menu" :class="{ dragging: actionMenuDragging }"');
+    expect(chat).toContain('@touchmove.passive="onActionMenuTouchMove"');
     expect(chat).toContain("actionMenuPosition");
     expect(chat).toContain('querySelector<HTMLElement>(".message-bubble")');
     expect(chat).toContain("fitsBelow");
