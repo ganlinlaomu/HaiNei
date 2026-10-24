@@ -22,26 +22,20 @@ describe("ringtone audio", () => {
     }
   });
 
-  it("registers silent activation only after Vue mounts, never at cold start", () => {
+  it("keeps ringtone priming opt-in to explicit call buttons, not arbitrary app taps", () => {
     const unlock = readFileSync("src/utils/audioUnlock.ts", "utf8");
     const main = readFileSync("src/main.ts", "utf8");
+    const chat = readFileSync("src/views/Messages.vue", "utf8");
     expect(main.indexOf('app.mount("#app")')).toBeLessThan(main.indexOf("installIncomingRingtoneActivation();"));
     expect(unlock).toContain('window.addEventListener("touchend", gesture');
     expect(unlock).toContain('window.addEventListener("pointerup", gesture');
-    expect(unlock).toContain('window.addEventListener("keydown", gesture');
     expect(unlock).toContain('window.addEventListener("click", gesture');
-    expect(unlock).toContain('(event as PointerEvent).pointerType === "touch"');
-    expect(unlock).toContain('if (now - lastGestureAt < 450) return;');
-    expect(unlock).toContain('if (!event.isTrusted || callAudioActive || document.visibilityState === "hidden") return;');
-    expect(unlock).toContain('closest?.("[data-live-audio-action]")');
-    expect(unlock).toContain('if (session?.type === "play-and-record") return;');
-    expect(unlock).not.toContain("SILENT_OFFSET");
-    expect(unlock).not.toContain("primeElements");
+    expect(chat).toContain('data-live-audio-action data-ringtone-arm');
+    expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain('data-live-audio-action data-ringtone-arm');
     expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('const first = ringtoneElement(kind);');
-    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('startupMark("call_ring_requires_interaction"');
   });
 
-  it("arms on trusted touchend only once and never primes during live audio actions", async () => {
+  it("does not interrupt music on menu changes, even after returning from background", async () => {
     vi.resetModules();
     const listeners = new Map<string, (event: any) => void>();
     const play = vi.fn(() => Promise.resolve());
@@ -56,29 +50,52 @@ describe("ringtone audio", () => {
       createElement,
       addEventListener: vi.fn((type: string, fn: (event: any) => void) => listeners.set(type, fn)),
     });
-    vi.stubGlobal("window", { addEventListener: vi.fn((type: string, fn: (event: any) => void) => listeners.set(type, fn)) });
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn((type: string, fn: (event: any) => void) => listeners.set(type, fn)),
+    });
     vi.stubGlobal("navigator", { audioSession: { type: "auto" } });
-    const event = (type: string, opts: Record<string, unknown> = {}) =>
-      ({ type, isTrusted: true, target: { closest: () => false }, ...opts });
+    const menuTarget = { closest: () => null };
+    const callTarget = { closest: (selector: string) => selector === "[data-ringtone-arm]" ? {} : null };
+    const event = (type: string, target: unknown, opts: Record<string, unknown> = {}) =>
+      ({ type, isTrusted: true, target, ...opts });
     try {
-      const { installIncomingRingtoneActivation, incomingRingtoneArmed } = await import("@/utils/audioUnlock");
+      const { installIncomingRingtoneActivation, incomingRingtoneArmed, isExplicitRingtoneArmTarget } =
+        await import("@/utils/audioUnlock");
+      expect(isExplicitRingtoneArmTarget(menuTarget as unknown as EventTarget)).toBe(false);
+      expect(isExplicitRingtoneArmTarget(callTarget as unknown as EventTarget)).toBe(true);
       installIncomingRingtoneActivation();
-      listeners.get("pointerup")!(event("pointerup", { pointerType: "touch" }));
+      for (const type of ["pointerup", "touchend", "click", "keydown"]) {
+        listeners.get(type)!(event(type, menuTarget, { pointerType: "touch" }));
+      }
       expect(play).not.toHaveBeenCalled();
-      listeners.get("touchend")!(event("touchend"));
-      listeners.get("click")!(event("click"));
+      expect(createElement).not.toHaveBeenCalled();
+      expect(incomingRingtoneArmed()).toBe(false);
+      // A PWA returning from the background must not reacquire media focus
+      // merely because the user changed tabs again.
+      (document as any).visibilityState = "hidden";
+      listeners.get("visibilitychange")!(event("visibilitychange", menuTarget));
+      (document as any).visibilityState = "visible";
+      listeners.get("touchend")!(event("touchend", menuTarget));
+      expect(play).not.toHaveBeenCalled();
+
+      // Only an intentional voice-call button is allowed to prewarm the ring.
+      listeners.get("pointerup")!(event("pointerup", callTarget, { pointerType: "touch" }));
+      expect(play).not.toHaveBeenCalled();
+      listeners.get("touchend")!(event("touchend", callTarget));
+      listeners.get("click")!(event("click", callTarget));
       expect(play).toHaveBeenCalledTimes(1);
       await Promise.resolve();
       expect(incomingRingtoneArmed()).toBe(true);
-      expect(pause).toHaveBeenCalledOnce();
-      listeners.get("keydown")!(event("keydown", { target: { closest: () => true } }));
+      expect(pause).toHaveBeenCalledTimes(1);
+      // A second navigation tap must not trigger a new prime.
+      listeners.get("click")!(event("click", menuTarget));
       expect(play).toHaveBeenCalledTimes(1);
-      listeners.get("visibilitychange")!(event("visibilitychange"));
-      // The existing arm is not silently played again until after a new
-      // trusted input on foreground. A PWA might have lost its audio route.
+      // Untrusted events must not unlock the element.
       (document as any).visibilityState = "hidden";
-      listeners.get("visibilitychange")!(event("visibilitychange"));
-      expect(incomingRingtoneArmed()).toBe(false);
+      listeners.get("visibilitychange")!(event("visibilitychange", menuTarget));
+      (document as any).visibilityState = "visible";
+      listeners.get("click")!({ type: "click", target: callTarget, isTrusted: false });
+      expect(play).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
       vi.resetModules();
