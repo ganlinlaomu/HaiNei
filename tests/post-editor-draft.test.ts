@@ -240,6 +240,33 @@ describe("post editor close and media UX", () => {
     expect(source).toContain('📅 加入日历提醒');
   });
 
+  it("matches private-space todo auto-height editing, with no inline textarea scrolling", () => {
+    expect(source).toContain('import { vAutoGrow } from "@/directives/autoGrowTextarea";');
+    expect(source).toContain("directives: { autoGrow: vAutoGrow }");
+    expect(source).toContain('v-model="task.text" v-auto-grow="task.text" rows="1"');
+    expect(source).toMatch(/\\.composer-todo-input \\{[^}]*resize:none; overflow-y:hidden;/);
+    expect(source).not.toMatch(/\\.composer-todo-input \\{[^}]*max-height:/);
+  });
+
+  it("inserts and focuses the next todo with Enter, preserving Shift+Enter and IME", () => {
+    expect(source).toContain('@keydown.enter="onTodoTaskEnter($event, index)"');
+    expect(source).toContain('import { shouldSubmitTaskOnEnter } from "@/utils/taskInput";');
+    expect(source).toContain("if (!shouldSubmitTaskOnEnter(event)) return;");
+    expect(source).toContain("event.preventDefault();");
+    expect(source).toContain("addTodoTask(index, true);");
+    expect(source).toContain("todoTasks.value.splice(insertAt, 0,");
+    expect(source).toContain('querySelectorAll<HTMLTextAreaElement>(".composer-todo-input")[insertAt]?.focus()');
+    expect(source).toContain("if (todoTasks.value.length >= 1000)");
+    expect(source).toContain("if (!draftReady.value || sending.value) return;");
+  });
+
+  it("disables every due/time/calendar action before draft restore or while sending", () => {
+    expect(source).toMatch(/class="composer-todo-option"\\s+:disabled="!draftReady \\|\\| sending"/);
+    expect(source).toMatch(/class="composer-todo-calendar" :disabled="!draftReady \\|\\| sending"/);
+    expect(source).toMatch(/type="datetime-local"[\\s\\S]*?:disabled="!draftReady \\|\\| sending"/);
+    expect(source).toContain('class="composer-todo-add" :disabled="!draftReady || sending || todoTasks.length >= 1000"');
+  });
+
   it("redesigns the publisher into content, audience cards, and a compact toolbar", () => {
     expect(source).toContain('class="editor-header-row"');
     expect(source).toContain('class="editor-author"');
