@@ -613,7 +613,9 @@ describe("offline status in the UI", () => {
     expect(home).toContain('if (!networkOnline.value) return "离线中 · 已缓存内容可以查看，发出的内容会在联网后自动发送";');
     expect(readFileSync("src/components/PostCard.vue", "utf8")).toContain('networkOnline ? "发送中…" : "等待联网后发送"');
     const chat = readFileSync("src/views/Messages.vue", "utf8");
-    expect(chat).toContain('case "sending": return waitingForNetwork(message) ? "等待联网" : "发送中…";');
+    const { dmDeliveryLabel } = await import("@/utils/networkOperationFeedback");
+    expect(dmDeliveryLabel("sending", true)).toBe("等待联网");
+    expect(dmDeliveryLabel("sending", false)).toBe("发送中…");
     expect(readFileSync("src/views/Conversations.vue", "utf8")).toContain('if (!networkOnline.value) return "离线";');
   });
 });
