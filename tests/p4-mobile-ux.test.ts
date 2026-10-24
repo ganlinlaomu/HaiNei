@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { dmDeliveryLabel } from "@/utils/networkOperationFeedback";
 import { readThemedSource } from "./helpers/themedSource";
 
 describe("P4 mobile UX regression contract", () => {
@@ -77,9 +78,8 @@ describe("P4 mobile UX regression contract", () => {
   });
 
   it("keeps relay acceptance distinct from delivery and read receipts", () => {
-    const messages = readThemedSource("src/views/Messages.vue", "utf8");
-    expect(messages).toContain('case "sent": return "✓ Relay 已接受"');
-    expect(messages).toContain('case "delivered": return "✓✓ 已送达"');
-    expect(messages).toContain('case "read": return "✓✓ 已读"');
+    expect(dmDeliveryLabel("sent")).toBe("✓ Relay 已接受");
+    expect(dmDeliveryLabel("delivered")).toBe("✓✓ 已送达");
+    expect(dmDeliveryLabel("read")).toBe("✓✓ 已读");
   });
 });
