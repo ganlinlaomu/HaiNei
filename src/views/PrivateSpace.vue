@@ -39,7 +39,7 @@
     </section>
     <template v-if="!editor">
       <div ref="tabBar" class="tabs" role="tablist" aria-label="私人空间分类">
-        <span class="tab-pill" aria-hidden="true" :style="tabPillStyle"></span>
+        <span class="tab-pill" :class="{ 'no-motion': !tabPillReady }" aria-hidden="true" :style="tabPillStyle"></span>
         <button v-for="tab in tabs" :key="tab.value" :data-space-tab="tab.value" type="button" role="tab"
           :class="{ selected: filter === tab.value }" :aria-selected="filter === tab.value"
           @click="selectFilter(tab.value)">{{ tab.label }}</button>
@@ -190,7 +190,7 @@ import { vAutoGrow } from "@/directives/autoGrowTextarea";
 import { shouldSubmitTaskOnEnter } from "@/utils/taskInput";
 import { describeDue } from "@/utils/todoPlanning";
 import { privateSpaceSearchLabel, privateSpaceEmptyMessage, type SpaceFilter } from "@/utils/privateSpacePresentation";
-import { selectedTabPill } from "@/utils/tabPillGeometry";
+import { selectedTabPill, createTabPillObserver } from "@/utils/tabPillGeometry";
 import {
   syncPrivateSpace, notePrivateSpaceMutation, setPrivateSpaceEditing,
   getPrivateSpaceSyncState, subscribePrivateSpaceSync, type PrivateSpaceSyncState,
@@ -432,7 +432,20 @@ const tabs = [
 ] as const;
 const tabBar = ref<HTMLElement | null>(null);
 const tabPillStyle = ref<Record<string, string>>({ opacity: "0", width: "0px", transform: "translateX(0px)" });
-let tabResizeObserver: ResizeObserver | null = null;
+const tabPillReady = ref(false);
+let tabPillHasPosition = false;
+let tabPillFrame: number | null = null;
+function cancelTabPillFrame() {
+  if (tabPillFrame !== null) cancelAnimationFrame(tabPillFrame);
+  tabPillFrame = null;
+}
+function enableTabPillAnimationAfterPaint() {
+  cancelTabPillFrame();
+  tabPillFrame = requestAnimationFrame(() => {
+    tabPillFrame = null;
+    if (tabBar.value) tabPillReady.value = true;
+  });
+}
 function refreshTabPill() {
   const bar = tabBar.value;
   if (!bar) return;
@@ -440,10 +453,32 @@ function refreshTabPill() {
     key: element.dataset.spaceTab || "", offsetLeft: element.offsetLeft, offsetWidth: element.offsetWidth,
   }));
   const pill = selectedTabPill(geometries, filter.value);
-  tabPillStyle.value = pill
-    ? { opacity: "1", width: `${pill.width}px`, transform: `translateX(${pill.translateX}px)` }
-    : { opacity: "0", width: "0px", transform: "translateX(0px)" };
+  if (!pill) {
+    // Archived/trash are not primary tabs: retain the previous position so
+    // returning to a tab never animates in from the left edge.
+    tabPillStyle.value = { ...tabPillStyle.value, opacity: "0" };
+    return;
+  }
+  if (!tabPillHasPosition) {
+    // First DOM measurement (including remount after editor) must not slide.
+    tabPillReady.value = false;
+    tabPillHasPosition = true;
+    enableTabPillAnimationAfterPaint();
+  }
+  tabPillStyle.value = {
+    opacity: "1", width: `${pill.width}px`,
+    transform: `translateX(${pill.translateX}px)`,
+  };
 }
+const tabPillObserver = createTabPillObserver(refreshTabPill);
+watch(tabBar, bar => {
+  // The entire tablist is v-if removed while editing. Always reconnect to
+  // freshly mounted elements, even if the selected filter did not change.
+  cancelTabPillFrame();
+  tabPillReady.value = false;
+  tabPillHasPosition = false;
+  tabPillObserver.attach(bar);
+}, { flush: "post" });
 watch(filter, () => { void nextTick(refreshTabPill); });
 function selectFilter(value: SpaceFilter) {
   filter.value = value;
@@ -894,16 +929,7 @@ function onVisibilityChange() {
     void flush().catch(handleError);
 }
 onMounted(() => {
-  void nextTick(() => {
-    refreshTabPill();
-    const bar = tabBar.value;
-    if (bar && typeof ResizeObserver !== "undefined") {
-      tabResizeObserver = new ResizeObserver(refreshTabPill);
-      tabResizeObserver.observe(bar);
-      for (const button of bar.querySelectorAll<HTMLButtonElement>("[data-space-tab]"))
-        tabResizeObserver.observe(button);
-    }
-  });
+  // watch(tabBar) handles initial binding and every editor/list transition.
   window.addEventListener("resize", refreshTabPill, { passive: true });
   void document.fonts?.ready.then(refreshTabPill);
   cloudSyncState.value = getPrivateSpaceSyncState(keys.pkHex.toLowerCase());
@@ -930,8 +956,8 @@ onBeforeUnmount(() => {
   if (editor.value) setPrivateSpaceEditing(editor.value.accountPubkey, false);
   unsubscribeLock?.();
   stopCloudStatus?.();
-  tabResizeObserver?.disconnect();
-  tabResizeObserver = null;
+  tabPillObserver.disconnect();
+  cancelTabPillFrame();
   window.removeEventListener("resize", refreshTabPill);
   window.removeEventListener("hainei-private-space-synced", onCloudUpdate);
   document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -953,10 +979,12 @@ onBeforeUnmount(() => {
 .toolbar button{flex-shrink:0}
 button{font:inherit;cursor:pointer}
 .primary{padding:10px;border:0;border-radius:11px;background:#172033;color:#fff;white-space:nowrap;font-size:13px}
-.tabs{position:relative;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:12px 14px;border-bottom:1px solid var(--bd-f1f3f5)}
-.tabs .tab-pill{position:absolute;top:12px;left:0;height:42px;border-radius:9px;background:var(--bg-dfe8f4);pointer-events:none;z-index:0;transition:transform 200ms ease,opacity 180ms ease}
+.tabs{--tab-padding-y:12px;--tab-padding-x:14px;--tab-height:42px;position:relative;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:var(--tab-padding-y) var(--tab-padding-x);border-bottom:1px solid var(--bd-f1f3f5)}
+.tabs::before{content:"";position:absolute;top:var(--tab-padding-y);left:var(--tab-padding-x);right:var(--tab-padding-x);height:var(--tab-height);border-radius:9px;background:var(--bg-f1f5f9);pointer-events:none;z-index:0}
+.tabs .tab-pill{position:absolute;top:var(--tab-padding-y);left:0;height:var(--tab-height);border-radius:9px;background:var(--bg-dfe8f4);pointer-events:none;z-index:1;transition:transform 200ms ease,opacity 180ms ease}
+.tabs .tab-pill.no-motion{transition:none}
 @media (prefers-reduced-motion:reduce){.tabs .tab-pill{transition:opacity 150ms ease}}
-.tabs button{position:relative;z-index:1;display:flex;align-items:center;justify-content:center;width:100%;height:42px;min-height:42px;box-sizing:border-box;border:0;border-radius:9px;background:var(--bg-f1f5f9);padding:0 8px;color:var(--fg-64748b);font-size:13px;line-height:1}
+.tabs button{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;width:100%;height:var(--tab-height);min-height:var(--tab-height);box-sizing:border-box;border:0;border-radius:9px;background:transparent;padding:0 8px;color:var(--fg-64748b);font-size:13px;line-height:1}
 .tabs button.selected{color:var(--fg-0f172a);background:transparent;font-weight:650}
 .subsection{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;color:var(--fg-334155);font-size:13px}
 .subsection button{border:0;background:transparent;color:var(--fg-2563eb);padding:6px}
