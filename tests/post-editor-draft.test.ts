@@ -8,6 +8,7 @@ import {
   mergeCompletedPostDraftVideo,
   postDraftKey,
   savePostDraft,
+  normalizeComposerTodoTasks,
   type PostDraftImage,
 } from "@/utils/postDraft";
 import { canStartPostEditorDrag, shouldDismissPostEditor } from "@/utils/postEditorGesture";
@@ -78,6 +79,50 @@ describe("complete post draft media", () => {
     expect(loadPostDraft(ACCOUNT)).toMatchObject({ type: "post" });
     savePostDraft(ACCOUNT, { type: "todo", content: "买菜\n取快递", allFriends: false, selectedGroups: [] });
     expect(loadPostDraft(ACCOUNT)).toMatchObject({ type: "todo", content: "买菜\n取快递" });
+  });
+
+  it("persists private todo titles and optional per-item dates across editor reopen", () => {
+    const due = new Date("2026-10-25T15:30:00+09:00").getTime();
+    const items = [
+      { id: "first", text: "买菜", done: false, due },
+      { id: "second", text: "给家人打电话", done: true },
+    ];
+    savePostDraft(ACCOUNT, {
+      type: "todo", content: "", todoTitle: "周末安排", todoTasks: items,
+      allFriends: false, selectedGroups: [],
+    });
+    expect(loadPostDraft(ACCOUNT)).toMatchObject({ type: "todo", todoTitle: "周末安排", todoTasks: items });
+    // A delayed media callback must not discard todo metadata while merging.
+    mergeCompletedPostDraftImage(ACCOUNT, image);
+    expect(loadPostDraft(ACCOUNT)).toMatchObject({ todoTitle: "周末安排", todoTasks: items });
+  });
+
+  it("reopens old newline todo drafts as separate editable tasks", async () => {
+    savePostDraft(ACCOUNT, {
+      type: "todo", content: "买菜\\n取快递", allFriends: false, selectedGroups: [],
+    });
+    const { deviceStorage } = await import("@/services/deviceStorage");
+    const raw = JSON.parse(deviceStorage.getItem(postDraftKey(ACCOUNT)!) || "{}");
+    delete raw.todoTasks; delete raw.todoTitle;
+    deviceStorage.setItem(postDraftKey(ACCOUNT)!, JSON.stringify(raw));
+    const restored = loadPostDraft(ACCOUNT);
+    expect(restored?.todoTitle).toBe("");
+    expect(restored?.todoTasks.map(task => task.text)).toEqual(["买菜", "取快递"]);
+    expect(restored?.todoTasks.every(task => !!task.id && task.done === false)).toBe(true);
+  });
+
+  it("rejects malformed or duplicate due times and keeps stable IDs", () => {
+    const items = normalizeComposerTodoTasks([
+      { id: "one", text: "报告", done: false, due: 123 },
+      { id: "one", text: "重复", done: false },
+      { id: "two", text: "会议", done: true, due: 1_800_000_000_000 },
+      { id: "three", text: "日程", done: false, due: Number.NaN },
+    ]);
+    expect(items).toEqual([
+      { id: "one", text: "报告", done: false },
+      { id: "two", text: "会议", done: true, due: 1_800_000_000_000 },
+      { id: "three", text: "日程", done: false },
+    ]);
   });
 
   it("remembers only explicitly selected audiences, including self-only", () => {
@@ -188,7 +233,11 @@ describe("post editor close and media UX", () => {
     expect(source).toContain('if (postType.value !== "post" && !pendingPostRetry.value) {');
     expect(source).toContain("await privateSpaceRepository.createWithContent(account, crypto.randomUUID(), draft);");
     expect(source).toContain("notePrivateSpaceMutation(keys);");
-    expect(source).toContain('content.value.split("\\n")');
+    expect(source).toContain('normalizeComposerTodoTasks(todoTasks.value)');
+    expect(source).toContain('title: todoTitle.value.trim()');
+    expect(source).toContain('openTaskInCalendar({ id: task.id, text: task.text.trim(), due: task.due }');
+    expect(source).toContain('type="datetime-local"');
+    expect(source).toContain('📅 加入日历提醒');
   });
 
   it("redesigns the publisher into content, audience cards, and a compact toolbar", () => {
