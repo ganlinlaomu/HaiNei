@@ -23,7 +23,7 @@ export function createTabPillObserver(onMeasure: () => void) {
     if (typeof ResizeObserver === "undefined") return;
     observer = new ResizeObserver(onMeasure);
     observer.observe(bar);
-    for (const tab of bar.querySelectorAll<HTMLElement>("[data-space-tab]"))
+    for (const tab of Array.from(bar.querySelectorAll<HTMLElement>("[data-space-tab]")))
       observer.observe(tab);
   }
   return {
