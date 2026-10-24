@@ -134,6 +134,31 @@ describe("private space NIP-44 cloud reconciliation", () => {
     expect((await privateSpaceRepository.get(ACCOUNT, todo.id))?.tasks[0]).toEqual({ id: "t1", text: "开会", done: false, due });
   });
 
+  it("restores deleted todo on remote after deletion was already synchronized", async () => {
+    const due = 1_792_000_000_000;
+    const todo = await privateSpaceRepository.createWithContent(ACCOUNT, "undo-sync-todo", {
+      kind: "todo", title: "跨设备待办", body: "", pinned: true,
+      tasks: [{ id: "one", text: "约会", done: false, due }],
+    });
+    await syncPrivateSpace(keys());
+    const deleted = await privateSpaceRepository.moveToTrash(ACCOUNT, todo.id);
+    await syncPrivateSpace(keys()); // Cloud has already observed the deletion.
+    const cloudDeleted = JSON.parse(await keys().nip44Decrypt(ACCOUNT, cloud.get(todo.id)!.ciphertext));
+    expect(cloudDeleted.note.deletedAt).toBeGreaterThan(0);
+    const restored = await privateSpaceRepository.undoDisposition(
+      ACCOUNT, todo.id, "deletedAt", deleted.revision, deleted.deletedAt!,
+    );
+    expect(restored?.revision).toBeGreaterThan(Number(restored?.syncedRevision || 0));
+    await syncPrivateSpace(keys());
+    expect(cloud.get(todo.id)?.version).toBe(3);
+    // New device downloads the reinstated encrypted record.
+    await db.accountNotes.delete([ACCOUNT, todo.id]);
+    await syncPrivateSpace(keys());
+    const fresh = await privateSpaceRepository.get(ACCOUNT, todo.id);
+    expect(fresh).toMatchObject({ title: "跨设备待办", deletedAt: 0, tasks: todo.tasks });
+    expect(getPrivateSpaceSyncState(ACCOUNT).status).toBe("synced");
+  });
+
   it("roundtrips optional encrypted excerpt metadata across cloud and fresh device", async () => {
     const id = "d".repeat(64), author = "e".repeat(64);
     const created = await privateSpaceRepository.importNote(
