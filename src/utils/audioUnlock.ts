@@ -1,8 +1,9 @@
 import { startupMark } from "@/utils/debugLog";
 
-// A user gesture can grant an HTMLAudioElement permission to play later on
-// iOS. Prime ONE persistent incoming-ring element using an all-zero PCM clip,
-// never a seek into an audible ringtone (which can cause the first-tap "dong").
+// A trusted call-related gesture can grant an HTMLAudioElement permission to
+// play later on iOS. A zero-PCM clip still takes audio focus on some iPhones:
+// NEVER prime during normal app navigation, scrolling, or keyboard input.
+// Only an explicit "start a voice call" control may request this warm-up.
 // Nothing is synthesized or played on the app's cold-start path.
 const elements = new Map<RingKind, HTMLAudioElement>();
 let callAudioActive = false;
@@ -171,10 +172,20 @@ export function armIncomingRingtoneFromGesture(gesture = "manual") {
 }
 
 /**
- * Only capture gestures WebKit recognizes as media activations. On iOS, the
- * pointerup preceding touchend is deliberately ignored so it cannot consume
- * the only activation opportunity with an early rejected play(). Native
- * keyboard, mouse/pen and assistive click actions remain supported.
+ * A gesture is eligible only when it originates from an intentional voice-call
+ * control. Silently priming an unmuted media element on an unrelated tab
+ * switch can pause Apple Music / podcasts, despite the WAV containing zeros.
+ * Keep this pure so navigation and call controls can be tested independently.
+ */
+export function isExplicitRingtoneArmTarget(target: EventTarget | null): boolean {
+  return Boolean((target as Element | null)?.closest?.("[data-ringtone-arm]"));
+}
+
+/**
+ * Only capture call-specific gestures WebKit recognizes as media activations.
+ * On iOS the pointerup preceding touchend is deliberately ignored; pointerup
+ * can otherwise consume the gesture before WebKit grants playback permission.
+ * Native keyboard, mouse/pen and assistive click remain supported.
  */
 export function installIncomingRingtoneActivation() {
   if (activationInstalled || typeof window === "undefined") return;
@@ -182,8 +193,10 @@ export function installIncomingRingtoneActivation() {
   let lastGestureAt = -Infinity;
   const gesture = (event: Event) => {
     if (!event.isTrusted || callAudioActive || document.visibilityState === "hidden") return;
+    // Never acquire audio focus when opening a tab, using search, or typing.
+    // An explicit call button may opt in to warm the incoming ring element.
+    if (!isExplicitRingtoneArmTarget(event.target)) return;
     if (event.type === "pointerup" && (event as PointerEvent).pointerType === "touch") return;
-    if ((event.target as Element | null)?.closest?.("[data-live-audio-action]")) return;
     const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
     if (session?.type === "play-and-record") return;
     // touchend + synthetic click from the same gesture must not cause two
