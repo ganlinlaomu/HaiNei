@@ -40,14 +40,15 @@
           <section v-if="postType === 'todo'" class="composer-todo" aria-label="待办清单">
             <input v-model="todoTitle" class="composer-todo-title" maxlength="500"
               aria-label="待办标题" placeholder="标题（可不填）" :disabled="!draftReady || sending" />
-            <div class="composer-todo-list">
+            <div ref="todoList" class="composer-todo-list">
               <div v-for="(task, index) in todoTasks" :key="task.id" class="composer-todo-row">
                 <div class="composer-todo-text">
                   <input type="checkbox" v-model="task.done" :aria-label="'完成第 ' + (index + 1) + ' 项'"
                     :disabled="!draftReady || sending" />
-                  <textarea v-model="task.text" rows="1" maxlength="2000" class="composer-todo-input"
+                  <textarea v-model="task.text" v-auto-grow="task.text" rows="1" maxlength="2000" class="composer-todo-input"
                     :class="{ done: task.done }" :aria-label="'第 ' + (index + 1) + ' 项待办内容'"
-                    placeholder="待办事项" :disabled="!draftReady || sending"></textarea>
+                    placeholder="待办事项" :disabled="!draftReady || sending"
+                    @keydown.enter="onTodoTaskEnter($event, index)"></textarea>
                   <button type="button" class="composer-todo-remove" :aria-label="'删除第 ' + (index + 1) + ' 项'"
                     :disabled="!draftReady || sending" @click="removeTodoTask(index)">×</button>
                 </div>
@@ -60,16 +61,16 @@
                       @change="setTodoTaskDue(task, ($event.target as HTMLInputElement).value)" />
                   </label>
                   <button v-if="task.due" type="button" class="composer-todo-option"
-                    :disabled="sending" @click="setTodoTaskDue(task, '')">取消时间</button>
+                    :disabled="!draftReady || sending" @click="setTodoTaskDue(task, '')">取消时间</button>
                   <button v-if="task.due && task.text.trim() && !task.done" type="button"
-                    class="composer-todo-calendar" :disabled="sending"
+                    class="composer-todo-calendar" :disabled="!draftReady || sending"
                     :aria-label="'将第 ' + (index + 1) + ' 项加入日历提醒'"
                     @click="addTodoToCalendar(task)">📅 加入日历提醒</button>
                 </div>
               </div>
             </div>
             <button type="button" class="composer-todo-add" :disabled="!draftReady || sending || todoTasks.length >= 1000"
-              @click="addTodoTask">＋ 添加待办事项</button>
+              @click="addTodoTask(undefined, true)">＋ 添加待办事项</button>
             <p class="composer-todo-hint">时间可选；设置时间后，可加入系统日历提醒。保存的待办会同步到私人空间。</p>
           </section>
           <div v-else class="editor-textarea-wrap">
@@ -273,6 +274,8 @@ import { exportKeyToBase64 } from "@/utils/videoCrypto";
 import { bytesToBase64 } from "@/nostr/crypto";
 import { parseVideoUrl as parseVideoUrlUtil } from "@/utils/videoUtils";
 import { extractPrivateSpaceContent } from "@/services/privateSpaceContent";
+import { vAutoGrow } from "@/directives/autoGrowTextarea";
+import { shouldSubmitTaskOnEnter } from "@/utils/taskInput";
 import type { PrivateSpaceDraft } from "@/repositories/privateSpaceRepository";
 import {
   clearPostDraft,
@@ -317,6 +320,7 @@ const VIDEO_METADATA_SUFFIX = ']';
 export default defineComponent({
   name: "PostEditorModal",
   components: { PostImagePreview, ProfileAvatar, MentionSuggestions },
+  directives: { autoGrow: vAutoGrow },
   setup() {
     const router = useRouter();
     const route = useRoute();
@@ -332,9 +336,24 @@ export default defineComponent({
     const content = ref("");
     const todoTitle = ref("");
     const todoTasks = ref<ComposerTodoTask[]>([]);
-    function addTodoTask() {
-      if (todoTasks.value.length >= 1000) return;
-      todoTasks.value.push({ id: crypto.randomUUID(), text: "", done: false });
+    const todoList = ref<HTMLElement | null>(null);
+    function addTodoTask(afterIndex?: number, focus = false) {
+      if (todoTasks.value.length >= 1000) {
+        error.value = "最多只能添加 1000 项待办";
+        return;
+      }
+      const insertAt = afterIndex === undefined ? todoTasks.value.length : Math.min(todoTasks.value.length, afterIndex + 1);
+      todoTasks.value.splice(insertAt, 0, { id: crypto.randomUUID(), text: "", done: false });
+      if (focus) {
+        void nextTick(() => todoList.value?.querySelectorAll<HTMLTextAreaElement>(".composer-todo-input")[insertAt]?.focus());
+      }
+    }
+    function onTodoTaskEnter(event: KeyboardEvent, index: number) {
+      // Preserve IME confirmation and Shift+Enter for a multiline task.
+      if (!shouldSubmitTaskOnEnter(event)) return;
+      event.preventDefault();
+      if (!draftReady.value || sending.value) return;
+      addTodoTask(index, true);
     }
     function removeTodoTask(index: number) {
       todoTasks.value.splice(index, 1);
@@ -1445,7 +1464,7 @@ export default defineComponent({
     }
 
     return {
-      visible, content, todoTitle, todoTasks, addTodoTask, removeTodoTask, todoDueInputValue, setTodoTaskDue,
+      visible, content, todoTitle, todoTasks, todoList, addTodoTask, onTodoTaskEnter, removeTodoTask, todoDueInputValue, setTodoTaskDue,
       addTodoToCalendar, describeDue, sending, pendingPostRetry, allFriends, selectedGroups, audienceChosen, visibilityError,
       visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseGroups,
       postType, composerTypes, editorTitle, sendLabel, composerPlaceholder, selectComposerType, recipients, groups, countByGroup,
@@ -1474,7 +1493,7 @@ export default defineComponent({
 .composer-todo-row { padding:11px; border:1px solid var(--bd-e2e8f0); border-radius:12px; background:var(--bg-fff); min-width:0; }
 .composer-todo-text { display:flex; align-items:flex-start; gap:9px; min-width:0; }
 .composer-todo-text>input[type="checkbox"] { width:19px; height:19px; flex:0 0 19px; margin-top:7px; }
-.composer-todo-input { flex:1 1 auto; min-width:0; min-height:40px; max-height:130px; padding:6px 3px; border:0; background:transparent; color:var(--fg-0f172a); font:inherit; resize:vertical; overflow-wrap:anywhere; }
+.composer-todo-input { flex:1 1 auto; min-width:0; min-height:40px; padding:6px 3px; border:0; background:transparent; color:var(--fg-0f172a); font:inherit; resize:none; overflow-y:hidden; overflow-wrap:anywhere; }
 .composer-todo-input.done { text-decoration:line-through; opacity:.6; }
 .composer-todo-input:focus { outline:none; }
 .composer-todo-remove { flex:0 0 32px; width:32px; height:32px; border:0; border-radius:8px; background:transparent; color:var(--fg-64748b); font-size:23px; }
