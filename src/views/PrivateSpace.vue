@@ -62,6 +62,12 @@
         <button type="button" @click="selectFilter('trash')">最近删除</button>
         <button type="button" @click="moreOpen = false; backupOpen = true">笔记与待办备份 / 恢复</button>
       </div>
+      <div v-if="filter !== 'saved' && !loading && keys.isUnlocked" class="cloud-sync-status" role="status" aria-live="polite">
+        <span>{{ cloudSyncInfo.label }}</span>
+        <button v-if="cloudSyncInfo.retryable" type="button" :disabled="retryingCloudSync" @click="retryCloudSync">
+          {{ retryingCloudSync ? "重试中…" : "重试同步" }}
+        </button>
+      </div>
       <TodoPlanner v-if="filter === 'todo' && !loading && !query.trim()" :records="notes" @open="openTodoById" @add="createTodoForDate" @changed="refreshAfterSync" />
       <p v-if="filter === 'todo' && !loading && !query.trim() && filtered.length" class="lists-label">全部待办清单</p>
       <SavedPosts v-if="filter === 'saved'" :query="query" />
@@ -105,6 +111,12 @@
         <button type="button" @click="closeEditor">‹ 返回列表</button>
         <span class="save-state" aria-live="polite">{{ saveStatus }}</span>
         <button type="button" @click="togglePin">{{ editor.pinned ? '取消置顶' : '置顶' }}</button>
+      </div>
+      <div v-if="keys.isUnlocked" class="cloud-sync-status" role="status" aria-live="polite">
+        <span>{{ cloudSyncInfo.label }}</span>
+        <button v-if="cloudSyncInfo.retryable" type="button" :disabled="retryingCloudSync" @click="retryCloudSync">
+          {{ retryingCloudSync ? "重试中…" : "重试同步" }}
+        </button>
       </div>
       <input v-model="editor.title" class="title-input" aria-label="笔记标题"
         placeholder="标题（可不填）" maxlength="500" @input="queueSave" />
@@ -179,7 +191,9 @@ import { describeDue } from "@/utils/todoPlanning";
 import { privateSpaceSearchLabel, privateSpaceEmptyMessage, type SpaceFilter } from "@/utils/privateSpacePresentation";
 import {
   syncPrivateSpace, notePrivateSpaceMutation, setPrivateSpaceEditing,
+  getPrivateSpaceSyncState, subscribePrivateSpaceSync, type PrivateSpaceSyncState,
 } from "@/services/privateSpaceSync";
+import { privateSyncFeedback } from "@/utils/networkOperationFeedback";
 
 const PostImagePreview = defineAsyncComponent(() => import("@/components/PostImagePreview.vue"));
 const SavedPosts = defineAsyncComponent(() => import("@/components/SavedPosts.vue"));
@@ -392,6 +406,24 @@ const moreOpen = ref(false);
 const loading = ref(false);
 const error = ref("");
 const saveStatus = ref("已保存在本机");
+const cloudSyncState = ref<PrivateSpaceSyncState | null>(null);
+const cloudSyncInfo = computed(() => privateSyncFeedback(
+  keys.supportsNip44 ? cloudSyncState.value?.status || "local" : "unavailable",
+));
+const retryingCloudSync = ref(false);
+let stopCloudStatus: (() => void) | undefined;
+async function retryCloudSync() {
+  if (retryingCloudSync.value || !keys.isUnlocked || !keys.supportsNip44) return;
+  const account = keys.pkHex;
+  const generation = keys.sessionGeneration;
+  retryingCloudSync.value = true;
+  try {
+    await syncPrivateSpace(keys);
+  } finally {
+    if (keys.pkHex === account && keys.sessionGeneration === generation)
+      retryingCloudSync.value = false;
+  }
+}
 const newTaskText = ref("");
 const tabs = [
   { value: "saved", label: "收藏" }, { value: "note", label: "笔记" }, { value: "todo", label: "待办" },
@@ -636,6 +668,7 @@ watch(() => editor.value?.accountPubkey || "", (account, previousAccount) => {
 // vault; reading earlier fails with local_vault_locked (seen on a cold start
 // straight into 私人空间, e.g. offline). Wait until the account is ready.
 watch(() => [keys.pkHex, keys.isUnlocked, keys.accountStoresReadyFor] as const, ([account, unlocked, readyFor]) => {
+  cloudSyncState.value = unlocked && account ? getPrivateSpaceSyncState(account.toLowerCase()) : null;
   if (unlocked && account && readyFor !== account) {
     loading.value = true; // keep the loading state instead of a false "暂无"
     return;
@@ -662,7 +695,8 @@ function saveNow(): Promise<void> {
     saveStatus.value = "空白草稿未保存";
     return writes;
   }
-  saveStatus.value = "保存中…";
+  // Local IndexedDB writes do not need a network-style progress animation.
+  saveStatus.value = "";
   const operation = writes.catch(() => undefined).then(async () => {
     if (loadVersion !== version || keys.pkHex !== account || !keys.isUnlocked) {
       throw new Error("account_changed");
@@ -843,6 +877,10 @@ function onVisibilityChange() {
     void flush().catch(handleError);
 }
 onMounted(() => {
+  cloudSyncState.value = getPrivateSpaceSyncState(keys.pkHex.toLowerCase());
+  stopCloudStatus = subscribePrivateSpaceSync(state => {
+    if (state.account === keys.pkHex.toLowerCase() && keys.isUnlocked) cloudSyncState.value = state;
+  });
   window.addEventListener("hainei-private-space-synced", onCloudUpdate);
   unsubscribeLock = onBeforeAccountLock(async account => {
     if (editor.value?.accountPubkey === account) await flush();
@@ -862,6 +900,7 @@ onBeforeUnmount(() => {
   backupPassword.value = ""; backupConfirm.value = "";
   if (editor.value) setPrivateSpaceEditing(editor.value.accountPubkey, false);
   unsubscribeLock?.();
+  stopCloudStatus?.();
   window.removeEventListener("hainei-private-space-synced", onCloudUpdate);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   if (timer) clearTimeout(timer);
@@ -871,6 +910,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.cloud-sync-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 16px 10px;color:var(--fg-64748b);font-size:12px;line-height:1.5}
+.cloud-sync-status button{min-height:34px;padding:5px 10px;border:1px solid var(--bd-e2e8f0);border-radius:8px;background:transparent;color:var(--fg-2563eb);font:inherit;cursor:pointer}
+.cloud-sync-status button:disabled{opacity:.6}
 .private-space-page{min-height:100%;background:var(--bg-fff);color:var(--fg-172033);padding-bottom:calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
 .error-line{margin:8px 16px;padding:10px;border-radius:8px;background:var(--bg-fef2f2);color:var(--fg-b91c1c);font-size:13px}
 .toolbar{display:flex;min-width:0;box-sizing:border-box;gap:8px;align-items:center;padding:14px 14px 10px}
