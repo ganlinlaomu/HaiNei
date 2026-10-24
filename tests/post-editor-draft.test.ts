@@ -99,7 +99,7 @@ describe("complete post draft media", () => {
 
   it("reopens old newline todo drafts as separate editable tasks", async () => {
     savePostDraft(ACCOUNT, {
-      type: "todo", content: "买菜\\n取快递", allFriends: false, selectedGroups: [],
+      type: "todo", content: "买菜\n取快递", allFriends: false, selectedGroups: [],
     });
     const { deviceStorage } = await import("@/services/deviceStorage");
     const raw = JSON.parse(deviceStorage.getItem(postDraftKey(ACCOUNT)!) || "{}");
