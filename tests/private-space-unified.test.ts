@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { isFeedRenderableMessage, syncedMessageRecordToInboxItem } from "@/nostr/messaging/messageViewModel";
 import type { SyncedMessageRecord } from "@/db/dexie";
 import { getPrivateSpaceTab, rememberPrivateSpaceTab } from "@/services/privateSpaceNavigation";
+import { selectedTabPill } from "@/utils/tabPillGeometry";
 
 const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 const fakeRecord = (tags: string[][]): SyncedMessageRecord => ({
@@ -71,12 +72,19 @@ describe("private space unified navigation", () => {
     expect(saved).toContain("bookmarks.load(account)");
   });
 
-  it("keeps 收藏、笔记、待办 the same fixed height", () => {
-    const privateSpace = source("src/views/PrivateSpace.vue");
-    expect(privateSpace).toContain("grid-template-columns:repeat(3,minmax(0,1fr))");
-    expect(privateSpace).toContain("height:42px;min-height:42px");
-    expect(privateSpace).toContain("align-items:center;justify-content:center;width:100%");
-    expect(privateSpace).toContain('role="tablist"');
+  it("uses the same measured pill dimensions across 收藏、笔记、待办", () => {
+    const positions = [
+      { key: "saved", offsetLeft: 14, offsetWidth: 100 },
+      { key: "note", offsetLeft: 120, offsetWidth: 100 },
+      { key: "todo", offsetLeft: 226, offsetWidth: 100 },
+    ];
+    expect(["saved", "note", "todo"].map(key => selectedTabPill(positions, key))).toEqual([
+      { translateX: 14, width: 100 },
+      { translateX: 120, width: 100 },
+      { translateX: 226, width: 100 },
+    ]);
+    // The tab list retains its accessible semantics.
+    expect(source("src/views/PrivateSpace.vue")).toContain('role="tablist"');
   });
 
   it("uses the account-scoped encrypted local message repository for older bookmarks", () => {
