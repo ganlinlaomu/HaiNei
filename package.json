@@ -1,6 +1,6 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.124",
+  "version": "0.1.125",
   "releaseSummary": "删除、归档和移除收藏后支持独立撤销及跨设备恢复",
   "private": true,
   "scripts": {
