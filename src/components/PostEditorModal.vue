@@ -1497,7 +1497,7 @@ export default defineComponent({
 .composer-todo-input.done { text-decoration:line-through; opacity:.6; }
 .composer-todo-input:focus { outline:none; }
 .composer-todo-remove { flex:0 0 32px; width:32px; height:32px; border:0; border-radius:8px; background:transparent; color:var(--fg-64748b); font-size:23px; }
-.composer-todo-options { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-left:27px; }
+.composer-todo-options { display:flex; align-items:center; column-gap:6px; row-gap:8px; flex-wrap:wrap; margin-top:12px; margin-left:28px; }
 .composer-todo-date { position:relative; display:inline-flex; overflow:hidden; align-items:center; max-width:100%; min-height:34px; padding:6px 10px; border-radius:9px; background:var(--bg-eff3f4); color:var(--fg-64748b); font-size:12px; white-space:nowrap; }
 .composer-todo-date.set { color:var(--fg-2563eb); }
 .composer-todo-date input { position:absolute; inset:0; width:100%; height:100%; min-width:0; box-sizing:border-box; opacity:0; cursor:pointer; }

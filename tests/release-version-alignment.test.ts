@@ -14,7 +14,7 @@ describe("release version alignment", () => {
     const swVersion = read("public/service-worker.js").match(/const VERSION = "([^"]+)"/)?.[1];
     const changelogVersion = read("CHANGELOG.md").match(/^## (\d+\.\d+\.\d+) — /)?.[1];
 
-    expect(pkg.version).toBe("0.1.123");
+    expect(pkg.version).toBe("0.1.124");
     expect([lock.version, lock.packages[""].version, appVersion, swVersion, changelogVersion])
       .toEqual(Array(5).fill(pkg.version));
     expect(read("src/appRelease.ts")).toContain(

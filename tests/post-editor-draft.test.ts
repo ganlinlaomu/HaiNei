@@ -248,6 +248,13 @@ describe("post editor close and media UX", () => {
     expect(source).not.toContain("max-height:130px;");
   });
 
+  it("keeps a visible gap between auto-growing todo text and its time controls", () => {
+    // iPhone focuses a task with a prominent outline: due-time controls
+    // must sit underneath it rather than visually touching or overlapping.
+    expect(source).toContain("v-auto-grow=\"task.text\"");
+    expect(source).toContain('.composer-todo-options { display:flex; align-items:center; column-gap:6px; row-gap:8px; flex-wrap:wrap; margin-top:12px; margin-left:28px; }');
+  });
+
   it("inserts and focuses the next todo with Enter, preserving Shift+Enter and IME", () => {
     expect(source).toContain('@keydown.enter="onTodoTaskEnter($event, index)"');
     expect(source).toContain('import { shouldSubmitTaskOnEnter } from "@/utils/taskInput";');
