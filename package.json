@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.127",
-  "releaseSummary": "私信操作菜单跟手下拉与回弹关闭",
+  "version": "0.1.128",
+  "releaseSummary": "私人空间收藏、笔记、待办分类切换更顺滑",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
