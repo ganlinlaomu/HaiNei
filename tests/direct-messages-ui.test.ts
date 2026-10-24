@@ -755,17 +755,17 @@ describe("direct-message navigation and UI contract", () => {
     expect(store).toContain('if (!friendships.isAccepted(task.peerPubkey)) throw new Error("好友关系已变更")');
   });
 
-  it("uses per-message optimistic status without blocking the composer", () => {
+  it("uses per-message optimistic status without blocking the composer", async () => {
     const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(chat).toContain("上传中…");
-    expect(chat).toContain("发送中…");
-    expect(chat).toContain("✓ Relay 已接受");
-    expect(chat).not.toContain("✔️ 已发送");
+    const { dmDeliveryLabel } = await import("@/utils/networkOperationFeedback");
+    expect(dmDeliveryLabel("uploading")).toBe("上传中…");
+    expect(dmDeliveryLabel("sending")).toBe("发送中…");
+    expect(dmDeliveryLabel("sent")).toBe("✓ Relay 已接受");
+    expect(dmDeliveryLabel("upload_failed")).toBe("上传失败");
+    expect(dmDeliveryLabel("send_failed")).toBe("发送失败");
     expect(chat).toContain("font-size:9px;font-weight:400");
     expect(chat).toContain("opacity:.85");
-    expect(chat).toContain("上传失败 ·");
-    expect(chat).toContain("发送失败 ·");
-    expect(chat).toContain("directMessages.retry(message.outgoing.localId)");
+    expect(chat).toContain("retryOutgoingMessage(message.outgoing.localId)");
     expect(chat).toContain('draft.value = ""');
     expect(chat).not.toContain("sendError");
     expect(chat).not.toContain("sending.value");
