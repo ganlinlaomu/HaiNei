@@ -191,8 +191,11 @@
     </section>
 
     <div v-if="actionMenuMessage" class="message-action-backdrop" @click.self="closeMessageActionMenu">
-      <div class="message-action-menu" :style="actionMenuStyle" role="menu" :aria-label="`消息操作：${quotePreview(actionMenuMessage)}`">
-        <div class="message-action-preview">
+      <div ref="actionMenuElement" class="message-action-menu" :class="{ dragging: actionMenuDragging }"
+        :style="actionMenuStyle" role="menu" :aria-label="`消息操作：${quotePreview(actionMenuMessage)}`">
+        <div class="message-action-preview" @touchstart.passive="onActionMenuTouchStart"
+          @touchmove.passive="onActionMenuTouchMove" @touchend.passive="onActionMenuTouchEnd"
+          @touchcancel.passive="onActionMenuTouchCancel">
           <strong>{{ isOwn(actionMenuMessage) ? "你" : displayName }}</strong>
           <span>{{ quotePreview(actionMenuMessage) }}</span>
         </div>
@@ -447,6 +450,7 @@ import { openProfile } from "@/utils/profileNavigation";
 import { useMentionComposer } from "@/composables/useMentionComposer";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import { dmDeliveryLabel } from "@/utils/networkOperationFeedback";
+import { canBeginVerticalDismissDrag, shouldDismissVerticalSheet } from "@/utils/postEditorGesture";
 import { quotedMessageExcerpt } from "@/utils/quotedMessageExcerpt";
 import { canMarkConversationTailRead } from "@/utils/messageReadVisibility";
 import type { MentionCandidate } from "@/utils/mentions";
@@ -629,11 +633,63 @@ const windowMessages = computed(() => {
     .filter((message): message is InboxItem => !!message);
 });
 const actionMenuPosition = ref({ top: 0, left: 12, width: 280 });
+const actionMenuElement = ref<HTMLElement | null>(null);
+const actionMenuDragging = ref(false);
+const actionMenuOffset = ref(0);
+let actionMenuTouch: { x: number; y: number; started: number } | null = null;
 const actionMenuStyle = computed(() => ({
   top: `${actionMenuPosition.value.top}px`,
   left: `${actionMenuPosition.value.left}px`,
   width: `${actionMenuPosition.value.width}px`,
+  transform: `translateY(${actionMenuOffset.value}px)`,
+  opacity: String(Math.max(0.55, 1 - actionMenuOffset.value / 500)),
 }));
+function onActionMenuTouchStart(event: TouchEvent) {
+  const touch = event.touches[0];
+  if (!touch || event.touches.length !== 1 || (actionMenuElement.value?.scrollTop || 0) > 0) {
+    actionMenuTouch = null;
+    return;
+  }
+  actionMenuTouch = { x: touch.clientX, y: touch.clientY, started: performance.now() };
+  actionMenuDragging.value = false;
+  actionMenuOffset.value = 0;
+}
+function onActionMenuTouchMove(event: TouchEvent) {
+  const touch = event.touches[0], gesture = actionMenuTouch;
+  if (!touch || !gesture || event.touches.length !== 1) return;
+  const dy = touch.clientY - gesture.y, dx = touch.clientX - gesture.x;
+  const scrollTop = actionMenuElement.value?.scrollTop || 0;
+  if (scrollTop > 0) {
+    actionMenuTouch = null;
+    actionMenuDragging.value = false;
+    actionMenuOffset.value = 0;
+    return;
+  }
+  if (!actionMenuDragging.value) {
+    if (dy < -6 || (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy))) {
+      actionMenuTouch = null; // Allow native scrolling and horizontal gestures.
+      return;
+    }
+    if (!canBeginVerticalDismissDrag(dx, dy, scrollTop)) return;
+    actionMenuDragging.value = true;
+  }
+  // Passive listeners do not block vertical page/menu scrolling.
+  actionMenuOffset.value = Math.max(0, dy);
+}
+function finishActionMenuTouch(cancelled: boolean) {
+  const gesture = actionMenuTouch;
+  actionMenuTouch = null;
+  const dragged = actionMenuDragging.value;
+  const distance = actionMenuOffset.value;
+  actionMenuDragging.value = false;
+  actionMenuOffset.value = 0;
+  if (!cancelled && dragged && gesture && shouldDismissVerticalSheet(
+    distance, distance / Math.max(1, performance.now() - gesture.started),
+    actionMenuElement.value?.offsetHeight || 0,
+  )) closeMessageActionMenu();
+}
+function onActionMenuTouchEnd() { finishActionMenuTouch(false); }
+function onActionMenuTouchCancel() { finishActionMenuTouch(true); }
 const actionMenuMessage = computed(() => lookupMessage(actionMenuMessageId.value));
 const actionMenuCopyText = computed(() => actionMenuMessage.value ? messageText(actionMenuMessage.value.content) : "");
 const importingDm = ref(false);
@@ -977,9 +1033,15 @@ function openMessageActionMenu(message: InboxItem, event?: MouseEvent) {
   resetMessageGesture();
   textInput.value?.blur();
   actionMenuPosition.value = { top, left, width: menuWidth };
+  actionMenuOffset.value = 0;
+  actionMenuDragging.value = false;
+  actionMenuTouch = null;
   actionMenuMessageId.value = message.id;
 }
 function closeMessageActionMenu() {
+  actionMenuTouch = null;
+  actionMenuDragging.value = false;
+  actionMenuOffset.value = 0;
   actionMenuMessageId.value = "";
 }
 function replyFromActionMenu() {
@@ -2213,8 +2275,10 @@ onBeforeUnmount(() => {
 .message-line .bubble-text,.message-line .quoted-message,.message-line .quoted-message *{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.swipe-reply-indicator{display:grid;height:30px;flex:0 0 auto;place-items:center;overflow:hidden;border-radius:50%;color:var(--fg-657786);transition:color 120ms ease,background 120ms ease}.swipe-reply-indicator.active{background:var(--bg-e8f4fd);color:var(--fg-1687e8)}.swipe-reply-indicator svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:var(--bg-eff3f4);color:var(--fg-0f1419);line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:var(--bg-d9efff)}.quoted-message{display:flex;width:100%;min-width:0;flex-direction:column;gap:1px;margin:0 0 6px;padding:6px 8px;border:0;border-left:3px solid #1687e8;border-radius:7px;background:var(--bg-rgba-255-255-255-58);color:inherit;font:inherit;line-height:1.25;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}.quoted-message:active{background:var(--bg-rgba-255-255-255-88)}.quoted-message strong{overflow:hidden;color:var(--fg-536471);font-size:11px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.quoted-message span{overflow:hidden;max-width:280px;color:var(--fg-536471);font-size:12px;text-overflow:ellipsis;white-space:nowrap}.message-line.message-highlight .message-bubble{animation:message-target-highlight 1.25s ease-out}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.call-back-link{display:inline-block;margin-top:4px;padding:2px 0;border:0;background:transparent;color:var(--fg-1687e8);font:inherit;font-size:13px;font-weight:650;cursor:pointer}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-meta{display:flex;align-items:center;gap:4px;margin:3px 5px 1px;color:var(--fg-8b98a5);font-size:9px;font-weight:400;line-height:1.3;opacity:.85;white-space:nowrap;font-variant-numeric:tabular-nums}.message-meta.failed,.caption-meta.failed{color:var(--fg-dc2626)}.message-meta.read,.caption-meta.read{color:var(--fg-1687e8)}.message-meta button,.caption-meta button{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:650}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble>.quoted-message{margin:8px 10px 6px}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}.caption-meta{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;color:var(--fg-718096);font-size:9px;line-height:1.3;white-space:nowrap}
 .audio-bubble{padding:9px 10px}
 .message-action-backdrop{position:fixed;inset:0;z-index:20;background:rgba(15,23,42,.12);backdrop-filter:blur(.5px)}
-.message-action-menu{position:fixed;overflow:hidden;border:1px solid var(--bd-rgba-203-213-225-82);border-radius:18px;background:var(--bg-rgba-255-255-255-98);box-shadow:0 18px 48px rgba(15,23,42,.22);backdrop-filter:blur(18px);transform-origin:center}
-.message-action-preview{display:flex;min-width:0;flex-direction:column;gap:2px;padding:11px 14px;border-bottom:1px solid var(--bd-eef1f4)}.message-action-preview strong,.message-action-preview span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.message-action-preview strong{font-size:12px;color:var(--fg-0f1419)}.message-action-preview span{font-size:13px;color:var(--fg-657786)}
+.message-action-menu{position:fixed;max-height:calc(100dvh - 24px);overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;transition:transform 200ms ease-out,opacity 200ms ease-out;border:1px solid var(--bd-rgba-203-213-225-82);border-radius:18px;background:var(--bg-rgba-255-255-255-98);box-shadow:0 18px 48px rgba(15,23,42,.22);backdrop-filter:blur(18px);transform-origin:center}
+ .message-action-menu.dragging{transition:none}
+@media (prefers-reduced-motion: reduce){.message-action-menu{transition:opacity 150ms ease-out;transform:none!important}}
+.message-action-preview{touch-action:pan-y;user-select:none;-webkit-user-select:none;display:flex;min-width:0;flex-direction:column;gap:2px;padding:11px 14px;border-bottom:1px solid var(--bd-eef1f4)}.message-action-preview strong,.message-action-preview span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.message-action-preview strong{font-size:12px;color:var(--fg-0f1419)}.message-action-preview span{font-size:13px;color:var(--fg-657786)}
 .message-action-menu>button{display:flex;width:100%;min-height:52px;align-items:center;gap:12px;padding:0 16px;border:0;border-top:1px solid var(--bd-f1f3f5);background:transparent;color:var(--fg-0f1419);font:inherit;font-size:16px;text-align:left}.message-action-menu>button:first-of-type{border-top:0}.message-action-menu>button:active{background:var(--bg-f4f6f8)}.message-action-menu>button svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.message-line.action-menu-source .message-bubble{box-shadow:0 0 0 3px rgba(22,135,232,.12)}
 @keyframes message-target-highlight{0%{filter:brightness(.92);box-shadow:0 0 0 4px rgba(22,135,232,.24)}55%{filter:brightness(.98);box-shadow:0 0 0 3px rgba(22,135,232,.12)}100%{filter:none;box-shadow:0 0 0 0 rgba(22,135,232,0)}}
 .jump-to-latest{position:absolute;right:18px;bottom:calc(94px + env(safe-area-inset-bottom));z-index:4;display:flex;min-width:42px;height:42px;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid var(--bd-d8dee5);border-radius:999px;background:var(--bg-fff);color:var(--fg-0f1419);box-shadow:0 5px 18px rgba(15,23,42,.16);font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent}.jump-to-latest:active{background:var(--bg-f7f9f9);transform:scale(.97)}.jump-to-latest>span{font-size:20px;line-height:1}.jump-to-latest strong{font-size:12px;font-weight:650;white-space:nowrap}
