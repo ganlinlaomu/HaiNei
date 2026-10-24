@@ -33,6 +33,23 @@ export const useBookmarksStore = defineStore("bookmarks", {
       this.records = [];
       this.loadedFor = "";
     },
+    /** Restore a specific removed revision; never cross an account/lock boundary. */
+    async undoRemoval(account: string, messageId: string, expectedUpdatedAt: number) {
+      const keys = useKeyStore();
+      if (!keys.isUnlocked || keys.pkHex.toLowerCase() !== account ||
+          this.loadedFor !== account || !Number.isSafeInteger(expectedUpdatedAt)) return false;
+      const generation = keys.sessionGeneration;
+      const record = await bookmarkRepository.restoreRemoval(account, messageId, expectedUpdatedAt);
+      if (!record) return false;
+      // Persisted mutation remains pending for foreground reconciliation if a
+      // session change occurred while IndexedDB committed the undo.
+      if (!keys.isUnlocked || keys.pkHex.toLowerCase() !== account ||
+          keys.sessionGeneration !== generation || this.loadedFor !== account) return false;
+      this.records = [record, ...this.records.filter(item => item.messageId !== messageId)];
+      noteBookmarkLocalMutation(keys, account);
+      schedulePrivateBookmarkMirror(keys);
+      return true;
+    },
     async toggle(messageId: string) {
       const account = this.loadedFor;
       if (!account || !messageId) return false;

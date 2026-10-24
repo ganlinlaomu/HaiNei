@@ -160,6 +160,7 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch 
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useKeyStore } from "@/stores/keys";
+import { useUIStore } from "@/stores/ui";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { privateSpaceRepository, type PrivateSpaceDraft } from "@/repositories/privateSpaceRepository";
 import type { PrivateSpaceRecord } from "@/db/dexie";
@@ -184,6 +185,7 @@ const PostImagePreview = defineAsyncComponent(() => import("@/components/PostIma
 const SavedPosts = defineAsyncComponent(() => import("@/components/SavedPosts.vue"));
 const TodoPlanner = defineAsyncComponent(() => import("@/components/TodoPlanner.vue"));
 const keys = useKeyStore();
+const ui = useUIStore();
 const route = useRoute();
 const router = useRouter();
 const backupOpen = ref(false);
@@ -493,6 +495,43 @@ async function editFromSwipe(note: PrivateSpaceRecord) {
   closeAllNoteSwipes();
   await open(note);
 }
+
+/** Each toast captures its own item/revision; a later deletion does not replace it. */
+function offerDispositionUndo(
+  saved: PrivateSpaceRecord, field: "deletedAt" | "archivedAt", prior = 0,
+) {
+  const account = saved.accountPubkey.toLowerCase();
+  const generation = keys.sessionGeneration;
+  const at = saved[field];
+  if (!at) return;
+  let used = false;
+  ui.addToast(field === "deletedAt" ? "已删除 · 可撤销" : "已归档 · 可撤销", 5_000, "info", {
+    label: "撤销",
+    run: () => {
+      if (used || !keys.isUnlocked || keys.pkHex.toLowerCase() !== account ||
+          keys.sessionGeneration !== generation) return;
+      used = true;
+      void (async () => {
+        try {
+          const restored = await privateSpaceRepository.undoDisposition(
+            account, saved.id, field, saved.revision, at, prior,
+          );
+          if (!restored) return;
+          // The write is account-scoped even if a logout raced the transaction.
+          // On the next unlock, dirty revisions will be reconciled to cloud.
+          if (!keys.isUnlocked || keys.pkHex.toLowerCase() !== account ||
+              keys.sessionGeneration !== generation) return;
+          updateInList(restored);
+          notePrivateSpaceMutation(keys);
+        } catch {
+          if (keys.isUnlocked && keys.pkHex.toLowerCase() === account)
+            ui.addToast("撤销失败，请到最近删除或归档中恢复", 2_600, "error");
+        }
+      })();
+    },
+  });
+}
+
 async function deleteFromSwipe(note: PrivateSpaceRecord) {
   if (backupBusy.value || loading.value || editorTransitionBusy.value || rowActionBusyId.value || !canSwipeNote(note)) return;
   if (!window.confirm("将「" + label(note).slice(0, 60) + "」移到最近删除？可以从最近删除中恢复。")) {
@@ -510,6 +549,7 @@ async function deleteFromSwipe(note: PrivateSpaceRecord) {
     updateInList(deleted);
     closeSwipe(note.id);
     notePrivateSpaceMutation(keys);
+    offerDispositionUndo(deleted, "deletedAt", current.deletedAt || 0);
     error.value = "";
   } catch (cause) {
     if (keys.isUnlocked && keys.pkHex === note.accountPubkey) handleError(cause);
@@ -756,8 +796,10 @@ async function archiveNote() {
   try {
     await flush();
     const note = editor.value;
-    updateInList(await privateSpaceRepository.update(note.accountPubkey, note.id, { archivedAt: Date.now() }));
+    const archived = await privateSpaceRepository.update(note.accountPubkey, note.id, { archivedAt: Date.now() });
+    updateInList(archived);
     notePrivateSpaceMutation(keys);
+    offerDispositionUndo(archived, "archivedAt", note.archivedAt || 0);
     editor.value = null;
   } catch (cause) { handleError(cause); }
 }
@@ -776,8 +818,10 @@ async function deleteNote() {
   try {
     await flush();
     const note = editor.value;
-    updateInList(await privateSpaceRepository.moveToTrash(note.accountPubkey, note.id));
+    const deleted = await privateSpaceRepository.moveToTrash(note.accountPubkey, note.id);
+    updateInList(deleted);
     notePrivateSpaceMutation(keys);
+    offerDispositionUndo(deleted, "deletedAt", note.deletedAt || 0);
     editor.value = null;
   } catch (cause) { handleError(cause); }
 }

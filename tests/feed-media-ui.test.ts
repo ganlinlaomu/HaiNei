@@ -49,8 +49,9 @@ describe("feed media carousel and actions", () => {
     const card = readThemedSource(join(process.cwd(), "src/components/PostCard.vue"), "utf8");
     const toasts = readThemedSource(join(process.cwd(), "src/components/ToastContainer.vue"), "utf8");
     expect(card).toContain(".action.bookmark.saved{color:#60A5FA}");
-    expect(card).toContain('saved ? "已添加到收藏夹" : "已从收藏夹移除"');
-    expect(card).toContain('1700, "success"');
+    // Saving remains a short success toast; removals use an independent
+    // undo toast, behavior-covered in bookmark-undo.test.ts.
+    expect(card).toContain('ui.addToast("已添加到收藏夹", 1_700, "success")');
     expect(toasts).toContain("top:calc(env(safe-area-inset-top) + 10px)");
     expect(toasts).toContain("background:rgba(255,255,255,.96)");
     expect(toasts).toContain("font-size:13px");

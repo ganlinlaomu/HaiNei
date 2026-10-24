@@ -30,6 +30,7 @@ import PostCard from "@/components/PostCard.vue";
 import { useBookmarksStore } from "@/stores/bookmarks";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
+import { useUIStore } from "@/stores/ui";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { isFeedRenderableMessage, syncedMessageRecordToInboxItem } from "@/nostr/messaging/messageViewModel";
 import { resumeAccountMessageSync } from "@/services/accountMessageSync";
@@ -37,6 +38,7 @@ import { resumeAccountMessageSync } from "@/services/accountMessageSync";
 const props = defineProps<{ query: string }>();
 const keys = useKeyStore();
 const bookmarks = useBookmarksStore();
+const ui = useUIStore();
 const messages = useMessagesStore();
 const locallyResolved = ref<Record<string, InboxItem>>({});
 const loading = ref(false);
@@ -119,8 +121,13 @@ async function retryMissing() {
 
 async function removeMissing(id: string) {
   if (!keys.isUnlocked || !bookmarks.isBookmarked(id)) return;
-  try { await bookmarks.toggle(id); }
-  catch { loadError.value = "取消收藏失败，请重试。"; }
+  try {
+    const saved = await bookmarks.toggle(id);
+    if (!saved) {
+      const { offerBookmarkUndoToast } = await import("@/services/bookmarkUndoToast");
+      await offerBookmarkUndoToast(id, keys, bookmarks, ui);
+    }
+  } catch { loadError.value = "取消收藏失败，请重试。"; }
 }
 </script>
 
