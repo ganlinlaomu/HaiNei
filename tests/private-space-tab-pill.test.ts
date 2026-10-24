@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { selectedTabPill } from "@/utils/tabPillGeometry";
+import { describe, expect, it, vi } from "vitest";
+import { selectedTabPill, createTabPillObserver } from "@/utils/tabPillGeometry";
 
 describe("private-space sliding tab indicator", () => {
   const initial = [
@@ -25,5 +25,62 @@ describe("private-space sliding tab indicator", () => {
     expect(selectedTabPill(initial, "archived")).toBeNull();
     expect(selectedTabPill([{ key: "saved", offsetLeft: 0, offsetWidth: 0 }], "saved")).toBeNull();
     expect(selectedTabPill([{ key: "saved", offsetLeft: Number.NaN, offsetWidth: 90 }], "saved")).toBeNull();
+  });
+});
+
+describe("tab pill observer lifetime", () => {
+  it("rebinds to a new tab bar after editing, detaches old nodes and immediately remeasures", () => {
+    const observers: Array<{
+      targets: HTMLElement[];
+      disconnected: boolean;
+      change: () => void;
+    }> = [];
+    class FakeResizeObserver {
+      private state: (typeof observers)[number];
+      constructor(callback: () => void) {
+        this.state = { targets: [], disconnected: false, change: callback };
+        observers.push(this.state);
+      }
+      observe(node: HTMLElement) { this.state.targets.push(node); }
+      disconnect() { this.state.disconnected = true; }
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    try {
+      let measured = 0;
+      const manager = createTabPillObserver(() => { measured++; });
+      const firstButtons = [{}, {}, {}] as HTMLElement[];
+      const firstBar = { querySelectorAll: () => firstButtons } as unknown as HTMLElement;
+      manager.attach(firstBar);
+      expect(measured).toBe(1);
+      expect(observers[0].targets).toEqual([firstBar, ...firstButtons]);
+      observers[0].change(); // orientation/font resize fires observer callback
+      expect(measured).toBe(2);
+      manager.attach(null); // editor opened: v-if destroyed the list
+      expect(observers[0].disconnected).toBe(true);
+      expect(measured).toBe(2);
+      const nextButtons = [{}, {}, {}] as HTMLElement[];
+      const nextBar = { querySelectorAll: () => nextButtons } as unknown as HTMLElement;
+      manager.attach(nextBar); // editor closed, same selected filter
+      expect(measured).toBe(3);
+      expect(observers[1].targets).toEqual([nextBar, ...nextButtons]);
+      manager.disconnect();
+      expect(observers[1].disconnected).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it("still remeasures when ResizeObserver is unsupported", () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    try {
+      let measured = 0;
+      const manager = createTabPillObserver(() => { measured++; });
+      manager.attach({ querySelectorAll: () => [] } as unknown as HTMLElement);
+      manager.attach(null);
+      manager.attach({ querySelectorAll: () => [] } as unknown as HTMLElement);
+      expect(measured).toBe(2);
+      manager.disconnect();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
