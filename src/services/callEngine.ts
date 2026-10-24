@@ -7,7 +7,7 @@ import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
 import { debugLog, startupMark } from "@/utils/debugLog";
-import { incomingRingtoneArmed, reloadRingtoneElement, ringtoneElement, setCallAudioActive, setRingAudioSession } from "@/utils/audioUnlock";
+import { incomingRingtoneArmed, releaseRingtoneElement, reloadRingtoneElement, ringtoneElement, setCallAudioActive, setRingAudioSession } from "@/utils/audioUnlock";
 import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
@@ -930,11 +930,25 @@ export async function acceptCall() {
   const session = activeSession;
   if (!session || !isCurrent(session) || session.direction !== "incoming" || store.phase !== "incoming" || !store.invite) return;
   const invite = { ...store.invite };
+  // Claim the real-time communication category BEFORE releasing the audible
+  // ringtone. Old order: playback -> auto -> play-and-record; on iPhone this
+  // can leave WebKit's output route stuck after ringing, even if play() resolves.
+  // stopTone's setRingAudioSession(false) intentionally does not downgrade an
+  // already-owned play-and-record session.
+  setCallAudioActive(true);
+  setCallAudioSession(session, "play-and-record", "ring_to_call_handoff");
   stopTone(session);
+  releaseRingtoneElement("ring");
+  // Detaching a playing HTMLAudioElement can prompt WebKit to recompute the
+  // session asynchronously; reaffirm before getUserMedia and after it resolves.
+  setCallAudioSession(session, "play-and-record", "ring_released");
+  startupMark("call_ring_handoff", {
+    callId: session.id,
+    sessionType: browserCallAudioSession()?.type || "unsupported",
+    sessionState: browserCallAudioSession()?.state || "unknown",
+  });
   closeCallNotification(session.id);
   store.phase = "connecting";
-  setCallAudioActive(true);
-  setCallAudioSession(session, "play-and-record", "call_accept");
   let stream: MediaStream;
   try {
     stream = await getMicrophone();

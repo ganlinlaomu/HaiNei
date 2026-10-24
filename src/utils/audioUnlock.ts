@@ -221,6 +221,38 @@ export function installIncomingRingtoneActivation() {
   window.addEventListener("click", gesture, { capture: true });
 }
 
+/**
+ * End the ringtone's HTMLMediaElement session before WebRTC takes over.
+ * pause() alone can leave a decoded media source attached in WebKit; an
+ * incoming call that rang audibly must not retain a second playback owner
+ * after switching the document to play-and-record.
+ *
+ * Only call after an actual ring is finished, NOT before the first ring:
+ * that would discard the gesture-primed element needed for iOS autoplay.
+ */
+export function releaseRingtoneElement(kind: RingKind) {
+  const element = elements.get(kind);
+  if (!element) return;
+  elements.delete(kind);
+  if (kind === "ring") {
+    ++incomingArmAttempt;
+    incomingArmPending = false;
+    incomingArmSucceeded = false;
+    needsIncomingArm = true;
+    incomingUsingSilence = false;
+    releaseSilentSource();
+  }
+  const source = element.src;
+  try { element.pause(); } catch { /* already stopped */ }
+  try { element.removeAttribute?.("src"); } catch { /* test/browser shim */ }
+  // Explicitly release the decoded source and media session. Never load a
+  // fresh ring here; it must be generated only on the next actual invite.
+  try { element.load?.(); } catch { /* unsupported browser shim */ }
+  if (source?.startsWith("blob:")) {
+    try { URL.revokeObjectURL(source); } catch { /* ignored */ }
+  }
+}
+
 /** Recreate an element whose source failed to load (MediaError), once per failure. */
 export function reloadRingtoneElement(kind: RingKind): HTMLAudioElement | null {
   const element = elements.get(kind);

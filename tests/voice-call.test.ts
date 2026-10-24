@@ -271,6 +271,58 @@ describe("call engine", () => {
   });
 
 
+  it("hands off an audible incoming ring to WebRTC without crossing auto", async () => {
+    // Regression: iPhone 15 hears the ringing but not the peer after answering.
+    vi.resetModules(); // Keep ringtone element/session state from prior tests out.
+    const { handleCallSignal, acceptCall, hangup } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const categories: string[] = [];
+    let currentCategory = "auto";
+    (navigator as any).audioSession = {
+      get type() { return currentCategory; },
+      set type(next: string) { categories.push(next); currentCategory = next; },
+      state: "active",
+    };
+    const ring = {
+      src: "", currentTime: 0, paused: false, loop: false, muted: false,
+      preload: "", error: null, setAttribute: vi.fn(),
+      play: vi.fn(async () => undefined),
+      pause: vi.fn(() => { ring.paused = true; }),
+      removeAttribute: vi.fn((name: string) => { if (name === "src") ring.src = ""; }),
+      load: vi.fn(),
+    };
+    (document.createElement as ReturnType<typeof vi.fn>).mockImplementationOnce(() => ring);
+    await handleCallSignal(FRIEND, ME, { ...invite, callId: "7".repeat(32) }, now());
+    expect(useCallStore().phase).toBe("incoming");
+    expect(categories).toEqual(["playback"]);
+    expect(ring.play).toHaveBeenCalledOnce();
+    await Promise.resolve();
+
+    const mic = navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>;
+    mic.mockImplementationOnce(async () => {
+      expect(currentCategory).toBe("play-and-record");
+      expect(ring.pause).toHaveBeenCalled();
+      expect(ring.removeAttribute).toHaveBeenCalledWith("src");
+      expect(ring.load).toHaveBeenCalledOnce();
+      return { getTracks: () => [], getAudioTracks: () => [] };
+    });
+    await acceptCall();
+    expect(useCallStore().phase).toBe("connecting");
+    // No auto reset can interrupt the microphone's call session after ring.
+    expect(categories).toEqual(["playback", "play-and-record"]);
+    const room = mocks.rooms.at(-1);
+    room.onPeerJoin("caller-device");
+    const remoteStream = { getAudioTracks: () => [] } as unknown as MediaStream;
+    room.onPeerStream(remoteStream, "caller-device");
+    await Promise.resolve();
+    const remote = mocks.audioElements.find((element: any) => element.srcObject === remoteStream);
+    expect(remote?.play).toHaveBeenCalledOnce();
+    expect(currentCategory).toBe("play-and-record");
+    await hangup();
+    expect(categories.at(-1)).toBe("auto");
+    expect(ring.load).toHaveBeenCalledOnce();
+  });
+
   it("requests a call audio session before capture and releases it on hangup", async () => {
     const { startCall, hangup } = await import("@/services/callEngine");
     const audioSession = { type: "auto" };
