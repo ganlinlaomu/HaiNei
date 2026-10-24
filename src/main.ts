@@ -113,8 +113,9 @@ async function bootstrap() {
     versionTrackingMs,
     vueMountMs: Math.round(performance.now() - vueMountStartedAt),
   });
-  // Only add a lightweight listener now. A 100%-silent media prime happens
-  // on a later trusted gesture, never during cold start or first paint.
+  // A lightweight listener considers only explicit voice-call controls.
+  // Ordinary tab changes/taps must never play the unmuted silent PCM prime:
+  // iOS can pause background music even when the audio samples are all zero.
   installIncomingRingtoneActivation();
 
   // 异步恢复登录态，不阻塞首屏渲染
