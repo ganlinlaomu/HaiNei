@@ -50,6 +50,10 @@ type CallSession = {
   audioCleanup: (() => void) | null;
   audioRetryTimer: ReturnType<typeof setTimeout> | null;
   audioFailures: number;
+  /** Consecutive RTP samples received while WebKit reports its audio track muted. */
+  remoteMutedSamples: number;
+  /** Only one explicit audio-session route reset per call, even after repeated taps. */
+  routeResetAttempts: number;
   playRequest: number;
   /** Explicit browser-selected output, if the speaker-selection API is available. */
   outputDeviceId: string;
@@ -72,7 +76,7 @@ function account() {
 function createSession(id: string, peer: string, direction: CallDirection): CallSession {
   const session: CallSession = {
     id, peer, direction, owner: account(), room: null, localStream: null, remoteAudio: null, remoteStream: null,
-    audioCleanup: null, audioRetryTimer: null, audioFailures: 0, playRequest: 0, outputDeviceId: "",
+    audioCleanup: null, audioRetryTimer: null, audioFailures: 0, remoteMutedSamples: 0, routeResetAttempts: 0, playRequest: 0, outputDeviceId: "",
     mediaPeer: "", timers: new Set(), peerLossTimer: null, ringtone: null, wakeLock: null,
     statsTimer: null, quality: { route: "", rttMs: 0, lost: 0, received: 0, poorSamples: 0, samples: 0 },
   };
@@ -148,6 +152,36 @@ function startQualitySampling(session: CallSession, room: Room) {
         poorSamples: session.quality.poorSamples + Number(poor), samples: session.quality.samples + 1,
       });
       store.quality = poor ? "poor" : "good";
+      // A resolved <audio>.play() does not prove that WebKit has delivered
+      // decoded samples to the remote track. v0.1.130 iPhone 15 logs show
+      // inbound RTP + nonzero audio energy with track.muted=true throughout.
+      // Never claim healthy output when this persists across two samples.
+      const remoteTrack = session.remoteStream?.getAudioTracks?.()[0];
+      if (inbound && received > 0 && (inbound.totalAudioEnergy || 0) > 0 && remoteTrack?.muted === true) {
+        session.remoteMutedSamples++;
+        if (session.remoteMutedSamples === 2) {
+          store.audioStatus = "blocked";
+          const receiverTracks = connection.getReceivers?.()
+            ?.filter((receiver: RTCRtpReceiver) => receiver.track?.kind === "audio")
+            .map((receiver: RTCRtpReceiver) => ({
+              sameTrack: receiver.track?.id === remoteTrack.id,
+              muted: receiver.track?.muted ?? null,
+              enabled: receiver.track?.enabled ?? null,
+              state: receiver.track?.readyState ?? "unknown",
+            })) || [];
+          startupMark("call_remote_track_stalled", {
+            packetsReceived: inbound.packetsReceived || 0,
+            bytesReceived: inbound.bytesReceived || 0,
+            totalAudioEnergy: inbound.totalAudioEnergy || 0,
+            trackEnabled: remoteTrack.enabled ?? null,
+            trackState: remoteTrack.readyState,
+            receiverTracks,
+            sessionType: browserCallAudioSession()?.type || "unknown",
+          });
+        }
+      } else if (remoteTrack?.muted === false) {
+        session.remoteMutedSamples = 0;
+      }
       // The audio element's play() promise can resolve even when iOS routes
       // sound to the receiver (or renders nothing). Record the RTP side
       // separately so a later no-sound report can distinguish the two.
@@ -497,6 +531,8 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
   const trackMuted = () => { if (isCurrent(session)) startupMark("call_remote_track_muted"); };
   const trackUnmuted = () => {
     if (!isCurrent(session)) return;
+    session.remoteMutedSamples = 0;
+    startupMark("call_remote_track_unmuted", {});
     // A late unmute often arrives milliseconds after the first stream/play.
     // Rebinding srcObject here aborts WebKit's still-starting audio renderer.
     if (audio.paused || store.audioStatus === "blocked") attemptRemotePlayback(session, "track_unmuted");
@@ -588,6 +624,7 @@ function playRemote(session: CallSession, stream: MediaStream, reason = "remote_
     document.body.appendChild(session.remoteAudio);
   }
   session.remoteStream = stream;
+  session.remoteMutedSamples = 0;
   session.audioFailures = 0;
   session.playRequest++;
   clearAudioRetry(session);
@@ -616,8 +653,29 @@ export function recoverCallAudio() {
   if (!session || !isCurrent(session) || !session.remoteStream) return;
   const stream = session.remoteStream;
   const track = stream.getAudioTracks?.()[0];
+  // A new <audio> element cannot repair a stuck WebKit audio session. On an
+  // explicit recovery tap, try one controlled category reinitialization if
+  // the *remote track itself* is muted. Do not do this automatically during
+  // calls or repeat it with every tap: it may interrupt microphone routing.
+  let routeReset = false;
+  const native = browserCallAudioSession();
+  if (track?.muted && native?.type === "play-and-record" && session.routeResetAttempts === 0) {
+    session.routeResetAttempts++;
+    try {
+      native.type = "auto";
+      native.type = "play-and-record";
+      routeReset = native.type === "play-and-record";
+      startupMark("call_audio_route_reset", { result: routeReset ? "reasserted" : "unconfirmed", reason: "remote_track_muted" });
+    } catch (error) {
+      // Do not strand an active microphone session in auto on a partial error.
+      try { native.type = "play-and-record"; } catch { /* iOS rejected reassertion */ }
+      startupMark("call_audio_route_reset", {
+        result: "failed", reason: "remote_track_muted", error: error instanceof Error ? error.name : "unknown",
+      });
+    }
+  }
   startupMark("call_audio_output_recovery", {
-    strategy: "replace_element",
+    strategy: routeReset ? "route_reset_and_replace_element" : "replace_element",
     incomingPackets: session.quality.received,
     trackMuted: track?.muted ?? null,
     trackState: track?.readyState ?? "unknown",

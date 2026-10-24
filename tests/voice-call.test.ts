@@ -380,6 +380,39 @@ describe("call engine", () => {
     expect(remoteAudio.removeEventListener).toHaveBeenCalledWith("playing", expect.any(Function));
   });
 
+  it("makes a one-time manual iPhone route reset when RTP track is stuck muted", async () => {
+    const { startCall, recoverCallAudio, hangup } = await import("@/services/callEngine");
+    const categories: string[] = [];
+    let category = "auto";
+    const audioSession = {
+      get type() { return category; },
+      set type(value: string) { category = value; categories.push(value); },
+    };
+    (navigator as any).audioSession = audioSession;
+    await startCall(FRIEND);
+    const room = mocks.rooms.at(-1);
+    room.onPeerJoin("iphone15");
+    const track = {
+      id: "incoming-audio", kind: "audio", muted: true, enabled: true, readyState: "live",
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    };
+    const stream = { getAudioTracks: () => [track] } as unknown as MediaStream;
+    room.onPeerStream(stream, "iphone15");
+    await Promise.resolve();
+    expect(category).toBe("play-and-record");
+    recoverCallAudio();
+    await Promise.resolve();
+    expect(categories).toContain("auto");
+    expect(categories.slice(-2)).toEqual(["auto", "play-and-record"]);
+    const firstResetCount = categories.filter(type => type === "auto").length;
+    recoverCallAudio();
+    await Promise.resolve();
+    expect(categories.filter(type => type === "auto")).toHaveLength(firstResetCount);
+    expect(room.addStream).toHaveBeenCalledTimes(1);
+    await hangup();
+    expect(category).toBe("auto");
+  });
+
   it("offers an explicit output picker without renegotiating the WebRTC call", async () => {
     const { startCall, selectCallOutput, hangup } = await import("@/services/callEngine");
     await startCall(FRIEND);
