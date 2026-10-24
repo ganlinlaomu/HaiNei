@@ -224,7 +224,11 @@ async function likeFromImage() {
 async function toggleBookmark() {
   try {
     const saved = await bookmarks.toggle(props.message.id);
-    ui.addToast(saved ? "已添加到收藏夹" : "已从收藏夹移除", 1700, "success");
+    if (saved) ui.addToast("已添加到收藏夹", 1_700, "success");
+    else {
+      const { offerBookmarkUndoToast } = await import("@/services/bookmarkUndoToast");
+      await offerBookmarkUndoToast(props.message.id, keys, bookmarks, ui);
+    }
   }
   catch { ui.addToast("收藏失败，请重试", 1800, "error"); }
 }
