@@ -19,6 +19,26 @@ export class BookmarkRepository {
     });
   }
 
+  get(accountPubkey: string, messageId: string) {
+    return this.database.accountBookmarks.get([normalizeAccountPubkey(accountPubkey), messageId]);
+  }
+
+  /** CAS undo: never resurrect a bookmark removed again or changed elsewhere. */
+  async restoreRemoval(accountPubkey: string, messageId: string, expectedUpdatedAt: number) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    let restored: BookmarkRecord | null = null;
+    await this.database.transaction("rw", this.database.accountBookmarks, async () => {
+      const current = await this.database.accountBookmarks.get([account, messageId]);
+      if (!current?.deleted || current.updatedAt !== expectedUpdatedAt) return;
+      restored = {
+        ...current, deleted: false,
+        updatedAt: Math.max(Date.now(), expectedUpdatedAt + 1),
+      };
+      await this.database.accountBookmarks.put(restored);
+    });
+    return restored;
+  }
+
   delete(accountPubkey: string, messageId: string) {
     return this.database.accountBookmarks.delete([normalizeAccountPubkey(accountPubkey), messageId]);
   }
