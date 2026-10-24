@@ -37,7 +37,42 @@
             <ProfileAvatar :pubkey="keys.pkHex" :size="42" />
             <div class="editor-author-copy"><strong>{{ ownName }}</strong><span>{{ postType === 'post' ? '分享此刻的想法' : '🔒 仅自己可见' }}</span></div>
           </div>
-          <div class="editor-textarea-wrap">
+          <section v-if="postType === 'todo'" class="composer-todo" aria-label="待办清单">
+            <input v-model="todoTitle" class="composer-todo-title" maxlength="500"
+              aria-label="待办标题" placeholder="标题（可不填）" :disabled="!draftReady || sending" />
+            <div class="composer-todo-list">
+              <div v-for="(task, index) in todoTasks" :key="task.id" class="composer-todo-row">
+                <div class="composer-todo-text">
+                  <input type="checkbox" v-model="task.done" :aria-label="'完成第 ' + (index + 1) + ' 项'"
+                    :disabled="!draftReady || sending" />
+                  <textarea v-model="task.text" rows="1" maxlength="2000" class="composer-todo-input"
+                    :class="{ done: task.done }" :aria-label="'第 ' + (index + 1) + ' 项待办内容'"
+                    placeholder="待办事项" :disabled="!draftReady || sending"></textarea>
+                  <button type="button" class="composer-todo-remove" :aria-label="'删除第 ' + (index + 1) + ' 项'"
+                    :disabled="!draftReady || sending" @click="removeTodoTask(index)">×</button>
+                </div>
+                <div class="composer-todo-options">
+                  <label class="composer-todo-date" :class="{ set: !!task.due }">
+                    <span>{{ task.due ? describeDue(task.due).label : '⏰ 设置时间（可选）' }}</span>
+                    <input type="datetime-local" :aria-label="'第 ' + (index + 1) + ' 项的时间'"
+                      :value="task.due ? todoDueInputValue(task.due) : ''"
+                      :disabled="!draftReady || sending"
+                      @change="setTodoTaskDue(task, ($event.target as HTMLInputElement).value)" />
+                  </label>
+                  <button v-if="task.due" type="button" class="composer-todo-option"
+                    :disabled="sending" @click="setTodoTaskDue(task, '')">取消时间</button>
+                  <button v-if="task.due && task.text.trim() && !task.done" type="button"
+                    class="composer-todo-calendar" :disabled="sending"
+                    :aria-label="'将第 ' + (index + 1) + ' 项加入日历提醒'"
+                    @click="addTodoToCalendar(task)">📅 加入日历提醒</button>
+                </div>
+              </div>
+            </div>
+            <button type="button" class="composer-todo-add" :disabled="!draftReady || sending || todoTasks.length >= 1000"
+              @click="addTodoTask">＋ 添加待办事项</button>
+            <p class="composer-todo-hint">时间可选；设置时间后，可加入系统日历提醒。保存的待办会同步到私人空间。</p>
+          </section>
+          <div v-else class="editor-textarea-wrap">
             <textarea v-model="content" ref="textarea" class="editor-textarea"
               :placeholder="composerPlaceholder" rows="6" :disabled="!draftReady || !!pendingPostRetry"
               @paste="onPaste" @input="onMentionInput" @focus="onMentionFocus"
@@ -248,7 +283,11 @@ import {
   type ComposerType,
   type PostDraftImage,
   type PostDraftVideo,
+  type ComposerTodoTask,
+  composerTodoTasksFromText,
+  normalizeComposerTodoTasks,
 } from "@/utils/postDraft";
+import { describeDue, openTaskInCalendar, validTaskDue } from "@/utils/todoPlanning";
 import { canStartPostEditorDrag, shouldDismissPostEditor } from "@/utils/postEditorGesture";
 import {
   audienceGroupCounts,
@@ -291,6 +330,28 @@ export default defineComponent({
 
     const visible = computed(() => ui.showPostEditor);
     const content = ref("");
+    const todoTitle = ref("");
+    const todoTasks = ref<ComposerTodoTask[]>([]);
+    function addTodoTask() {
+      if (todoTasks.value.length >= 1000) return;
+      todoTasks.value.push({ id: crypto.randomUUID(), text: "", done: false });
+    }
+    function removeTodoTask(index: number) {
+      todoTasks.value.splice(index, 1);
+    }
+    function todoDueInputValue(ms: number) {
+      return new Date(ms - new Date(ms).getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+    }
+    function setTodoTaskDue(task: ComposerTodoTask, value: string) {
+      const due = value ? new Date(value).getTime() : undefined;
+      if (validTaskDue(due)) task.due = due;
+      else delete task.due;
+    }
+    function addTodoToCalendar(task: ComposerTodoTask) {
+      if (!task.text.trim() || task.done || !validTaskDue(task.due)) return;
+      // Same ICS exporter as the private-space planner, including its VALARM.
+      openTaskInCalendar({ id: task.id, text: task.text.trim(), due: task.due }, todoTitle.value.trim());
+    }
     const sending = ref(false);
     const error = ref<string | null>(null);
     const pendingPostRetry = ref<{ outgoingId: string } | null>(null);
@@ -325,11 +386,18 @@ export default defineComponent({
       dismissAudienceConfirmation();
       visibilityError.value = false;
       error.value = null;
+      if (type === "todo" && postType.value !== "todo" && !todoTasks.value.length) {
+        todoTasks.value = composerTodoTasksFromText(content.value);
+        if (!todoTasks.value.length) addTodoTask();
+      }
       postType.value = type;
     }
-    // Opened as 新待办 / 新笔记 from elsewhere: preselect that type once.
+    // Keep the requested type through asynchronous draft restoration.
+    // Otherwise opening a new to-do from the Home bar could reopen an old post.
+    let requestedComposerType: ComposerType | null = null;
     watch(() => [ui.showPostEditor, ui.postEditorType] as const, ([shown, type]) => {
       if (!shown || !type) return;
+      requestedComposerType = type;
       ui.postEditorType = null;
       selectComposerType(type);
     }, { immediate: true });
@@ -355,6 +423,8 @@ export default defineComponent({
       savePostDraft(account, {
         type: postType.value,
         content: content.value,
+        todoTitle: todoTitle.value,
+        todoTasks: todoTasks.value,
         allFriends: allFriends.value,
         selectedGroups: [...selectedGroups.value],
         audienceChosen: audienceChosen.value,
@@ -372,7 +442,7 @@ export default defineComponent({
     });
     const canSend = computed(() => {
       const hasText = content.value.trim().length > 0;
-      if (postType.value === "todo") return hasText;
+      if (postType.value === "todo") return !!todoTitle.value.trim() || todoTasks.value.some(task => !!task.text.trim());
       const hasUploadedImages = uploads.value.some(u => u.status === 'done' && u.encryptedRef);
       const hasVideo = videoPreview.value !== null;
       return hasText || hasUploadedImages || hasVideo;
@@ -866,6 +936,9 @@ export default defineComponent({
       releasePostEditorMediaUrls(uploads.value, videoPreview.value);
       postType.value = "post";
       content.value = "";
+      todoTitle.value = "";
+      todoTasks.value = [];
+      requestedComposerType = null;
       error.value = null;
       pendingPostRetry.value = null;
       allFriends.value = false;
@@ -914,6 +987,7 @@ export default defineComponent({
       }
       // Do not create an empty draft when the user cancels an untouched editor.
       const hasDraftContent = content.value.length > 0
+        || (postType.value === "todo" && (!!todoTitle.value.trim() || todoTasks.value.some(task => !!task.text.trim() || !!task.due)))
         || uploads.value.length > 0
         || videoPreview.value !== null
         || !!pendingPostRetry.value;
@@ -1040,8 +1114,13 @@ export default defineComponent({
         if (generation !== openGeneration || !ui.showPostEditor || keys.pkHex !== accountAtOpen) return;
         draftAccount = accountAtOpen;
         const draft = loadPostDraft(accountAtOpen);
-        postType.value = draft?.type || "post";
+        postType.value = requestedComposerType || draft?.type || "post";
+        requestedComposerType = null;
         content.value = draft?.content || "";
+        todoTitle.value = draft?.todoTitle || "";
+        todoTasks.value = draft?.todoTasks?.length ? normalizeComposerTodoTasks(draft.todoTasks)
+          : postType.value === "todo" ? composerTodoTasksFromText(content.value) : [];
+        if (postType.value === "todo" && !todoTasks.value.length) addTodoTask();
         const restoredGroups = normalizeSelectedAudienceGroups(draft?.selectedGroups || [], groups.value);
         allFriends.value = !!draft?.audienceChosen && !!draft.allFriends && postAudienceFriends.value.length > 0;
         selectedGroups.value = allFriends.value ? [] : restoredGroups;
@@ -1098,6 +1177,8 @@ export default defineComponent({
     watch(
       [
         content,
+        todoTitle,
+        todoTasks,
         allFriends,
         selectedGroups,
         audienceChosen,
@@ -1205,9 +1286,10 @@ export default defineComponent({
       try {
         let draft: PrivateSpaceDraft;
         if (kind === "todo") {
-          const tasks = content.value.split("\n").map(line => line.trim()).filter(Boolean).slice(0, 1000)
-            .map(text => ({ id: crypto.randomUUID(), text: text.slice(0, 2000), done: false }));
-          draft = { kind, title: "", body: "", tasks, pinned: false };
+          const tasks = normalizeComposerTodoTasks(todoTasks.value)
+            .filter(task => !!task.text.trim())
+            .map(task => ({ ...task, text: task.text.trim() }));
+          draft = { kind, title: todoTitle.value.trim(), body: "", tasks, pinned: false };
         } else {
           const { fullContent } = await composeContentWithMedia();
           const { text, attachments } = extractPrivateSpaceContent(fullContent);
@@ -1363,7 +1445,8 @@ export default defineComponent({
     }
 
     return {
-      visible, content, sending, pendingPostRetry, allFriends, selectedGroups, audienceChosen, visibilityError,
+      visible, content, todoTitle, todoTasks, addTodoTask, removeTodoTask, todoDueInputValue, setTodoTaskDue,
+      addTodoToCalendar, describeDue, sending, pendingPostRetry, allFriends, selectedGroups, audienceChosen, visibilityError,
       visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseGroups,
       postType, composerTypes, editorTitle, sendLabel, composerPlaceholder, selectComposerType, recipients, groups, countByGroup,
       keys, ownName, cancelSheetOpen, cancelContinueButton, draftReady, requestCancel, saveAndClose, continueEditing, insertMentionTrigger,
@@ -1385,6 +1468,25 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.composer-todo { display:flex; flex-direction:column; gap:10px; min-height:0; padding:8px 0 16px; }
+.composer-todo-title { width:100%; min-height:44px; padding:11px 12px; border:1px solid var(--bd-e2e8f0); border-radius:12px; background:var(--bg-fff); color:var(--fg-0f172a); font:inherit; font-weight:600; }
+.composer-todo-list { display:flex; flex-direction:column; gap:10px; }
+.composer-todo-row { padding:11px; border:1px solid var(--bd-e2e8f0); border-radius:12px; background:var(--bg-fff); min-width:0; }
+.composer-todo-text { display:flex; align-items:flex-start; gap:9px; min-width:0; }
+.composer-todo-text>input[type="checkbox"] { width:19px; height:19px; flex:0 0 19px; margin-top:7px; }
+.composer-todo-input { flex:1 1 auto; min-width:0; min-height:40px; max-height:130px; padding:6px 3px; border:0; background:transparent; color:var(--fg-0f172a); font:inherit; resize:vertical; overflow-wrap:anywhere; }
+.composer-todo-input.done { text-decoration:line-through; opacity:.6; }
+.composer-todo-input:focus { outline:none; }
+.composer-todo-remove { flex:0 0 32px; width:32px; height:32px; border:0; border-radius:8px; background:transparent; color:var(--fg-64748b); font-size:23px; }
+.composer-todo-options { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-left:27px; }
+.composer-todo-date { position:relative; display:inline-flex; overflow:hidden; align-items:center; max-width:100%; min-height:34px; padding:6px 10px; border-radius:9px; background:var(--bg-eff3f4); color:var(--fg-64748b); font-size:12px; white-space:nowrap; }
+.composer-todo-date.set { color:var(--fg-2563eb); }
+.composer-todo-date input { position:absolute; inset:0; width:100%; height:100%; min-width:0; box-sizing:border-box; opacity:0; cursor:pointer; }
+.composer-todo-option,.composer-todo-calendar { min-height:34px; padding:6px 9px; border:0; border-radius:9px; background:var(--bg-eff3f4); color:var(--fg-2563eb); font:inherit; font-size:12px; }
+.composer-todo-add { align-self:flex-start; min-height:40px; padding:8px 12px; border:1px dashed var(--bd-e2e8f0); border-radius:10px; background:transparent; color:var(--fg-2563eb); font:inherit; }
+.composer-todo-hint { margin:0; color:var(--fg-64748b); font-size:12px; line-height:1.5; }
+.composer-todo button:disabled { opacity:.5; }
+.composer-todo :focus-visible { outline:2px solid var(--fg-2563eb); outline-offset:2px; }
 /* Global box-sizing for all elements to prevent width issues */
 * {
   box-sizing: border-box;
