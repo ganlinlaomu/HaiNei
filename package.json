@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.128",
-  "releaseSummary": "私人空间收藏、笔记、待办分类切换更顺滑",
+  "version": "0.1.129",
+  "releaseSummary": "修复切换菜单时后台音乐被铃声预热暂停",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
