@@ -258,6 +258,31 @@ export class PrivateSpaceRepository {
     return updated!;
   }
 
+  /**
+   * Undo only the exact revision created by the user's action.
+   * A cloud acknowledgement changes syncedRevision/cloudVersion, not revision,
+   * so undo still works after upload. Never replace newer edits or task due dates.
+   */
+  async undoDisposition(
+    account: string, id: string, field: "deletedAt" | "archivedAt",
+    expectedRevision: number, expectedTime: number, previousTime = 0,
+  ): Promise<PrivateSpaceRecord | null> {
+    const owner = requireUnlocked(account);
+    let result: PrivateSpaceRecord | null = null;
+    await this.database.transaction("rw", this.database.accountNotes, async () => {
+      const current = await this.database.accountNotes.get([owner, id]);
+      if (!current || current.revision !== expectedRevision || current[field] !== expectedTime) return;
+      result = {
+        ...current,
+        [field]: previousTime,
+        revision: current.revision + 1,
+        updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+      };
+      await this.database.accountNotes.put(result);
+    });
+    return result;
+  }
+
   async moveToTrash(account: string, id: string) {
     return this.update(account, id, { deletedAt: Date.now() });
   }
