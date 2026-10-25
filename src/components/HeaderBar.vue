@@ -3,9 +3,9 @@
     <div v-if="activeTabIndex >= 0" class="nav-liquid-track" aria-hidden="true">
       <span class="nav-liquid-indicator" :style="{ '--nav-slide': `${activeTabIndex * 100}%` }"><span :key="activeTabIndex" class="nav-liquid-surface"></span></span>
     </div>
-    <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 0 }" to="/" aria-label="首页"  @click="handleNavigation">
+    <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 0 }" to="/" aria-label="动态"  @click="handleNavigation">
       <span class="icon-wrapper"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7v10H3z"/><path d="M9 20v-7h6v7"/></svg></span>
-      <span class="nav-label">首页</span>
+      <span class="nav-label">动态</span>
     </router-link>
     <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 1 }" to="/conversations" aria-label="私信" @pointerdown="preloadBottomTab('conversations')" @focus="preloadBottomTab('conversations')" @click="handleNavigation">
       <span class="icon-wrapper"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span v-if="directMessages.unreadCount + nearbyUnread.count > 0" class="badge">{{ directMessages.unreadCount + nearbyUnread.count > 99 ? "99+" : directMessages.unreadCount + nearbyUnread.count }}</span></span>

@@ -33,7 +33,7 @@ describe("direct-message navigation and UI contract", () => {
   it("exposes five labeled communication tabs, with notifications on Home", () => {
     const source = readThemedSource(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
     const labels = [...source.matchAll(/<router-link class="nav-item"[^>]*aria-label="([^"]+)"/g)].map(match => match[1]);
-    expect(labels).toEqual(["首页", "私信", "通话", "通讯录", "我的"]);
+    expect(labels).toEqual(["动态", "私信", "通话", "通讯录", "我的"]);
     for (const path of ["/conversations", "/calls", "/friends", "/settings"]) {
       expect(source).toContain(`to="${path}"`);
     }

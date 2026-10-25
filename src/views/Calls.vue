@@ -59,7 +59,7 @@
           <button v-for="friend in callableFriends" :key="friend.pubkey" class="picker-row" type="button"
             :disabled="busy || call.phase !== 'idle'" data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="startCall(friend.pubkey)">
             <ProfileAvatar :pubkey="friend.pubkey" :local-name="friend.name" :size="42"/>
-            <span>{{ name(friend.pubkey) }}</span>
+            <span class="picker-name">{{ name(friend.pubkey) }}</span>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
           </button>
         </div>
@@ -199,7 +199,7 @@ async function startCall(peer: string) {
 .picker-header button{width:44px;height:44px;border:0;background:transparent;color:inherit;font-size:28px}
 .picker-sheet input{height:44px;padding:0 14px;border:0;border-radius:12px;background:var(--bg-eff3f4);color:inherit;font-size:16px}
 .picker-list{overflow:auto;overscroll-behavior:contain}.picker-row{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;border:0;border-bottom:1px solid var(--bd-eff1f3);background:transparent;color:inherit;text-align:left}
-.picker-row span{flex:1}.picker-row svg{color:#1687e8}.picker-row:disabled{opacity:.4}
+.picker-row .picker-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.picker-row :deep(.profile-avatar){flex:0 0 42px;max-width:42px;max-height:42px}.picker-row svg{color:#1687e8}.picker-row:disabled{opacity:.4}
 .calls-page button:focus-visible{outline:2px solid #1687e8;outline-offset:2px}
 @media (min-width:768px){.picker-sheet{margin:auto;border-radius:22px}}
 </style>
