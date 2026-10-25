@@ -323,6 +323,72 @@ describe("call engine", () => {
     expect(ring.load).toHaveBeenCalledOnce();
   });
 
+  it("releases outgoing ringback before receiving peer audio without resetting iOS call session", async () => {
+    vi.resetModules(); // Reset the audioUnlock media-element cache.
+    const { startCall, handleCallSignal, hangup } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const categories: string[] = [];
+    let category = "auto";
+    (navigator as any).audioSession = {
+      get type() { return category; },
+      set type(next: string) { categories.push(next); category = next; },
+      state: "active",
+    };
+    const ringback = {
+      src: "", currentTime: 0, muted: false, loop: false, preload: "", error: null,
+      setAttribute: vi.fn(),
+      play: vi.fn(async () => undefined),
+      pause: vi.fn(),
+      removeAttribute: vi.fn(),
+      load: vi.fn(),
+    };
+    (document.createElement as ReturnType<typeof vi.fn>).mockImplementationOnce(() => ringback);
+    await startCall(FRIEND);
+    expect(ringback.play).toHaveBeenCalledOnce();
+    expect(category).toBe("play-and-record");
+
+    const room = mocks.rooms.at(-1);
+    const callId = useCallStore().callId;
+    await handleCallSignal(FRIEND, ME, { action: "accept", callId }, now());
+    expect(ringback.pause).toHaveBeenCalled();
+    expect(ringback.removeAttribute).toHaveBeenCalledWith("src");
+    expect(ringback.load).toHaveBeenCalledOnce();
+    expect(categories).toEqual(["play-and-record"]);
+
+    room.onPeerJoin("answering-iphone");
+    const remoteStream = { getAudioTracks: () => [] } as unknown as MediaStream;
+    room.onPeerStream(remoteStream, "answering-iphone");
+    await Promise.resolve();
+    const remoteAudio = mocks.audioElements.find((item: any) => item.srcObject === remoteStream);
+    expect(remoteAudio?.play).toHaveBeenCalledOnce();
+    expect(ringback.load.mock.invocationCallOrder[0]).toBeLessThan(remoteAudio.play.mock.invocationCallOrder[0]);
+    expect(ringback.load).toHaveBeenCalledOnce();
+    expect(category).toBe("play-and-record");
+    await hangup();
+    expect(categories).toEqual(["play-and-record", "auto"]);
+    expect(ringback.load).toHaveBeenCalledOnce();
+  });
+
+  it("releases outgoing ringback when cancelled before peer answers", async () => {
+    vi.resetModules();
+    const { startCall, hangup } = await import("@/services/callEngine");
+    const ringback = {
+      src: "", currentTime: 0, muted: false, loop: false, preload: "", error: null,
+      setAttribute: vi.fn(),
+      play: vi.fn(async () => undefined),
+      pause: vi.fn(),
+      removeAttribute: vi.fn(),
+      load: vi.fn(),
+    };
+    (document.createElement as ReturnType<typeof vi.fn>).mockImplementationOnce(() => ringback);
+    await startCall(FRIEND);
+    expect(ringback.play).toHaveBeenCalledOnce();
+    await hangup();
+    expect(ringback.pause).toHaveBeenCalled();
+    expect(ringback.removeAttribute).toHaveBeenCalledWith("src");
+    expect(ringback.load).toHaveBeenCalledOnce();
+  });
+
   it("requests a call audio session before capture and releases it on hangup", async () => {
     const { startCall, hangup } = await import("@/services/callEngine");
     const audioSession = { type: "auto" };
