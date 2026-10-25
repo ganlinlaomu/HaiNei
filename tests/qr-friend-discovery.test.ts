@@ -71,7 +71,8 @@ describe("Nostr QR friend discovery", () => {
     expect(settings).toContain("MyQrCodeSheet");
     expect(myProfile).toContain(">我的二维码</button>");
     expect(friends).toContain("QrScannerSheet");
-    expect(friends).toContain('aria-label="扫描二维码添加好友"');
+    expect(friends).toContain('class="scan-qr-button"');
+    expect(friends).toContain('@click="showScanner = true"');
     expect(friends).toContain("const startScan = () =>");
     expect(friends).toContain("parseNostrProfileQrValue");
     expect(friends).toContain('state === "accepted"');
