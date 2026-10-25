@@ -1,3 +1,10 @@
+## 0.1.131 — 2026-10-25
+
+- iPhone 15 主屏幕 PWA 语音通话仍然无声时，区分 ICE 已连接和**真正收到入站音频 RTP**：即使 Safari WebKit 的 RTP stats 缺少 kind/mediaType，仍能使用音频编解码器等信息识别音频流。
+- 第一次及第三次 WebRTC 采样均输出音频诊断；不存在 inbound-rtp 时明确记录「统计不可用」，避免将缺失的统计误读成「0% 丢包」。记录远端轨道的 muted/readyState、接收与发送包数量和音频会话类型。
+- WebKit 缺少 totalAudioEnergy 字段时，若连续两次采样确认收到音频包而远端 track 仍 muted，标记「播放受限」并记录卡住的轨道状态，辅助后续定位无声原因。
+- 保留原通话信令、Trystero 房间、TURN、麦克风和输出恢复流程；新增 Safari 缺失 kind 字段的自动化回归测试。该版本是**诊断能力增强，不宣称已解决 iPhone 15 真机无声**。
+
 ## 0.1.130 — 2026-10-24
 
 - 修复 iPhone 主屏幕 PWA 上「来电铃声能播放，接通后却听不到对方」的音频会话交接风险。先从 `playback` 直接切到 `play-and-record`，再暂停铃声，不经过可能让 WebKit 音频输出路由失效的 `auto` 中间状态。
