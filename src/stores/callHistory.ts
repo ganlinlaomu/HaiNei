@@ -2,10 +2,15 @@ import { defineStore } from "pinia";
 import Dexie, { liveQuery } from "dexie";
 import { db } from "@/db/dexie";
 import { metaRepository } from "@/repositories/metaRepository";
-import { callHistoryItem, uniqueCallHistory, type CallHistoryItem } from "@/services/callHistory";
+import {
+  CALL_HISTORY_DELETED_PREFIX, CALL_HISTORY_SYNC_PREFIX, callHistoryItem, deletedCallIds,
+  loadDeletedCallIds, uniqueCallHistory, type CallHistoryItem,
+} from "@/services/callHistory";
+import { useFeedPreferencesStore } from "@/stores/feedPreferences";
+import { useKeyStore } from "@/stores/keys";
 
 const SEEN_KEY = "call-history:seen-through";
-const DELETED_PREFIX = "call-history:deleted:";
+const DELETED_PREFIX = CALL_HISTORY_DELETED_PREFIX;
 const LOCAL_MISSED_PREFIX = "call-history:missed-record:";
 /** Carry over recent missed calls on first run, rather than marking all as read at PWA open. */
 const FIRST_RUN_HISTORY_SECONDS = 7 * 24 * 60 * 60;
@@ -46,10 +51,11 @@ export const useCallHistoryStore = defineStore("callHistory", {
       this.localMissed = [];
       if (!account) return;
       const promise = (async () => {
-        const [seen, tombstones, fallbackRecords] = await Promise.all([
+        const [seen, tombstones, fallbackRecords, syncedPreferences] = await Promise.all([
           metaRepository.get(account, SEEN_KEY),
           metaRepository.listPrefix(account, DELETED_PREFIX),
           metaRepository.listPrefix(account, LOCAL_MISSED_PREFIX),
+          metaRepository.get(account, "feed_preferences_v2"),
         ]);
         if (token !== generation || this.loadedFor !== account) return;
         // Do not mark offline/missed calls as read merely because the PWA was reopened.
@@ -59,8 +65,7 @@ export const useCallHistoryStore = defineStore("callHistory", {
         if (!seen) await metaRepository.put(account, SEEN_KEY, readAt);
         if (token !== generation || this.loadedFor !== account) return;
         this.seenThrough = readAt;
-        this.deletedIds = tombstones.filter(row => row.value === true)
-          .map(row => row.key.slice(DELETED_PREFIX.length));
+        this.deletedIds = [...deletedCallIds(tombstones, syncedPreferences?.value)];
         this.localMissed = fallbackRecords.flatMap(row => {
           const value = row.value as { peer?: unknown; createdAt?: unknown } | null;
           const suffix = row.key.slice(LOCAL_MISSED_PREFIX.length);
@@ -81,19 +86,23 @@ export const useCallHistoryStore = defineStore("callHistory", {
       subscription?.unsubscribe();
       const cutoff = this.seenThrough;
       subscription = liveQuery(async () => {
+        const deleted = await loadDeletedCallIds(account);
         const found: CallHistoryItem[] = [];
         await db.syncedMessages.where("[accountPubkey+createdAt+id]")
           .between([account, cutoff + 1, Dexie.minKey],
             [account, Dexie.maxKey, Dexie.maxKey])
           .each(record => {
             const item = callHistoryItem(record, account);
-            if (item?.missed) found.push(item);
+            if (item?.missed && !deleted.has(item.id)) found.push(item);
           });
-        return uniqueCallHistory(found);
+        return { items: uniqueCallHistory(found), deleted: [...deleted] };
       }).subscribe({
-        next: items => {
+        next: result => {
           if (generation === token && this.loadedFor === account && this.seenThrough === cutoff) {
-            this.recentMissed = items;
+            // Never temporarily resurrect a locally deleted item while an
+            // earlier Dexie liveQuery snapshot is finishing.
+            this.deletedIds = [...new Set([...this.deletedIds, ...result.deleted])];
+            this.recentMissed = result.items.filter(item => !this.deletedIds.includes(item.id));
           }
         },
         error: () => {
@@ -136,6 +145,21 @@ export const useCallHistoryStore = defineStore("callHistory", {
       if (!id || !account || this.loadedFor !== account || !this.ready || this.deletedIds.includes(id)) return;
       await metaRepository.put(account, DELETED_PREFIX + id, true);
       if (this.loadedFor === account && !this.deletedIds.includes(id)) this.deletedIds = [...this.deletedIds, id];
+      // Use the existing encrypted account preference sync, just as hidden
+      // dynamics and friend metadata retain their deletion state.
+      const keys = useKeyStore();
+      if (keys.pkHex.toLowerCase() === account && this.loadedFor === account) {
+        try {
+          const preferences = useFeedPreferencesStore();
+          await preferences.load(account);
+          if (this.loadedFor === account && keys.pkHex.toLowerCase() === account) {
+            await preferences.hide(CALL_HISTORY_SYNC_PREFIX + id);
+          }
+        } catch {
+          // Local durable tombstone remains authoritative even when offline.
+          // Account state sync can retry independently when connectivity returns.
+        }
+      }
     },
     reset() {
       ++generation;
