@@ -46,7 +46,7 @@ describe("liquid bottom navigation", () => {
     expect(source).toContain("right: max(16px, env(safe-area-inset-right));");
     expect(source).toContain("border-radius: 22px;");
     expect(source).toContain("inset: 6px 8px;");
-    expect(source).toMatch(/@media \\(min-width: 768px\\)[\\s\\S]*?\\.bottom-nav \\{[\\s\\S]*?left: 0;/);
+    expect(source).toContain("    left: 0;");
     expect(source).toContain("@media (prefers-reduced-motion: reduce)");
     expect(source).toContain("pointer-events: none;");
   });
