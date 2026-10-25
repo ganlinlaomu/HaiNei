@@ -21,6 +21,12 @@ describe("separate DMs, missed calls, contacts and history deletion", () => {
     expect(calls).toContain('class="call-swipe-actions"');
     expect(calls).toContain("onTouchMove");
     expect(calls).not.toContain("item.text }}");
+    // The call picker avatar is a span. Flex-grow must be limited to the
+    // contact name, otherwise ProfileAvatar stretches horizontally into an oval.
+    expect(calls).toContain('class="picker-name"');
+    expect(calls).toContain('.picker-row .picker-name{flex:1;min-width:0;');
+    expect(calls).toContain('.picker-row :deep(.profile-avatar){flex:0 0 42px;');
+    expect(calls).not.toContain('.picker-row span{flex:1}');
     expect(calls).not.toContain('class="call-more"');
     expect(calls).not.toContain(">···</button>");
     const callBackMarkup = calls.slice(calls.indexOf('class="call-back"'), calls.indexOf('</button>', calls.indexOf('class="call-back"')));
