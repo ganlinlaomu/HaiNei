@@ -422,9 +422,12 @@ function startWebAudioTone(session: CallSession, kind: "ring" | "ringback", vibr
   }
 }
 
-function stopTone(session: CallSession) {
+function stopTone(session: CallSession, releaseMedia = false) {
   session.ringtone?.stop();
   session.ringtone = null;
+  // Pausing a ringtone alone leaves its decoded <audio> source attached in
+  // WebKit. Release that source before remote WebRTC audio starts playing.
+  if (releaseMedia) releaseRingtoneElement(session.direction === "outgoing" ? "ringback" : "ring");
 }
 
 /** Must run directly in the ringtone retry button's trusted click event. */
@@ -849,8 +852,10 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
   };
   currentRoom.onPeerStream = (stream, peerId) => {
     if (!active() || peerId !== session.mediaPeer) return;
+    // Release the outgoing ringback's HTMLAudioElement *before* WebKit binds
+    // and plays the remote stream. Some peers arrive before the accept signal.
+    stopTone(session, true);
     playRemote(session, stream);
-    stopTone(session);
     store.reconnecting = false;
     if (store.phase !== "active") {
       store.phase = "active";
@@ -880,7 +885,8 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
 
 async function releaseSessionResources(session: CallSession) {
   clearTimers(session);
-  stopTone(session);
+  // Cancelled / declined / unanswered calls must not keep ringtone resources.
+  stopTone(session, true);
   const leaving = session.room;
   session.room = null;
   if (leaving) {
@@ -1032,8 +1038,7 @@ export async function acceptCall() {
   // already-owned play-and-record session.
   setCallAudioActive(true);
   setCallAudioSession(session, "play-and-record", "ring_to_call_handoff");
-  stopTone(session);
-  releaseRingtoneElement("ring");
+  stopTone(session, true);
   // Detaching a playing HTMLAudioElement can prompt WebKit to recompute the
   // session asynchronously; reaffirm before getUserMedia and after it resolves.
   setCallAudioSession(session, "play-and-record", "ring_released");
@@ -1158,7 +1163,11 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     return;
   }
   if (signal.action === "accept" && store.phase === "outgoing") {
-    stopTone(session);
+    stopTone(session, true);
+    startupMark("call_ringback_handoff", {
+      sessionType: browserCallAudioSession()?.type || "unknown",
+      phase: "connecting",
+    });
     store.phase = "connecting";
     later(session, CONNECT_TIMEOUT_MS, () => { if (store.phase === "connecting") void finish(session, "failed", true); });
     // Several callee devices can answer the same invite. Once one has accepted,
