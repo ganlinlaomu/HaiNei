@@ -4,7 +4,10 @@ import { getActivePinia } from "pinia";
 import { getRelaysFromStorage, inspectRelays, onRelayConnectionState, releaseUnusedRelayConnections } from "@/nostr/relays";
 import { managedReceivedSinceRelay, managedRelayUrlFromCache } from "@/services/relaySession";
 import { negentropyCapableRelays } from "@/services/relayCapabilities";
-import { parseCallSignal } from "@/nostr/messaging/callControl";
+import { parseCallSignal, CALL_LOG_TYPE } from "@/nostr/messaging/callControl";
+import { CALL_RECORD_TAG } from "@/services/callHistory";
+import { StartupCallSignalGate } from "@/services/startupCallSignalGate";
+import { useCallStore } from "@/stores/call";
 import { loadCallEngine } from "@/stores/call";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
@@ -83,6 +86,7 @@ export const STARTUP_UNREAD_PENDING_GRACE_MS = 60_000;
 const accountMessageSyncManager = new MessageSyncManager();
 let activeKeys: AccountSyncKeys | null = null;
 let accountSyncGeneration = 0;
+let activeCallSignalGate: StartupCallSignalGate | null = null;
 let accountSyncSnapshot: AccountMessageSyncSnapshot = { accountPubkey: "", status: "idle", relay: "idle", live: "idle", catchup: "idle" };
 let removeAccountRelayObserver: (() => void) | null = null;
 const accountSyncStatusListeners = new Set<(snapshot: AccountMessageSyncSnapshot) => void>();
@@ -239,6 +243,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
   if (!account || !keys.isLoggedIn || !keys.supportsNip44) return false;
 
   const generation = ++accountSyncGeneration;
+  activeCallSignalGate?.dispose();
+  activeCallSignalGate = null;
   clearStartupUnreadGraceTimer();
   stopDmRelayHealthWatch();
   removeAccountRelayObserver?.();
@@ -249,6 +255,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
     && activeKeys === keys
     && keys.isLoggedIn
     && keys.pkHex.toLowerCase() === account;
+  const callSignalGate = new StartupCallSignalGate(account, isCurrent);
+  activeCallSignalGate = callSignalGate;
   // A managed-relay refresh must not block NIP-17 subscriptions. If it changes
   // the read-relay set, reconcile once the current startup has settled.
   let subscribedReadRelaySignature: string | null = null;
@@ -431,27 +439,56 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
         processReceipt: message => directMessages.processReceipt(message),
         processBurnControl: message => directMessages.processBurnControl(message),
         // The call engine (WebRTC, media) loads only when a call signal arrives.
-        processCallControl: async message => {
+        processCallControl: message => {
           const signal = parseCallSignal(message);
-          if (!signal) return;
+          if (!signal || !isCurrent()) return;
           const sender = message.senderPubkey.toLowerCase();
           const recipient = message.recipientPubkeys.map(value => value.toLowerCase()).find(value => value !== account) || account;
-          try {
-            const engine = await loadCallEngine();
-            observeRecoverySignal({ account, sender, peer: sender === account ? recipient : sender, eventId: message.transportEventId || "", signal, createdAt: message.createdAt });
-            // Do not hold message ingestion while a call tears down its room.
-            void engine.handleCallSignal(sender, recipient, signal, message.createdAt, message.id).catch(error => {
-              debugLog("system", "call_signal_unhandled", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
+          // Observe before dispatch. A cancelled push invite can arrive from
+          // cache while its closing signal is still being decrypted from Relay.
+          observeRecoverySignal({ account, sender, peer: sender === account ? recipient : sender,
+            eventId: message.transportEventId || "", signal, createdAt: message.createdAt });
+          callSignalGate.accept(sender, recipient, signal, message.createdAt, () => {
+            if (!isCurrent()) return;
+            void loadCallEngine().then(engine => {
+              if (!isCurrent()) return;
+              return engine.handleCallSignal(sender, recipient, signal, message.createdAt, message.id);
+            }).catch(error => {
+              debugLog("system", "call_signal_unhandled", {
+                reason: error instanceof Error ? error.message.slice(0, 80) : "unknown",
+              }, "warn");
             });
-          } catch (error) {
-            debugLog("system", "call_signal_unhandled", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
-          }
+          });
         },
         isInteraction: isInteractionMessage,
         processInteraction: async message => {
           await interactions.processCanonicalInteraction(message, account);
         },
         mirrorMessage: message => {
+          // The caller's signed missed-call record is a terminal signal too.
+          // It can arrive before the separate NIP-17 cancel on cold PWA boot.
+          const callerRecord = message.tags?.find(tag => tag[0] === CALL_RECORD_TAG);
+          if (message.senderPubkey.toLowerCase() !== account
+            && message.tags?.some(tag => tag[0] === "t" && tag[1] === CALL_LOG_TYPE)
+            && callerRecord?.[2] === "outgoing"
+            && (callerRecord[3] === "cancelled" || callerRecord[3] === "no_answer")
+            && /^[0-9a-f]{32}$/i.test(callerRecord[1] || "")) {
+            const sender = message.senderPubkey.toLowerCase();
+            const id = callerRecord[1];
+            callSignalGate.conclude(sender, id);
+            useCallStore().markSeen(id);
+            observeRecoverySignal({ account, sender, peer: sender, eventId: "",
+              signal: { action: "cancel", callId: id }, createdAt: message.createdAt });
+            // If a cancel signal was lost, the durable missed record still
+            // closes a currently ringing copy of this same call.
+            if (useCallStore().phase === "incoming" && useCallStore().callId === id
+              && useCallStore().peer === sender) {
+              void loadCallEngine().then(engine => {
+                if (isCurrent()) return engine.handleCallSignal(sender, account,
+                  { action: "cancel", callId: id }, message.createdAt);
+              }).catch(() => undefined);
+            }
+          }
           if (
             message.senderPubkey.toLowerCase() !== account
             && !isConversationMessage(message)
@@ -601,6 +638,8 @@ export async function markAccountConversationRead(conversationId: string) {
 }
 
 export function stopAccountMessageSync() {
+  activeCallSignalGate?.dispose();
+  activeCallSignalGate = null;
   clearRecoveryObservations();
   const account = activeKeys?.pkHex.toLowerCase() || accountSyncSnapshot.accountPubkey;
   accountSyncGeneration++;

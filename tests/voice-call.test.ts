@@ -102,7 +102,7 @@ describe("call signaling", () => {
     expect(app).not.toContain('scheduleBackgroundTask("preload-call-ui"');
     expect(app).toContain(`<CallOverlay v-if="call.phase !== 'idle'" />`);
     expect(readFileSync("src/stores/call.ts", "utf8")).toContain('return import("@/services/callEngine").then(module => {');
-    expect(readFileSync("src/services/accountMessageSync.ts", "utf8")).toContain("await loadCallEngine()");
+    expect(readFileSync("src/services/accountMessageSync.ts", "utf8")).toContain("loadCallEngine().then(engine => {");
     expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("z-index:200000");
     expect(readFileSync("src/components/CallOverlay.vue", "utf8")).toContain("function restoreAudio() { loadedCallEngine()?.recoverCallAudio(); }");
     expect(readFileSync("src/components/CallOverlay.vue", "utf8")).not.toContain('from "@/services/callEngine"');
@@ -176,6 +176,17 @@ describe("call engine", () => {
     // The ringing acknowledgement for the first call, then busy for the second.
     expect(sentActions()).toEqual(["ringing", "busy"]);
     expect(store.callId).toBe("2".repeat(32));
+  });
+
+  it("dismisses a caller-cancelled unanswered invitation directly to idle, without a cancelled call screen", async () => {
+    const { handleCallSignal } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const id = "6".repeat(32);
+    await handleCallSignal(FRIEND, ME, { ...invite, callId: id }, now());
+    expect(useCallStore().phase).toBe("incoming");
+    await handleCallSignal(FRIEND, ME, { action: "cancel", callId: id }, now());
+    expect(useCallStore().phase).toBe("idle");
+    expect(useCallStore().callId).toBe("");
   });
 
   it("offers an explicit trusted-tap retry when iOS denies incoming ringtone autoplay", async () => {
