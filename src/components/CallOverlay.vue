@@ -71,16 +71,53 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import { loadCallEngine, loadedCallEngine, useCallStore } from "@/stores/call";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { useFriendsStore } from "@/stores/friends";
+import { useKeyStore } from "@/stores/keys";
+import { debugLog } from "@/utils/debugLog";
 
 const call = useCallStore();
 const profiles = useProfilesStore();
 const friends = useFriendsStore();
 const acting = ref(false);
+const keys = useKeyStore();
+// A mounted UI, rather than a heartbeat or a Relay receipt, owns the alert.
+// Leave background devices eligible for push, including this account's other
+// devices. Re-check state after lazy imports and browser subscription lookups.
+async function claimIncomingNotification() {
+  if (call.direction !== "incoming" || call.phase === "idle" || document.visibilityState !== "visible") return;
+  const id = call.callId;
+  const messageId = call.notificationMessageId;
+  const account = keys.pkHex;
+  const sender = call.peer;
+  await nextTick();
+  if (document.visibilityState !== "visible" || call.callId !== id || call.phase === "idle") return;
+  navigator.serviceWorker?.controller?.postMessage({ type: "INCOMING_RINGTONE_START", callId: id });
+  const { acknowledgeCallNotification } = await import("@/services/pushNotifications");
+  await acknowledgeCallNotification(account, keys.signEvent.bind(keys), sender, messageId,
+    // A quick accept/decline also handled the alert; do not resurrect it.
+    () => keys.pkHex === account && keys.isUnlocked && call.callId === id && call.phase !== "idle");
+}
+const claimNotification = () => {
+  if (call.phase === "incoming" && document.visibilityState === "hidden") {
+    // A page that already claimed the alert must hand it back when the user
+    // switches away during ringing. Do this synchronously, before suspension.
+    navigator.serviceWorker?.controller?.postMessage({ type: "INCOMING_CALL_BACKGROUND", callId: call.callId });
+    return;
+  }
+  void claimIncomingNotification().catch(error => {
+  debugLog("system", "call_notification_handoff_failed", { reason: error instanceof Error ? error.message : "unknown" }, "warn");
+  });
+};
+onMounted(() => {
+  claimNotification();
+  document.addEventListener("visibilitychange", claimNotification);
+});
+watch(() => [call.callId, call.phase, call.notificationMessageId], claimNotification, { flush: "post" });
+onBeforeUnmount(() => document.removeEventListener("visibilitychange", claimNotification));
 // Only offer the output picker on browsers that actually implement it.
 // iOS versions without selectAudioOutput cannot be forced to the speaker by a PWA.
 const canChooseOutput = typeof navigator !== "undefined"

@@ -15,6 +15,8 @@ export const useCallStore = defineStore("call", () => {
   const phase = ref<CallPhase>("idle");
   const peer = ref("");
   const callId = ref("");
+  /** Canonical encrypted invite ID, used only to claim this device's alert. */
+  const notificationMessageId = ref("");
   const direction = ref<"outgoing" | "incoming">("outgoing");
   /** Invite parameters for an incoming call, kept until accepted or dismissed. */
   const invite = ref<{ room: string; secret: string } | null>(null);
@@ -38,6 +40,7 @@ export const useCallStore = defineStore("call", () => {
     phase.value = "idle";
     peer.value = "";
     callId.value = "";
+    notificationMessageId.value = "";
     invite.value = null;
     connectedAt.value = 0;
     muted.value = false;
@@ -54,7 +57,7 @@ export const useCallStore = defineStore("call", () => {
     if (seen.size > 200) seen.delete(seen.values().next().value!);
   }
 
-  return { phase, peer, callId, direction, invite, connectedAt, muted, endReason, remoteRinging, reconnecting, quality, audioStatus, ringtoneBlocked, seen, reset, markSeen };
+  return { phase, peer, callId, notificationMessageId, direction, invite, connectedAt, muted, endReason, remoteRinging, reconnecting, quality, audioStatus, ringtoneBlocked, seen, reset, markSeen };
 });
 
 /** Lazily load the call engine (WebRTC, Trystero, media). */

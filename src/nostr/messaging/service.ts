@@ -247,7 +247,7 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
  * away carrying the encrypted wrap, so a closed app can ring without a fetch.
  * No retries: a lost call signal is superseded by the call's own timeouts.
  */
-export async function sendFastControl(options: SendDirectMessageOptions & { push?: "call"; selfOnly?: boolean }) {
+export async function sendFastControl(options: SendDirectMessageOptions & { push?: "call"; selfOnly?: boolean; shouldPush?: () => boolean }) {
   const account = options.context.senderPubkey.toLowerCase();
   const encoded = await buildMessageEvents(options);
   const relays = [...new Set(options.relays.map(url => normalizeRelayUrl(url)).filter(Boolean))];
@@ -263,7 +263,7 @@ export async function sendFastControl(options: SendDirectMessageOptions & { push
       ...(JSON.stringify(event).length <= 6_000 ? { event } : {}),
     }));
     const recipients = [...new Set(hints.map(hint => hint.recipient))];
-    void triggerGenericPush(recipients, account, options.context.signEvent, options.push, encoded.message.id, hints)
+    void triggerGenericPush(recipients, account, options.context.signEvent, options.push, encoded.message.id, hints, options.shouldPush)
       .catch(error => debugLog("system", "push_trigger_failed", { reason: error instanceof Error ? error.message : "unknown_error" }, "warn"));
   }
   // Our own copies (other devices) are best effort and never awaited.
