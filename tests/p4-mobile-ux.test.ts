@@ -22,7 +22,7 @@ describe("P4 mobile UX regression contract", () => {
     expect(styles).toMatch(/input\[type="search"\][\s\S]*?textarea,[\s\S]*?select\s*\{\s*font-size:\s*16px;/);
     expect(conversations).toContain('class="conversation-search primary-page-search"');
     expect(styles).toContain(".primary-page-search input{flex:1;min-width:0;width:100%;height:42px;");
-    expect(styles).toContain("color:var(--fg-0f1419);font-size:16px");
+    expect(styles).toContain("color:#0f1419;font-size:16px");
     expect(messages).toContain("chat-search-field input{min-width:0;width:100%;height:38px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}");
     expect(messages).toContain("searchInput.value?.blur()");
     expect(newDm).toContain("friend-search input{width:100%;height:42px;padding:0;border:0;outline:0;background:transparent;color:#0f1419;font-size:16px}");
