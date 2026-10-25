@@ -80,8 +80,10 @@ let subscription: { unsubscribe(): void } | undefined;
 let generation = 0;
 const localName = (peer: string) => friends.list.find(f => f.pubkey === peer)?.name;
 const name = (peer: string) => privateProfileDisplayName(profiles.getProfile(peer)?.nickname, peer, localName(peer));
-const filtered = computed(() => records.value.filter(item => !callHistory.isDeleted(item.id)
-  && name(item.peer).toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase())));
+const filtered = computed(() => uniqueCallHistory([...records.value, ...callHistory.localMissed]
+  .filter(item => !callHistory.isDeleted(item.id) && (!missedOnly.value || item.missed)
+    && name(item.peer).toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))
+  .sort((a, b) => b.createdAt - a.createdAt)));
 const callableFriends = computed(() => friends.getAcceptedList(friendships.isAccepted).filter(friend => name(friend.pubkey).toLocaleLowerCase().includes(contactSearch.value.trim().toLocaleLowerCase())));
 function timeLabel(seconds: number) {
   const date = new Date(seconds * 1000);
@@ -117,9 +119,8 @@ watch(() => [keys.pkHex, keys.isUnlocked] as const, ([account, unlocked]) => {
     void callHistory.load(account).then(() => callHistory.acknowledge(account)).catch(() => {});
   } else showPicker.value = false;
 }, { immediate: true });
-watch(() => callHistory.missedUnreadCount, count => {
-  if (count && keys.pkHex && keys.isUnlocked) void callHistory.acknowledge(keys.pkHex).catch(() => {});
-});
+// Viewing the Calls tab acknowledges the badge. Do not mark unread before
+// the account's local and server history has hydrated, or race an offline call.
 async function deleteCallRecord(item: CallHistoryItem) {
   const account = keys.pkHex;
   if (!account || deletingId.value || !window.confirm(`删除与 ${name(item.peer)} 的这条通话记录？`)) return;
