@@ -119,6 +119,114 @@ describe("nearby signaling recovery", () => {
     expect(nearbyState.transfers.every(item => item.state === 'done')).toBe(true);
   });
 
+  it('never exposes the transport self id as an online target or accepts its offers', async () => {
+    await ensureOwnDevicesRoom('account', '1'.repeat(64));
+    const room = trystero.rooms[0];
+    room.onPeerJoin('local-test-id');
+    room.actions.hello.handlers.onMessage({ name: 'iPhone', reply: true, text: true, protocol: 2 }, { peerId: 'local-test-id' });
+    expect(nearbyState.ownPeers).toEqual({});
+    expect(await room.actions.offer.handlers.onRequest({ id: '0123456789abcdef', files: [], text: 'self', protocol: 2 }, { peerId: 'local-test-id' })).toBe(false);
+    await expect(sendNearbyFiles('own', 'local-test-id', [], 'self')).rejects.toThrow('nearby_invalid_target_or_files');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nearbyPresence.online).toBe(0);
+    expect(nearbyState.transfers).toEqual([]);
+  });
+
+  it('excludes another session of this installation but keeps a different iPhone', async () => {
+    await ensureOwnDevicesRoom('account', '1'.repeat(64));
+    const room = trystero.rooms[0];
+    const device = await nearbyDeviceId();
+    room.onPeerJoin('other-tab');
+    room.actions.hello.handlers.onMessage({ name: 'iPhone', reply: true, text: true, protocol: 2, device }, { peerId: 'other-tab' });
+    expect(nearbyState.ownPeers).toEqual({});
+    expect(nearbyState.ownCompatible).toEqual({});
+    expect(nearbyState.ownDevices).toEqual({});
+    room.onPeerJoin('other-phone');
+    room.actions.hello.handlers.onMessage({ name: 'iPhone', reply: true, text: true, protocol: 2, device: 'f'.repeat(16) }, { peerId: 'other-phone' });
+    expect(nearbyState.ownPeers).toEqual({ 'other-phone': 'iPhone' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nearbyPresence.online).toBe(1);
+    // A later join/name frame cannot re-add the quarantined local session.
+    room.onPeerJoin('other-tab');
+    room.actions.hello.handlers.onMessage({ name: 'changed', reply: true, text: true, protocol: 2 }, { peerId: 'other-tab' });
+    expect(nearbyState.ownPeers).not.toHaveProperty('other-tab');
+    expect(await room.actions.offer.handlers.onRequest({ id: '0123456789abcdef', files: [], text: 'self', protocol: 2 }, { peerId: 'other-tab' })).toBe(false);
+    expect(nearbyState.transfers).toEqual([]);
+  });
+
+  it('blocks direct send and receive entry points after identifying a local session', async () => {
+    const onOffer = vi.fn(async () => true);
+    const onPeers = vi.fn();
+    const device = await nearbyDeviceId();
+    const room = new NearbyRoom('iPhone', { onPeers, onOffer, onError: vi.fn(), onReceiveProgress: vi.fn(), onFile: vi.fn() }, device);
+    await room.join({ roomId: 'local', password: 'secret' });
+    const transport = trystero.rooms[0];
+    transport.actions.hello.handlers.onMessage({ name: 'iPhone', reply: true, text: true, protocol: 2, device }, { peerId: 'same-installation' });
+    await expect(room.send('same-installation', [], vi.fn(), 'self')).rejects.toThrow('nearby_local_device');
+    expect(await transport.actions.offer.handlers.onRequest({ id: '0123456789abcdef', files: [], text: 'self', protocol: 2 }, { peerId: 'same-installation' })).toBe(false);
+    expect(transport.actions.chunk2.handlers.onReceive({ kind: 'request', peerId: 'same-installation', byteLength: 1 })).toBe(false);
+    expect(transport.actions.control2.handlers.onReceive({ peerId: 'same-installation', byteLength: 1 })).toBe(false);
+    expect(onOffer).not.toHaveBeenCalled();
+    expect(transport.actions.offer.request).not.toHaveBeenCalled();
+    await room.leave();
+  });
+
+  it('requires a remote hello before accepting an incoming offer', async () => {
+    await ensureOwnDevicesRoom('account', '1'.repeat(64));
+    const room = trystero.rooms[0];
+    room.onPeerJoin('unknown');
+    const offer = { id: '0123456789abcdef', files: [], text: 'too early', protocol: 2 };
+    expect(await room.actions.offer.handlers.onRequest(offer, { peerId: 'unknown' })).toBe(false);
+    expect(nearbyState.transfers).toEqual([]);
+    room.actions.hello.handlers.onMessage({ name: 'iPad', reply: true, text: true, protocol: 2 }, { peerId: 'unknown' });
+    expect(await room.actions.offer.handlers.onRequest(offer, { peerId: 'unknown' })).toBe(true);
+    expect(nearbyState.transfers).toHaveLength(1);
+  });
+
+  it('uses a room-scoped installation tag to reject local QR sessions even signed out', async () => {
+    const key = { roomId: 'local-qr', password: 'qr-secret' };
+    await startPairRoom(key);
+    const pair = trystero.rooms[0];
+    pair.onPeerJoin('second-tab');
+    const hello = pair.actions.hello.send.mock.calls.at(-1)[0];
+    const device = await nearbyDeviceId();
+    expect(hello.device).toBeUndefined();
+    expect(hello.installation).toBe(await pairDeviceTag(key.password, key.roomId, device));
+    expect(hello.installation).not.toBe(device);
+    pair.actions.hello.handlers.onMessage({ ...hello, name: 'iPhone', reply: true }, { peerId: 'second-tab' });
+    expect(nearbyState.pairPeers).toEqual({});
+    expect(await pair.actions.offer.handlers.onRequest({ id: '0123456789abcdef', files: [], text: 'self', protocol: 2 }, { peerId: 'second-tab' })).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nearbyPresence.online).toBe(0);
+    expect(nearbyState.transfers).toEqual([]);
+    await startPairRoom({ roomId: 'another-qr', password: key.password });
+    const next = trystero.rooms.at(-1);
+    next.onPeerJoin('remote');
+    expect(next.actions.hello.send.mock.calls.at(-1)[0].installation).not.toBe(hello.installation);
+    next.actions.hello.handlers.onMessage({ name: 'iPhone', reply: true, text: true, protocol: 2, installation: 'e'.repeat(32) }, { peerId: 'remote' });
+    expect(nearbyState.pairPeers).toEqual({ remote: 'iPhone' });
+  });
+
+  it('clears old online targets immediately while restart is still awaiting shutdown', async () => {
+    const onPeers = vi.fn();
+    const room = new NearbyRoom('phone', { onPeers, onError: vi.fn(), onOffer: async () => true, onReceiveProgress: vi.fn(), onFile: vi.fn() });
+    await room.join({ roomId: 'restart', password: 'secret' });
+    const first = trystero.rooms[0];
+    first.actions.hello.handlers.onMessage({ name: 'PC', reply: true, text: true, protocol: 2 }, { peerId: 'peer' });
+    expect(onPeers.mock.calls.at(-1)[0]).toEqual({ peer: 'PC' });
+    let finishLeave!: () => void;
+    first.leave.mockImplementationOnce(() => new Promise<void>(resolve => { finishLeave = resolve; }));
+    const restarting = room.restart();
+    expect(onPeers.mock.calls.at(-1)).toEqual([{}, {}, {}]);
+    first.actions.hello.handlers.onMessage({ name: 'stale', reply: true, text: true, protocol: 2 }, { peerId: 'peer' });
+    first.onPeerJoin('ghost');
+    expect(onPeers.mock.calls.at(-1)).toEqual([{}, {}, {}]);
+    finishLeave();
+    await restarting;
+    expect(trystero.rooms).toHaveLength(2);
+    await room.leave();
+  });
+
   it('announces a stable device id to own devices only', async () => {
     const own = await modernRoom();
     own.onPeerJoin('other');
@@ -249,6 +357,7 @@ describe("nearby signaling recovery", () => {
     await room.join({ roomId: 'resume', password: 'secret' });
     const offer = { id: '0123456789abcdef', files: [{ name: 'a', size: NEARBY_CHUNK_BYTES + 1, type: 'application/octet-stream' }], protocol: 2 };
     const first = trystero.rooms[0];
+    first.actions.hello.handlers.onMessage({ name: 'PC', reply: true, text: true, protocol: 2 }, { peerId: 'peer' });
     expect(await first.actions.offer.handlers.onRequest(offer, { peerId: 'peer' })).toBe(true);
     const bytes = new Uint8Array(NEARBY_CHUNK_BYTES);
     await first.actions.chunk2.handlers.onRequest(bytes.buffer, { peerId: 'peer', metadata: { id: offer.id, index: 0, offset: 0, hash: chunkDigest(bytes) } });
@@ -283,6 +392,7 @@ describe("nearby signaling recovery", () => {
     await ensureOwnDevicesRoom("account", "1".repeat(64));
     const own = trystero.rooms[0];
     own.onPeerJoin("peer");
+    own.actions.hello.handlers.onMessage({ name: "PC", reply: true, text: true, protocol: 2 }, { peerId: "peer" });
     const offer = { id: "0123456789abcdef", files: [], text: "第一行\n第二行", protocol: 2 };
     expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "peer" })).toBe(true);
     expect(nearbyState.pendingOffer).toBeNull();
@@ -295,6 +405,7 @@ describe("nearby signaling recovery", () => {
     await startPairRoom({ roomId: "qr", password: "secret" });
     const pair = trystero.rooms[0];
     pair.onPeerJoin("peer");
+    pair.actions.hello.handlers.onMessage({ name: "PC", reply: true, text: true, protocol: 2 }, { peerId: "peer" });
     const offer = { id: "0123456789abcdef", files: [], text: "hello", protocol: 2 };
     const request = pair.actions.offer.handlers.onRequest(offer, { peerId: "peer" });
     expect(nearbyState.transfers[0].state).toBe("waiting");
@@ -321,6 +432,7 @@ describe("nearby signaling recovery", () => {
     const offer = { id: "0123456789abcdef", files: [{ name: "a.txt", size: 3, type: "text/plain" }], protocol: 2 };
     const own = trystero.rooms[0];
     own.onPeerJoin("own-peer");
+    own.actions.hello.handlers.onMessage({ name: "PC", reply: true, text: true, protocol: 2 }, { peerId: "own-peer" });
     expect(await own.actions.offer.handlers.onRequest({ ...offer, id: "fedcba9876543210", protocol: undefined }, { peerId: "own-peer" })).toBe(false);
     expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "own-peer" })).toBe(true);
     expect(nearbyState.pendingOffer).toBeNull();
@@ -328,6 +440,7 @@ describe("nearby signaling recovery", () => {
     await startPairRoom({ roomId: "qr", password: "qr-secret" });
     const pair = trystero.rooms[1];
     pair.onPeerJoin("pair-peer");
+    pair.actions.hello.handlers.onMessage({ name: "PC", reply: true, text: true, protocol: 2 }, { peerId: "pair-peer" });
     const request = pair.actions.offer.handlers.onRequest(offer, { peerId: "pair-peer" });
     expect(nearbyState.pendingOffer?.transferId).toBe(`pair:${offer.id}`);
     answerPendingOffer(true);
@@ -338,6 +451,7 @@ describe("nearby signaling recovery", () => {
     await ensureOwnDevicesRoom("account", "1".repeat(64));
     const own = trystero.rooms[0];
     own.onPeerJoin("peer");
+    own.actions.hello.handlers.onMessage({ name: "PC", reply: true, text: true, protocol: 2 }, { peerId: "peer" });
     const offer = { id: "0123456789abcdef", files: [{ name: "large", size: 700 * 1024 * 1024 }], protocol: 2 };
     expect(await own.actions.offer.handlers.onRequest(offer, { peerId: "peer" })).toBe(true);
     // A repeated offer resumes the known batch instead of adding a second one.
@@ -350,6 +464,7 @@ describe("nearby signaling recovery", () => {
     clearNearbyTransfer(nearbyState.transfers[0].id);
     expect(nearbyState.transfers).toHaveLength(0);
     own.onPeerJoin("peer");
+    own.actions.hello.handlers.onMessage({ name: "PC", reply: true, text: true, protocol: 2 }, { peerId: "peer" });
     expect(await own.actions.offer.handlers.onRequest(second, { peerId: "peer" })).toBe(true);
     await resetNearby();
     expect(nearbyState.transfers).toHaveLength(0);

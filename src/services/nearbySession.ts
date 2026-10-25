@@ -193,7 +193,7 @@ function rebindOwnDevices(next: Record<string, string>, devices: Record<string, 
   }
 }
 
-function makeRoom(kind: RoomKind, deviceId = "", accountTag = "") {
+function makeRoom(kind: RoomKind, deviceId = "", accountTag = "", installationTag = "") {
   return new NearbyRoom(nearbyState.deviceName, {
     onPeers: (next, compatible = {}, devices = {}) => {
       if (kind === "own") { nearbyState.ownPeers = next; nearbyState.ownCompatible = compatible; nearbyState.ownDevices = devices; }
@@ -298,7 +298,7 @@ function makeRoom(kind: RoomKind, deviceId = "", accountTag = "") {
       pending?.resolve(false);
       record.state = 'canceled';
     },
-  }, deviceId, accountTag);
+  }, deviceId, accountTag, installationTag);
 }
 
 /** Join (once) the room shared by every device of this account. */
@@ -356,11 +356,16 @@ export async function startPairRoom(key: NearbyRoomKey) {
   await leaving;
   if (generation !== pairGeneration) return;
   const secret = pairSecret;
-  const [deviceTag, accountTag] = secret
-    ? await Promise.all([nearbyDeviceId().then(id => pairDeviceTag(secret, key.roomId, id)), pairAccountTag(secret, key.roomId)])
-    : ["", ""];
+  const deviceId = await nearbyDeviceId();
+  const [deviceTag, accountTag, installationTag] = await Promise.all([
+    secret ? pairDeviceTag(secret, key.roomId, deviceId) : "",
+    secret ? pairAccountTag(secret, key.roomId) : "",
+    // Also works signed out, or when two tabs use different accounts. Never
+    // announce the stable installation id to a QR-paired stranger.
+    pairDeviceTag(key.password, key.roomId, deviceId),
+  ]);
   if (generation !== pairGeneration) return;
-  const room = makeRoom("pair", deviceTag, accountTag);
+  const room = makeRoom("pair", deviceTag, accountTag, installationTag);
   rooms.pair = room;
   nearbyState.pairKey = key;
   nearbyState.pairError = "";
