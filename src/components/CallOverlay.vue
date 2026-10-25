@@ -16,7 +16,12 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
     </button>
   </div>
+  <div v-else-if="minimized && canMinimize" class="call-banner" role="region" aria-label="正在通话">
+    <button class="banner-peer" type="button" aria-label="返回通话" @click="minimized = false"><ProfileAvatar :pubkey="call.peer" :size="40" /><span class="banner-copy"><strong>{{ name }}</strong><span>{{ status }}{{ call.muted ? " · 已静音" : "" }}</span></span></button>
+    <button class="banner-action decline" type="button" aria-label="挂断" :disabled="acting" @click="hangup">挂断</button>
+  </div>
   <div v-else class="call-overlay" role="dialog" aria-modal="true" :aria-label="`与 ${name} 的语音通话`" @click.self="dismissEnded">
+    <button v-if="canMinimize" class="call-minimize" type="button" @click="minimized = true">收起通话</button>
     <div class="call-peer">
       <ProfileAvatar :pubkey="call.peer" :size="96" />
       <strong class="call-name">{{ name }}</strong>
@@ -52,13 +57,13 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/><path v-if="call.muted" d="M4 4l16 16"/></svg>
           <span>{{ call.muted ? "已静音" : "静音" }}</span>
         </button>
-        <button class="call-button recover" type="button" aria-label="恢复声音" data-live-audio-action :disabled="call.phase === 'outgoing'" @click="restoreAudio">
+        <button v-if="call.audioStatus === 'blocked'" class="call-button recover" type="button" aria-label="恢复声音" data-live-audio-action :disabled="call.phase === 'outgoing'" @click="restoreAudio">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5zM15 9a5 5 0 0 1 0 6M18 6a9 9 0 0 1 0 12"/><path d="M20 2v4h-4"/></svg>
           <span>恢复声音</span>
         </button>
         <button v-if="canChooseOutput" class="call-button recover" type="button" aria-label="选择声音输出设备" data-live-audio-action @click="chooseOutput">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 7h6M10 15a2 2 0 1 0 4 0 2 2 0 0 0-4 0"/></svg>
-          <span>选择输出</span>
+          <span>音频设备</span>
         </button>
         <button class="call-button decline" type="button" aria-label="挂断" :disabled="acting" @click="hangup">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
@@ -66,6 +71,7 @@
         </button>
       </template>
     </div>
+    <details v-if="call.phase === 'active' && call.audioStatus !== 'blocked'" class="call-more"><summary>更多</summary><button type="button" class="ring-retry-button" data-live-audio-action @click="restoreAudio">听不到声音？恢复声音</button></details>
     <p v-if="call.phase === 'active' || call.phase === 'connecting'" class="call-hint">通话时请保持海内在前台，锁屏或切走可能会中断通话</p>
   </div>
 </template>
@@ -125,8 +131,10 @@ const canChooseOutput = typeof navigator !== "undefined"
   && typeof HTMLMediaElement !== "undefined"
   && typeof (HTMLMediaElement.prototype as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId === "function";
 // An incoming call starts as a banner; expanded shows the full call screen.
+const minimized = ref(false);
+const canMinimize = computed(() => call.phase === "active" || call.phase === "connecting" || call.phase === "outgoing");
 const expanded = ref(false);
-watch(() => call.callId, () => { expanded.value = false; });
+watch(() => call.callId, () => { expanded.value = false; minimized.value = false; });
 const showBanner = computed(() => call.phase === "incoming" && !expanded.value);
 const now = ref(Date.now());
 const ticker = setInterval(() => { now.value = Date.now(); }, 1_000);
@@ -144,7 +152,7 @@ function clock(ms: number) {
 const ENDED_TEXT: Record<string, string> = {
   hangup: "通话已结束", remote_hangup: "对方已挂断", declined: "已拒绝", remote_declined: "对方已拒绝",
   busy: "忙线中", remote_busy: "对方正忙", cancelled: "已取消", remote_cancelled: "对方已取消",
-  no_answer: "无人接听", answered_elsewhere: "已在其他设备处理", failed: "连接失败，请稍后重试",
+  no_answer: "无人接听", answered_elsewhere: "已在其他设备处理", failed: "连接失败，请稍后重试", network_lost: "网络连接中断",
   microphone_denied: "无法使用麦克风，请在系统设置中允许海内使用麦克风",
 };
 
@@ -212,7 +220,7 @@ async function callBack() {
 .call-peer{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center}
 .call-name{max-width:80vw;overflow:hidden;font-size:24px;text-overflow:ellipsis;white-space:nowrap}
 .call-status{color:#cbd5e1;font-size:16px;font-variant-numeric:tabular-nums}
-.call-actions{display:flex;justify-content:center;gap:clamp(22px,8vw,44px)}
+.call-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:clamp(22px,8vw,44px)}
 .call-button{display:flex;flex-direction:column;align-items:center;gap:8px;padding:0;border:0;background:transparent;color:#f8fafc;font:inherit;font-size:13px;cursor:pointer}
 .call-button svg{width:64px;height:64px;padding:18px;border-radius:50%;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .call-button.accept svg{background:#16a34a}
@@ -222,4 +230,7 @@ async function callBack() {
 .call-button:disabled{opacity:.45}
 .ring-retry-button{align-self:center;display:flex;gap:8px;align-items:center;background:#d97706;color:#fff;border:0;border-radius:12px;padding:10px 16px;font:inherit;font-size:14px;cursor:pointer}
 .call-hint{margin:0;color:#94a3b8;font-size:12px;text-align:center}
+.call-more{text-align:center}.call-more summary{min-height:44px;padding:12px;cursor:pointer}
+.call-minimize{position:absolute;top:calc(env(safe-area-inset-top) + 16px);left:20px;border:0;background:transparent;color:inherit;font:inherit;min-height:44px;padding:8px 12px}
+@media (prefers-reduced-motion:reduce){.call-banner{animation:none}}
 </style>

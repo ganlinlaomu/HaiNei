@@ -13,7 +13,7 @@ export const CALL_INVITE_TYPE = "hainei-call-invite";
 export const CALL_LOG_TYPE = "hainei-call-log";
 export const CALL_MISSED_TYPE = "hainei-call-missed";
 /** An invite older than this rings no more: it is recorded as missed. */
-export const CALL_RING_WINDOW_SECONDS = 60;
+export const CALL_RING_WINDOW_SECONDS = 45;
 
 // ringing: the callee's device is ringing (caller shows 对方响铃中 instead of 正在呼叫).
 export type CallAction = "invite" | "ringing" | "accept" | "reject" | "busy" | "cancel" | "end";

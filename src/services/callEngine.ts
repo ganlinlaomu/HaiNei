@@ -21,7 +21,7 @@ import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/messageRouting";
  * (DTLS-SRTP), with Cloudflare TURN only as an encrypted relay.
  */
 const CALL_APP_ID = "hainei-call-v1";
-const RING_TIMEOUT_MS = 45_000;
+const RING_TIMEOUT_MS = CALL_RING_WINDOW_SECONDS * 1000;
 const CONNECT_TIMEOUT_MS = 25_000;
 // A network switch (Wi-Fi <-> cellular) drops the peer; Trystero re-discovers
 // it through the relays. Show 重新连接中 and wait this long before ending.
@@ -305,7 +305,7 @@ function recordCall(session: CallSession, reason: CallEndReason, durationSeconds
       : outgoing && reason === "remote_declined" ? "对方已拒绝"
         : outgoing && reason === "remote_busy" ? "对方忙"
           : !outgoing && reason === "declined" ? "已拒绝"
-            : outgoing && (reason === "failed" || reason === "remote_hangup") ? "未接通"
+            : outgoing && (reason === "failed" || reason === "network_lost" || reason === "remote_hangup") ? "未接通"
               : "";
   // Incoming calls the caller records as missed, or another device handled.
   if (!outcome) return;
@@ -911,7 +911,7 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
     if (session.peerLossTimer) clearTimeout(session.peerLossTimer);
     session.peerLossTimer = setTimeout(() => {
       session.peerLossTimer = null;
-      if (active()) void finish(session, "remote_hangup", false);
+      if (active()) void finish(session, "network_lost", false);
     }, PEER_LOSS_GRACE_MS);
   };
 }
@@ -1150,7 +1150,8 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     // Our own outgoing invite seen on another of our devices: not a call for us.
     if (fromSelf || store.seen.has(signal.callId)) return;
     store.markSeen(signal.callId);
-    if (Math.floor(Date.now() / 1000) - createdAt > CALL_RING_WINDOW_SECONDS) return;
+    const remainingMs = Math.min(RING_TIMEOUT_MS, createdAt * 1000 + RING_TIMEOUT_MS - Date.now());
+    if (remainingMs <= 0) return;
     if (store.phase !== "idle" && store.phase !== "ended") {
       sendSignalBestEffort(peer, { action: "busy", callId: signal.callId });
       return;
@@ -1171,7 +1172,7 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     startTone(session, "ring");
     // Tell the caller this device is ringing (对方响铃中).
     sendSignalBestEffort(peer, { action: "ringing", callId: signal.callId });
-    later(session, RING_TIMEOUT_MS, () => { if (store.phase === "incoming") void finish(session, "no_answer", false); });
+    later(session, remainingMs, () => { if (store.phase === "incoming") void finish(session, "no_answer", false); });
     return;
   }
   const session = activeSession;
