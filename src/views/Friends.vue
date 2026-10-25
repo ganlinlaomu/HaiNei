@@ -2,10 +2,7 @@
   <div class="friends-container app-page">
     <header class="contacts-header">
       <h1>通讯录</h1>
-      <div class="contacts-header-actions">
-        <button type="button" aria-label="扫码添加好友" title="扫码添加好友" @click="startScan">⌗</button>
-        <button type="button" aria-label="添加好友" title="添加好友" @click="startAdd">＋</button>
-      </div>
+      <button class="contact-add" type="button" aria-label="添加好友" title="添加好友" @click="startAdd">＋</button>
     </header>
     <label class="contacts-search">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
@@ -44,25 +41,6 @@
     <div v-show="activeSection === 'accepted'" class="card">
       <div class="friends-list-heading">
         <h3>联系人（{{ filteredAcceptedFriends.length }}）</h3>
-        <div class="friend-heading-actions">
-          <button
-            class="btn-icon btn-scan"
-            type="button"
-            @click="startScan"
-            title="扫描二维码添加好友"
-            aria-label="扫描二维码添加好友"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4M8 8h3v3H8zM14 8h2v2h-2zM8 14h2v2H8zM13 13h3v3h-3z"/></svg>
-          </button>
-          <button 
-            class="btn-icon btn-add" 
-            @click="startAdd"
-            title="添加好友"
-            aria-label="添加好友"
-          >
-            +
-          </button>
-        </div>
       </div>
       <div v-if="filteredAcceptedFriends.length === 0" class="friends-empty">
         <strong>{{ searchQuery.trim() ? "没有匹配的联系人" : "还没有好友" }}</strong>
@@ -800,8 +778,7 @@ export default defineComponent({
 <style scoped>
 .contacts-header{display:flex;align-items:center;justify-content:space-between;min-height:56px;padding:8px 16px}
 .contacts-header h1{margin:0;font-size:22px;color:var(--fg-172033);font-weight:750}
-.contacts-header-actions{display:flex;gap:6px}
-.contacts-header-actions button{display:grid;place-items:center;width:42px;height:42px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--fg-172033);font-size:28px}
+.contact-add{display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--fg-172033);font-size:28px}
 .contacts-search{display:flex;align-items:center;gap:9px;margin:0 16px 12px;padding:0 13px;border-radius:999px;background:var(--bg-eff3f4);color:var(--fg-64748b)}
 .contacts-search svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9}
 .contacts-search input{height:42px;flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:16px;color:var(--fg-172033)}

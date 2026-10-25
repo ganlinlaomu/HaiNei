@@ -171,7 +171,7 @@
               </template>
               <template v-else>
                 <MentionText v-if="messageText(message.content)" class="bubble-text" :text="messageText(message.content)" />
-                <button v-if="isCallRecord(message) && accepted" class="call-back-link" type="button" data-live-audio-action data-ringtone-arm @pointerdown.stop="preloadCall" @click.stop="startVoiceCall">回拨</button>
+
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else-if="hasImage(message.content)" :content="message.content" :show-all="true" alt-text="私信图片" />
               </template>
@@ -431,7 +431,6 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import { loadCallEngine, loadedCallEngine } from "@/stores/call";
-import { CALL_LOG_TYPE } from "@/nostr/messaging/callControl";
 import { useMessagesStore, type InboxItem, type InboxMutation } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import {
@@ -463,10 +462,6 @@ const keys = useKeyStore();
 const ui = useUIStore();
 // The call engine (WebRTC, media) loads on first use; warm it on touch.
 function preloadCall() { void loadCallEngine().catch(() => undefined); }
-// The call's record in the chat ("📞 语音通话 · …") offers a call back.
-function isCallRecord(message: { tags?: string[][] }) {
-  return message.tags?.some(tag => tag[0] === "t" && tag[1] === CALL_LOG_TYPE) === true;
-}
 async function startVoiceCall() {
   try {
     const engine = loadedCallEngine();

@@ -42,7 +42,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(home).toContain('aria-label="查看通知"');
     expect(home).toContain("notifications.unreadCount");
     const settings = readThemedSource(join(process.cwd(), "src/views/Settings.vue"), "utf8");
-    expect(settings).toContain('router.push("/friends")');
+    expect(settings).not.toContain('router.push("/friends")');
+    expect(settings).not.toContain("好友 / 好友分组");
   });
 
   it("shows profile save progress and prevents duplicate submissions", () => {

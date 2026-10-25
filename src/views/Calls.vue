@@ -29,6 +29,9 @@
           </span>
           <time>{{ timeLabel(item.createdAt) }}</time>
         </button>
+        <button class="call-delete" type="button" :aria-label="`删除 ${name(item.peer)} 的通话记录`" :disabled="deletingId === item.id" @click="deleteCallRecord(item)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4m-8 3 1 13h10l1-13M10 11v6m4-6v6"/></svg>
+        </button>
         <button class="call-back" type="button" :aria-label="`回拨 ${name(item.peer)}`" :disabled="busy || call.phase !== 'idle' || !friendships.isAccepted(item.peer)" data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="startCall(item.peer)">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
         </button>
@@ -67,16 +70,18 @@ import { useFriendsStore } from "@/stores/friends";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { loadCallEngine, loadedCallEngine, useCallStore } from "@/stores/call";
 import { loadAccountStoresOnce } from "@/utils/bottomTabActivation";
+import { useCallHistoryStore } from "@/stores/callHistory";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 const keys = useKeyStore(), friendships = useFriendshipsStore(), friends = useFriendsStore(), profiles = useProfilesStore();
-const router = useRouter(), call = useCallStore();
+const router = useRouter(), call = useCallStore(), callHistory = useCallHistoryStore();
 const records = ref<CallHistoryItem[]>([]), limit = ref(50), missedOnly = ref(false), hasMore = ref(false), loading = ref(true), error = ref(""), busy = ref(false);
-const showPicker = ref(false), search = ref(""), contactSearch = ref("");
+const showPicker = ref(false), search = ref(""), contactSearch = ref(""), deletingId = ref("");
 let subscription: { unsubscribe(): void } | undefined;
 let generation = 0;
 const localName = (peer: string) => friends.list.find(f => f.pubkey === peer)?.name;
 const name = (peer: string) => privateProfileDisplayName(profiles.getProfile(peer)?.nickname, peer, localName(peer));
-const filtered = computed(() => records.value.filter(item => name(item.peer).toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase())));
+const filtered = computed(() => records.value.filter(item => !callHistory.isDeleted(item.id)
+  && name(item.peer).toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase())));
 const callableFriends = computed(() => friends.getAcceptedList(friendships.isAccepted).filter(friend => name(friend.pubkey).toLocaleLowerCase().includes(contactSearch.value.trim().toLocaleLowerCase())));
 function timeLabel(seconds: number) {
   const date = new Date(seconds * 1000);
@@ -107,9 +112,23 @@ function subscribe() {
 }
 watch(() => [keys.pkHex, keys.isUnlocked, limit.value, missedOnly.value], subscribe, { immediate: true, flush: "sync" });
 watch(() => [keys.pkHex, keys.isUnlocked] as const, ([account, unlocked]) => {
-  if (account && unlocked) void loadAccountStoresOnce(account, [friends, friendships, profiles]).catch(() => {});
-  else showPicker.value = false;
+  if (account && unlocked) {
+    void loadAccountStoresOnce(account, [friends, friendships, profiles]).catch(() => {});
+    void callHistory.load(account).then(() => callHistory.acknowledge(account)).catch(() => {});
+  } else showPicker.value = false;
 }, { immediate: true });
+watch(() => callHistory.missedUnreadCount, count => {
+  if (count && keys.pkHex && keys.isUnlocked) void callHistory.acknowledge(keys.pkHex).catch(() => {});
+});
+async function deleteCallRecord(item: CallHistoryItem) {
+  const account = keys.pkHex;
+  if (!account || deletingId.value || !window.confirm(`删除与 ${name(item.peer)} 的这条通话记录？`)) return;
+  deletingId.value = item.id;
+  try {
+    if (keys.pkHex === account && keys.isUnlocked) await callHistory.deleteRecord(account, item.id);
+  } catch { error.value = "删除失败，请重试"; }
+  finally { deletingId.value = ""; }
+}
 onBeforeUnmount(() => { generation++; subscription?.unsubscribe(); });
 function preload() { void loadCallEngine().catch(() => {}); }
 async function startCall(peer: string) {
@@ -144,6 +163,9 @@ async function startCall(peer: string) {
 .call-copy strong{font-size:15px}.call-copy span{font-size:12px;color:var(--fg-64748b)}.call-copy .missed{color:#dc2626}
 .call-record time{align-self:flex-start;margin-top:9px;color:var(--fg-94a3b8);font-size:11px;white-space:nowrap}
 .call-back{display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border:0;border-radius:50%;background:transparent;color:#1687e8}
+.call-delete{display:grid;place-items:center;flex:0 0 40px;width:40px;height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--fg-64748b)}
+.call-delete svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.call-delete:disabled{opacity:.4}
 .call-back:disabled{opacity:.35}.calls-state{text-align:center;padding:34px 16px;color:var(--fg-64748b);font-size:14px}.calls-note{padding:14px 16px;color:var(--fg-94a3b8);font-size:12px}
 .load-more{display:block;margin:12px auto;border:0;background:transparent;color:#1687e8;min-height:44px}
 .picker-backdrop{position:fixed;inset:0;z-index:15000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.46)}

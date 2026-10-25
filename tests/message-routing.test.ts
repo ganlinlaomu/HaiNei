@@ -23,6 +23,13 @@ describe("NIP-17 Feed vs interoperable DM routing", () => {
       expect(classifyPrivateMessage(dm)).toBe("direct");
     }
   });
+  it("routes call-log NIP-17 records exclusively to call history, not chat", () => {
+    const callLog = { protocol: "nip17", transportKind: 1059, createdAt: after,
+      tags: [["t", "hainei-dm"], ["t", "hainei-call-log"], ["t", "hainei-call-missed"]] };
+    expect(classifyPrivateMessage(callLog)).toBe("direct");
+    expect(isConversationMessage(callLog)).toBe(false);
+    expect(isConversationMessage({ ...callLog, tags: [["t", "hainei-dm"]] })).toBe(true);
+  });
   it("recognizes standard untagged NIP-17 chat from another client", () => {
     const standard = { protocol: "nip17", transportKind: 1059, createdAt: after, tags: [["p", "b".repeat(64)]], plaintext: "Hello" };
     expect(classifyPrivateMessage(standard)).toBe("direct");
