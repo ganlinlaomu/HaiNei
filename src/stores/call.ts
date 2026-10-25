@@ -4,7 +4,7 @@ import { ref } from "vue";
 export type CallPhase = "idle" | "outgoing" | "incoming" | "connecting" | "active" | "ended";
 export type CallEndReason =
   | "hangup" | "remote_hangup" | "declined" | "remote_declined" | "busy" | "remote_busy"
-  | "cancelled" | "remote_cancelled" | "no_answer" | "answered_elsewhere" | "failed" | "microphone_denied";
+  | "network_lost" | "cancelled" | "remote_cancelled" | "no_answer" | "answered_elsewhere" | "failed" | "microphone_denied";
 
 /**
  * Tiny, always-loaded call state for the overlay and the incoming-call

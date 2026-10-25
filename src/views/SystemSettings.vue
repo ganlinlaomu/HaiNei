@@ -217,7 +217,7 @@
         <summary class="section-heading">
           <div><h3>后台推送 / {{ isNativeApp ? "Android Push" : "Web Push" }}</h3><p>{{ pushStatusText }}</p></div>
         </summary>
-        <p class="section-detail">推送仅用于私信，固定显示“你有新的私信消息”，不会包含好友名称、消息内容或图片信息。</p>
+        <p class="section-detail">推送用于消息与来电提醒，显示“你有新的私信消息”或“你有一个语音来电”，不会包含好友名称、消息内容或图片信息。</p>
         <div class="account-row">
           <span class="small">{{ pushHelpText }}</span>
           <button v-if="!isNativeApp" class="btn btn-secondary" type="button" :disabled="pushBusy || !pushSupported" @click="togglePush">

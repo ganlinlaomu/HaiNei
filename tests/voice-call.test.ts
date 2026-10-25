@@ -687,7 +687,7 @@ describe("call engine", () => {
     await vi.advanceTimersByTimeAsync(19_999);
     expect(store.phase).toBe("active");
     await vi.advanceTimersByTimeAsync(1);
-    expect(store).toMatchObject({ phase: "ended", endReason: "remote_hangup" });
+    expect(store).toMatchObject({ phase: "ended", endReason: "network_lost" });
     expect(joined.leave).toHaveBeenCalled();
   });
 
@@ -889,6 +889,15 @@ describe("call engine", () => {
     expect(store).toMatchObject({ phase: "outgoing", remoteRinging: true });
   });
 
+  it("rings a delayed invitation only for its remaining lifetime", async () => {
+    const { handleCallSignal } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    await handleCallSignal(FRIEND, ME, invite, now() - 40);
+    expect(useCallStore().phase).toBe("incoming");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(useCallStore()).toMatchObject({ phase: "ended", endReason: "no_answer" });
+  });
+
   it("shows reconnecting when the peer drops, recovers on rejoin, ends after the grace", async () => {
     const { startCall } = await import("@/services/callEngine");
     const { useCallStore } = await import("@/stores/call");
@@ -905,7 +914,7 @@ describe("call engine", () => {
     expect(store).toMatchObject({ phase: "active", reconnecting: false });
     room.onPeerLeave("peer-2");
     await vi.advanceTimersByTimeAsync(20_000);
-    expect(store).toMatchObject({ phase: "ended", endReason: "remote_hangup" });
+    expect(store).toMatchObject({ phase: "ended", endReason: "network_lost" });
   });
 
   it("samples route, latency and loss while connected and flags a poor network", async () => {
