@@ -272,7 +272,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(system).toContain("高级设置 / Diagnostics");
     expect(system).toContain('<SecondaryPageHeader title="设置" back-label="返回我的" />');
     expect(friends).toContain('<header class="contacts-header primary-page-header">');
-    expect(friends).toContain('<h1>通讯录</h1>');
+    expect(friends).toContain('<h1 class="primary-page-title">通讯录</h1>');
     expect(friends).toContain('filteredAcceptedFriends');
     expect(friends).toContain('components: { ProfileAvatar, QrScannerSheet }');
     expect(saved).toContain('<SecondaryPageHeader title="已收藏" back-label="返回我的" />');
