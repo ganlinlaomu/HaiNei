@@ -93,11 +93,13 @@ describe("bottom-tab activation loading", () => {
     expect(app).toContain("await preloadBottomTabViews()");
     expect(app).toContain("'SystemSettings'");
     expect(routes).toContain("component: loadConversationsView");
+    expect(routes).toContain("component: loadCallsView");
     expect(routes).toContain("component: loadNotificationsView");
     expect(routes).toContain("component: loadSettingsView");
     expect(routes).toContain("component: loadSystemSettingsView");
     expect(lazyViews).toContain("loadMessagesView,");
     expect(lazyViews).toContain("loadFriendsView,");
+    expect(lazyViews).toContain("loadCallsView,");
     expect(lazyViews).toContain("loadSystemSettingsView,");
     // Each view waits for a fresh idle moment, so scrolling postpones the rest.
     expect(lazyViews).toContain("await waitForIdle()");
@@ -106,8 +108,9 @@ describe("bottom-tab activation loading", () => {
     expect(lazyViews.indexOf("    loadConversationsView,")).toBeLessThan(lazyViews.indexOf("    loadMessagesView,"));
     expect(lazyViews.indexOf("    loadMessagesView,")).toBeLessThan(lazyViews.indexOf("    loadSettingsView,"));
     expect(header).toContain('@pointerdown="preloadBottomTab(\'conversations\')"');
-    expect(header).toContain('@pointerdown="preloadBottomTab(\'notifications\')"');
+    expect(header).toContain('@pointerdown="preloadBottomTab(\'calls\')"');
+    expect(header).toContain('@pointerdown="preloadBottomTab(\'friends\')"');
     expect(header).toContain('@pointerdown="preloadBottomTab(\'settings\')"');
-    expect(header).toContain("loadConversationsView, loadNotificationsView, loadSettingsView");
+    expect(header).toContain("loadConversationsView, loadCallsView, loadFriendsView, loadSettingsView");
   });
 });

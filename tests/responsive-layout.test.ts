@@ -25,7 +25,7 @@ describe("responsive application layout", () => {
     expect(header).toContain("touch-action: manipulation");
     expect(header).toContain("@media (hover: hover) and (pointer: fine)");
     expect(header).toContain("@media (min-width: 768px) and (hover: hover) and (pointer: fine)");
-    expect((header.match(/<router-link/g) || [])).toHaveLength(4);
+    expect((header.match(/<router-link/g) || [])).toHaveLength(5);
     expect(header).toContain('[...ui.blockingOverlays].some(name => name.startsWith("comment-sheet-"))');
   });
 
