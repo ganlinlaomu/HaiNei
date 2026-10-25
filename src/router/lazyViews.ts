@@ -1,6 +1,7 @@
 import { waitForIdle } from "@/services/backgroundWorkScheduler";
 
 export const loadConversationsView = () => import("@/views/Conversations.vue");
+export const loadCallsView = () => import("@/views/Calls.vue");
 export const loadNotificationsView = () => import("@/views/Notifications.vue");
 export const loadSettingsView = () => import("@/views/Settings.vue");
 export const loadSystemSettingsView = () => import("@/views/SystemSettings.vue");
@@ -20,9 +21,10 @@ async function preloadBottomTabsInBatches() {
     // notification and the costliest to parse cold.
     loadConversationsView,
     loadMessagesView,
+    loadCallsView,
+    loadFriendsView,
     loadSettingsView,
     loadNotificationsView,
-    loadFriendsView,
     loadSystemSettingsView,
   ];
   const results: PromiseSettledResult<unknown>[] = [];

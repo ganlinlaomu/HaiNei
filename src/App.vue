@@ -103,10 +103,10 @@ export default defineComponent({
     const postEditorReady = ref(false);
     const postEditorLoadError = ref(false);
     const hideAppChrome = computed(() => route.meta.hideHeader === true);
-    const primaryRoutes = new Set(["Home", "Friends", "Conversations", "Notifications", "Settings", "MyProfile", "Saved", "Profile"]);
+    const primaryRoutes = new Set(["Home"]);
     const isPrimaryRoute = computed(() => !hideAppChrome.value && primaryRoutes.has(String(route.name || "")));
     const isConversationsRoute = computed(() => route.name === "Conversations");
-    const fabLabel = computed(() => isConversationsRoute.value ? "开始新私信" : "发帖");
+    const fabLabel = computed(() => "发帖");
     const showComposeFab = computed(() => !hideAppChrome.value
       && isPrimaryRoute.value
       && !ui.showPostEditor
@@ -147,12 +147,11 @@ export default defineComponent({
     }
 
     function handleFabIntent() {
-      if (!isConversationsRoute.value) preloadPostEditor();
+      preloadPostEditor();
     }
 
     function handleFabClick() {
-      if (isConversationsRoute.value) ui.openNewConversation();
-      else ui.openPostEditor();
+      ui.openPostEditor();
     }
 
     function reconcileFriendStateOnForeground() {

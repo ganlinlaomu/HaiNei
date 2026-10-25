@@ -5,19 +5,13 @@
         <h1>私信</h1>
         <span v-if="syncLabel" class="sync-label" role="status" aria-live="polite">{{ syncLabel }}</span>
       </div>
-      <button
-        class="conversation-filter"
-        type="button"
-        :aria-label="`当前显示${filterMode === 'all' ? '全部' : '未读'}私信，点击切换`"
-        :aria-pressed="filterMode === 'unread'"
-        @click="toggleFilter"
-      >
-        {{ filterMode === 'all' ? '全部' : '未读' }}
-        <span aria-hidden="true">⌄</span>
-      </button>
+      <div class="conversation-header-actions">
+        <button class="conversation-filter" type="button" :aria-label="`当前显示${filterMode === 'all' ? '全部' : '未读'}私信，点击切换`" :aria-pressed="filterMode === 'unread'" @click="toggleFilter">
+          {{ filterMode === 'all' ? '全部' : '未读' }} <span aria-hidden="true">⌄</span>
+        </button>
+        <button class="new-conversation-button" type="button" aria-label="发起新私信" @click="ui.openNewConversation()">＋</button>
+      </div>
     </header>
-
-    <button class="conversation-filter" type="button" @click="router.push('/calls')">通话记录</button>
 
     <label class="conversation-search">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
@@ -317,6 +311,9 @@ onDeactivated(() => {
 </script>
 
 <style scoped>
+.conversation-header-actions{display:flex;align-items:center;gap:10px}
+.new-conversation-button{display:grid;place-items:center;width:36px;height:36px;border:1px solid var(--bd-cbd5e1);border-radius:50%;background:var(--bg-fff);color:var(--fg-172033);font-size:24px;line-height:1;cursor:pointer}
+.new-conversation-button:focus-visible{outline:2px solid #1687e8;outline-offset:2px}
 .assistant-avatar{display:grid;width:48px;height:48px;flex:0 0 48px;place-items:center;border-radius:50%;background:var(--bg-f1f5f9);color:var(--fg-172033)}
 .assistant-avatar svg{width:25px;height:25px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round}
 .conversations-page{width:100%;min-height:100%;margin:0 auto;box-sizing:border-box;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 28px);background:var(--bg-fff);color:var(--fg-0f1419)}
