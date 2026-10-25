@@ -477,6 +477,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
             const id = callerRecord[1];
             callSignalGate.conclude(sender, id);
             useCallStore().markSeen(id);
+            observeRecoverySignal({ account, sender, peer: sender, eventId: "",
+              signal: { action: "cancel", callId: id }, createdAt: message.createdAt });
             // If a cancel signal was lost, the durable missed record still
             // closes a currently ringing copy of this same call.
             if (useCallStore().phase === "incoming" && useCallStore().callId === id
