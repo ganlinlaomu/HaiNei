@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
     signEvent: vi.fn()
   },
   send: vi.fn(),
+  queue: vi.fn(),
+  publish: vi.fn(),
+  queueGet: vi.fn(),
+  queueUpdate: vi.fn(),
+  deliveryListeners: [] as Array<(event: any) => void>,
   list: vi.fn(),
   put: vi.fn(),
   delete: vi.fn(),
@@ -31,9 +36,12 @@ vi.mock("@/nostr/relays", () => ({
 }));
 vi.mock("@/nostr/messaging/service", () => ({
   sendDirectMessage: mocks.send,
-  queueDirectMessage: vi.fn(),
-  publishQueuedOutgoing: vi.fn(),
-  onOutgoingQueueState: vi.fn(() => () => undefined),
+  queueDirectMessage: mocks.queue,
+  publishQueuedOutgoing: mocks.publish,
+  onOutgoingQueueState: vi.fn(listener => { mocks.deliveryListeners.push(listener); return () => undefined; }),
+}));
+vi.mock("@/repositories/outgoingQueueRepository", () => ({
+  outgoingQueueRepository: { get: mocks.queueGet, update: mocks.queueUpdate }
 }));
 vi.mock("@/repositories/friendshipRepository", () => ({
   friendshipRepository: { list: mocks.list, put: mocks.put, delete: mocks.delete }
@@ -78,6 +86,9 @@ beforeEach(() => {
   mocks.getRelaysFromStorage.mockReturnValue(["wss://relay.test"]);
   mocks.list.mockResolvedValue([]);
   mocks.put.mockResolvedValue(undefined);
+  mocks.queueGet.mockResolvedValue(undefined);
+  mocks.queueUpdate.mockResolvedValue(undefined);
+  mocks.publish.mockResolvedValue({});
   mocks.delete.mockResolvedValue(undefined);
   mocks.sendCurrentProfileTo.mockResolvedValue(undefined);
   mocks.requestCurrentProfile.mockResolvedValue(undefined);
@@ -93,6 +104,12 @@ beforeEach(() => {
     },
     events: [],
     relayResults: []
+  }));
+  mocks.queue.mockImplementation(async (options: any) => ({
+    message: {
+      ...message("request", ACCOUNT), id: "queued-request", recipientPubkeys: options.recipientPubkeys,
+      plaintext: options.content, tags: options.tags,
+    }, events: [], relayResults: [],
   }));
   vi.stubGlobal("localStorage", {
     getItem: () => null,
@@ -132,7 +149,7 @@ describe("friendship state and message authorization", () => {
     mocks.getRelaysFromStorage.mockReturnValue(["wss://configured.test", "wss://shared.test"]);
     await useFriendshipsStore().sendRequest(PEER);
     expect(mocks.getRelaysFromStorage).toHaveBeenCalledWith("write");
-    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({
+    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
       relays: ["wss://configured.test", "wss://shared.test", "wss://bootstrap.test"]
     }));
   });
@@ -140,7 +157,124 @@ describe("friendship state and message authorization", () => {
   it("falls back to bootstrap relays when configured write relays are empty", async () => {
     mocks.getRelaysFromStorage.mockReturnValue([]);
     await useFriendshipsStore().sendRequest(PEER);
-    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ relays: BOOTSTRAP_RELAYS }));
+    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({ relays: BOOTSTRAP_RELAYS }));
+  });
+
+  it("returns a durable pending request without waiting for slow relays", async () => {
+    let finishPublish!: () => void;
+    mocks.publish.mockImplementationOnce(() => new Promise<void>(resolve => { finishPublish = resolve; }));
+    const store = useFriendshipsStore();
+    const result = await store.sendRequest(PEER);
+    expect(result.message.id).toBe("queued-request");
+    expect(store.getState(PEER)).toBe("outgoing_pending");
+    expect(store.requestDelivery(PEER)).toBe("pending");
+    expect(mocks.put).toHaveBeenCalled();
+    expect(mocks.publish).toHaveBeenCalledWith(ACCOUNT, "queued-request");
+    expect(mocks.send).not.toHaveBeenCalled();
+    for (const listener of mocks.deliveryListeners) listener({ accountPubkey: ACCOUNT, outgoingId: "queued-request", state: "sent" });
+    expect(store.requestDelivery(PEER)).toBe("sent");
+    finishPublish();
+  });
+
+  it("does not publish or create a relationship when durable queueing fails", async () => {
+    mocks.queue.mockRejectedValueOnce(new Error("disk full"));
+    const store = useFriendshipsStore();
+    await expect(store.sendRequest(PEER)).rejects.toThrow("disk full");
+    expect(store.getState(PEER)).toBeUndefined();
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates repeated requests while the durable queue is being written", async () => {
+    let finishQueue!: (value: any) => void;
+    mocks.queue.mockImplementationOnce(() => new Promise(resolve => { finishQueue = resolve; }));
+    const store = useFriendshipsStore();
+    store.loadedFor = ACCOUNT;
+    const first = store.sendRequest(PEER);
+    const duplicate = store.sendRequest(PEER);
+    expect(mocks.queue).toHaveBeenCalledTimes(1);
+    finishQueue({ message: { ...message("request", ACCOUNT), id: "one-request" }, events: [], relayResults: [] });
+    await Promise.all([first, duplicate]);
+    expect(mocks.queue).toHaveBeenCalledTimes(1);
+    expect(mocks.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores failed request delivery after reopening and retries the same signed request", async () => {
+    mocks.list.mockResolvedValueOnce([{
+      accountPubkey: ACCOUNT, peerPubkey: PEER, state: "outgoing_pending", requestEventId: "original-request", updatedAt: 1,
+    }]);
+    mocks.queueGet.mockResolvedValue({ state: "failed" });
+    const store = useFriendshipsStore();
+    await store.load(ACCOUNT);
+    expect(store.requestDelivery(PEER)).toBe("failed");
+    await store.retryRequest(PEER);
+    expect(mocks.publish).toHaveBeenCalledWith(ACCOUNT, "original-request");
+    expect(mocks.queue).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("refreshes delivery state changed by another device without overwriting a live queue event", async () => {
+    const store = useFriendshipsStore();
+    store.loadedFor = ACCOUNT;
+    store.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "outgoing_pending", requestEventId: "original-request", updatedAt: 1 }];
+    store.requestDeliveries["original-request"] = "failed";
+    mocks.list.mockResolvedValue(store.records);
+    mocks.queueGet.mockResolvedValue({ state: "sent" });
+    await store.reloadFromStorage(ACCOUNT);
+    expect(store.requestDelivery(PEER)).toBe("sent");
+
+    mocks.queueGet.mockImplementationOnce(async () => {
+      for (const listener of mocks.deliveryListeners) listener({ accountPubkey: ACCOUNT, outgoingId: "original-request", state: "sending" });
+      return { state: "failed" };
+    });
+    await store.reloadFromStorage(ACCOUNT);
+    expect(store.requestDelivery(PEER)).toBe("sending");
+  });
+
+  it("keeps pre-publication route errors visible and retryable", async () => {
+    mocks.publish.mockRejectedValueOnce(new Error("directory failed"));
+    mocks.queueGet.mockResolvedValue({ state: "pending" });
+    const store = useFriendshipsStore();
+    await store.sendRequest(PEER);
+    await vi.waitFor(() => expect(store.requestDelivery(PEER)).toBe("failed"));
+    expect(mocks.queueUpdate).toHaveBeenCalledWith(ACCOUNT, "queued-request", expect.objectContaining({ state: "failed" }));
+    expect(store.getState(PEER)).toBe("outgoing_pending");
+  });
+
+  it("ignores delivery updates belonging to another account", async () => {
+    mocks.publish.mockImplementationOnce(() => new Promise(() => undefined));
+    const store = useFriendshipsStore();
+    await store.sendRequest(PEER);
+    for (const listener of mocks.deliveryListeners) listener({ accountPubkey: OTHER, outgoingId: "queued-request", state: "sent" });
+    expect(store.requestDelivery(PEER)).toBe("pending");
+  });
+
+  it("does not apply request state or publish after an account switch during local persistence", async () => {
+    mocks.put.mockImplementationOnce(async () => { mocks.key.pkHex = OTHER; });
+    const store = useFriendshipsStore();
+    await expect(store.sendRequest(PEER)).rejects.toThrow("账号已切换");
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(store.requestDeliveries).toEqual({});
+  });
+
+  it("keeps a relay failure pending for automatic retry instead of removing the request", async () => {
+    mocks.publish.mockRejectedValueOnce(new Error("offline"));
+    mocks.queueGet.mockResolvedValue({ state: "waiting_network" });
+    const store = useFriendshipsStore();
+    await store.sendRequest(PEER);
+    for (const listener of mocks.deliveryListeners) listener({ accountPubkey: ACCOUNT, outgoingId: "queued-request", state: "waiting_network" });
+    expect(store.requestDelivery(PEER)).toBe("waiting_network");
+    expect(store.getState(PEER)).toBe("outgoing_pending");
+    expect(mocks.queue).toHaveBeenCalledTimes(1);
+    expect(mocks.queueUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsent withdrawal to prevent cancel overtaking request", async () => {
+    const store = useFriendshipsStore();
+    await store.sendRequest(PEER);
+    mocks.queueGet.mockResolvedValue({ state: "waiting_network" });
+    await expect(store.cancelRequest(PEER)).rejects.toThrow("请等待好友请求发送成功后再撤回");
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported NIP-44 before sending a friendship request", async () => {
@@ -158,7 +292,7 @@ describe("friendship state and message authorization", () => {
 
     await friendships.sendRequest(OTHER);
     expect(friendships.getState(OTHER)).toBe("outgoing_pending");
-    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({
+    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
       recipientPubkeys: [OTHER], tags: friendshipTags("request")
     }));
   });
@@ -333,7 +467,7 @@ describe("friendship state and message authorization", () => {
     const friendships = useFriendshipsStore();
     friendships.loadedFor = ACCOUNT;
     friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "outgoing_pending", updatedAt: 1 }];
-    await expect(friendships.sendRequest(PEER)).rejects.toThrow("好友请求已经发送");
+    await expect(friendships.sendRequest(PEER)).rejects.toThrow("好友请求已保存");
 
     friendships.records[0].state = "incoming_pending";
     await expect(friendships.sendRequest(PEER)).rejects.toThrow("对方正在等待你的确认");

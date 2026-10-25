@@ -105,22 +105,25 @@
         <div v-for="request in outgoingRequests" :key="request.peerPubkey" class="friend-swipe" @touchstart="onTouchStart($event, request.peerPubkey)" @touchmove="onTouchMove($event, request.peerPubkey)" @touchend="onTouchEnd(request.peerPubkey)" @touchcancel="onTouchCancel(request.peerPubkey)">
           <div class="friend-swipe-actions">
             <button class="swipe-action edit" type="button" @click.stop="editPendingFromSwipe(request.peerPubkey)">编辑</button>
-            <button class="swipe-action delete" type="button" @click.stop="withdrawFromSwipe(request.peerPubkey)">撤回</button>
+            <button class="swipe-action delete" type="button" :disabled="friendships.requestDelivery(request.peerPubkey) !== 'sent' || relationshipBusy.has(request.peerPubkey)" @click.stop="withdrawFromSwipe(request.peerPubkey)">撤回</button>
           </div>
           <div class="friend-item" :style="swipeStyle(request.peerPubkey)">
           <ProfileAvatar :pubkey="request.peerPubkey" :local-name="localContactName(request.peerPubkey)" :size="38" />
           <div class="friend-info">
             <strong>{{ contactName(request.peerPubkey) }}</strong>
-            <div class="small">等待对方接受<span v-if="request.requestedAt"> · {{ requestAge(request.requestedAt) }}</span></div>
+            <div class="small" role="status">{{ requestDeliveryLabel(request.peerPubkey) }}<span v-if="request.requestedAt"> · {{ requestAge(request.requestedAt) }}</span></div>
           </div>
-          <div class="friend-actions"></div>
+          <div class="friend-actions">
+            <button v-if="['failed', 'waiting_network'].includes(friendships.requestDelivery(request.peerPubkey))" class="btn" type="button"
+              :disabled="relationshipBusy.has(request.peerPubkey)" @click="retryRequest(request.peerPubkey)">{{ relationshipBusy.has(request.peerPubkey) ? '重试中…' : '重试发送' }}</button>
+          </div>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Modal for Add/Edit Friend -->
-    <div v-if="showModal" class="modal-overlay" @click="closeModal">
+    <div v-if="showModal" class="modal-overlay" @click="closeModal()">
       <div class="modal-content" @click.stop>
         <h3>{{ editMode ? (editingPending ? '编辑备注' : '编辑好友') : '添加好友' }}</h3>
         
@@ -183,7 +186,7 @@
           </div>
 
           <div class="form-actions">
-            <button type="button" class="btn btn-cancel" @click="closeModal">取消</button>
+            <button type="button" class="btn btn-cancel" @click="closeModal()">取消</button>
             <button type="submit" class="btn" :disabled="saving">
               {{ saving ? "保存中..." : "保存" }}
             </button>
@@ -196,6 +199,7 @@
 </template>
 
 <script lang="ts">
+import { startupMark } from "@/utils/debugLog";
 import { defineComponent, ref, reactive, onMounted, onBeforeUnmount, watch, computed } from "vue";
 import { useFriendsStore, Friend } from "@/stores/friends";
 import { useUIStore } from "@/stores/ui";
@@ -273,6 +277,22 @@ export default defineComponent({
     const outgoingRequests = computed(() => friendships.getOutgoingRequests());
     const localContactName = (pubkey: string) => friends.list.find(friend => friend.pubkey === pubkey)?.name;
     const contactName = (pubkey: string) => privateProfileDisplayName(profiles.getProfile(pubkey)?.nickname, pubkey, localContactName(pubkey));
+    const requestDeliveryLabel = (pubkey: string) => ({
+      pending: "请求已保存，准备发送", sending: "正在发送请求…",
+      waiting_network: "等待联网或自动重试", failed: "发送失败，请重试", sent: "已发送，等待对方接受"
+    })[friendships.requestDelivery(pubkey)];
+    const retryRequest = async (pubkey: string) => {
+      if (relationshipBusy.has(pubkey)) return;
+      relationshipBusy.add(pubkey);
+      const account = keys.pkHex;
+      try {
+        await friendships.retryRequest(pubkey);
+      } catch (error) {
+        if (keys.pkHex === account) ui.addToast(error instanceof Error ? error.message : "重试失败", 2400, "error");
+      } finally {
+        relationshipBusy.delete(pubkey);
+      }
+    };
     const requestAge = (timestamp: number) => formatRelativeTime(timestamp);
 
     function openFriendProfile(pubkey: string, event?: Event) {
@@ -396,7 +416,7 @@ export default defineComponent({
       if (!formData.value.name.trim()) formData.value.name = localName || profileName || "";
 
       if (state === "outgoing_pending") {
-        ui.addToast("好友请求已经发送，正在等待对方接受", 2_200, "info");
+        ui.addToast("好友请求已保存，请在已发送列表查看进度", 2_200, "info");
       } else {
         ui.addToast("已识别好友公钥", 1_500, "success");
       }
@@ -463,7 +483,8 @@ export default defineComponent({
       startEdit(friend, true);
     };
 
-    const closeModal = () => {
+    const closeModal = (force = false) => {
+      if (saving.value && force !== true) return;
       const active = document.activeElement;
       if (active instanceof HTMLElement && active.closest(".modal-content")) active.blur();
       showModal.value = false;
@@ -477,6 +498,8 @@ export default defineComponent({
     };
 
     const saveForm = async () => {
+      if (saving.value) return;
+      const account = keys.pkHex;
       if (!keys.isLoggedIn) {
         ui.addToast("请先登录", 2000, "error");
         return;
@@ -488,7 +511,9 @@ export default defineComponent({
         return;
       }
 
+      const startedAt = Date.now();
       saving.value = true;
+      startupMark("friend_save_started", { editing: editMode.value });
       try {
         if (editMode.value) {
           // Update existing friend
@@ -502,9 +527,10 @@ export default defineComponent({
           };
           const ok = await friends.upsertMetadata(formData.value.originalPubkey, patch);
 
+          if (keys.pkHex !== account) return;
           if (ok) {
             ui.addToast("好友信息已更新", 2000, "success");
-            closeModal();
+            closeModal(true);
           } else {
             ui.addToast("更新失败", 2000, "error");
           }
@@ -532,36 +558,44 @@ export default defineComponent({
             return;
           }
           if (currentState === "outgoing_pending") {
-            ui.addToast("好友请求已经发送，正在等待对方接受", 2200, "info");
+            ui.addToast("好友请求已保存，请在已发送列表查看进度", 2200, "info");
+            closeModal(true);
+            activeSection.value = "outgoing";
             return;
           }
           if (currentState === "incoming_pending") {
             ui.addToast("对方正在等待你的确认", 2200, "info");
-            closeModal();
+            closeModal(true);
             activeSection.value = "incoming";
             return;
           }
 
+          if (!keys.supportsNip44) throw new Error("当前登录方式暂不支持加密好友请求");
           const groupInput = formData.value.groupsInput.trim();
           const group = groupInput.length > 0 ? groupInput : undefined;
           const savedName = nameVal
             || privateProfileDisplayName(profiles.getProfile(hexKey)?.nickname, hexKey);
 
-          await friendships.sendRequest(hexKey);
           const metadataSaved = await friends.upsertMetadata(hexKey, {
             name: savedName,
             groups: group ? [group] : undefined,
             group
           });
-          if (!metadataSaved) throw new Error("好友请求已发送，但备注保存失败");
-          ui.addToast("好友请求已发送，等待对方接受", 2400, "success");
-          closeModal();
+          if (keys.pkHex !== account) return;
+          if (!metadataSaved) throw new Error("备注保存失败，请重试");
+          await friendships.sendRequest(hexKey);
+          if (keys.pkHex !== account) return;
+          ui.addToast("好友请求已保存，正在发送", 2400, "success");
+          activeSection.value = "outgoing";
+          closeModal(true);
         }
       } catch (e) {
+        if (keys.pkHex !== account) return;
         console.error("Save friend error:", e);
         ui.addToast(e instanceof Error ? e.message : "操作失败", 2000, "error");
       } finally {
         saving.value = false;
+        startupMark("friend_save_finished", { durationMs: Date.now() - startedAt });
       }
     };
 
@@ -667,6 +701,9 @@ export default defineComponent({
     return {
       initialLoading, initialLoadError, loadFriendsPage, onTouchCancel,
       friends,
+      friendships,
+      requestDeliveryLabel,
+      retryRequest,
       router,
       relationshipBusy,
       acceptedFriends,
