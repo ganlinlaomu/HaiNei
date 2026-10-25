@@ -1,4 +1,3 @@
-import Dexie from "dexie";
 import { db, type SyncedMessageRecord } from "@/db/dexie";
 import { metaRepository } from "@/repositories/metaRepository";
 import { CALL_LOG_TYPE, CALL_MISSED_TYPE } from "@/nostr/messaging/callControl";
@@ -73,7 +72,8 @@ export async function readVisibleCallHistoryPage(account: string, requested: num
   const deleted = await loadDeletedCallIds(account);
   const seen = new Set<string>(), items: CallHistoryItem[] = [];
   await db.syncedMessages.where("[accountPubkey+createdAt+id]")
-    .between([account, Dexie.minKey, Dexie.minKey], [account, Dexie.maxKey, Dexie.maxKey])
+    // IndexedDB does not permit +/-Infinity as compound-key members.
+    .between([account, 0, ""], [account, Number.MAX_SAFE_INTEGER, "\uffff"])
     .reverse().until(() => items.length > count).each(record => {
       const item = callHistoryItem(record, account);
       if (!item || (missedOnly && !item.missed) || deleted.has(item.id) || seen.has(item.id)) return;

@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import Dexie, { liveQuery } from "dexie";
+import { liveQuery } from "dexie";
 import { db } from "@/db/dexie";
 import { metaRepository } from "@/repositories/metaRepository";
 import {
@@ -89,8 +89,8 @@ export const useCallHistoryStore = defineStore("callHistory", {
         const deleted = await loadDeletedCallIds(account);
         const found: CallHistoryItem[] = [];
         await db.syncedMessages.where("[accountPubkey+createdAt+id]")
-          .between([account, cutoff + 1, Dexie.minKey],
-            [account, Dexie.maxKey, Dexie.maxKey])
+          .between([account, cutoff + 1, ""],
+            [account, Number.MAX_SAFE_INTEGER, "\uffff"])
           .each(record => {
             const item = callHistoryItem(record, account);
             if (item?.missed && !deleted.has(item.id)) found.push(item);
