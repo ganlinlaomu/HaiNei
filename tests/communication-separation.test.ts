@@ -18,6 +18,9 @@ describe("separate DMs, missed calls, contacts and history deletion", () => {
     const state = src("src/stores/callHistory.ts");
     expect(calls).toContain("@click.stop=\"deleteCallRecord(item)\"");
     expect(calls).toContain("!callHistory.isDeleted(item.id)");
+    expect(calls).toContain("readVisibleCallHistoryPage(account, count, missed)");
+    expect(src("src/services/callHistory.ts")).toContain('deleted.has(item.id)');
+    expect(src("src/services/callHistory.ts")).toContain('loadDeletedCallIds(account)');
     expect(calls).toContain('class="call-swipe-actions"');
     expect(calls).toContain("onTouchMove");
     expect(calls).not.toContain("item.text }}");

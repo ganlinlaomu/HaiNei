@@ -71,9 +71,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import Dexie, { liveQuery } from "dexie";
-import { db } from "@/db/dexie";
-import { callHistoryItem, uniqueCallHistory, type CallHistoryItem } from "@/services/callHistory";
+import { liveQuery } from "dexie";
+import { readVisibleCallHistoryPage, uniqueCallHistory, type CallHistoryItem } from "@/services/callHistory";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useFriendsStore } from "@/stores/friends";
@@ -124,18 +123,10 @@ function subscribe() {
   const account = keys.pkHex, count = limit.value, missed = missedOnly.value;
   if (!account || !keys.isUnlocked) { loading.value = false; return; }
   loading.value = true;
-  subscription = liveQuery(async () => {
-    const items: CallHistoryItem[] = [];
-    await db.syncedMessages.where("[accountPubkey+createdAt+id]")
-      .between([account, Dexie.minKey, Dexie.minKey], [account, Dexie.maxKey, Dexie.maxKey])
-      .reverse().until(() => items.length > count).each(record => {
-        const item = callHistoryItem(record, account);
-        if (item && (!missed || item.missed) && !items.some(row => row.id === item.id)) items.push(item);
-      });
-    return uniqueCallHistory(items);
-  }).subscribe({ next: items => {
+  subscription = liveQuery(() => readVisibleCallHistoryPage(account, count, missed))
+    .subscribe({ next: page => {
     if (token !== generation) return;
-    records.value = items.slice(0, count); hasMore.value = items.length > count; loading.value = false;
+    records.value = page.items; hasMore.value = page.hasMore; loading.value = false;
   }, error: () => { if (token === generation) { loading.value = false; error.value = "读取通话记录失败，请重试"; } } });
 }
 watch(() => [keys.pkHex, keys.isUnlocked, limit.value, missedOnly.value], subscribe, { immediate: true, flush: "sync" });
