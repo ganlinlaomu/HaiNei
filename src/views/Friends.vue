@@ -230,7 +230,6 @@ import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { openProfile } from "@/utils/profileNavigation";
 import { useSwipeActions } from "@/composables/useSwipeActions";
-import 
 import QrScannerSheet from "@/components/QrScannerSheet.vue";
 import { parseNostrProfileQrValue } from "@/utils/nostrQr";
 import { friendGroupTags, UNGROUPED_FRIEND_LABEL } from "@/utils/friendAudience";
@@ -238,7 +237,7 @@ import { loadAccountStoresOnce, storesLoadedForAccount, waitForFirstPaint } from
 
 export default defineComponent({
   name: "Friends",
-  components: { ProfileAvatar, SecondaryPageHeader, QrScannerSheet },
+  components: { ProfileAvatar, QrScannerSheet },
   setup() {
     const friends = useFriendsStore();
     const friendships = useFriendshipsStore();
