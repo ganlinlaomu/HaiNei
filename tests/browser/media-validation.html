@@ -8,6 +8,7 @@
     import { createApp, h, nextTick } from "vue";
     import EncryptedVideoPlayer from "/src/components/EncryptedVideoPlayer.vue";
     import { validateTransferAssistant } from "/tests/browser/transfer-validation.ts";
+    import { validateCallMedia } from "/tests/browser/call-validation.ts";
     import {
       encryptVideoFile,
       exportKeyToBase64,
@@ -123,7 +124,8 @@
       if (fetchCount !== 2) throw new Error(`expected exactly two downloads, got ${fetchCount}`);
 
       await validateTransferAssistant();
-      result.textContent = "PASS: encrypted video timeout retry, AES-GCM metadata load, Blob release, transfer batch UI and save";
+      await validateCallMedia();
+      result.textContent = "PASS: encrypted video timeout retry, AES-GCM metadata load, Blob release, transfer batch UI and save, bidirectional voice RTP in both initiator roles";
       document.title = "PASS";
     } catch (error) {
       result.textContent = "FAIL: " + (error?.stack || error);

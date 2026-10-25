@@ -7,6 +7,7 @@ import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
 import { debugLog, startupMark } from "@/utils/debugLog";
+import { callMediaState, createCallMediaGate } from "@/services/callMedia";
 import { incomingRingtoneArmed, releaseRingtoneElement, reloadRingtoneElement, ringtoneElement, setCallAudioActive, setRingAudioSession } from "@/utils/audioUnlock";
 import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
@@ -48,6 +49,7 @@ type CallSession = {
   remoteAudio: HTMLAudioElement | null;
   remoteStream: MediaStream | null;
   audioCleanup: (() => void) | null;
+  mediaCleanup: (() => void) | null;
   audioRetryTimer: ReturnType<typeof setTimeout> | null;
   audioFailures: number;
   /** Consecutive RTP samples received while WebKit reports its audio track muted. */
@@ -76,7 +78,7 @@ function account() {
 function createSession(id: string, peer: string, direction: CallDirection): CallSession {
   const session: CallSession = {
     id, peer, direction, owner: account(), room: null, localStream: null, remoteAudio: null, remoteStream: null,
-    audioCleanup: null, audioRetryTimer: null, audioFailures: 0, remoteMutedSamples: 0, routeResetAttempts: 0, playRequest: 0, outputDeviceId: "",
+    audioCleanup: null, mediaCleanup: null, audioRetryTimer: null, audioFailures: 0, remoteMutedSamples: 0, routeResetAttempts: 0, playRequest: 0, outputDeviceId: "",
     mediaPeer: "", timers: new Set(), peerLossTimer: null, ringtone: null, wakeLock: null,
     statsTimer: null, quality: { route: "", rttMs: 0, lost: 0, received: 0, poorSamples: 0, samples: 0, inboundStatsSeen: false },
   };
@@ -146,6 +148,16 @@ function startQualitySampling(session: CallSession, room: Room) {
         || String(entry.id || "").toLowerCase().includes("rtpaudio");
       const inbound: any = inboundCandidates.find(isAudioRtp) || inboundCandidates.find(entry => !entry.kind && !entry.mediaType) || null;
       const outbound: any = outboundCandidates.find(isAudioRtp) || outboundCandidates.find(entry => !entry.kind && !entry.mediaType) || null;
+      // Only switch tracks when the RTP report identifies the actual receiver.
+      // Replaying an old/mismatched stream cannot unmute the current receiver.
+      const receiverTrack = (connection.getReceivers?.() || []).map(receiver => receiver.track)
+        .find(track => track.kind === "audio" && track.readyState === "live" && track.id === inbound?.trackIdentifier);
+      if (receiverTrack?.muted === false && inbound?.packetsReceived > 0 && session.remoteStream
+        && !session.remoteStream.getAudioTracks().some(track => track.muted === false && track.readyState === "live")
+        && !session.remoteStream.getAudioTracks().includes(receiverTrack)) {
+        startupMark("call_receiver_track_corrected", { previousTrackMuted: session.remoteStream.getAudioTracks()[0]?.muted ?? null });
+        playRemote(session, new MediaStream([receiverTrack]), "receiver_track_corrected");
+      }
       session.quality.inboundStatsSeen ||= !!inbound;
       const rttMs = pair?.currentRoundTripTime ? Math.round(pair.currentRoundTripTime * 1000) : 0;
       const local = pair ? report.get(pair.localCandidateId)?.candidateType || "" : "";
@@ -209,6 +221,8 @@ function startQualitySampling(session: CallSession, room: Room) {
           totalSamplesDuration: inbound?.totalSamplesDuration ?? null,
           outboundCandidateCount: outboundCandidates.length,
           packetsSent: outbound?.packetsSent ?? null,
+          receiverCount: connection.getReceivers?.().filter(receiver => receiver.track?.kind === "audio").length ?? null,
+          outputMatchesReceiver: receiverTrack ? session.remoteStream?.getAudioTracks?.().includes(receiverTrack) ?? false : null,
           trackCount: session.remoteStream?.getAudioTracks?.().length ?? 0,
           trackMuted: track?.muted ?? null,
           trackEnabled: track?.enabled ?? null,
@@ -218,6 +232,7 @@ function startQualitySampling(session: CallSession, room: Room) {
           sinkId: session.remoteAudio ? (session.remoteAudio as RoutedAudio).sinkId ?? "unsupported" : "no_element",
           sessionType: browserCallAudioSession()?.type || "unknown",
           sessionState: browserCallAudioSession()?.state || "unknown",
+          ...callMediaState(connection, session.localStream),
         });
         if (!inbound) startupMark("call_audio_stats_unavailable", {
           inboundCandidateCount: inboundCandidates.length,
@@ -525,8 +540,9 @@ function attemptRemotePlayback(session: CallSession, reason: string, reset = fal
     if (!isCurrent(session) || session.playRequest !== request) return;
     clearAudioRetry(session);
     session.audioFailures = 0;
-    store.audioStatus = "playing";
-    startupMark("call_remote_audio_playing", { reason });
+    const track = stream.getAudioTracks?.()[0];
+    store.audioStatus = track?.muted === true ? "waiting" : "playing";
+    startupMark("call_remote_audio_playing", { reason, trackMuted: track?.muted ?? null });
   }, error => {
     if (!isCurrent(session) || session.playRequest !== request) return;
     const name = error instanceof Error ? error.name : "unknown";
@@ -544,7 +560,7 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
     if (!isCurrent(session)) return;
     clearAudioRetry(session);
     session.audioFailures = 0;
-    store.audioStatus = "playing";
+    store.audioStatus = stream.getAudioTracks?.()[0]?.muted === true ? "waiting" : "playing";
   };
   const paused = () => {
     if (!isCurrent(session)) return;
@@ -565,6 +581,7 @@ function watchRemoteAudio(session: CallSession, stream: MediaStream, audio: HTML
     // A late unmute often arrives milliseconds after the first stream/play.
     // Rebinding srcObject here aborts WebKit's still-starting audio renderer.
     if (audio.paused || store.audioStatus === "blocked") attemptRemotePlayback(session, "track_unmuted");
+    else store.audioStatus = "playing";
   };
   const trackEnded = () => { if (isCurrent(session)) startupMark("call_remote_track_ended"); };
   const foreground = () => {
@@ -807,14 +824,26 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
   const addLocalStream = (peerId: string) => {
     const stream = session.localStream;
     if (!stream || !active()) return;
+    const connection = currentRoom.getPeers()[peerId];
+    if (connection) startupMark("call_microphone_attaching", callMediaState(connection, stream));
     for (const sending of currentRoom.addStream(stream, { target: peerId })) {
-      void sending.catch(error => {
+      void sending.then(() => {
+        if (active() && connection) startupMark("call_microphone_attached", callMediaState(connection, stream));
+      }).catch(error => {
         if (active()) debugLog("system", "call_stream_send_failed", {
           reason: error instanceof Error ? error.message.slice(0, 80) : "unknown",
         }, "warn");
       });
     }
   };
+  const media = createCallMediaGate({
+    direction: session.direction,
+    current: active,
+    connection: peerId => currentRoom.getPeers()[peerId],
+    attach: addLocalStream,
+  });
+  session.mediaCleanup?.();
+  session.mediaCleanup = media.clear;
   // A second device of the callee joined after another one answered.
   const taken = currentRoom.makeAction<boolean>("taken", {
     onMessage: () => { if (active()) void finish(session, "answered_elsewhere", false); },
@@ -831,7 +860,7 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
         session.mediaPeer = peerId;
         store.reconnecting = false;
         startupMark("call_reconnected", { newPeer: true });
-        addLocalStream(peerId);
+        media.joined(peerId);
         return;
       }
       // The caller is the room's arbiter. An answering device must not mark
@@ -848,10 +877,13 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
       store.reconnecting = false;
       startupMark("call_reconnected", { newPeer: false });
     }
-    addLocalStream(peerId);
+    media.joined(peerId);
   };
   currentRoom.onPeerStream = (stream, peerId) => {
     if (!active() || peerId !== session.mediaPeer) return;
+    // ontrack can precede setLocalDescription(answer). The gate waits for
+    // stable before the callee adds audio, avoiding simultaneous audio offers.
+    media.received(peerId);
     // Release the outgoing ringback's HTMLAudioElement *before* WebKit binds
     // and plays the remote stream. Some peers arrive before the accept signal.
     stopTone(session, true);
@@ -866,6 +898,7 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
   };
   currentRoom.onPeerLeave = peerId => {
     if (!active() || peerId !== session.mediaPeer) return;
+    media.forget(peerId);
     if (store.phase !== "active") {
       session.mediaPeer = "";
       return;
@@ -885,6 +918,8 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
 
 async function releaseSessionResources(session: CallSession) {
   clearTimers(session);
+  session.mediaCleanup?.();
+  session.mediaCleanup = null;
   // Cancelled / declined / unanswered calls must not keep ringtone resources.
   stopTone(session, true);
   const leaving = session.room;

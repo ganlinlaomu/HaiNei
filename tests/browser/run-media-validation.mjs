@@ -18,6 +18,9 @@ const child = spawn(chrome, [
   "--disable-dev-shm-usage",
   "--disable-background-timer-throttling",
   "--autoplay-policy=no-user-gesture-required",
+  // Native voice RTP fixtures connect two peers locally, including in CI
+  // environments with no routable network interface.
+  "--allow-loopback-in-peer-connection",
   "--remote-debugging-port=9222",
   `--user-data-dir=${profile}`,
   url,
