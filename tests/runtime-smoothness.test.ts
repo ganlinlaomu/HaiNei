@@ -71,7 +71,8 @@ describe("v0.1.10 runtime smoothness", () => {
     expect(conversations).toContain('@pointerdown="warmConversation(conversation.peerPubkey)"');
     expect(conversations).toContain("directMessages.prefetchPeerHistory(pubkey)");
     expect(settings).toContain('@pointerdown="loadPrivateSpaceView"');
-    expect(settings).toContain('@pointerdown="loadFriendsView"');
+    const header = readFileSync("src/components/HeaderBar.vue", "utf8");
+    expect(header).toContain('@pointerdown="preloadBottomTab(\'friends\')"');
     expect(card).toContain('@pointerdown="preloadProfile"');
     expect(routes).toContain("component: loadMessagesView");
     expect(routes).toContain("component: loadProfileView");

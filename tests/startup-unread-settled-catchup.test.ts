@@ -216,7 +216,7 @@ describe("conversation list sync phase", async () => {
   it("shows the phase next to the 私信 title", async () => {
     const { readFileSync } = await import("node:fs");
     const view = readFileSync("src/views/Conversations.vue", "utf8");
-    expect(view).toContain('<h1>私信</h1>\n        <span v-if="syncLabel" class="sync-label"');
+    expect(view).toContain('<h1 class="primary-page-title">私信</h1>\n        <span v-if="syncLabel" class="sync-label"');
     expect(view).toContain('phase === "connecting" ? "连接中…" : phase === "syncing" ? "同步中…" : ""');
   });
 });

@@ -1,7 +1,7 @@
 <template>
   <main class="settings-container app-page">
+    <header class="primary-page-header"><h1 class="primary-page-title">我的</h1></header>
     <section v-if="!hasAccount" class="card">
-      <h2>我的</h2>
       <p class="small">当前未登录。</p>
       <button class="btn btn-primary" type="button" @click="router.push('/login')">前往登录</button>
     </section>
@@ -14,7 +14,6 @@
       </header>
       <button class="top-level-row" type="button" @pointerdown="loadProfileView" @focus="loadProfileView" @click="openOwnProfile"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><strong>我的资料</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @pointerdown="loadPrivateSpaceView" @focus="loadPrivateSpaceView" @click="openPrivateSpace"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 4h12v16H6V6a2 2 0 0 1 2-2Z"/><path d="M9 9h8M9 13h8M9 17h5"/></svg></span><span class="space-row-label"><strong>私人空间</strong><small>收藏 · 笔记 · 待办</small></span></span><span class="row-chevron" aria-hidden="true">›</span></button>
-      <button class="top-level-row" type="button" @pointerdown="loadFriendsView" @focus="loadFriendsView" @click="openFriends"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 15.5a5 5 0 0 1 7 4.5"/></svg></span><strong>好友 / 好友分组</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
       <button class="top-level-row" type="button" @pointerdown="preloadSystemSettings" @focus="preloadSystemSettings" @click="openSystemSettings"><span class="row-main"><span class="row-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></span><strong>设置</strong></span><span class="row-chevron" aria-hidden="true">›</span></button>
     </section>
     <MyQrCodeSheet :open="showMyQr" :pubkey="keyStore.pkHex" :nickname="nickname" @close="showMyQr = false" />
@@ -29,7 +28,7 @@ import { useKeyStore } from "@/stores/keys";
 import { useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 import { pubkeyToNpub, shortNpub } from "@/utils/nostrQr";
-import { loadFriendsView, loadProfileView, loadSystemSettingsView, loadPrivateSpaceView } from "@/router/lazyViews";
+import { loadProfileView, loadSystemSettingsView, loadPrivateSpaceView } from "@/router/lazyViews";
 import { runAfterFirstPaint, runWhenIdle } from "@/utils/bottomTabActivation";
 
 const keyStore = useKeyStore();
@@ -61,11 +60,6 @@ function openPrivateSpace() {
   void router.push("/settings/private-space");
 }
 
-function openFriends() {
-  void loadFriendsView();
-  void router.push("/friends");
-}
-
 onMounted(() => {
   // The Settings hub is already local. Warm likely next screens after first
   // paint and only while idle so navigation remains responsive.
@@ -73,7 +67,6 @@ onMounted(() => {
     preloadSystemSettings();
     runWhenIdle(() => {
       void loadProfileView();
-      void loadFriendsView();
     }, 800);
   });
 });

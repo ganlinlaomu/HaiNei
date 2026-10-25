@@ -42,7 +42,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(home).toContain('aria-label="查看通知"');
     expect(home).toContain("notifications.unreadCount");
     const settings = readThemedSource(join(process.cwd(), "src/views/Settings.vue"), "utf8");
-    expect(settings).toContain('router.push("/friends")');
+    expect(settings).not.toContain('router.push("/friends")');
+    expect(settings).not.toContain("好友 / 好友分组");
   });
 
   it("shows profile save progress and prevents duplicate submissions", () => {
@@ -270,8 +271,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(system).toContain("存储 / Cache");
     expect(system).toContain("高级设置 / Diagnostics");
     expect(system).toContain('<SecondaryPageHeader title="设置" back-label="返回我的" />');
-    expect(friends).toContain('<header class="contacts-header">');
-    expect(friends).toContain('<h1>通讯录</h1>');
+    expect(friends).toContain('<header class="contacts-header primary-page-header">');
+    expect(friends).toContain('<h1 class="primary-page-title">通讯录</h1>');
     expect(friends).toContain('filteredAcceptedFriends');
     expect(friends).toContain('components: { ProfileAvatar, QrScannerSheet }');
     expect(saved).toContain('<SecondaryPageHeader title="已收藏" back-label="返回我的" />');
@@ -295,7 +296,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(profile).toContain(".profile-editor{padding:8px 16px 0}");
     expect(saved).toContain(".saved-list{display:grid;gap:12px;padding:0 10px}");
     expect(friends).not.toContain(".friends-header{");
-    expect(friends).toContain('class="contacts-search"');
+    expect(friends).toContain('class="contacts-search primary-page-search"');
     expect(router).toContain('path: "/settings/system"');
   });
 

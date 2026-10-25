@@ -950,7 +950,9 @@ describe("call engine", () => {
     const overlay = readFileSync("src/components/CallOverlay.vue", "utf8");
     expect(overlay).toContain('call.remoteRinging ? "对方响铃中…" : "正在呼叫…"');
     expect(overlay).toContain('call.direction === "outgoing" ? "重拨" : "回拨"');
-    expect(readFileSync("src/views/Messages.vue", "utf8")).toContain('v-if="isCallRecord(message) && accepted" class="call-back-link"');
+    const chat = readFileSync("src/views/Messages.vue", "utf8");
+    expect(chat).not.toContain('isCallRecord(message)');
+    expect(chat).toContain('aria-label="语音通话"');
   });
 
   it("closes at once when you end the call, briefly shows why when the other side did", async () => {

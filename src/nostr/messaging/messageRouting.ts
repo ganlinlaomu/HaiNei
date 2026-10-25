@@ -1,6 +1,6 @@
 import { DM_RECEIPT_TYPE, isDmReceiptPayload } from "./dmReceipts";
 import { DM_BURN_CONTROL_TYPE, isBurnControlPayload } from "./dmBurnControl";
-import { CALL_CONTROL_TYPE, isCallPayload } from "./callControl";
+import { CALL_CONTROL_TYPE, CALL_LOG_TYPE, isCallPayload } from "./callControl";
 
 // Until 2026-10-10 18:30 JST, an unmarked NIP-17 rumor was a HaiNei Feed
 // post. Afterwards, newly authored posts have an explicit encrypted tag.
@@ -63,6 +63,8 @@ export function classifyPrivateMessage(message: RoutableMessage): MessageRoute {
     ? "feed" : "direct";
 }
 
+/** A call log remains a durable NIP-17 record, not an ordinary chat message. */
 export function isConversationMessage(message: RoutableMessage) {
-  return classifyPrivateMessage(message) === "direct";
+  return !hasMessageType(message.tags, CALL_LOG_TYPE)
+    && classifyPrivateMessage(message) === "direct";
 }

@@ -41,6 +41,12 @@ describe("liquid bottom navigation", () => {
     expect(source).toContain("@media (min-width: 768px)");
     expect(source).toContain(".nav-liquid-track {");
     expect(source).toContain("display: none;");
+    expect(source).toContain("bottom: calc(12px + env(safe-area-inset-bottom));");
+    expect(source).toContain("left: max(16px, env(safe-area-inset-left));");
+    expect(source).toContain("right: max(16px, env(safe-area-inset-right));");
+    expect(source).toContain("border-radius: 22px;");
+    expect(source).toContain("inset: 6px 8px;");
+    expect(source).toContain("    left: 0;");
     expect(source).toContain("@media (prefers-reduced-motion: reduce)");
     expect(source).toContain("pointer-events: none;");
   });

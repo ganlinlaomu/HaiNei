@@ -12,7 +12,7 @@
       <span class="nav-label">私信</span>
     </router-link>
     <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 2 }" to="/calls" aria-label="通话" @pointerdown="preloadBottomTab('calls')" @focus="preloadBottomTab('calls')" @click="handleNavigation">
-      <span class="icon-wrapper"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg></span>
+      <span class="icon-wrapper"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg><span v-if="callHistory.missedUnreadCount > 0" class="badge" :aria-label="`${callHistory.missedUnreadCount} 个新未接来电`">{{ callHistory.missedUnreadCount > 99 ? "99+" : callHistory.missedUnreadCount }}</span></span>
       <span class="nav-label">通话</span>
     </router-link>
     <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 3 }" to="/friends" aria-label="通讯录" @pointerdown="preloadBottomTab('friends')" @focus="preloadBottomTab('friends')" @click="handleNavigation">
@@ -27,12 +27,13 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, computed } from "vue";
+import { defineComponent, computed, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 
 import { useDirectMessagesStore } from "@/stores/directMessages";
+import { useCallHistoryStore } from "@/stores/callHistory";
 import { nearbyUnread } from "@/services/nearbyUnread";
 import { loadConversationsView, loadCallsView, loadFriendsView, loadSettingsView } from "@/router/lazyViews";
 import { getBottomNavTabIndex } from "@/utils/bottomNavigation";
@@ -45,8 +46,18 @@ export default defineComponent({
     const ui = useUIStore();
 
     const directMessages = useDirectMessagesStore();
+    const callHistory = useCallHistoryStore();
     const route = useRoute();
     const activeTabIndex = computed(() => getBottomNavTabIndex(route.path));
+    watch(() => [keys.pkHex, keys.isUnlocked] as const, ([account, unlocked]) => {
+      if (account && unlocked) void callHistory.load(account).then(() => {
+        if (route.path === "/calls" && keys.pkHex === account && keys.isUnlocked) void callHistory.acknowledge(account);
+      }).catch(() => undefined);
+      else callHistory.reset();
+    }, { immediate: true });
+    watch(() => route.path, path => {
+      if (path === "/calls" && keys.pkHex && keys.isUnlocked) void callHistory.acknowledge(keys.pkHex).catch(() => undefined);
+    });
     const isLoggedIn = computed(() => !!keys.pkHex);
     const shortPk = computed(() => (keys.pkHex ? keys.pkHex.slice(0, 8) + "..." : ""));
     
@@ -72,7 +83,7 @@ export default defineComponent({
       ui.closePostEditor();
     }
     
-    return { isLoggedIn, shortPk, preloadBottomTab, handleNavigation, directMessages, nearbyUnread, shouldShowBottomNav, activeTabIndex, ui };
+    return { isLoggedIn, shortPk, preloadBottomTab, handleNavigation, callHistory, directMessages, nearbyUnread, shouldShowBottomNav, activeTabIndex, ui };
   }
 });
 </script>
@@ -95,14 +106,15 @@ export default defineComponent({
 
 .bottom-nav {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  /* Keep the bar clear of iPhone home indicator and screen edges. */
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
 
-  /* 尺寸 */
-  height: calc(62px + env(safe-area-inset-bottom));
-  padding-top: 5px;
-  padding-bottom: calc(5px + env(safe-area-inset-bottom));
+  /* Fixed-height floating bar: safe area is in the outside gap. */
+  box-sizing: border-box;
+  height: 64px;
+  padding: 6px 8px;
 
   /* 布局 */
   display: flex;
@@ -111,8 +123,9 @@ export default defineComponent({
 
   /* 视觉（替代 backdrop-filter，性能友好） */
   background: var(--bg-rgba-255-255-255-0-94);
-  border-top: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 -1px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 22px;
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.13);
 
   /* 层级 */
   z-index: var(--z-bottom-nav, 9999);
@@ -127,10 +140,10 @@ export default defineComponent({
   pointer-events: auto;
 }
 
-/* Single mobile-only selector; track follows the nav content box and safe area. */
+/* Keep the selected pill aligned with the five touch targets inside the inset bar. */
 .nav-liquid-track {
   position: absolute;
-  inset: 5px 0 calc(5px + env(safe-area-inset-bottom));
+  inset: 6px 8px;
   display: flex;
   align-items: center;
   z-index: 0;
@@ -328,6 +341,7 @@ export default defineComponent({
 
   .bottom-nav {
     top: 0;
+    left: 0;
     right: auto;
     bottom: 0;
     width: var(--navigation-rail-width);
@@ -336,8 +350,9 @@ export default defineComponent({
     flex-direction: column;
     justify-content: center;
     gap: 12px;
-    border-top: 0;
+    border: 0;
     border-right: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 0;
     box-shadow: 1px 0 8px rgba(0, 0, 0, 0.05);
     transform: none;
     -webkit-transform: none;
