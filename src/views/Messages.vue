@@ -773,7 +773,7 @@ function recommendationActionLabel(pubkey: string) {
   if (pubkey === keys.pkHex) return "这是你自己";
   const status = friendships.getState(pubkey);
   if (status === "accepted") return "查看资料";
-  if (status === "outgoing_pending") return "已发送申请";
+  if (status === "outgoing_pending") return "申请已保存";
   if (status === "incoming_pending") return "接受好友申请";
   return "添加好友";
 }
@@ -790,7 +790,7 @@ async function actOnRecommendation(pubkey: string) {
   try {
     if (friendships.getState(pubkey) === "incoming_pending") await friendships.acceptRequest(pubkey);
     else await friendships.sendRequest(pubkey);
-    if (!disposed && keys.pkHex === account) ui.addToast(friendships.isAccepted(pubkey) ? "已添加好友" : "好友申请已发送", 2000, "success");
+    if (!disposed && keys.pkHex === account) ui.addToast(friendships.isAccepted(pubkey) ? "已添加好友" : "好友申请已保存，正在发送", 2000, "success");
   } catch (error) {
     if (!disposed && keys.pkHex === account) ui.addToast(error instanceof Error ? error.message : "操作失败，请稍后重试", 2200, "error");
   } finally {

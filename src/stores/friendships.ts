@@ -1,6 +1,9 @@
 import { defineStore } from "pinia";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
-import { sendDirectMessage } from "@/nostr/messaging/service";
+import { sendDirectMessage, queueDirectMessage, publishQueuedOutgoing, onOutgoingQueueState } from "@/nostr/messaging/service";
+import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
+import type { OutgoingQueueState } from "@/db/dexie";
+import { startupMark } from "@/utils/debugLog";
 import { decodeFriendshipControl, friendshipTags, type FriendshipAction, type FriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { DEFAULT_RELAYS, getRelaysFromStorage } from "@/nostr/relays";
 import { friendshipRepository } from "@/repositories/friendshipRepository";
@@ -37,6 +40,27 @@ export function isFriendshipAcceptedAt(friendship: FriendshipRecord | undefined,
 }
 
 const activeFriendshipControls = new Map<string, { action: FriendshipAction; promise: Promise<any> }>();
+
+let requestDeliveryObserverInstalled = false;
+function ensureRequestDeliveryObserver() {
+  if (requestDeliveryObserverInstalled) return;
+  requestDeliveryObserverInstalled = true;
+  onOutgoingQueueState(event => {
+    const store = useFriendshipsStore();
+    if (store.loadedFor !== event.accountPubkey || useKeyStore().pkHex !== event.accountPubkey) return;
+    if (store.loading || store.records.some(record => record.requestEventId === event.outgoingId)) {
+      store.requestDeliveries[event.outgoingId] = event.state;
+    }
+  });
+}
+
+async function readRequestDeliveries(account: string, records: FriendshipRecord[]) {
+  const pending = records.filter(record => record.state === "outgoing_pending" && record.requestEventId);
+  return Promise.all(pending.map(async record => {
+    const queued = await outgoingQueueRepository.get(account, record.requestEventId!);
+    return { outgoingId: record.requestEventId!, state: queued?.state ?? ("sent" as OutgoingQueueState) };
+  }));
+}
 
 function friendshipControlRelays() {
   return [...new Set([...getRelaysFromStorage("write"), ...DEFAULT_RELAYS])];
@@ -114,7 +138,7 @@ export function reduceFriendshipControl(
 }
 
 export const useFriendshipsStore = defineStore("friendships", {
-  state: () => ({ records: [] as FriendshipRecord[], loadedFor: "", loading: false, authorizationReady: false }),
+  state: () => ({ records: [] as FriendshipRecord[], loadedFor: "", loading: false, authorizationReady: false, requestDeliveries: {} as Record<string, OutgoingQueueState> }),
   getters: {
     getRecord: state => (peerPubkey: string) => state.records.find(item => item.peerPubkey === normalized(peerPubkey)),
     getState(): (peerPubkey: string) => FriendshipState | undefined {
@@ -122,6 +146,13 @@ export const useFriendshipsStore = defineStore("friendships", {
     },
     isAccepted(): (peerPubkey: string) => boolean {
       return peerPubkey => this.getState(peerPubkey) === "accepted";
+    },
+    requestDelivery(): (peerPubkey: string) => OutgoingQueueState {
+      return peerPubkey => {
+        const id = this.getRecord(peerPubkey)?.requestEventId;
+        // Legacy requests may predate the durable outgoing queue.
+        return id ? this.requestDeliveries[id] || "pending" : "sent";
+      };
     },
     getIncomingRequests: state => () => state.records.filter(item => item.state === "incoming_pending"),
     getOutgoingRequests: state => () => state.records.filter(item => item.state === "outgoing_pending"),
@@ -132,13 +163,21 @@ export const useFriendshipsStore = defineStore("friendships", {
       if (!account) return this.reset();
       if (this.loadedFor === account && !this.loading && this.authorizationReady) return;
       this.records = [];
+      this.requestDeliveries = {};
       this.loadedFor = account;
+      ensureRequestDeliveryObserver();
       this.loading = true;
       this.authorizationReady = false;
       try {
         const records = await friendshipRepository.list(account);
+        const outgoing = await readRequestDeliveries(account, records);
         if (this.loadedFor === account) {
           this.records = records;
+          // Install the observer before reading disk; never overwrite a newer
+          // in-flight delivery event with the snapshot that was just loaded.
+          for (const item of outgoing) {
+            if (!this.requestDeliveries[item.outgoingId]) this.requestDeliveries[item.outgoingId] = item.state;
+          }
           this.authorizationReady = true;
           notifyDirectMessageAuthorizationChanged(account);
           notifyMessageAuthorizationChanged(account);
@@ -150,9 +189,15 @@ export const useFriendshipsStore = defineStore("friendships", {
     async reloadFromStorage(accountPubkey?: string) {
       const account = normalized(accountPubkey || useKeyStore().pkHex);
       if (!account || this.loadedFor !== account) return false;
+      ensureRequestDeliveryObserver();
+      const deliveryBeforeRead = { ...this.requestDeliveries };
       const records = await friendshipRepository.list(account);
+      const outgoing = await readRequestDeliveries(account, records);
       if (this.loadedFor !== account) return false;
       this.records = records;
+      for (const item of outgoing) {
+        if (this.requestDeliveries[item.outgoingId] === deliveryBeforeRead[item.outgoingId]) this.requestDeliveries[item.outgoingId] = item.state;
+      }
       this.authorizationReady = true;
       notifyDirectMessageAuthorizationChanged(account);
       notifyMessageAuthorizationChanged(account);
@@ -163,6 +208,7 @@ export const useFriendshipsStore = defineStore("friendships", {
       this.loadedFor = "";
       this.loading = false;
       this.authorizationReady = false;
+      this.requestDeliveries = {};
     },
     async applyControl(peerPubkey: string, event: FriendshipControlEvent) {
       const accountPubkey = this.loadedFor;
@@ -205,9 +251,18 @@ export const useFriendshipsStore = defineStore("friendships", {
       }
       const promise = (async () => {
         if (this.loadedFor !== account) await this.load(account);
+        if (keys.pkHex !== account || this.loadedFor !== account) throw new Error("账号已切换");
+        if (action === "request") {
+          const state = this.getState(peer);
+          if (state === "accepted") throw new Error("你们已经是好友");
+          if (state === "outgoing_pending") throw new Error("好友请求已保存，请在已发送列表查看进度");
+          if (state === "incoming_pending") throw new Error("对方正在等待你的确认");
+        }
         const previousControlAt = this.getRecord(peer)?.lastControlAt || 0;
         const timestamp = Math.max(Math.floor(Date.now() / 1000), previousControlAt + 1);
-        const result = await sendDirectMessage({
+        const startedAt = Date.now();
+        const send = action === "request" ? queueDirectMessage : sendDirectMessage;
+        const result = await send({
           recipientPubkeys: [peer],
           content: JSON.stringify({ type: `friend_${action}`, from: account, timestamp, ...(requestId ? { requestId } : {}) }),
           tags: friendshipTags(action),
@@ -216,6 +271,22 @@ export const useFriendshipsStore = defineStore("friendships", {
         });
         if (keys.pkHex !== account || this.loadedFor !== account) throw new Error("账号已切换");
         const applied = await this.applyControl(peer, { action, timestamp, eventId: result.message.id, requestId, selfMessage: true });
+        if (keys.pkHex !== account || this.loadedFor !== account) throw new Error("账号已切换");
+        if (action === "request") {
+          ensureRequestDeliveryObserver();
+          this.requestDeliveries[result.message.id] = "pending";
+          startupMark("friend_request_queued", { durationMs: Date.now() - startedAt });
+          // The signed request is durable and the local relationship is saved.
+          // Relay discovery and publication must not hold the editor open.
+          void this.publishRequest(account, result.message.id).then(() => {
+            startupMark("friend_request_published", { durationMs: Date.now() - startedAt });
+          }).catch(error => {
+            startupMark("friend_request_publish_failed", {
+              durationMs: Date.now() - startedAt,
+              reason: error instanceof Error ? error.message : "publish_failed",
+            });
+          });
+        }
         return { result, applied };
       })().finally(() => {
         if (activeFriendshipControls.get(flightKey)?.promise === promise) activeFriendshipControls.delete(flightKey);
@@ -227,9 +298,49 @@ export const useFriendshipsStore = defineStore("friendships", {
       const peer = normalized(peerPubkey);
       const state = this.getState(peer);
       if (state === "accepted") throw new Error("你们已经是好友");
-      if (state === "outgoing_pending") throw new Error("好友请求已经发送");
+      if (state === "outgoing_pending") throw new Error("好友请求已保存，请在已发送列表查看进度");
       if (state === "incoming_pending") throw new Error("对方正在等待你的确认");
       return (await this.sendControl(peer, "request")).result;
+    },
+    async publishRequest(account: string, outgoingId: string) {
+      if (this.loadedFor !== account || useKeyStore().pkHex !== account) throw new Error("账号已切换");
+      try {
+        await publishQueuedOutgoing(account, outgoingId);
+        // An automatic retry may have finished before the local relationship
+        // was installed, so its queue event could have preceded our observer.
+        if (this.loadedFor === account && useKeyStore().pkHex === account) this.requestDeliveries[outgoingId] = "sent";
+      } catch (error) {
+        if (this.loadedFor !== account || useKeyStore().pkHex !== account) throw error;
+        // Route discovery/storage can fail before the publisher enters its
+        // normal retry state. Keep these failures visible and retryable too.
+        try {
+          const queued = await outgoingQueueRepository.get(account, outgoingId);
+          if (queued && (queued.state === "pending" || queued.state === "sending")) {
+            await outgoingQueueRepository.update(account, outgoingId, {
+              state: "failed", lastError: error instanceof Error ? error.message : "publish_failed", updatedAt: Date.now(),
+            });
+            if (this.loadedFor === account && useKeyStore().pkHex === account) this.requestDeliveries[outgoingId] = "failed";
+          }
+        } catch { /* Preserve the original publication error. */ }
+        throw error;
+      }
+    },
+    async retryRequest(peerPubkey: string) {
+      const account = this.loadedFor;
+      const keys = useKeyStore();
+      const record = this.getRecord(peerPubkey);
+      if (!account || keys.pkHex !== account || !keys.isLoggedIn) throw new Error("请先登录");
+      if (record?.state !== "outgoing_pending" || !record.requestEventId) throw new Error("好友请求已失效");
+      const queued = await outgoingQueueRepository.get(account, record.requestEventId);
+      if (this.loadedFor !== account || keys.pkHex !== account) throw new Error("账号已切换");
+      if (!queued) throw new Error("找不到待发送的好友请求");
+      if (queued.state === "sent") {
+        this.requestDeliveries[record.requestEventId] = "sent";
+        return;
+      }
+      // Reuse the signed event and its queue entry, never generate a new request.
+      ensureRequestDeliveryObserver();
+      await this.publishRequest(account, record.requestEventId);
     },
     async acceptRequest(peerPubkey: string) {
       const peer = normalized(peerPubkey);
@@ -259,6 +370,11 @@ export const useFriendshipsStore = defineStore("friendships", {
     async cancelRequest(peerPubkey: string) {
       const current = this.getRecord(peerPubkey);
       if (current?.state !== "outgoing_pending") throw new Error("好友请求已失效");
+      const account = this.loadedFor;
+      const queued = current.requestEventId ? await outgoingQueueRepository.get(account, current.requestEventId) : undefined;
+      if (this.loadedFor !== account || useKeyStore().pkHex !== account) throw new Error("账号已切换");
+      if (this.getRecord(peerPubkey)?.requestEventId !== current.requestEventId || this.getState(peerPubkey) !== "outgoing_pending") throw new Error("好友请求已失效");
+      if (queued && queued.state !== "sent") throw new Error("请等待好友请求发送成功后再撤回");
       await this.sendControl(peerPubkey, "cancel", current.requestEventId);
     },
     async removeFriend(peerPubkey: string) {
