@@ -64,7 +64,7 @@ type CallSession = {
   wakeLock: { release(): Promise<void> } | null;
   statsTimer: ReturnType<typeof setInterval> | null;
   /** Connection summary for the call's diagnostics. */
-  quality: { route: string; rttMs: number; lost: number; received: number; poorSamples: number; samples: number };
+  quality: { route: string; rttMs: number; lost: number; received: number; poorSamples: number; samples: number; inboundStatsSeen: boolean };
 };
 
 let activeSession: CallSession | null = null;
@@ -78,7 +78,7 @@ function createSession(id: string, peer: string, direction: CallDirection): Call
     id, peer, direction, owner: account(), room: null, localStream: null, remoteAudio: null, remoteStream: null,
     audioCleanup: null, audioRetryTimer: null, audioFailures: 0, remoteMutedSamples: 0, routeResetAttempts: 0, playRequest: 0, outputDeviceId: "",
     mediaPeer: "", timers: new Set(), peerLossTimer: null, ringtone: null, wakeLock: null,
-    statsTimer: null, quality: { route: "", rttMs: 0, lost: 0, received: 0, poorSamples: 0, samples: 0 },
+    statsTimer: null, quality: { route: "", rttMs: 0, lost: 0, received: 0, poorSamples: 0, samples: 0, inboundStatsSeen: false },
   };
   activeSession = session;
   return session;
@@ -130,11 +130,23 @@ function startQualitySampling(session: CallSession, room: Room) {
     try {
       const report: any = await connection.getStats();
       let pair: any = null;
-      let inbound: any = null;
+      const inboundCandidates: any[] = [];
+      const outboundCandidates: any[] = [];
       report.forEach((entry: any) => {
         if (entry.type === "candidate-pair" && entry.state === "succeeded" && (entry.nominated || entry.selected)) pair = entry;
-        if (entry.type === "inbound-rtp" && entry.kind === "audio") inbound = entry;
+        if (entry.type === "inbound-rtp") inboundCandidates.push(entry);
+        if (entry.type === "outbound-rtp") outboundCandidates.push(entry);
       });
+      // Safari/WebKit has historically omitted kind on inbound-rtp records.
+      // HaiNei calls are audio-only: with an untyped candidate it is safe to
+      // use that record instead of silently reporting 0 packets and 0% loss.
+      const isAudioRtp = (entry: any) =>
+        entry.kind === "audio" || entry.mediaType === "audio"
+        || String(report.get?.(entry.codecId)?.mimeType || "").toLowerCase().startsWith("audio/")
+        || String(entry.id || "").toLowerCase().includes("rtpaudio");
+      const inbound: any = inboundCandidates.find(isAudioRtp) || inboundCandidates.find(entry => !entry.kind && !entry.mediaType) || null;
+      const outbound: any = outboundCandidates.find(isAudioRtp) || outboundCandidates.find(entry => !entry.kind && !entry.mediaType) || null;
+      session.quality.inboundStatsSeen ||= !!inbound;
       const rttMs = pair?.currentRoundTripTime ? Math.round(pair.currentRoundTripTime * 1000) : 0;
       const local = pair ? report.get(pair.localCandidateId)?.candidateType || "" : "";
       const remote = pair ? report.get(pair.remoteCandidateId)?.candidateType || "" : "";
@@ -157,7 +169,7 @@ function startQualitySampling(session: CallSession, room: Room) {
       // inbound RTP + nonzero audio energy with track.muted=true throughout.
       // Never claim healthy output when this persists across two samples.
       const remoteTrack = session.remoteStream?.getAudioTracks?.()[0];
-      if (inbound && received > 0 && (inbound.totalAudioEnergy || 0) > 0 && remoteTrack?.muted === true) {
+      if (inbound && received > 0 && remoteTrack?.muted === true) {
         session.remoteMutedSamples++;
         if (session.remoteMutedSamples === 2) {
           store.audioStatus = "blocked";
@@ -185,20 +197,34 @@ function startQualitySampling(session: CallSession, room: Room) {
       // The audio element's play() promise can resolve even when iOS routes
       // sound to the receiver (or renders nothing). Record the RTP side
       // separately so a later no-sound report can distinguish the two.
-      if (inbound && (session.quality.samples === 1 || session.quality.samples === 3)) {
+      if (session.quality.samples === 1 || session.quality.samples === 3) {
         const track = session.remoteStream?.getAudioTracks?.()[0];
         startupMark("call_audio_media_stats", {
-          packetsReceived: inbound.packetsReceived || 0,
-          bytesReceived: inbound.bytesReceived || 0,
-          totalAudioEnergy: inbound.totalAudioEnergy || 0,
-          totalSamplesDuration: inbound.totalSamplesDuration || 0,
+          inboundFound: !!inbound,
+          inboundCandidateCount: inboundCandidates.length,
+          reportedKind: inbound?.kind || inbound?.mediaType || "missing",
+          packetsReceived: inbound?.packetsReceived ?? null,
+          bytesReceived: inbound?.bytesReceived ?? null,
+          totalAudioEnergy: inbound?.totalAudioEnergy ?? null,
+          totalSamplesDuration: inbound?.totalSamplesDuration ?? null,
+          outboundCandidateCount: outboundCandidates.length,
+          packetsSent: outbound?.packetsSent ?? null,
+          trackCount: session.remoteStream?.getAudioTracks?.().length ?? 0,
           trackMuted: track?.muted ?? null,
+          trackEnabled: track?.enabled ?? null,
           trackState: track?.readyState ?? "unknown",
           elementPaused: session.remoteAudio?.paused ?? null,
           elementMuted: session.remoteAudio?.muted ?? null,
           sinkId: session.remoteAudio ? (session.remoteAudio as RoutedAudio).sinkId ?? "unsupported" : "no_element",
           sessionType: browserCallAudioSession()?.type || "unknown",
           sessionState: browserCallAudioSession()?.state || "unknown",
+        });
+        if (!inbound) startupMark("call_audio_stats_unavailable", {
+          inboundCandidateCount: inboundCandidates.length,
+          outboundCandidateCount: outboundCandidates.length,
+          hasRemoteTrack: !!track,
+          // Report categories only, not device details, peers or SSRCs.
+          availableTypes: [...new Set(Array.from(report.values?.() || [], (entry: any) => entry.type))].slice(0, 12),
         });
       }
       // Packet arrival alone does not prove that WebKit is rendering sound.
@@ -624,6 +650,16 @@ function playRemote(session: CallSession, stream: MediaStream, reason = "remote_
     document.body.appendChild(session.remoteAudio);
   }
   session.remoteStream = stream;
+  startupMark("call_remote_track_attached", {
+    trackCount: stream.getAudioTracks?.().length ?? 0,
+    tracks: (stream.getAudioTracks?.() || []).map(track => ({
+      kind: track.kind ?? "unknown",
+      muted: track.muted ?? null,
+      enabled: track.enabled ?? null,
+      state: track.readyState ?? "unknown",
+    })),
+    sessionType: browserCallAudioSession()?.type || "unknown",
+  });
   session.remoteMutedSamples = 0;
   session.audioFailures = 0;
   session.playRequest++;
@@ -920,6 +956,7 @@ async function finish(session: CallSession, reason: CallEndReason, notify: boole
     reason, durationSeconds: duration, direction: session.direction,
     route: q.route, rttMs: q.rttMs, lossPct: q.lost + q.received ? Math.round((q.lost / (q.lost + q.received)) * 1000) / 10 : 0,
     poorPct: q.samples ? Math.round((q.poorSamples / q.samples) * 100) : 0,
+    inboundStatsSeen: q.inboundStatsSeen, receivedAudioPackets: q.received, statsSamples: q.samples,
   });
   await releasing;
   // Leave the outcome on screen briefly, then close the overlay.
