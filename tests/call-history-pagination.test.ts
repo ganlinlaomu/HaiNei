@@ -1,5 +1,4 @@
 import "fake-indexeddb/auto";
-import Dexie from "dexie";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { db, type SyncedMessageRecord } from "@/db/dexie";
@@ -30,7 +29,6 @@ const makeRecord = (n: number, options: { id?: string; account?: string } = {}):
   firstSeenAt: Date.now(),
   lastSeenAt: Date.now(),
 });
-const inserted = new Set<string>();
 afterEach(async () => {
   useCallHistoryStore().reset();
   for (const scope of [account, otherAccount]) {

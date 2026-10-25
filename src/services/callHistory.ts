@@ -33,7 +33,7 @@ export const CALL_HISTORY_SYNC_PREFIX = "call-history:";
 const FEED_PREFERENCES_SYNC_KEY = "feed_preferences_v2";
 
 export function deletedCallIds(
-  local: ReadonlyArray<{ key: string; value: unknown }>,
+  local: ReadonlyArray<{ key: string; value?: unknown }>,
   preferenceValue: unknown,
 ): Set<string> {
   const result = new Set<string>();
