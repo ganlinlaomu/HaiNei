@@ -438,7 +438,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
           try {
             const engine = await loadCallEngine();
             // Do not hold message ingestion while a call tears down its room.
-            void engine.handleCallSignal(sender, recipient, signal, message.createdAt).catch(error => {
+            void engine.handleCallSignal(sender, recipient, signal, message.createdAt, message.id).catch(error => {
               debugLog("system", "call_signal_unhandled", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
             });
           } catch (error) {

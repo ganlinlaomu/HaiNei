@@ -79,3 +79,21 @@ Pages 自动发布不会部署 `worker/`。本次修复增加 `/api/push/test`�
 - 若测试可显示而好友私信没有提醒：让发送端也更新前端，然后检查接收账号 `/api/push/policy` 是否已同步该 accepted 好友。
 
 发送端现在将推送请求单独持久化。请求失败、网络断开或 PWA 被挂起后，在解锁恢复或联网时重试，退避最长 15 分钟、有效期 24 小时；不会重新发布已经发送的私信，也不会补发修复前历史消息的提醒。Worker 已接受的请求不再重试；供应商接受也不等同于设备已显示通知。
+
+## 7. 语音来电的页面／系统通知交接
+
+本次修复必须同时发布 Worker 和 Pages，先部署 Worker。没有新增 D1 迁移，保留现有 VAPID 密钥：
+
+```bash
+npm exec wrangler -- deploy --config worker/wrangler.toml
+```
+
+普通消息继续使用 `foreground_until`；语音邀请绕过该过滤，避免 PWA 刚退出、离开状态上报被挂起时，在 40 秒内漏掉来电。Worker 在创建来电 Web Push **之前**等待 1.5 秒。页面只有在来电组件已挂载且仍可见、账号和通话仍匹配时，才能签名调用 `/api/push/call-handled`，提交 canonical invite message ID、sender pubkey 和本机 subscription endpoint。确认只抑制该设备的同一邀请，不影响同账号其他设备。
+
+确认记录复用现有 `hainei_push_deliveries`，以 `SHA-256("call-handled:" + endpoint)` 隔离于供应商投递记录；仅接受最近 5 秒的记录，由既有定时清理删除。接口认证绑定 URL、方法和 payload，且只允许确认本账号已经登记的 endpoint。不保存明文通话 room、secret 或来电者姓名。发送端仍只收到通用 accepted 响应；设备计数和 `handled` 仅记录在 Worker 日志，不能向发送者泄露收件人的设备信息。
+
+未及时确认时优先保证提醒：照常创建系统通知，不因窗口可见而静音／关闭来电通知。已收到的 Web Push 仍展示可见通知，不能通过 Service Worker 静默吞掉推送来避免双横幅。页面铃声自动播放失败只保留页面接听／铃声重试按钮，不再另建系统通知。已接管的来电仍在响铃时若页面切到后台，页面同步发消息给 Service Worker，尽力交还系统提醒；回到前台再撤下，接听／取消优先于异步通知创建，重复后台事件不再创建第二条。点击来电通知优先 focus 已有窗口并读取加密邀请缓存，不 navigate／重载当前通话。
+
+来电请求快速失败时最多重试一次，使用同一 canonical ID，且只在最初 5 秒内、呼叫仍在进行时启动重试。普通消息原有持久化重试不变；来电不会进入 24 小时补发队列。`call_push_requested` 表示服务器接受请求，不代表手机已显示。页面确认结果见 `call_notification_handoff`，失败见 `call_notification_handoff_failed`。
+
+发布后用两台真实设备验证：前台来电只显示页面提醒；关闭 PWA 后立即拨打以及等一分钟后拨打均有系统通知；铃声 autoplay 被拒绝不再额外弹系统横幅；同账号另一台后台设备仍收到通知；点通知唤回当前页面；快速接听／拒绝与 Relay 乱序回执不产生幽灵来电。网络严重延迟、系统通知权限／专注模式和 iOS 后台调度仍可能影响送达，不能以单元测试代替 iPhone 实测，也不能宣称具备 CallKit 系统电话能力。

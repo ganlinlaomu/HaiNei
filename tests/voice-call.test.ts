@@ -90,12 +90,10 @@ describe("call signaling", () => {
     const sw = readFileSync("public/service-worker.js", "utf8");
     expect(sw).toContain("body: isCall ? '你有一个语音来电' : '你有新的私信消息'");
     expect(sw).toContain("type === 'CLOSE_CALL_NOTIFICATION'");
-    expect(sw).toContain("type === 'INCOMING_RINGTONE_BLOCKED'");
+    expect(sw).not.toContain("type === 'INCOMING_RINGTONE_BLOCKED'");
     expect(sw).toContain("type === 'INCOMING_RINGTONE_START'");
     expect(sw).toContain("visibleIncomingCallId && visibleIncomingCallId !== id");
-    expect(sw).toContain("hasBlockedVisibleRing()");
     expect(sw).toContain("if (revision !== callAlertRevision");
-    expect(sw).toContain("callId: blockedIncomingCallId");
   });
 
   it("keeps call code and ringtone media out of the startup path", () => {
@@ -196,7 +194,7 @@ describe("call engine", () => {
     const store = useCallStore();
     expect(store.phase).toBe("incoming");
     expect(store.ringtoneBlocked).toBe(true);
-    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('signalCallNotification("INCOMING_RINGTONE_BLOCKED", session.id);');
+    expect(readFileSync("src/services/callEngine.ts", "utf8")).not.toContain('signalCallNotification("INCOMING_RINGTONE_BLOCKED", session.id);');
     expect(element.play).toHaveBeenCalledTimes(1);
     retryIncomingRingtone();
     await Promise.resolve();
@@ -205,6 +203,18 @@ describe("call engine", () => {
     expect(store.phase).toBe("incoming");
     await declineCall();
     expect(store.phase).toBe("ended");
+  });
+
+  it("does not mistake an out-of-order ringing receipt for a terminal call signal", async () => {
+    const { handleCallSignal, declineCall } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const id = "a".repeat(32);
+    const messageId = "f".repeat(64);
+    await handleCallSignal(ME, FRIEND, { action: "ringing", callId: id }, now());
+    await handleCallSignal(FRIEND, ME, { ...invite, callId: id }, now(), messageId);
+    expect(useCallStore().phase).toBe("incoming");
+    expect(useCallStore().notificationMessageId).toBe(messageId);
+    await declineCall();
   });
 
   it("stops ringing when another of our devices answers", async () => {
@@ -957,6 +967,7 @@ describe("call engine", () => {
     expect(overlay).toContain('<div v-if="showBanner" class="call-banner"');
     const sw = readFileSync("public/service-worker.js", "utf8");
     expect(sw).toContain("for (const notification of await self.registration.getNotifications({ tag })) notification.close();");
-    expect(readFileSync("src/services/callEngine.ts", "utf8")).toContain('signalCallNotification("INCOMING_RINGTONE_START", session.id);');
+    expect(overlay).toContain('postMessage({ type: "INCOMING_RINGTONE_START", callId: id })');
+    expect(readFileSync("src/services/callEngine.ts", "utf8")).not.toContain('signalCallNotification("INCOMING_RINGTONE_START", session.id);');
   });
 });

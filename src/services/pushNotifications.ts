@@ -1,6 +1,6 @@
 import type { EventTemplate, VerifiedEvent, NostrEvent } from "nostr-tools";
 import { deviceStorage } from "@/services/deviceStorage";
-import { debugLog } from "@/utils/debugLog";
+import { debugLog, startupMark } from "@/utils/debugLog";
 import { signedWorkerPost } from "@/services/workerAuth";
 import { DEFAULT_HAINEI_WORKER_URL, haineiWorkerBaseUrl, resolveHaiNeiWorkerBaseUrl } from "@/services/workerUrl";
 import { friendRepository } from "@/repositories/friendRepository";
@@ -264,17 +264,49 @@ export async function triggerGenericPush(
   type: PushCategory = "activity",
   messageId?: string,
   hints: EncryptedPushHint[] = [],
+  shouldSendCall?: () => boolean,
 ) {
   if (type !== "message" && type !== "call") return;
   const recipients = [...new Set(recipientPubkeys.map(value => value.toLowerCase()))]
     .filter(value => value !== pubkey.toLowerCase());
   if (!recipients.length) return;
-  await authenticatedPost("/api/push/trigger", {
+  const payload = {
     recipientPubkeys: recipients,
     type,
     ...(messageId ? { messageId } : {}),
     ...(hints.length ? { hints } : {}),
+  };
+  // Calls are ephemeral: retry a transient request failure once, using the
+  // same canonical ID so the Worker's per-device reservation prevents repeats.
+  // Never put call invites in the ordinary 24-hour message retry queue.
+  const retryBefore = Date.now() + 5_000;
+  for (let attempt = 1; ; attempt++) {
+    if (type === "call" && shouldSendCall && !shouldSendCall()) return;
+    try {
+      await authenticatedPost("/api/push/trigger", payload, pubkey, signEvent);
+      if (type === "call") startupMark("call_push_requested", { attempt });
+      return;
+    } catch (error) {
+      if (type !== "call" || attempt >= 2 || Date.now() >= retryBefore) throw error;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+}
+
+/** Call only after the incoming UI has mounted, never for mere visibility. */
+export async function acknowledgeCallNotification(
+  pubkey: string, signEvent: SignEvent, senderPubkey: string, messageId: string,
+  isCurrent: () => boolean,
+) {
+  if (!/^[0-9a-f]{64}$/i.test(messageId) || !supportsPushNotifications()
+    || !pushEnabledForAccount(pubkey) || document.visibilityState !== "visible" || !isCurrent()) return;
+  const registration = await withTimeout(navigator.serviceWorker.ready, SERVICE_WORKER_TIMEOUT_MS, "service worker 未就绪");
+  const subscription = await registration.pushManager.getSubscription();
+  if (!subscription || document.visibilityState !== "visible" || !isCurrent()) return;
+  const response = await authenticatedPost("/api/push/call-handled", {
+    endpoint: subscription.endpoint, senderPubkey, messageId,
   }, pubkey, signEvent);
+  startupMark("call_notification_handoff", { acknowledged: response?.acknowledged === true });
 }
 
 export async function testPushNotification(pubkey: string, signEvent: SignEvent) {

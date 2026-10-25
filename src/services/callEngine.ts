@@ -256,7 +256,7 @@ function startQualitySampling(session: CallSession, room: Room) {
   }, STATS_INTERVAL_MS);
 }
 
-function signalCallNotification(type: "INCOMING_RINGTONE_START" | "INCOMING_RINGTONE_BLOCKED" | "INCOMING_RINGTONE_PLAYING" | "CLOSE_CALL_NOTIFICATION", callId: string) {
+function signalCallNotification(type: "CLOSE_CALL_NOTIFICATION", callId: string) {
   try { navigator.serviceWorker?.controller?.postMessage({ type, callId }); } catch { /* best effort */ }
 }
 function closeCallNotification(callId: string) {
@@ -274,7 +274,9 @@ async function sendSignal(peer: string, signal: CallSignal) {
     tags: callControlTags(signal),
     relays: [...new Set([...DEFAULT_RELAY_URLS, ...getRelaysFromStorage("write")])],
     context: { senderPubkey: keys.pkHex, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
-    ...(signal.action === "invite" ? { push: "call" as const } : {}),
+    ...(signal.action === "invite" ? { push: "call" as const,
+      shouldPush: () => activeSession?.id === signal.callId && useCallStore().phase === "outgoing",
+    } : {}),
   });
   startupMark("call_signal_sent", { action: signal.action, ms: Date.now() - started });
 }
@@ -358,7 +360,6 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
         if (session.ringtone === handle && isCurrent(session)) {
           startupMark("call_ring_audio", { kind, via: "element", attempt, primed: incomingRingtoneArmed() });
           startupMark("ring_autoplay_result", { callId: session.id, kind, result: "played", primed: incomingRingtoneArmed() });
-          if (kind === "ring") signalCallNotification("INCOMING_RINGTONE_PLAYING", session.id);
         }
       },
       error => {
@@ -377,10 +378,9 @@ function startTone(session: CallSession, kind: "ring" | "ringback") {
           // or fresh AudioContext cannot manufacture an iOS user activation.
           if (kind === "ring") {
             store.ringtoneBlocked = true;
-            // Foreground push notifications are intentionally silent/closed.
-            // Ask the service worker for an OS alert ONLY if audio was denied.
-            signalCallNotification("INCOMING_RINGTONE_BLOCKED", session.id);
-            startupMark("ring_fallback_result", { callId: session.id, result: "os_alert_requested" });
+            // The visible banner owns this alert even if iOS denies autoplay.
+            // Creating another OS notification here produced a second banner.
+            startupMark("ring_fallback_result", { callId: session.id, result: "visible_banner" });
           }
           stopTone(session);
           return;
@@ -1137,7 +1137,7 @@ export function toggleMute() {
  * Apply a call signal from `sender` (a friend, or this account's own device).
  * `createdAt` is the rumor time in seconds.
  */
-export async function handleCallSignal(sender: string, recipient: string, signal: CallSignal, createdAt: number) {
+export async function handleCallSignal(sender: string, recipient: string, signal: CallSignal, createdAt: number, messageId = "") {
   const store = useCallStore();
   const me = account();
   const normalizedSender = sender.toLowerCase();
@@ -1159,15 +1159,15 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     store.phase = "incoming";
     store.peer = peer;
     store.callId = signal.callId;
+    store.notificationMessageId = /^[0-9a-f]{64}$/i.test(messageId) ? messageId : "";
     store.direction = "incoming";
     store.invite = { room: signal.room!, secret: signal.secret! };
     const session = createSession(signal.callId, peer, "incoming");
     // Do not let a tap on the incoming-call banner prime unrelated ringtone
     // media or a Web Audio context just as WebKit starts microphone capture.
     setCallAudioActive(true);
-    // Announce this exact call before playback. Stale close messages from
-    // a previous call must not hide this call's OS fallback notification.
-    signalCallNotification("INCOMING_RINGTONE_START", session.id);
+    // Only the mounted, visible overlay may take over the OS notification.
+    // Relay delivery and successful autoplay can also happen in a hidden tab.
     startTone(session, "ring");
     // Tell the caller this device is ringing (对方响铃中).
     sendSignalBestEffort(peer, { action: "ringing", callId: signal.callId });
@@ -1179,7 +1179,8 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     // NIP-17 copies can arrive from different relays out of order. Remember a
     // terminal signal seen before its invite so a cancelled call cannot ring
     // later as a ghost incoming call.
-    store.markSeen(signal.callId);
+    if (signal.action === "cancel" || signal.action === "end" || signal.action === "reject"
+      || signal.action === "busy" || (fromSelf && signal.action === "accept")) store.markSeen(signal.callId);
     return;
   }
   if (fromSelf) {

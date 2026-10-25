@@ -101,7 +101,53 @@ type PushDiagnostics = {
   sent: number;
   failed: number;
   expired: number;
+  handled?: number;
 };
+
+// Wait before creating a Web Push, not after: WebKit requires every delivered
+// push to show a notification. A visible, mounted call UI can claim only its
+// own subscription and this exact invite during this bounded handoff window.
+export const CALL_PUSH_HANDOFF_MS = 1_500;
+const CALL_HANDLED_TTL_SECONDS = 5;
+
+async function callHandledEndpointHash(endpoint: string) {
+  return sha256Hex(`call-handled:${endpoint}`);
+}
+
+export async function acknowledgeVisibleCall(
+  env: Env, recipientPubkey: string, endpointValue: unknown,
+  senderValue: unknown, messageValue: unknown,
+) {
+  const endpoint = validatedPushEndpoint(env, endpointValue);
+  const sender = typeof senderValue === "string" ? senderValue.toLowerCase() : "";
+  const messageId = typeof messageValue === "string" ? messageValue.toLowerCase() : "";
+  if (!PUBKEY.test(sender) || sender === recipientPubkey || !EVENT_ID.test(messageId)) {
+    throw new HttpError(400, "invalid_call_acknowledgement");
+  }
+  // Use a separate hash namespace in the existing idempotency table. This is
+  // not a provider delivery receipt; no schema migration or plaintext call
+  // secrets are required. INSERT SELECT prevents acknowledging another account's
+  // endpoint. Existing scheduled delivery cleanup also removes these rows.
+  const result = await env.DB.prepare(`
+    INSERT INTO hainei_push_deliveries
+      (sender_pubkey, recipient_pubkey, message_id, endpoint_hash, status, updated_at)
+    SELECT ?, ?, ?, ?, 'sent', ?
+    FROM hainei_push_subscriptions WHERE account_pubkey = ? AND endpoint = ?
+    ON CONFLICT(sender_pubkey, recipient_pubkey, message_id, endpoint_hash)
+    DO UPDATE SET updated_at = excluded.updated_at
+  `).bind(sender, recipientPubkey, messageId, await callHandledEndpointHash(endpoint),
+    Math.floor(Date.now() / 1000), recipientPubkey, endpoint).run();
+  return { acknowledged: Number(result.meta?.changes || 0) > 0 };
+}
+
+async function callWasHandled(env: Env, sender: string, messageId: string, row: PushSubscriptionRow) {
+  const receipt = await env.DB.prepare(`
+    SELECT updated_at FROM hainei_push_deliveries
+    WHERE sender_pubkey = ? AND recipient_pubkey = ? AND message_id = ? AND endpoint_hash = ? AND status = 'sent'
+  `).bind(sender, row.account_pubkey, messageId, await callHandledEndpointHash(row.endpoint))
+    .first<{ updated_at: number }>();
+  return !!receipt && receipt.updated_at >= Math.floor(Date.now() / 1000) - CALL_HANDLED_TTL_SECONDS;
+}
 
 type VapidConfig = {
   publicKey: string;
@@ -536,10 +582,24 @@ export async function triggerGenericPush(
       AND a.sender_pubkey = ?
       AND a.expires_at > ?
     WHERE s.account_pubkey IN (${placeholders})
-      AND s.foreground_until <= ?
-  `).bind(senderPubkey, now, ...recipients, now).all<PushSubscriptionRow>();
+      ${pushPayload.type === "call" ? "" : "AND s.foreground_until <= ?"}
+  `).bind(senderPubkey, now, ...recipients, ...(pushPayload.type === "call" ? [] : [now])).all<PushSubscriptionRow>();
   diagnostics.subscriptionsFound = rows.results.length;
   if (!rows.results.length) return diagnostics;
+
+  if (pushPayload.type === "call") {
+    diagnostics.handled = 0;
+    await new Promise(resolve => setTimeout(resolve, CALL_PUSH_HANDOFF_MS));
+    // A generic foreground heartbeat is never sufficient to suppress a call.
+    // Missing/late UI acknowledgement always falls back to an actual push.
+    const checked = await Promise.all(rows.results.map(async row => ({ row,
+      handled: await callWasHandled(env, senderPubkey, messageId, row).catch(() => false),
+    })));
+    const pending = checked.filter(item => !item.handled).map(item => item.row);
+    diagnostics.handled = checked.length - pending.length;
+    if (!pending.length) return diagnostics;
+    return deliverPushRows(env, senderPubkey, messageId, pending, diagnostics, now, sanitizeEncryptedPushHints(hintsValue), pushPayload);
+  }
 
   return deliverPushRows(env, senderPubkey, messageId, rows.results, diagnostics, now, sanitizeEncryptedPushHints(hintsValue), pushPayload);
 }
