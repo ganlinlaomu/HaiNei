@@ -58,7 +58,7 @@ function worker(windows: FakeClient[] = []) {
         shown.filter(item => !item.close.mock.calls.length && (!filter?.tag || item.options.tag === filter.tag))),
     },
   };
-  runInNewContext(readFileSync("public/service-worker.js", "utf8"), { self, caches, URL, Response, console });
+  runInNewContext(readFileSync("public/service-worker.js", "utf8"), { self, caches, URL, URLSearchParams, Response, console });
   const settle = async () => { while (pending.length) await Promise.all(pending.splice(0)); };
   return {
     showNotification, shown, openWindow,
@@ -78,8 +78,8 @@ function worker(windows: FakeClient[] = []) {
         source: { visibilityState }, waitUntil: (p: Promise<unknown>) => pending.push(p) });
       await settle();
     },
-    click: async (type = "message") => {
-      const notification = { close: vi.fn(), data: { type } };
+    click: async (type = "message", data: Record<string, string> = {}) => {
+      const notification = { close: vi.fn(), data: { type, ...data } };
       handlers.get("notificationclick")!({ notification, waitUntil: (p: Promise<unknown>) => pending.push(p) });
       await settle();
     },
@@ -134,7 +134,13 @@ describe("review #11: push notification behavior", () => {
     await sw.click("call");
     expect(background.focus).toHaveBeenCalledOnce();
     expect(background.navigate).not.toHaveBeenCalled();
-    expect(background.postMessage).toHaveBeenCalledWith({ type: "ENCRYPTED_PUSH_HINT_AVAILABLE" });
+    expect(background.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "ENCRYPTED_PUSH_HINT_AVAILABLE", callNotification: expect.any(Object) }));
+  });
+
+  it("carries only validated opaque identifiers into cold-start recovery", async () => {
+    const sw = worker([]);
+    await sw.click("call", { eventId: "a".repeat(64), accountScope: "b".repeat(64), callId: "bad&secret=hello" });
+    expect(sw.openWindow).toHaveBeenCalledWith(`https://app.test/#/conversations?incomingCall=1&eventId=${"a".repeat(64)}&scope=${"b".repeat(64)}`);
   });
 
   it("opens a closed PWA on a call notification click", async () => {
@@ -143,7 +149,7 @@ describe("review #11: push notification behavior", () => {
     await sw.push("8".repeat(64), "call");
     expect(sw.shown[0].options.data.type).toBe("call");
     await sw.click("call");
-    expect(sw.openWindow).toHaveBeenCalledWith("https://app.test/#/conversations");
+    expect(sw.openWindow).toHaveBeenCalledWith("https://app.test/#/conversations?incomingCall=1");
   });
 
   it("does not let a hidden Relay client or autoplay-denied fallback erase or duplicate an OS call alert", async () => {

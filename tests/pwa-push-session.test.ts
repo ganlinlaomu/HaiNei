@@ -29,7 +29,7 @@ function harness() {
     clients: { matchAll: async () => [] },
     registration: { showNotification },
   };
-  runInNewContext(readFileSync("public/service-worker.js", "utf8"), { self, caches, URL, Response, console });
+  runInNewContext(readFileSync("public/service-worker.js", "utf8"), { self, caches, URL, URLSearchParams, Response, console });
   const postMessage = (data: unknown) => handlers.get("message")!({ data, waitUntil: (promise: Promise<unknown>) => pending.push(promise) });
   const target = { clearAppBadge: vi.fn(async () => {}), setAppBadge: vi.fn(async () => {}),
     serviceWorker: { controller: { postMessage }, ready: Promise.resolve({ active: { postMessage } }) } } as any;

@@ -278,6 +278,11 @@ export class MessageSyncManager {
     });
   }
 
+  recoverNotificationInbox() {
+    if (this.options && this.sessionId) this.drainEncryptedPushInbox(this.sessionId, this.options.accountPubkey);
+    return this.resume("manual");
+  }
+
   private drainEncryptedPushInbox(sessionId: string, account: string) {
     if (this.pushInboxFlight || !this.isCurrent(sessionId, account) || !this.pipeline) return;
     const flight = (async () => {

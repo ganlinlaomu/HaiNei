@@ -12,6 +12,7 @@ export type CallEndReason =
  * chunks (services/callEngine, components/CallOverlay) so startup is unaffected.
  */
 export const useCallStore = defineStore("call", () => {
+  const notificationExpanded = ref(false);
   const phase = ref<CallPhase>("idle");
   const peer = ref("");
   const callId = ref("");
@@ -37,6 +38,7 @@ export const useCallStore = defineStore("call", () => {
   const seen = new Set<string>();
 
   function reset() {
+    notificationExpanded.value = false;
     phase.value = "idle";
     peer.value = "";
     callId.value = "";
@@ -57,7 +59,7 @@ export const useCallStore = defineStore("call", () => {
     if (seen.size > 200) seen.delete(seen.values().next().value!);
   }
 
-  return { phase, peer, callId, notificationMessageId, direction, invite, connectedAt, muted, endReason, remoteRinging, reconnecting, quality, audioStatus, ringtoneBlocked, seen, reset, markSeen };
+  return { notificationExpanded, phase, peer, callId, notificationMessageId, direction, invite, connectedAt, muted, endReason, remoteRinging, reconnecting, quality, audioStatus, ringtoneBlocked, seen, reset, markSeen };
 });
 
 /** Lazily load the call engine (WebRTC, Trystero, media). */

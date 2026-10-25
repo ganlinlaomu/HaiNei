@@ -135,7 +135,7 @@ const minimized = ref(false);
 const canMinimize = computed(() => call.phase === "active" || call.phase === "connecting" || call.phase === "outgoing");
 const expanded = ref(false);
 watch(() => call.callId, () => { expanded.value = false; minimized.value = false; });
-const showBanner = computed(() => call.phase === "incoming" && !expanded.value);
+const showBanner = computed(() => call.phase === "incoming" && !expanded.value && !call.notificationExpanded);
 const now = ref(Date.now());
 const ticker = setInterval(() => { now.value = Date.now(); }, 1_000);
 onBeforeUnmount(() => clearInterval(ticker));

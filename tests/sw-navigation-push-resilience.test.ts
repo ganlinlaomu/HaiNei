@@ -45,7 +45,7 @@ function worker(options: { fetch?: (request: any) => Promise<Response>; cacheFai
   let source = readFileSync("public/service-worker.js", "utf8");
   if (options.precache) source = source.replace(/const PRECACHE_ASSETS = \[.*?\];/, `const PRECACHE_ASSETS = ${JSON.stringify(options.precache)};`);
   runInNewContext(source, {
-    self, caches, URL, Response, console, setTimeout, clearTimeout,
+    self, caches, URL, URLSearchParams, Response, console, setTimeout, clearTimeout,
     fetch: options.fetch ?? (async () => new Response("network")),
   });
   return {

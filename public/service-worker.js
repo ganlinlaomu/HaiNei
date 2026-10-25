@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.134"; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.135"; // ⚠️ 更新代码时同步修改此版本号
 const BUILD_ID = "source-328b9451a4e413fd"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
@@ -409,7 +409,7 @@ self.addEventListener('push', (event) => {
       const tag = isCall ? CALL_NOTIFICATION_TAG : DM_NOTIFICATION_TAG;
       await self.registration.showNotification('HaiNei', {
         body: isCall ? '你有一个语音来电' : '你有新的私信消息', icon:'/icon-192.png', badge:'/icon-192.png',
-        tag, data:{type: isCall ? 'call' : 'message'},
+        tag, data:{type: isCall ? 'call' : 'message', ...(isCall ? { eventId: payload.hint?.eventId, accountScope: payload.accountScope } : {})},
         ...(isCall ? { requireInteraction: true, renotify: true } : appVisible ? { silent: true } : { renotify: true })
       });
       // Ordinary foreground message alerts are quiet; an unclaimed call stays
@@ -435,7 +435,16 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const path = '/#/conversations';
+  const isCall = event.notification.data?.type === 'call';
+  const notice = event.notification.data || {};
+  const query = new URLSearchParams();
+  if (isCall) {
+    query.set('incomingCall', '1');
+    if (/^[a-f0-9]{64}$/.test(notice.eventId || '')) query.set('eventId', notice.eventId);
+    if (/^[a-f0-9]{64}$/.test(notice.accountScope || '')) query.set('scope', notice.accountScope);
+    if (/^[a-f0-9]{32}$/.test(notice.callId || '')) query.set('callId', notice.callId);
+  }
+  const path = '/#/conversations' + (isCall ? '?' + query.toString() : '');
   const target = new URL(path, self.location.origin).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
@@ -447,7 +456,7 @@ self.addEventListener('notificationclick', (event) => {
         if (event.notification.data?.type === 'call') {
           // Preserve the existing call/session instead of reloading the app.
           const focused = await client.focus();
-          (focused || client).postMessage({ type: 'ENCRYPTED_PUSH_HINT_AVAILABLE' });
+          (focused || client).postMessage({ type: 'ENCRYPTED_PUSH_HINT_AVAILABLE', callNotification: { eventId: notice.eventId, callId: notice.callId, accountScope: notice.accountScope } });
           return focused || client;
         }
         const navigated = await client.navigate(target);
