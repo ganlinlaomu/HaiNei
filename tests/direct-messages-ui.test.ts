@@ -296,7 +296,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(profile).toContain(".profile-editor{padding:8px 16px 0}");
     expect(saved).toContain(".saved-list{display:grid;gap:12px;padding:0 10px}");
     expect(friends).not.toContain(".friends-header{");
-    expect(friends).toContain('class="contacts-search"');
+    expect(friends).toContain('class="contacts-search primary-page-search"');
     expect(router).toContain('path: "/settings/system"');
   });
 
