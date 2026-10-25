@@ -152,7 +152,9 @@ function startQualitySampling(session: CallSession, room: Room) {
       // Replaying an old/mismatched stream cannot unmute the current receiver.
       const receiverTrack = (connection.getReceivers?.() || []).map(receiver => receiver.track)
         .find(track => track.kind === "audio" && track.readyState === "live" && track.id === inbound?.trackIdentifier);
-      if (receiverTrack && session.remoteStream && !session.remoteStream.getAudioTracks().includes(receiverTrack)) {
+      if (receiverTrack?.muted === false && inbound?.packetsReceived > 0 && session.remoteStream
+        && !session.remoteStream.getAudioTracks().some(track => track.muted === false && track.readyState === "live")
+        && !session.remoteStream.getAudioTracks().includes(receiverTrack)) {
         startupMark("call_receiver_track_corrected", { previousTrackMuted: session.remoteStream.getAudioTracks()[0]?.muted ?? null });
         playRemote(session, new MediaStream([receiverTrack]), "receiver_track_corrected");
       }

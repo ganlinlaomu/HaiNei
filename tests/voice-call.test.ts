@@ -549,10 +549,15 @@ describe("call engine", () => {
     await hangup();
   });
 
-  it("binds the receiver identified by RTP instead of repeatedly playing a stale track", async () => {
+  it.each([
+    { scenario: "stale output", staleMuted: true, receiverMuted: false, packets: 198, corrected: true },
+    { scenario: "healthy output", staleMuted: false, receiverMuted: false, packets: 198, corrected: false },
+    { scenario: "muted receiver", staleMuted: true, receiverMuted: true, packets: 198, corrected: false },
+    { scenario: "no incoming packets", staleMuted: true, receiverMuted: false, packets: 0, corrected: false },
+  ])("only repairs a proven receiver mismatch: $scenario", async ({ staleMuted, receiverMuted, packets, corrected }) => {
     const { startCall, hangup } = await import("@/services/callEngine");
-    const stale = { id: "stale", kind: "audio", muted: true, readyState: "live" };
-    const actual = { id: "actual", kind: "audio", muted: false, readyState: "live" };
+    const stale = { id: "stale", kind: "audio", muted: staleMuted, readyState: "live" };
+    const actual = { id: "actual", kind: "audio", muted: receiverMuted, readyState: "live" };
     vi.stubGlobal("MediaStream", class {
       constructor(private tracks: any[]) {}
       getAudioTracks() { return this.tracks; }
@@ -562,14 +567,14 @@ describe("call engine", () => {
     room.peers.peer = {
       getReceivers: () => [{ track: actual }],
       getStats: async () => new Map([["audio", {
-        type: "inbound-rtp", kind: "audio", trackIdentifier: "actual", packetsReceived: 198,
+        type: "inbound-rtp", kind: "audio", trackIdentifier: "actual", packetsReceived: packets,
       }]]),
     };
     room.onPeerJoin("peer");
     room.onPeerStream({ getAudioTracks: () => [stale] } as unknown as MediaStream, "peer");
     await vi.advanceTimersByTimeAsync(4_050);
     const audio = mocks.audioElements.find(element => element.srcObject);
-    expect(audio.srcObject.getAudioTracks()).toEqual([actual]);
+    expect(audio.srcObject.getAudioTracks()).toEqual([corrected ? actual : stale]);
     expect(room.addStream).toHaveBeenCalledOnce();
     await hangup();
   });
