@@ -1,23 +1,60 @@
 <template>
   <main class="app-page calls-page">
-    <header><button type="button" @click="router.push('/conversations')" aria-label="返回私信">‹ 返回</button><h1>通话</h1></header>
-    <div class="filters" aria-label="通话筛选"><button type="button" :aria-pressed="!missedOnly" @click="missedOnly = false">最近通话</button><button type="button" :aria-pressed="missedOnly" @click="missedOnly = true">未接</button></div>
-    <p v-if="error" role="alert">{{ error }} <button type="button" @click="subscribe">重试</button></p>
-    <p v-else-if="loading" role="status">正在读取通话记录…</p>
-    <p v-else-if="!visible.length">{{ missedOnly ? '暂无未接来电' : '暂无通话记录' }}</p>
-    <ul>
-      <li v-for="item in visible" :key="item.id">
-        <button class="record" type="button" @click="router.push(`/messages/${item.peer}`)">
-          <ProfileAvatar :pubkey="item.peer" :size="44" />
-          <span class="copy"><strong :class="{ missed: item.missed }">{{ name(item.peer) }}</strong><span>{{ item.direction === 'incoming' ? '呼入 · ' : item.direction === 'outgoing' ? '呼出 · ' : '' }}{{ item.text }}</span><time>{{ new Date(item.createdAt * 1000).toLocaleString() }}</time></span>
+    <header class="calls-header">
+      <h1>通话</h1>
+      <button class="new-call" type="button" aria-label="发起新通话" @click="showPicker = true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg>
+      </button>
+    </header>
+    <div class="calls-filters" role="group" aria-label="通话记录筛选">
+      <button type="button" :aria-pressed="!missedOnly" @click="missedOnly = false">全部</button>
+      <button type="button" :aria-pressed="missedOnly" @click="missedOnly = true">未接来电</button>
+    </div>
+    <label class="calls-search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input v-model="search" type="search" autocomplete="off" placeholder="搜索通话记录" aria-label="搜索通话记录"/>
+    </label>
+    <p v-if="error" class="calls-state" role="alert">{{ error }} <button type="button" @click="subscribe">重试</button></p>
+    <p v-else-if="loading" class="calls-state" role="status">正在读取通话记录…</p>
+    <p v-else-if="!filtered.length" class="calls-state">{{ search.trim() ? "没有匹配的通话" : missedOnly ? "暂无未接来电" : "暂无通话记录" }}</p>
+    <ul v-else class="calls-list">
+      <li v-for="item in filtered" :key="item.id" class="call-row">
+        <button class="call-record" type="button" :aria-label="`查看 ${name(item.peer)} 的资料`" @click="router.push(`/profile/${item.peer}`)">
+          <ProfileAvatar :pubkey="item.peer" :local-name="localName(item.peer)" :size="46"/>
+          <span class="call-copy">
+            <strong :class="{ missed: item.missed }">{{ name(item.peer) }}</strong>
+            <span :class="{ missed: item.missed }">
+              {{ item.missed ? "↙ 未接来电" : item.direction === "incoming" ? "↙ 呼入" : item.direction === "outgoing" ? "↗ 呼出" : "通话" }} · {{ item.text }}
+            </span>
+          </span>
+          <time>{{ timeLabel(item.createdAt) }}</time>
         </button>
-        <button class="callback" type="button" :aria-label="`回拨 ${name(item.peer)}`" :disabled="busy || call.phase !== 'idle' || !friendships.isAccepted(item.peer)" data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="callBack(item.peer)">回拨</button>
+        <button class="call-back" type="button" :aria-label="`回拨 ${name(item.peer)}`" :disabled="busy || call.phase !== 'idle' || !friendships.isAccepted(item.peer)" data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="startCall(item.peer)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
+        </button>
       </li>
     </ul>
-    <button v-if="hasMore" type="button" :disabled="loading" @click="limit += 50">加载更多</button>
-    <p class="note">显示本账号已同步到此设备的记录。旧版记录可能没有呼入／呼出信息。</p>
+    <button v-if="hasMore && !search.trim()" class="load-more" type="button" :disabled="loading" @click="limit += 50">加载更多</button>
+    <p class="calls-note">显示此设备已同步的通话记录。历史版本可能缺少呼入或呼出信息。</p>
+
+    <div v-if="showPicker" class="picker-backdrop" @click.self="showPicker = false">
+      <section class="picker-sheet" role="dialog" aria-modal="true" aria-label="发起语音通话">
+        <header class="picker-header"><h2>选择联系人</h2><button type="button" aria-label="关闭" @click="showPicker = false">×</button></header>
+        <input v-model="contactSearch" type="search" autocomplete="off" placeholder="搜索通讯录" aria-label="搜索要拨打的联系人"/>
+        <div class="picker-list">
+          <p v-if="!callableFriends.length" class="calls-state">暂无匹配的好友</p>
+          <button v-for="friend in callableFriends" :key="friend.pubkey" class="picker-row" type="button"
+            :disabled="busy || call.phase !== 'idle'" data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="startCall(friend.pubkey)">
+            <ProfileAvatar :pubkey="friend.pubkey" :local-name="friend.name" :size="42"/>
+            <span>{{ name(friend.pubkey) }}</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
+          </button>
+        </div>
+      </section>
+    </div>
   </main>
 </template>
+
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -29,14 +66,25 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useFriendsStore } from "@/stores/friends";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { loadCallEngine, loadedCallEngine, useCallStore } from "@/stores/call";
+import { loadAccountStoresOnce } from "@/utils/bottomTabActivation";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 const keys = useKeyStore(), friendships = useFriendshipsStore(), friends = useFriendsStore(), profiles = useProfilesStore();
 const router = useRouter(), call = useCallStore();
 const records = ref<CallHistoryItem[]>([]), limit = ref(50), missedOnly = ref(false), hasMore = ref(false), loading = ref(true), error = ref(""), busy = ref(false);
+const showPicker = ref(false), search = ref(""), contactSearch = ref("");
 let subscription: { unsubscribe(): void } | undefined;
 let generation = 0;
-const visible = computed(() => records.value);
-const name = (peer: string) => privateProfileDisplayName(profiles.getProfile(peer)?.nickname, peer, friends.list.find(f => f.pubkey === peer)?.name);
+const localName = (peer: string) => friends.list.find(f => f.pubkey === peer)?.name;
+const name = (peer: string) => privateProfileDisplayName(profiles.getProfile(peer)?.nickname, peer, localName(peer));
+const filtered = computed(() => records.value.filter(item => name(item.peer).toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase())));
+const callableFriends = computed(() => friends.getAcceptedList(friendships.isAccepted).filter(friend => name(friend.pubkey).toLocaleLowerCase().includes(contactSearch.value.trim().toLocaleLowerCase())));
+function timeLabel(seconds: number) {
+  const date = new Date(seconds * 1000);
+  const today = new Date();
+  return date.toDateString() === today.toDateString()
+    ? date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleDateString(undefined, { month: "numeric", day: "numeric" });
+}
 function subscribe() {
   subscription?.unsubscribe(); const token = ++generation;
   records.value = []; error.value = ""; hasMore.value = false;
@@ -45,7 +93,6 @@ function subscribe() {
   loading.value = true;
   subscription = liveQuery(async () => {
     const items: CallHistoryItem[] = [];
-    // Scan the account index, not the bounded 1000-message inbox. Keep only call rows.
     await db.syncedMessages.where("[accountPubkey+createdAt+id]")
       .between([account, Dexie.minKey, Dexie.minKey], [account, Dexie.maxKey, Dexie.maxKey])
       .reverse().until(() => items.length > count).each(record => {
@@ -59,19 +106,53 @@ function subscribe() {
   }, error: () => { if (token === generation) { loading.value = false; error.value = "读取通话记录失败，请重试"; } } });
 }
 watch(() => [keys.pkHex, keys.isUnlocked, limit.value, missedOnly.value], subscribe, { immediate: true, flush: "sync" });
+watch(() => [keys.pkHex, keys.isUnlocked] as const, ([account, unlocked]) => {
+  if (account && unlocked) void loadAccountStoresOnce(account, [friends, friendships, profiles]).catch(() => {});
+  else showPicker.value = false;
+}, { immediate: true });
 onBeforeUnmount(() => { generation++; subscription?.unsubscribe(); });
 function preload() { void loadCallEngine().catch(() => {}); }
-async function callBack(peer: string) {
+async function startCall(peer: string) {
   if (busy.value || call.phase !== "idle" || !friendships.isAccepted(peer)) return;
   busy.value = true; error.value = "";
   const account = keys.pkHex;
   try {
     const engine = loadedCallEngine() || await loadCallEngine();
-    if (keys.pkHex === account && keys.isUnlocked && friendships.isAccepted(peer)) await engine.startCall(peer);
+    if (keys.pkHex === account && keys.isUnlocked && friendships.isAccepted(peer)) {
+      showPicker.value = false;
+      await engine.startCall(peer);
+    }
   } catch { error.value = "暂时无法发起通话，请重试"; }
   finally { busy.value = false; }
 }
 </script>
+
 <style scoped>
-.calls-page{max-width:720px;margin:auto;padding:16px}.calls-page header{display:flex;align-items:center;gap:16px}.calls-page h1{font-size:24px}.calls-page button{font:inherit;color:inherit;min-height:44px;border:0;border-radius:12px;padding:10px 14px;background:var(--bg-f1f5f9,#f1f5f9);cursor:pointer}.filters{display:flex;gap:12px;margin:16px 0}.filters button[aria-pressed=true]{background:#2563eb;color:#fff}.calls-page ul{list-style:none;padding:0}.calls-page li{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border,#cbd5e1);padding:10px 0}.calls-page .record{display:flex;align-items:center;gap:12px;flex:1;min-width:0;text-align:left;background:transparent;padding:4px}.copy{display:flex;flex-direction:column;gap:5px;min-width:0}.copy strong,.copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.copy span,.copy time,.note{font-size:13px;opacity:.75}.missed{color:#dc2626}.calls-page button:disabled{opacity:.45;cursor:default}.calls-page button:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+.calls-page{max-width:760px;margin:0 auto;min-height:100%;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 20px);background:var(--bg-fff);color:var(--fg-0f1419)}
+.calls-header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;min-height:56px}
+.calls-header h1{margin:0;font-size:22px;font-weight:750}
+.new-call{display:grid;place-items:center;width:40px;height:40px;border:1px solid var(--bd-cbd5e1);border-radius:50%;background:transparent;color:var(--fg-172033)}
+.new-call svg,.calls-search svg,.call-back svg,.picker-row svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.calls-filters{display:flex;gap:8px;padding:2px 16px 12px}
+.calls-filters button{min-height:35px;padding:0 17px;border:0;border-radius:999px;background:var(--bg-eef2f6);color:var(--fg-536471);font-size:13px;font-weight:650}
+.calls-filters button[aria-pressed=true]{background:#1687e8;color:#fff}
+.calls-search{display:flex;align-items:center;gap:10px;margin:0 16px 8px;padding:0 13px;border-radius:999px;background:var(--bg-eff3f4);color:var(--fg-64748b)}
+.calls-search input{height:42px;min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--fg-0f1419);font-size:16px}
+.calls-list{margin:0;padding:0;list-style:none}.call-row{display:flex;align-items:center;gap:2px;border-bottom:1px solid var(--bd-eff1f3);padding:4px 12px}
+.call-record{display:flex;align-items:center;gap:11px;min-height:64px;min-width:0;flex:1;padding:6px 2px;border:0;background:transparent;color:inherit;text-align:left}
+.call-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:5px}.call-copy strong,.call-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.call-copy strong{font-size:15px}.call-copy span{font-size:12px;color:var(--fg-64748b)}.call-copy .missed{color:#dc2626}
+.call-record time{align-self:flex-start;margin-top:9px;color:var(--fg-94a3b8);font-size:11px;white-space:nowrap}
+.call-back{display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border:0;border-radius:50%;background:transparent;color:#1687e8}
+.call-back:disabled{opacity:.35}.calls-state{text-align:center;padding:34px 16px;color:var(--fg-64748b);font-size:14px}.calls-note{padding:14px 16px;color:var(--fg-94a3b8);font-size:12px}
+.load-more{display:block;margin:12px auto;border:0;background:transparent;color:#1687e8;min-height:44px}
+.picker-backdrop{position:fixed;inset:0;z-index:15000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.46)}
+.picker-sheet{display:flex;flex-direction:column;width:100%;max-width:760px;max-height:82dvh;padding:16px 16px calc(env(safe-area-inset-bottom) + 20px);border-radius:22px 22px 0 0;background:var(--bg-fff);color:var(--fg-172033)}
+.picker-header{display:flex;justify-content:space-between;align-items:center}.picker-header h2{margin:0 0 12px;font-size:19px}
+.picker-header button{width:44px;height:44px;border:0;background:transparent;color:inherit;font-size:28px}
+.picker-sheet input{height:44px;padding:0 14px;border:0;border-radius:12px;background:var(--bg-eff3f4);color:inherit;font-size:16px}
+.picker-list{overflow:auto;overscroll-behavior:contain}.picker-row{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;border:0;border-bottom:1px solid var(--bd-eff1f3);background:transparent;color:inherit;text-align:left}
+.picker-row span{flex:1}.picker-row svg{color:#1687e8}.picker-row:disabled{opacity:.4}
+.calls-page button:focus-visible{outline:2px solid #1687e8;outline-offset:2px}
+@media (min-width:768px){.picker-sheet{margin:auto;border-radius:22px}}
 </style>

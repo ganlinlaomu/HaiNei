@@ -16,9 +16,15 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
     </button>
   </div>
-  <div v-else-if="minimized && canMinimize" class="call-banner" role="region" aria-label="正在通话">
-    <button class="banner-peer" type="button" aria-label="返回通话" @click="minimized = false"><ProfileAvatar :pubkey="call.peer" :size="40" /><span class="banner-copy"><strong>{{ name }}</strong><span>{{ status }}{{ call.muted ? " · 已静音" : "" }}</span></span></button>
-    <button class="banner-action decline" type="button" aria-label="挂断" :disabled="acting" @click="hangup">挂断</button>
+  <div v-else-if="minimized && canMinimize" class="call-banner minimized-call" role="region" aria-label="正在通话">
+    <button class="banner-peer" type="button" aria-label="展开通话界面" @click="minimized = false">
+      <ProfileAvatar :pubkey="call.peer" :size="36" />
+      <span class="banner-copy"><strong>{{ name }} · {{ call.phase === "active" ? "通话中" : "语音通话" }}</strong><span>{{ status }}{{ call.muted ? " · 已静音" : "" }}</span></span>
+      <span class="banner-expand" aria-hidden="true">⌄</span>
+    </button>
+    <button class="banner-action decline" type="button" aria-label="挂断" :disabled="acting" @click="hangup">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
+    </button>
   </div>
   <div v-else class="call-overlay" role="dialog" aria-modal="true" :aria-label="`与 ${name} 的语音通话`" @click.self="dismissEnded">
     <button v-if="canMinimize" class="call-minimize" type="button" @click="minimized = true">收起通话</button>
@@ -204,6 +210,9 @@ async function callBack() {
 </script>
 
 <style scoped>
+.minimized-call{max-width:760px;margin:0 auto;left:8px;right:8px;padding:7px 10px;border-radius:18px}
+.banner-expand{font-size:24px;color:#cbd5e1}
+
 .call-banner{position:fixed;top:calc(env(safe-area-inset-top) + 8px);left:8px;right:8px;z-index:200000;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:18px;background:#0f172a;color:#f8fafc;box-shadow:0 12px 32px rgba(15,23,42,.35);animation:banner-in .2s ease-out}
 @keyframes banner-in{from{transform:translateY(-120%)}to{transform:none}}
 .banner-peer{display:flex;flex:1;min-width:0;align-items:center;gap:10px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}

@@ -24,7 +24,8 @@
         <div v-if="!isSelf" class="friend-state">已接受的好友</div>
         <div class="profile-actions">
           <button v-if="isSelf" class="message-button" type="button" @pointerdown="loadMyProfileView" @focus="loadMyProfileView" @click="router.push('/settings/profile')">编辑资料</button>
-          <button v-else-if="canMessage" class="message-button" type="button" @pointerdown="loadMessagesView" @focus="loadMessagesView" @click="router.push(`/messages/${ownerPubkey}`)">私信</button>
+          <button v-else-if="canMessage" class="message-button" type="button" @pointerdown="loadMessagesView" @focus="loadMessagesView" @click="router.push(`/messages/${ownerPubkey}`)">发私信</button>
+          <button v-if="canMessage" class="voice-call-button" type="button" :disabled="callBusy || call.phase !== 'idle'" data-live-audio-action data-ringtone-arm @pointerdown="preloadProfileCall" @focus="preloadProfileCall" @click="startProfileCall">语音电话</button>
           <button class="secondary-action" type="button" :aria-label="isSelf ? '复制我的公钥' : '复制用户公钥'" @click="copyPubkey">复制公钥</button>
           <button class="secondary-action" type="button" :aria-label="isSelf ? '打开我的二维码' : '打开用户二维码'" @click="showQr = true">二维码</button>
         </div>
@@ -59,6 +60,7 @@ import PostCard from "@/components/PostCard.vue";
 import MyQrCodeSheet from "@/components/MyQrCodeSheet.vue";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useFriendsStore } from "@/stores/friends";
+import { loadCallEngine, loadedCallEngine, useCallStore } from "@/stores/call";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
@@ -85,6 +87,8 @@ const profiles = useProfilesStore();
 const messages = useMessagesStore();
 const feedPreferences = useFeedPreferencesStore();
 const ui = useUIStore();
+const call = useCallStore();
+const callBusy = ref(false);
 const ready = ref(storesLoadedForAccount(keys.pkHex, [friends, friendships, profiles, messages, feedPreferences]));
 const showQr = ref(false);
 let loadGeneration = 0;
@@ -113,6 +117,18 @@ const localNote = computed(() => {
 const canMessage = computed(() => ownerPubkey.value !== keys.pkHex
   && friendships.loadedFor === keys.pkHex
   && friendships.isAccepted(ownerPubkey.value));
+function preloadProfileCall() { void loadCallEngine().catch(() => {}); }
+async function startProfileCall() {
+  const peer = ownerPubkey.value;
+  if (!canMessage.value || callBusy.value || call.phase !== "idle") return;
+  const account = keys.pkHex;
+  callBusy.value = true;
+  try {
+    const engine = loadedCallEngine() || await loadCallEngine();
+    if (keys.pkHex === account && keys.isUnlocked && friendships.isAccepted(peer)) await engine.startCall(peer);
+  } catch { ui.addToast("暂时无法发起通话，请重试", 2200, "error"); }
+  finally { callBusy.value = false; }
+}
 async function copyPubkey() {
   if (!ownerPubkey.value) return;
   try {
@@ -177,6 +193,9 @@ watch([() => keys.pkHex, ownerPubkey], load);
 </script>
 
 <style scoped>
+.voice-call-button{min-width:112px;border:1px solid #1687e8;background:var(--bg-fff);color:#1687e8}
+.voice-call-button:disabled{opacity:.45}
+
 .profile-view{width:100%;margin:0 auto;box-sizing:border-box;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px)}
 .profile-content{display:flex;flex-direction:column;align-items:center;padding:18px}.profile-content h2{margin:14px 0 8px;font-size:23px;color:var(--fg-172033)}.bio{width:100%;max-width:420px;margin:0;padding:14px 0 20px;color:var(--fg-475569);line-height:1.65;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere}.bio.empty{color:var(--fg-94a3b8)}.profile-meta{width:100%;max-width:420px;display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid var(--bd-e2e8f0);color:var(--fg-64748b);font-size:14px}.profile-meta strong{color:var(--fg-334155)}.friend-state{margin-top:10px;padding:6px 10px;border-radius:999px;background:var(--bg-ecfdf5);color:var(--fg-047857);font-size:12px}.profile-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:14px}.profile-actions button{min-height:42px;padding:0 16px;border-radius:999px;font-weight:700;cursor:pointer}.message-button{min-width:112px;border:0;background:#1687e8;color:#fff}.secondary-action{border:1px solid var(--bd-cbd5e1);background:var(--bg-fff);color:var(--fg-334155)}.unmute-button{margin-top:14px;min-height:42px;padding:0 14px;border:1px solid var(--bd-cbd5e1);border-radius:9px;background:var(--bg-fff);color:var(--fg-334155)}.profile-posts{width:100%;box-sizing:border-box;padding:4px 0 0}.profile-posts h3{margin:6px 16px 8px;padding-top:14px;border-top:1px solid var(--bd-e8edf3);color:var(--fg-172033);font-size:17px}.post-list{display:grid;gap:0}.empty-posts{margin:0;padding:40px 16px 56px;color:var(--fg-94a3b8);text-align:center;font-size:14px}.unavailable{padding:64px 16px;text-align:center}.unavailable h2{margin:0 0 8px;font-size:20px}.unavailable p{margin:0;color:var(--fg-64748b);font-size:14px}
 @media (min-width:768px){.unavailable{max-width:640px;margin-left:auto;margin-right:auto}}

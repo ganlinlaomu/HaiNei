@@ -30,14 +30,17 @@ function dm(id: string, pubkey: string, recipientPubkeys: string[], created_at: 
 }
 
 describe("direct-message navigation and UI contract", () => {
-  it("has exactly the required four icon-only bottom tabs and keeps friends under My", () => {
+  it("exposes five labeled communication tabs, with notifications on Home", () => {
     const source = readThemedSource(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
     const labels = [...source.matchAll(/<router-link class="nav-item"[^>]*aria-label="([^"]+)"/g)].map(match => match[1]);
-    expect(labels).toEqual(["首页", "私信", "通知", "我的"]);
-    expect(source).toContain('to="/conversations"');
-    expect(source).not.toContain('to="/friends"');
-    expect(source).not.toContain('class="nav-label"');
-    expect(source).toContain('to="/settings"');
+    expect(labels).toEqual(["首页", "私信", "通话", "通讯录", "我的"]);
+    for (const path of ["/conversations", "/calls", "/friends", "/settings"]) {
+      expect(source).toContain(`to="${path}"`);
+    }
+    expect(source).toContain('class="nav-label"');
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    expect(home).toContain('aria-label="查看通知"');
+    expect(home).toContain("notifications.unreadCount");
     const settings = readThemedSource(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     expect(settings).toContain('router.push("/friends")');
   });
@@ -233,7 +236,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(taskRepository).toContain("record.replyTo");
   });
 
-  it("uses My as a navigation hub with dedicated settings and consistent back navigation", () => {
+  it("keeps My settings and the new primary contacts page consistent", () => {
     const settings = readThemedSource(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     const system = readThemedSource(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
     const friends = readThemedSource(join(process.cwd(), "src/views/Friends.vue"), "utf8");
@@ -248,7 +251,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(settings).toContain("background:#fff;color:#0f1419");
     expect(settings).toContain("border-top:1px solid #eff1f3;background:#fff");
     expect(settings).not.toContain('<section v-else class="card settings-card">');
-    for (const source of [system, friends, profile, saved]) {
+    for (const source of [system, profile, saved]) {
       expect(source).toContain("SecondaryPageHeader");
     }
     expect(settings).toContain('aria-label="复制公钥"');
@@ -267,8 +270,10 @@ describe("direct-message navigation and UI contract", () => {
     expect(system).toContain("存储 / Cache");
     expect(system).toContain("高级设置 / Diagnostics");
     expect(system).toContain('<SecondaryPageHeader title="设置" back-label="返回我的" />');
-    expect(friends).toContain('<SecondaryPageHeader title="好友 / 好友分组" back-label="返回我的" />');
-    expect(friends).toContain('components: { ProfileAvatar, SecondaryPageHeader, QrScannerSheet }');
+    expect(friends).toContain('<header class="contacts-header">');
+    expect(friends).toContain('<h1>通讯录</h1>');
+    expect(friends).toContain('filteredAcceptedFriends');
+    expect(friends).toContain('components: { ProfileAvatar, QrScannerSheet }');
     expect(saved).toContain('<SecondaryPageHeader title="已收藏" back-label="返回我的" />');
     expect(saved).not.toContain("收藏会先保存在本机，并通过加密同步到其他设备");
     expect(saved).not.toContain("收藏仅保存在当前设备和账号中");
@@ -290,6 +295,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(profile).toContain(".profile-editor{padding:8px 16px 0}");
     expect(saved).toContain(".saved-list{display:grid;gap:12px;padding:0 10px}");
     expect(friends).not.toContain(".friends-header{");
+    expect(friends).toContain('class="contacts-search"');
     expect(router).toContain('path: "/settings/system"');
   });
 
@@ -319,12 +325,15 @@ describe("direct-message navigation and UI contract", () => {
     expect(friends).toContain("friendGroupTags(friend)");
   });
 
-  it("uses the existing composer behind a route-aware floating button", () => {
+  it("keeps Home post composer and uses a dedicated new-message action in private chats", () => {
     const app = readThemedSource(join(process.cwd(), "src/App.vue"), "utf8");
     expect(app.match(/class="compose-fab"/g)).toHaveLength(1);
     expect(app).toContain("ui.openPostEditor()");
     expect(app).toContain('route.name === "Conversations"');
-    expect(app).toContain("ui.openNewConversation()");
+    const conversations = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
+    expect(conversations).toContain("ui.openNewConversation()");
+    expect(conversations).toContain('aria-label="发起新私信"');
+    expect(app).toContain('const primaryRoutes = new Set(["Home"])');
     expect(app).toContain('key="message"');
     expect(app).toContain('key="compose"');
     expect(app).toContain("transition: opacity 240ms cubic-bezier(.2,.75,.25,1), transform 240ms cubic-bezier(.2,.75,.25,1)");
@@ -569,10 +578,11 @@ describe("direct-message navigation and UI contract", () => {
     expect(router).toContain("hideBottomNav: true");
   });
 
-  it("keeps DM unread and activity unread as separate navigation badges", () => {
+  it("keeps DM unread in the navigation and activity unread on Home", () => {
     const source = readThemedSource(join(process.cwd(), "src/components/HeaderBar.vue"), "utf8");
     expect(source).toContain("directMessages.unreadCount");
-    expect(source).toContain("notifications.unreadCount");
+    const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
+    expect(home).toContain("notifications.unreadCount");
     expect(source).not.toContain("notifications.unreadCount + directMessages.unreadCount");
   });
 

@@ -6,6 +6,7 @@ const NearbyTransfer = () => import("@/views/NearbyTransfer.vue");
 import Home from "@/views/Home.vue";
 import {
   loadConversationsView,
+  loadCallsView,
   loadNotificationsView,
   loadSettingsView,
   loadSystemSettingsView,
@@ -34,7 +35,7 @@ import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
  */
 
 const routes: Array<RouteRecordRaw> = [
-  { path: "/calls", name: "Calls", component: () => import("@/views/Calls.vue"), meta: { requiresAuth: true, hideHeader: true } },
+  { path: "/calls", name: "Calls", component: loadCallsView, meta: { requiresAuth: true } },
   {
     path: "/login",
     name: "Login",

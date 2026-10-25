@@ -3,18 +3,19 @@ import { describe, expect, it } from "vitest";
 import { getBottomNavTabIndex } from "@/utils/bottomNavigation";
 
 describe("liquid bottom navigation", () => {
-  it("tracks the four tabs and keeps settings subpages selected", () => {
+  it("tracks the five tabs and keeps settings subpages selected", () => {
     expect(getBottomNavTabIndex("/")).toBe(0);
     expect(getBottomNavTabIndex("/conversations")).toBe(1);
-    expect(getBottomNavTabIndex("/notifications")).toBe(2);
-    expect(getBottomNavTabIndex("/settings")).toBe(3);
-    expect(getBottomNavTabIndex("/settings/system")).toBe(3);
-    expect(getBottomNavTabIndex("/settings/profile")).toBe(3);
-    expect(getBottomNavTabIndex("/settings/saved")).toBe(3);
+    expect(getBottomNavTabIndex("/calls")).toBe(2);
+    expect(getBottomNavTabIndex("/friends")).toBe(3);
+    expect(getBottomNavTabIndex("/settings")).toBe(4);
+    expect(getBottomNavTabIndex("/settings/system")).toBe(4);
+    expect(getBottomNavTabIndex("/settings/profile")).toBe(4);
+    expect(getBottomNavTabIndex("/settings/saved")).toBe(4);
   });
 
   it("does not suggest a selected tab on conversation, profile, or login routes", () => {
-    for (const path of ["/messages/abc", "/profile/abc", "/friends", "/debug", "/login"]) {
+    for (const path of ["/messages/abc", "/profile/abc", "/notifications", "/debug", "/login"]) {
       expect(getBottomNavTabIndex(path)).toBe(-1);
     }
   });
@@ -27,12 +28,15 @@ describe("liquid bottom navigation", () => {
     expect(source).toContain('aria-hidden="true"');
     expect(source).toContain("getBottomNavTabIndex(route.path)");
     expect(source).toContain('v-if="directMessages.unreadCount + nearbyUnread.count > 0"');
-    expect(source).toContain('v-if="notifications.unreadCount > 0"');
+    expect(source).toContain('to="/calls"');
+    expect(source).toContain('to="/friends"');
+    expect(source).toContain('class="nav-label"');
     expect(source).toContain('name.startsWith("comment-sheet-")');
     expect(source).toContain("route.meta.hideBottomNav === true");
     expect(source).toContain("@click=\"handleNavigation\"");
     expect(source).toContain("@pointerdown=\"preloadBottomTab('conversations')\"");
-    expect(source).toContain("@pointerdown=\"preloadBottomTab('notifications')\"");
+    expect(source).toContain("@pointerdown=\"preloadBottomTab('calls')\"");
+    expect(source).toContain("@pointerdown=\"preloadBottomTab('friends')\"");
     expect(source).toContain("@pointerdown=\"preloadBottomTab('settings')\"");
     expect(source).toContain("@media (min-width: 768px)");
     expect(source).toContain(".nav-liquid-track {");

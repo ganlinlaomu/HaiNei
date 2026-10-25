@@ -1,55 +1,27 @@
 <template>
-
-  <!-- Keep existing navigation controls; the mobile glass bubble is decorative only. -->
   <nav v-if="shouldShowBottomNav" class="bottom-nav" aria-label="主导航">
     <div v-if="activeTabIndex >= 0" class="nav-liquid-track" aria-hidden="true">
-      <span class="nav-liquid-indicator" :style="{ '--nav-slide': `${activeTabIndex * 100}%` }">
-        <span :key="activeTabIndex" class="nav-liquid-surface"></span>
-      </span>
+      <span class="nav-liquid-indicator" :style="{ '--nav-slide': `${activeTabIndex * 100}%` }"><span :key="activeTabIndex" class="nav-liquid-surface"></span></span>
     </div>
-    <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 0 }" to="/" aria-label="首页" @click="handleNavigation">
-      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-        <polyline points="9 22 9 12 15 12 15 22"></polyline>
-      </svg>
+    <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 0 }" to="/" aria-label="首页"  @click="handleNavigation">
+      <span class="icon-wrapper"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7v10H3z"/><path d="M9 20v-7h6v7"/></svg></span>
+      <span class="nav-label">首页</span>
     </router-link>
     <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 1 }" to="/conversations" aria-label="私信" @pointerdown="preloadBottomTab('conversations')" @focus="preloadBottomTab('conversations')" @click="handleNavigation">
-      <span class="icon-wrapper">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
-        </svg>
-        <span v-if="directMessages.unreadCount + nearbyUnread.count > 0" class="badge">{{ directMessages.unreadCount + nearbyUnread.count }}</span>
-      </span>
+      <span class="icon-wrapper"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg><span v-if="directMessages.unreadCount + nearbyUnread.count > 0" class="badge">{{ directMessages.unreadCount + nearbyUnread.count > 99 ? "99+" : directMessages.unreadCount + nearbyUnread.count }}</span></span>
+      <span class="nav-label">私信</span>
     </router-link>
-    <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 2 }" to="/notifications" aria-label="通知" @pointerdown="preloadBottomTab('notifications')" @focus="preloadBottomTab('notifications')" @click="handleNavigation">
-      <span class="icon-wrapper">
-        <svg
-          class="icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path>
-          <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-        </svg>
-
-        <!-- 🔴 小红点 / 数字 -->
-        <span
-          v-if="notifications.unreadCount > 0"
-          class="badge"
-        >
-          {{ notifications.unreadCount }}
-        </span>
-      </span>
+    <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 2 }" to="/calls" aria-label="通话" @pointerdown="preloadBottomTab('calls')" @focus="preloadBottomTab('calls')" @click="handleNavigation">
+      <span class="icon-wrapper"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg></span>
+      <span class="nav-label">通话</span>
     </router-link>
-    <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 3 }" to="/settings" aria-label="我的" @pointerdown="preloadBottomTab('settings')" @focus="preloadBottomTab('settings')" @click="handleNavigation">
-      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="8" r="4"></circle>
-        <path d="M4 21a8 8 0 0 1 16 0"></path>
-      </svg>
+    <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 3 }" to="/friends" aria-label="通讯录" @pointerdown="preloadBottomTab('friends')" @focus="preloadBottomTab('friends')" @click="handleNavigation">
+      <span class="icon-wrapper"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="12" cy="9" r="3"/><path d="M6.5 19v-2a5.5 5.5 0 0 1 11 0v2"/></svg></span>
+      <span class="nav-label">通讯录</span>
+    </router-link>
+    <router-link class="nav-item" :class="{ 'is-current-tab': activeTabIndex === 4 }" to="/settings" aria-label="我的" @pointerdown="preloadBottomTab('settings')" @focus="preloadBottomTab('settings')" @click="handleNavigation">
+      <span class="icon-wrapper"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span>
+      <span class="nav-label">我的</span>
     </router-link>
   </nav>
 </template>
@@ -59,10 +31,10 @@ import { defineComponent, computed } from "vue";
 import { useRoute } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
-import { useNotificationsStore } from "@/stores/notifications";
+
 import { useDirectMessagesStore } from "@/stores/directMessages";
 import { nearbyUnread } from "@/services/nearbyUnread";
-import { loadConversationsView, loadNotificationsView, loadSettingsView } from "@/router/lazyViews";
+import { loadConversationsView, loadCallsView, loadFriendsView, loadSettingsView } from "@/router/lazyViews";
 import { getBottomNavTabIndex } from "@/utils/bottomNavigation";
 
 
@@ -71,7 +43,7 @@ export default defineComponent({
   setup() {
     const keys = useKeyStore();
     const ui = useUIStore();
-    const notifications = useNotificationsStore();
+
     const directMessages = useDirectMessagesStore();
     const route = useRoute();
     const activeTabIndex = computed(() => getBottomNavTabIndex(route.path));
@@ -87,14 +59,12 @@ export default defineComponent({
       return true; // Logged in and unlocked (or not encrypted)
     });
 
-    type BottomTab = "conversations" | "notifications" | "settings";
+    type BottomTab = "conversations" | "calls" | "friends" | "settings";
 
     function preloadBottomTab(tab: BottomTab) {
-      const loader = tab === "conversations"
-        ? loadConversationsView
-        : tab === "notifications"
-          ? loadNotificationsView
-          : loadSettingsView;
+      const loader = tab === "conversations" ? loadConversationsView
+        : tab === "calls" ? loadCallsView
+        : tab === "friends" ? loadFriendsView : loadSettingsView;
       void loader().catch(() => undefined);
     }
 
@@ -102,7 +72,7 @@ export default defineComponent({
       ui.closePostEditor();
     }
     
-    return { isLoggedIn, shortPk, preloadBottomTab, handleNavigation, notifications, directMessages, nearbyUnread, shouldShowBottomNav, activeTabIndex, ui };
+    return { isLoggedIn, shortPk, preloadBottomTab, handleNavigation, directMessages, nearbyUnread, shouldShowBottomNav, activeTabIndex, ui };
   }
 });
 </script>
@@ -130,9 +100,9 @@ export default defineComponent({
   right: 0;
 
   /* 尺寸 */
-  height: 80px;
-  padding-top: 12px;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  height: calc(62px + env(safe-area-inset-bottom));
+  padding-top: 5px;
+  padding-bottom: calc(5px + env(safe-area-inset-bottom));
 
   /* 布局 */
   display: flex;
@@ -160,7 +130,7 @@ export default defineComponent({
 /* Single mobile-only selector; track follows the nav content box and safe area. */
 .nav-liquid-track {
   position: absolute;
-  inset: 12px 0 calc(12px + env(safe-area-inset-bottom));
+  inset: 5px 0 calc(5px + env(safe-area-inset-bottom));
   display: flex;
   align-items: center;
   z-index: 0;
@@ -169,7 +139,7 @@ export default defineComponent({
 
 .nav-liquid-indicator {
   position: relative;
-  flex: 0 0 25%;
+  flex: 0 0 20%;
   height: 48px;
   transform: translate3d(var(--nav-slide, 0%), 0, 0);
   transition: transform 440ms cubic-bezier(.22, 1.13, .32, 1);
@@ -217,8 +187,9 @@ export default defineComponent({
 .nav-item {
   flex: 1;
   min-width: 0;
-  min-height: 48px;
-  padding: 4px;
+  min-height: 50px;
+  gap: 3px;
+  padding: 3px 1px;
 
   display: flex;
   flex-direction: column;
@@ -288,6 +259,8 @@ export default defineComponent({
   position: relative;
   display: inline-flex;
 }
+.nav-label { font-size: 10px; line-height: 1.25; font-weight: 550; white-space: nowrap; }
+.nav-item.is-current-tab .nav-label { font-weight: 720; }
 
 .badge {
   position: absolute;
