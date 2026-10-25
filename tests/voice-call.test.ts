@@ -380,6 +380,55 @@ describe("call engine", () => {
     expect(remoteAudio.removeEventListener).toHaveBeenCalledWith("playing", expect.any(Function));
   });
 
+  it("samples audio-only iOS RTP when WebKit omits kind and does not mistake missing stats for zero loss", async () => {
+    const { startCall, hangup } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    const { useDebugLogsStore } = await import("@/stores/debugLogs");
+    await startCall(FRIEND);
+    const room = mocks.rooms.at(-1);
+    room.onPeerJoin("ios-peer");
+    let sample = 0;
+    room.peers["ios-peer"] = {
+      getStats: vi.fn(async () => {
+        sample++;
+        const entries: [string, any][] = [
+          ["pair", { type: "candidate-pair", state: "succeeded", nominated: true }],
+        ];
+        // First stats poll sees an ICE route but no inbound RTP report.
+        if (sample > 1) {
+          entries.push(["codec", { type: "codec", mimeType: "audio/opus" }]);
+          // Simulate WebKit omitting the required kind/mediaType properties.
+          entries.push(["inbound", {
+            type: "inbound-rtp", id: "legacy-rtp", codecId: "codec",
+            packetsReceived: (sample - 1) * 40, bytesReceived: (sample - 1) * 4800,
+          }]);
+        }
+        return new Map(entries);
+      }),
+      getReceivers: vi.fn(() => []),
+    };
+    const track = {
+      kind: "audio", id: "remote-audio", muted: true, enabled: true, readyState: "live",
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    };
+    room.onPeerStream({ getAudioTracks: () => [track] } as unknown as MediaStream, "ios-peer");
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(4_050);
+    let events = useDebugLogsStore().startupMarks();
+    expect(events.find(entry => entry.event === "startup_call_audio_stats_unavailable")).toBeTruthy();
+    const initial = events.find(entry => entry.event === "startup_call_audio_media_stats");
+    expect(initial?.data).toMatchObject({ inboundFound: false, packetsReceived: null });
+    await vi.advanceTimersByTimeAsync(8_050);
+    events = useDebugLogsStore().startupMarks();
+    const media = events.filter(entry => entry.event === "startup_call_audio_media_stats");
+    expect(media.at(-1)?.data).toMatchObject({ inboundFound: true, packetsReceived: 80, reportedKind: "missing" });
+    expect(events.find(entry => entry.event === "startup_call_remote_track_stalled")).toBeTruthy();
+    expect(useCallStore().audioStatus).toBe("blocked");
+    await hangup();
+    const ended = useDebugLogsStore().startupMarks().find(entry => entry.event === "startup_call_ended");
+    expect(ended?.data).toMatchObject({ inboundStatsSeen: true, receivedAudioPackets: 80 });
+  });
+
   it("makes a one-time manual iPhone route reset when RTP track is stuck muted", async () => {
     const { startCall, recoverCallAudio, hangup } = await import("@/services/callEngine");
     const categories: string[] = [];
