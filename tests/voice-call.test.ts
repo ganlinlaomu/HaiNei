@@ -259,7 +259,7 @@ describe("call engine", () => {
     // The caller's record is private to its own devices: no unread for the callee.
     const log = (mocks.send.mock.calls.at(-1) as any[])[0];
     expect(log.content).toBe("📞 语音通话 · 对方已拒绝");
-    expect(log.tags).toEqual([["t", "hainei-dm"], ["t", CALL_LOG_TYPE]]);
+    expect(log.tags).toEqual([["t", "hainei-dm"], ["t", CALL_LOG_TYPE], ["hainei-call-record", signal.callId, "outgoing", "remote_declined", "0"]]);
     expect(log.selfOnly).toBe(true);
   });
 
