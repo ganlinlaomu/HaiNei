@@ -16,8 +16,11 @@ describe("separate DMs, missed calls, contacts and history deletion", () => {
   it("persists call deletion tombstones so relay resync cannot revive a hidden record", () => {
     const calls = src("src/views/Calls.vue");
     const state = src("src/stores/callHistory.ts");
-    expect(calls).toContain("@click=\"deleteCallRecord(item)\"");
+    expect(calls).toContain("@click.stop=\"deleteCallRecord(item)\"");
     expect(calls).toContain("!callHistory.isDeleted(item.id)");
+    expect(calls).toContain('class="call-swipe-actions"');
+    expect(calls).toContain("onTouchMove");
+    expect(calls).not.toContain("item.text }}");
     expect(state).toContain("DELETED_PREFIX + id");
     expect(state).toContain("metaRepository.listPrefix(account, DELETED_PREFIX)");
     expect(state).not.toContain("db.syncedMessages.delete(");
