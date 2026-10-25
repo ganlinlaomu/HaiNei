@@ -1,10 +1,10 @@
 <template>
   <div class="friends-container app-page">
-    <header class="contacts-header">
-      <h1>通讯录</h1>
-      <button class="contact-add" type="button" aria-label="添加好友" title="添加好友" @click="startAdd">＋</button>
+    <header class="contacts-header primary-page-header">
+      <h1 class="primary-page-title">通讯录</h1>
+      <button class="contact-add primary-header-action" type="button" aria-label="添加好友" title="添加好友" @click="startAdd"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
     </header>
-    <label class="contacts-search">
+    <label class="contacts-search primary-page-search">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
       <input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索联系人、备注或分组" aria-label="搜索联系人"/>
     </label>
@@ -776,12 +776,6 @@ export default defineComponent({
 </script>
 
 <style scoped>
-.contacts-header{display:flex;align-items:center;justify-content:space-between;min-height:56px;padding:8px 16px}
-.contacts-header h1{margin:0;font-size:22px;color:var(--fg-172033);font-weight:750}
-.contact-add{display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--fg-172033);font-size:28px}
-.contacts-search{display:flex;align-items:center;gap:9px;margin:0 16px 12px;padding:0 13px;border-radius:999px;background:var(--bg-eff3f4);color:var(--fg-64748b)}
-.contacts-search svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9}
-.contacts-search input{height:42px;flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:16px;color:var(--fg-172033)}
 .contacts-requests{display:flex;align-items:center;gap:12px;width:calc(100% - 32px);min-height:52px;margin:0 16px 12px;padding:0 13px;border:0;border-radius:12px;background:var(--bg-eef2f6);color:var(--fg-172033);font-size:14px}
 .contacts-requests span:first-child{flex:1;text-align:left}.contacts-requests strong{display:grid;place-items:center;min-width:22px;height:22px;padding:0 5px;border-radius:999px;background:#ef4444;color:white;font-size:12px}
 .call-contact-button:disabled{opacity:.35}

@@ -2,9 +2,9 @@
   <div 
     class="home-container app-page" ref="container"
   >
-    <header class="home-app-header">
-      <h1>海内</h1>
-      <button class="home-notification-button" type="button" aria-label="查看通知" @click="router.push('/notifications')">
+    <header class="home-app-header primary-page-header">
+      <h1 class="primary-page-title">海内</h1>
+      <button class="home-notification-button primary-header-action" type="button" aria-label="查看通知" @click="router.push('/notifications')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M10 21h4"/></svg>
         <span v-if="notifications.unreadCount > 0" class="notification-indicator" :aria-label="`${notifications.unreadCount} 条未读通知`"></span>
       </button>
@@ -984,12 +984,7 @@ async function safeUpdateLocalRefs() {
 </script>
 
 <style scoped>
-.home-app-header {position:sticky;top:0;z-index:8;display:flex;align-items:center;justify-content:space-between;min-height:56px;padding:4px 16px;background:var(--bg-fff);border-bottom:1px solid var(--bd-eef2f6);}
-.home-app-header h1{margin:0;font-size:23px;font-weight:750;color:var(--fg-0f1419);}
-.home-notification-button{position:relative;display:grid;place-items:center;width:44px;height:44px;border:0;border-radius:50%;background:transparent;color:var(--fg-334155);}
-.home-notification-button svg{width:24px;height:24px}
 .notification-indicator{position:absolute;top:6px;right:6px;width:10px;height:10px;border:2px solid var(--bg-fff);border-radius:50%;background:#ef4444}
-.home-notification-button:focus-visible{outline:2px solid #1687e8;outline-offset:2px}
 .empty-feed{display:flex;min-height:42vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:var(--fg-64748b);text-align:center}.empty-feed strong{color:var(--fg-0f1419);font-size:19px}.empty-feed span{font-size:14px}.empty-feed button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:var(--bg-0f1419);color:#fff;font-size:14px;font-weight:650}
 .home-connection-notice{position:sticky;top:0;z-index:11;width:100%;box-sizing:border-box;padding:6px 12px;border-bottom:1px solid var(--bd-e7ebef);background:var(--bg-rgba-255-255-255-96);color:var(--fg-657786);font-size:12px;line-height:1.35;text-align:center;backdrop-filter:blur(10px)}
 

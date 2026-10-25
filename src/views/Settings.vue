@@ -1,7 +1,7 @@
 <template>
   <main class="settings-container app-page">
+    <header class="primary-page-header"><h1 class="primary-page-title">我的</h1></header>
     <section v-if="!hasAccount" class="card">
-      <h2>我的</h2>
       <p class="small">当前未登录。</p>
       <button class="btn btn-primary" type="button" @click="router.push('/login')">前往登录</button>
     </section>

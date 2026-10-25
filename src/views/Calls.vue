@@ -1,19 +1,19 @@
 <template>
   <main class="app-page calls-page">
-    <header class="calls-header">
-      <h1>通话</h1>
-      <button class="new-call" type="button" aria-label="发起新通话" @click="showPicker = true">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg>
+    <header class="calls-header primary-page-header">
+      <h1 class="primary-page-title">通话</h1>
+      <button class="new-call primary-header-action" type="button" aria-label="发起新通话" @click="showPicker = true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       </button>
     </header>
+    <label class="calls-search primary-page-search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input v-model="search" type="search" autocomplete="off" placeholder="搜索通话记录" aria-label="搜索通话记录"/>
+    </label>
     <div class="calls-filters" role="group" aria-label="通话记录筛选">
       <button type="button" :aria-pressed="!missedOnly" @click="missedOnly = false">全部</button>
       <button type="button" :aria-pressed="missedOnly" @click="missedOnly = true">未接来电</button>
     </div>
-    <label class="calls-search">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-      <input v-model="search" type="search" autocomplete="off" placeholder="搜索通话记录" aria-label="搜索通话记录"/>
-    </label>
     <p v-if="error" class="calls-state" role="alert">{{ error }} <button type="button" @click="subscribe">重试</button></p>
     <p v-else-if="loading" class="calls-state" role="status">正在读取通话记录…</p>
     <p v-else-if="!filtered.length" class="calls-state">{{ search.trim() ? "没有匹配的通话" : missedOnly ? "暂无未接来电" : "暂无通话记录" }}</p>
@@ -148,15 +148,10 @@ async function startCall(peer: string) {
 
 <style scoped>
 .calls-page{max-width:760px;margin:0 auto;min-height:100%;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 20px);background:var(--bg-fff);color:var(--fg-0f1419)}
-.calls-header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;min-height:56px}
-.calls-header h1{margin:0;font-size:22px;font-weight:750}
-.new-call{display:grid;place-items:center;width:40px;height:40px;border:1px solid var(--bd-cbd5e1);border-radius:50%;background:transparent;color:var(--fg-172033)}
-.new-call svg,.calls-search svg,.call-back svg,.picker-row svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.call-back svg,.picker-row svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .calls-filters{display:flex;gap:8px;padding:2px 16px 12px}
 .calls-filters button{min-height:35px;padding:0 17px;border:0;border-radius:999px;background:var(--bg-eef2f6);color:var(--fg-536471);font-size:13px;font-weight:650}
 .calls-filters button[aria-pressed=true]{background:#1687e8;color:#fff}
-.calls-search{display:flex;align-items:center;gap:10px;margin:0 16px 8px;padding:0 13px;border-radius:999px;background:var(--bg-eff3f4);color:var(--fg-64748b)}
-.calls-search input{height:42px;min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--fg-0f1419);font-size:16px}
 .calls-list{margin:0;padding:0;list-style:none}.call-row{display:flex;align-items:center;gap:2px;border-bottom:1px solid var(--bd-eff1f3);padding:4px 12px}
 .call-record{display:flex;align-items:center;gap:11px;min-height:64px;min-width:0;flex:1;padding:6px 2px;border:0;background:transparent;color:inherit;text-align:left}
 .call-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:5px}.call-copy strong,.call-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
