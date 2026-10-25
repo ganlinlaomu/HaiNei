@@ -1,6 +1,19 @@
 <template>
   <div class="friends-container app-page">
-    <SecondaryPageHeader title="好友 / 好友分组" back-label="返回我的" />
+    <header class="contacts-header">
+      <h1>通讯录</h1>
+      <div class="contacts-header-actions">
+        <button type="button" aria-label="扫码添加好友" title="扫码添加好友" @click="startScan">⌗</button>
+        <button type="button" aria-label="添加好友" title="添加好友" @click="startAdd">＋</button>
+      </div>
+    </header>
+    <label class="contacts-search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索联系人、备注或分组" aria-label="搜索联系人"/>
+    </label>
+    <button v-if="incomingRequests.length > 0" class="contacts-requests" type="button" @click="activeSection = 'incoming'">
+      <span>新的好友请求</span><strong>{{ incomingRequests.length }}</strong><span aria-hidden="true">›</span>
+    </button>
     <div v-if="initialLoading" class="friends-load-state" role="status" aria-live="polite">
       <span class="load-spinner" aria-hidden="true"></span>
       <span>正在加载好友…</span>
@@ -22,7 +35,7 @@
     </div>
 
     <nav class="friend-tabs" aria-label="好友分类">
-      <button type="button" :class="{ active: activeSection === 'accepted' }" @click="activeSection = 'accepted'">全部</button>
+      <button type="button" :class="{ active: activeSection === 'accepted' }" @click="activeSection = 'accepted'">全部好友</button>
       <button type="button" :class="{ active: activeSection === 'incoming' }" @click="activeSection = 'incoming'">收到请求 <span>{{ incomingRequests.length }}</span></button>
       <button type="button" :class="{ active: activeSection === 'outgoing' }" @click="activeSection = 'outgoing'">已发送 <span>{{ outgoingRequests.length }}</span></button>
     </nav>
@@ -30,7 +43,7 @@
     <!-- Friend List -->
     <div v-show="activeSection === 'accepted'" class="card">
       <div class="friends-list-heading">
-        <h3>好友（{{ acceptedFriends.length }}）</h3>
+        <h3>联系人（{{ filteredAcceptedFriends.length }}）</h3>
         <div class="friend-heading-actions">
           <button
             class="btn-icon btn-scan"
@@ -51,13 +64,13 @@
           </button>
         </div>
       </div>
-      <div v-if="acceptedFriends.length === 0" class="friends-empty">
-        <strong>还没有好友</strong>
+      <div v-if="filteredAcceptedFriends.length === 0" class="friends-empty">
+        <strong>{{ searchQuery.trim() ? "没有匹配的联系人" : "还没有好友" }}</strong>
         <span>添加好友后即可互发私信和查看好友动态。</span>
         <button type="button" @click="startAdd">添加好友</button>
       </div>
       <div class="list" v-else>
-        <div v-for="f in acceptedFriends" :key="f.pubkey" class="friend-swipe" @touchstart="onTouchStart($event, f.pubkey)" @touchmove="onTouchMove($event, f.pubkey)" @touchend="onTouchEnd(f.pubkey)" @touchcancel="onTouchCancel(f.pubkey)">
+        <div v-for="f in filteredAcceptedFriends" :key="f.pubkey" class="friend-swipe" @touchstart="onTouchStart($event, f.pubkey)" @touchmove="onTouchMove($event, f.pubkey)" @touchend="onTouchEnd(f.pubkey)" @touchcancel="onTouchCancel(f.pubkey)">
           <div class="friend-swipe-actions">
             <button class="swipe-action edit" type="button" @click.stop="editFromSwipe(f)">编辑</button>
             <button class="swipe-action delete" type="button" @click.stop="deleteFromSwipe(f)">删除</button>
@@ -73,6 +86,9 @@
             <div class="friend-actions">
               <button class="message-button" type="button" :aria-label="`给 ${contactName(f.pubkey)} 发私信`" @click="openMessage(f.pubkey)">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>
+              </button>
+              <button class="message-button call-contact-button" type="button" :aria-label="`拨打 ${contactName(f.pubkey)} 的语音电话`" :disabled="callBusy || call.phase !== 'idle'" data-live-audio-action data-ringtone-arm @pointerdown="preloadFriendCall" @focus="preloadFriendCall" @click="startFriendCall(f.pubkey)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
               </button>
             </div>
           </div>
@@ -202,6 +218,7 @@
 import { startupMark } from "@/utils/debugLog";
 import { defineComponent, ref, reactive, onMounted, onBeforeUnmount, watch, computed } from "vue";
 import { useFriendsStore, Friend } from "@/stores/friends";
+import { loadCallEngine, loadedCallEngine, useCallStore } from "@/stores/call";
 import { useUIStore } from "@/stores/ui";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendshipsStore } from "@/stores/friendships";
@@ -213,7 +230,7 @@ import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { openProfile } from "@/utils/profileNavigation";
 import { useSwipeActions } from "@/composables/useSwipeActions";
-import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
+import 
 import QrScannerSheet from "@/components/QrScannerSheet.vue";
 import { parseNostrProfileQrValue } from "@/utils/nostrQr";
 import { friendGroupTags, UNGROUPED_FRIEND_LABEL } from "@/utils/friendAudience";
@@ -239,6 +256,9 @@ export default defineComponent({
     const relationshipBusy = reactive(new Set<string>());
     const editingPending = ref(false);
     const activeSection = ref<"accepted" | "incoming" | "outgoing">("accepted");
+    const call = useCallStore();
+    const callBusy = ref(false);
+    const searchQuery = ref("");
     const { close: closeSwipe, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
     const initialLoading = ref(!storesLoadedForAccount(keys.pkHex, [friends, friendships, profiles]));
     const initialLoadError = ref("");
@@ -273,6 +293,11 @@ export default defineComponent({
       return Array.from(groupSet).sort((a, b) => a.localeCompare(b, "zh-CN"));
     });
     const acceptedFriends = computed(() => friends.getAcceptedList(friendships.isAccepted));
+    const filteredAcceptedFriends = computed(() => acceptedFriends.value.filter(f => {
+      const query = searchQuery.value.trim().toLocaleLowerCase();
+      if (!query) return true;
+      return [contactName(f.pubkey), f.name, f.note, f.group, ...(f.groups || [])].some(value => value?.toLocaleLowerCase().includes(query));
+    }));
     const incomingRequests = computed(() => friendships.getIncomingRequests());
     const outgoingRequests = computed(() => friendships.getOutgoingRequests());
     const localContactName = (pubkey: string) => friends.list.find(friend => friend.pubkey === pubkey)?.name;
@@ -300,6 +325,17 @@ export default defineComponent({
     }
     function openMessage(pubkey: string) {
       if (friendships.isAccepted(pubkey) && pubkey !== keys.pkHex) void router.push(`/messages/${pubkey}`);
+    }
+    function preloadFriendCall() { void loadCallEngine().catch(() => {}); }
+    async function startFriendCall(pubkey: string) {
+      if (callBusy.value || call.phase !== "idle" || !friendships.isAccepted(pubkey) || pubkey === keys.pkHex) return;
+      callBusy.value = true;
+      const account = keys.pkHex;
+      try {
+        const engine = loadedCallEngine() || await loadCallEngine();
+        if (keys.pkHex === account && keys.isUnlocked && friendships.isAccepted(pubkey)) await engine.startCall(pubkey);
+      } catch { ui.addToast("暂时无法发起通话，请重试", 2200, "error"); }
+      finally { callBusy.value = false; }
     }
 
     // Filter groups based on current input
@@ -707,6 +743,12 @@ export default defineComponent({
       router,
       relationshipBusy,
       acceptedFriends,
+      filteredAcceptedFriends,
+      searchQuery,
+      call,
+      callBusy,
+      preloadFriendCall,
+      startFriendCall,
       incomingRequests,
       outgoingRequests,
       activeSection,
@@ -757,6 +799,18 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.contacts-header{display:flex;align-items:center;justify-content:space-between;min-height:56px;padding:8px 16px}
+.contacts-header h1{margin:0;font-size:22px;color:var(--fg-172033);font-weight:750}
+.contacts-header-actions{display:flex;gap:6px}
+.contacts-header-actions button{display:grid;place-items:center;width:42px;height:42px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--fg-172033);font-size:28px}
+.contacts-search{display:flex;align-items:center;gap:9px;margin:0 16px 12px;padding:0 13px;border-radius:999px;background:var(--bg-eff3f4);color:var(--fg-64748b)}
+.contacts-search svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.9}
+.contacts-search input{height:42px;flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:16px;color:var(--fg-172033)}
+.contacts-requests{display:flex;align-items:center;gap:12px;width:calc(100% - 32px);min-height:52px;margin:0 16px 12px;padding:0 13px;border:0;border-radius:12px;background:var(--bg-eef2f6);color:var(--fg-172033);font-size:14px}
+.contacts-requests span:first-child{flex:1;text-align:left}.contacts-requests strong{display:grid;place-items:center;min-width:22px;height:22px;padding:0 5px;border-radius:999px;background:#ef4444;color:white;font-size:12px}
+.call-contact-button:disabled{opacity:.35}
+.contacts-header button:focus-visible,.contacts-requests:focus-visible,.call-contact-button:focus-visible{outline:2px solid #1687e8;outline-offset:2px}
+
 .pubkey-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.scan-qr-button{min-width:64px;border:1px solid #1687e8;border-radius:9px;background:var(--bg-fff);color:var(--fg-1687e8);font-weight:700}.optional{color:var(--fg-94a3b8);font-size:12px;font-weight:400}
 .friend-swipe{position:relative;overflow:hidden;touch-action:pan-y}.friend-swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:120px}.swipe-action{width:60px;border:0;color:#fff;font-size:12px;font-weight:650}.swipe-action.edit{background:#536471}.swipe-action.delete{background:#ef4444}.friend-swipe .friend-item{position:relative;z-index:1;background:var(--bg-fff);transition:transform .2s ease}.friends-empty{display:flex;min-height:28vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:var(--fg-64748b);text-align:center}.friends-empty strong{color:var(--fg-0f1419);font-size:18px}.friends-empty span{font-size:14px}.friends-empty button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:var(--bg-0f1419);color:#fff;font-size:14px;font-weight:650}
 

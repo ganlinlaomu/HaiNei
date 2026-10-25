@@ -963,6 +963,7 @@ async function safeUpdateLocalRefs() {
       isInitialLoad,
       acceptedFriends,
       ui,
+      notifications,
       connectionNotice,
       hasMore,
       isLoadingMore,
