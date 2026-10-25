@@ -528,6 +528,52 @@ describe("call engine", () => {
     expect(category).toBe("auto");
   });
 
+  it("does not call a muted remote track healthy just because play resolves", async () => {
+    const { startCall, hangup } = await import("@/services/callEngine");
+    const { useCallStore } = await import("@/stores/call");
+    await startCall(FRIEND);
+    const room = mocks.rooms.at(-1);
+    room.onPeerJoin("peer");
+    const listeners: Record<string, () => void> = {};
+    const track = {
+      muted: true, readyState: "live",
+      addEventListener: (name: string, fn: () => void) => { listeners[name] = fn; },
+      removeEventListener: vi.fn(),
+    };
+    room.onPeerStream({ getAudioTracks: () => [track] } as unknown as MediaStream, "peer");
+    await Promise.resolve();
+    expect(useCallStore().audioStatus).toBe("waiting");
+    track.muted = false;
+    listeners.unmute();
+    expect(useCallStore().audioStatus).toBe("playing");
+    await hangup();
+  });
+
+  it("binds the receiver identified by RTP instead of repeatedly playing a stale track", async () => {
+    const { startCall, hangup } = await import("@/services/callEngine");
+    const stale = { id: "stale", kind: "audio", muted: true, readyState: "live" };
+    const actual = { id: "actual", kind: "audio", muted: false, readyState: "live" };
+    vi.stubGlobal("MediaStream", class {
+      constructor(private tracks: any[]) {}
+      getAudioTracks() { return this.tracks; }
+    });
+    await startCall(FRIEND);
+    const room = mocks.rooms.at(-1);
+    room.peers.peer = {
+      getReceivers: () => [{ track: actual }],
+      getStats: async () => new Map([["audio", {
+        type: "inbound-rtp", kind: "audio", trackIdentifier: "actual", packetsReceived: 198,
+      }]]),
+    };
+    room.onPeerJoin("peer");
+    room.onPeerStream({ getAudioTracks: () => [stale] } as unknown as MediaStream, "peer");
+    await vi.advanceTimersByTimeAsync(4_050);
+    const audio = mocks.audioElements.find(element => element.srcObject);
+    expect(audio.srcObject.getAudioTracks()).toEqual([actual]);
+    expect(room.addStream).toHaveBeenCalledOnce();
+    await hangup();
+  });
+
   it("offers an explicit output picker without renegotiating the WebRTC call", async () => {
     const { startCall, selectCallOutput, hangup } = await import("@/services/callEngine");
     await startCall(FRIEND);
@@ -639,6 +685,9 @@ describe("call engine", () => {
     const joined = mocks.rooms[0];
     joined.onPeerJoin("caller-device");
     joined.onPeerJoin("other-answering-device");
+    expect(joined.addStream).not.toHaveBeenCalled();
+    joined.peers["caller-device"] = { signalingState: "stable" };
+    joined.onPeerStream({} as MediaStream, "caller-device");
     expect(joined.addStream).toHaveBeenCalledTimes(1);
     expect(joined.actions.taken.send).not.toHaveBeenCalled();
 
