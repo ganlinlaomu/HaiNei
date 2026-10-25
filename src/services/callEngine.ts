@@ -983,8 +983,12 @@ async function finish(session: CallSession, reason: CallEndReason, notify: boole
   // rooms can no longer stop tracks or mutate the next call.
   activeSession = null;
   closeCallNotification(session.id);
-  store.phase = "ended";
-  store.endReason = reason;
+  // A cancelled unanswered incoming call is a missed call, not a new screen
+  // saying "cancelled". Clear the overlay immediately; its history is stored
+  // separately when the caller's missed-call record arrives.
+  const quietMissedCall = reason === "remote_cancelled" && wasPhase === "incoming";
+  if (quietMissedCall) store.reset();
+  else { store.phase = "ended"; store.endReason = reason; }
   const releasing = releaseSessionResources(session);
   if (notify && peer && id) {
     const action: CallSignal["action"] = wasPhase === "outgoing" ? "cancel"
@@ -1001,6 +1005,7 @@ async function finish(session: CallSession, reason: CallEndReason, notify: boole
     inboundStatsSeen: q.inboundStatsSeen, receivedAudioPackets: q.received, statsSamples: q.samples,
   });
   await releasing;
+  if (quietMissedCall) return;
   // Leave the outcome on screen briefly, then close the overlay.
   setTimeout(() => { if (useCallStore().callId === id && useCallStore().phase === "ended") useCallStore().reset(); },
     ENDED_BY_ME.has(reason) ? ENDED_BY_ME_MS : ENDED_SCREEN_MS);
