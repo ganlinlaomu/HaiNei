@@ -17,6 +17,8 @@
       </button>
     </header>
 
+    <button class="conversation-filter" type="button" @click="router.push('/calls')">通话记录</button>
+
     <label class="conversation-search">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
       <input v-model="searchQuery" type="search" placeholder="搜索私信" autocomplete="off" />

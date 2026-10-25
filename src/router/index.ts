@@ -34,6 +34,7 @@ import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
  */
 
 const routes: Array<RouteRecordRaw> = [
+  { path: "/calls", name: "Calls", component: () => import("@/views/Calls.vue"), meta: { requiresAuth: true, hideHeader: true } },
   {
     path: "/login",
     name: "Login",

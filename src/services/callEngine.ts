@@ -1,3 +1,4 @@
+import { CALL_RECORD_TAG } from "@/services/callHistory";
 import { useCallStore, type CallEndReason } from "@/stores/call";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendshipsStore } from "@/stores/friendships";
@@ -313,7 +314,7 @@ function recordCall(session: CallSession, reason: CallEndReason, durationSeconds
   const options = {
     recipientPubkeys: [session.peer],
     content: `📞 语音通话 · ${outcome}`,
-    tags: [["t", DIRECT_MESSAGE_TYPE], ["t", CALL_LOG_TYPE], ...(missed ? [["t", CALL_MISSED_TYPE]] : [])],
+    tags: [["t", DIRECT_MESSAGE_TYPE], ["t", CALL_LOG_TYPE], [CALL_RECORD_TAG, session.id, session.direction, reason, String(durationSeconds)], ...(missed ? [["t", CALL_MISSED_TYPE]] : [])],
     relays: [...new Set([...DEFAULT_RELAY_URLS, ...getRelaysFromStorage("write")])],
     context: { senderPubkey: keys.pkHex, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
   };
