@@ -21,6 +21,13 @@ describe("separate DMs, missed calls, contacts and history deletion", () => {
     expect(calls).toContain('class="call-swipe-actions"');
     expect(calls).toContain("onTouchMove");
     expect(calls).not.toContain("item.text }}");
+    expect(calls).not.toContain('class="call-more"');
+    expect(calls).not.toContain(">···</button>");
+    const callBackMarkup = calls.slice(calls.indexOf('class="call-back"'), calls.indexOf('</button>', calls.indexOf('class="call-back"')));
+    const pickerPhoneMarkup = calls.slice(calls.indexOf('class="picker-row"'), calls.indexOf('</button>', calls.indexOf('class="picker-row"')));
+    const phonePath = 'M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2';
+    expect(callBackMarkup).toContain(phonePath);
+    expect(pickerPhoneMarkup).toContain(phonePath);
     expect(state).toContain("DELETED_PREFIX + id");
     expect(state).toContain("metaRepository.listPrefix(account, DELETED_PREFIX)");
     expect(state).not.toContain("db.syncedMessages.delete(");

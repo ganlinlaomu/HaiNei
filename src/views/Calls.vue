@@ -42,10 +42,8 @@
           </button>
           <button class="call-back" type="button" :aria-label="`回拨 ${name(item.peer)}`" :disabled="busy || call.phase !== 'idle' || !friendships.isAccepted(item.peer)"
             data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="startCall(item.peer)">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1 2-2"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
           </button>
-          <button class="call-more" type="button" :aria-label="`显示 ${name(item.peer)} 的删除操作`"
-            :aria-expanded="isSwipeOpen(item.id)" @click="isSwipeOpen(item.id) ? closeSwipe(item.id) : openSwipe(item.id)">···</button>
         </div>
       </li>
     </ul>
@@ -91,7 +89,7 @@ const keys = useKeyStore(), friendships = useFriendshipsStore(), friends = useFr
 const router = useRouter(), call = useCallStore(), callHistory = useCallHistoryStore();
 const records = ref<CallHistoryItem[]>([]), limit = ref(50), missedOnly = ref(false), hasMore = ref(false), loading = ref(true), error = ref(""), busy = ref(false);
 const showPicker = ref(false), search = ref(""), contactSearch = ref(""), deletingId = ref("");
-const { close: closeSwipe, open: openSwipe, isOpen: isSwipeOpen, onTouchStart, onTouchMove,
+const { close: closeSwipe, isOpen: isSwipeOpen, onTouchStart, onTouchMove,
   onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 88 });
 const { container, pullDistance, refreshing } = usePullToRefresh({ onRefresh: async () => {
   if (keys.pkHex && keys.isUnlocked) await resumeAccountMessageSync("manual");
@@ -192,7 +190,6 @@ async function startCall(peer: string) {
 .call-back{display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border:0;border-radius:50%;background:transparent;color:#1687e8}
 .call-delete{display:grid;place-items:center;width:88px;min-height:64px;border:0;background:#dc2626;color:white;font-size:14px;font-weight:700}
 .call-delete:disabled{opacity:.5}
-.call-more{flex:0 0 36px;width:36px;min-height:44px;padding:0;border:0;border-radius:10px;background:transparent;color:var(--fg-64748b);font-size:20px}
 @media (prefers-reduced-motion:reduce){.call-row{transition:none}}
 .call-back:disabled{opacity:.35}.calls-state{text-align:center;padding:34px 16px;color:var(--fg-64748b);font-size:14px}.calls-note{padding:14px 16px;color:var(--fg-94a3b8);font-size:12px}
 .load-more{display:block;margin:12px auto;border:0;background:transparent;color:#1687e8;min-height:44px}
