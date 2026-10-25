@@ -1,6 +1,9 @@
 <template>
-  <main class="settings-container app-page">
+  <main ref="container" class="settings-container app-page">
     <header class="primary-page-header"><h1 class="primary-page-title">我的</h1></header>
+    <div class="page-pull-indicator" :style="{ height: pullDistance + 'px' }" role="status">
+      {{ refreshing ? "正在更新…" : pullDistance >= 60 ? "松开刷新" : "↓ 下拉刷新" }}
+    </div>
     <section v-if="!hasAccount" class="card">
       <p class="small">当前未登录。</p>
       <button class="btn btn-primary" type="button" @click="router.push('/login')">前往登录</button>
@@ -30,12 +33,17 @@ import { useUIStore } from "@/stores/ui";
 import { pubkeyToNpub, shortNpub } from "@/utils/nostrQr";
 import { loadProfileView, loadSystemSettingsView, loadPrivateSpaceView } from "@/router/lazyViews";
 import { runAfterFirstPaint, runWhenIdle } from "@/utils/bottomTabActivation";
+import { usePullToRefresh } from "@/components/usePullToRefresh";
+import { resumeAccountMessageSync } from "@/services/accountMessageSync";
 
 const keyStore = useKeyStore();
 const profiles = useProfilesStore();
 const ui = useUIStore();
 const router = useRouter();
 const showMyQr = ref(false);
+const { container, pullDistance, refreshing } = usePullToRefresh({ onRefresh: async () => {
+  if (keyStore.pkHex && keyStore.isUnlocked) await resumeAccountMessageSync("manual");
+} });
 
 const hasAccount = computed(() => !!keyStore.pkHex);
 const nickname = computed(() => profiles.getProfile(keyStore.pkHex)?.nickname?.trim() || "未设置昵称");
@@ -83,7 +91,7 @@ async function copyPubkey() {
 </script>
 
 <style scoped>
-.settings-container{width:100%;min-height:100%;margin:0 auto;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px);box-sizing:border-box;background:var(--bg-fff);color:var(--fg-0f1419)}
+.settings-container{position:relative;overscroll-behavior:contain;width:100%;min-height:100vh;margin:0 auto;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 24px);box-sizing:border-box;background:var(--bg-fff);color:var(--fg-0f1419)}
 .card{padding:16px;border:1px solid var(--bd-e8edf3);box-shadow:0 2px 8px rgba(15,23,42,.035)}
 .settings-card{width:100%;padding:0;background:var(--bg-fff);overflow:hidden}
 .my-profile-summary{display:flex;min-height:88px;align-items:center;gap:13px;padding:15px 16px}

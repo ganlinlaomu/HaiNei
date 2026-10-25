@@ -8,6 +8,7 @@ import { parseCallSignal, CALL_LOG_TYPE } from "@/nostr/messaging/callControl";
 import { CALL_RECORD_TAG } from "@/services/callHistory";
 import { StartupCallSignalGate } from "@/services/startupCallSignalGate";
 import { useCallStore } from "@/stores/call";
+import { useCallHistoryStore } from "@/stores/callHistory";
 import { loadCallEngine } from "@/stores/call";
 import { decodeFriendshipControl } from "@/nostr/messaging/friendshipControl";
 import { createHomeMessageHandler, incomingFriendRequestNotification } from "@/nostr/messaging/homeDelivery";
@@ -448,6 +449,15 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
           // cache while its closing signal is still being decrypted from Relay.
           observeRecoverySignal({ account, sender, peer: sender === account ? recipient : sender,
             eventId: message.transportEventId || "", signal, createdAt: message.createdAt });
+          // Record the receiver's missed call independently from delivery of
+          // the caller's separate NIP-17 outcome message. The sender has
+          // already passed friendship authorization in the ingestion pipeline.
+          if (sender !== account && signal.action === "cancel") {
+            void useCallHistoryStore().recordIncomingMissed(account, sender, signal.callId,
+              message.createdAt).catch(error => debugLog("system", "missed_call_save_failed", {
+                reason: error instanceof Error ? error.message.slice(0, 80) : "unknown",
+              }, "warn"));
+          }
           callSignalGate.accept(sender, recipient, signal, message.createdAt, () => {
             if (!isCurrent()) return;
             void loadCallEngine().then(engine => {
@@ -476,6 +486,10 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
             const sender = message.senderPubkey.toLowerCase();
             const id = callerRecord[1];
             callSignalGate.conclude(sender, id);
+            // The separate missed-call log is authoritative, but a fallback
+            // also keeps history visible if the call never reached this device.
+            void useCallHistoryStore().recordIncomingMissed(account, sender, id,
+              message.createdAt).catch(() => undefined);
             useCallStore().markSeen(id);
             observeRecoverySignal({ account, sender, peer: sender, eventId: "",
               signal: { action: "cancel", callId: id }, createdAt: message.createdAt });

@@ -16,32 +16,44 @@ export function usePullToRefresh(options: PullOptions) {
 
   const container = ref<HTMLElement | null>(null);
   const startY = ref(0);
+  const startX = ref(0);
+  const gestureStarted = ref(false);
   const pullDistance = ref(0);
   const refreshing = ref(false);
 
+  const scrollRoot = () => document.querySelector("body > #app") as HTMLElement | null;
   function onTouchStart(e: TouchEvent) {
-    if (refreshing.value) return;
-    if (container.value?.scrollTop !== 0) return;
-
-    startY.value = e.touches[0].clientY;
+    const touch = e.touches[0];
+    if (!touch || refreshing.value || (scrollRoot()?.scrollTop || 0) > 0
+      || (e.target instanceof Element && e.target.closest("input,textarea,select,[role=dialog]"))) {
+      gestureStarted.value = false;
+      return;
+    }
+    startY.value = touch.clientY;
+    startX.value = touch.clientX;
+    gestureStarted.value = true;
   }
 
   function onTouchMove(e: TouchEvent) {
-    if (refreshing.value) return;
-    if (container.value?.scrollTop !== 0) return;
-
-    const dy = e.touches[0].clientY - startY.value;
-    if (dy <= 0) return;
-
+    if (!gestureStarted.value || refreshing.value || (scrollRoot()?.scrollTop || 0) > 0) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const dy = touch.clientY - startY.value;
+    const dx = touch.clientX - startX.value;
+    if (dy <= 0 || Math.abs(dx) > Math.abs(dy)) return;
     pullDistance.value = Math.min(dy, maxPull);
   }
 
-  async function onTouchEnd() {
-    if (pullDistance.value >= threshold && !refreshing.value) {
-       pullDistance.value = threshold;
-       triggerRefresh();
+  function onTouchEnd() {
+    if (gestureStarted.value && pullDistance.value >= threshold && !refreshing.value) {
+      pullDistance.value = threshold;
+      void triggerRefresh();
+    } else if (!refreshing.value) {
+      pullDistance.value = 0;
     }
+    gestureStarted.value = false;
   }
+  function onTouchCancel() { gestureStarted.value = false; if (!refreshing.value) pullDistance.value = 0; }
 
   async function triggerRefresh() {
     if (refreshing.value) return;
@@ -66,6 +78,7 @@ export function usePullToRefresh(options: PullOptions) {
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: true });
     el.addEventListener("touchend", onTouchEnd);
+    el.addEventListener("touchcancel", onTouchCancel);
   });
 
   onBeforeUnmount(() => {
@@ -75,6 +88,7 @@ export function usePullToRefresh(options: PullOptions) {
     el.removeEventListener("touchstart", onTouchStart);
     el.removeEventListener("touchmove", onTouchMove);
     el.removeEventListener("touchend", onTouchEnd);
+    el.removeEventListener("touchcancel", onTouchCancel);
   });
 
   return {

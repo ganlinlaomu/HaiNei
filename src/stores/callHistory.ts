@@ -6,6 +6,9 @@ import { callHistoryItem, uniqueCallHistory, type CallHistoryItem } from "@/serv
 
 const SEEN_KEY = "call-history:seen-through";
 const DELETED_PREFIX = "call-history:deleted:";
+const LOCAL_MISSED_PREFIX = "call-history:missed-record:";
+/** Carry over recent missed calls on first run, rather than marking all as read at PWA open. */
+const FIRST_RUN_HISTORY_SECONDS = 7 * 24 * 60 * 60;
 let generation = 0;
 let subscription: { unsubscribe(): void } | undefined;
 let pendingLoad: { account: string; promise: Promise<void> } | undefined;
@@ -21,9 +24,10 @@ export const useCallHistoryStore = defineStore("callHistory", {
     seenThrough: 0,
     deletedIds: [] as string[],
     recentMissed: [] as CallHistoryItem[],
+    localMissed: [] as CallHistoryItem[],
   }),
   getters: {
-    missedUnreadCount: state => uniqueCallHistory(state.recentMissed
+    missedUnreadCount: state => uniqueCallHistory([...state.recentMissed, ...state.localMissed]
       .filter(item => item.missed && item.createdAt > state.seenThrough && !state.deletedIds.includes(item.id))).length,
     isDeleted: state => (id: string) => state.deletedIds.includes(id),
   },
@@ -39,21 +43,33 @@ export const useCallHistoryStore = defineStore("callHistory", {
       this.seenThrough = 0;
       this.recentMissed = [];
       this.deletedIds = [];
+      this.localMissed = [];
       if (!account) return;
       const promise = (async () => {
-        const [seen, tombstones] = await Promise.all([
+        const [seen, tombstones, fallbackRecords] = await Promise.all([
           metaRepository.get(account, SEEN_KEY),
           metaRepository.listPrefix(account, DELETED_PREFIX),
+          metaRepository.listPrefix(account, LOCAL_MISSED_PREFIX),
         ]);
         if (token !== generation || this.loadedFor !== account) return;
-        // Historic missed calls are not new notifications on first upgrade.
+        // Do not mark offline/missed calls as read merely because the PWA was reopened.
         const readAt = typeof seen?.value === "number" && Number.isFinite(seen.value)
-          ? Math.max(0, Math.floor(seen.value)) : Math.floor(Date.now() / 1000);
+          ? Math.max(0, Math.floor(seen.value))
+          : Math.max(0, Math.floor(Date.now() / 1000) - FIRST_RUN_HISTORY_SECONDS);
         if (!seen) await metaRepository.put(account, SEEN_KEY, readAt);
         if (token !== generation || this.loadedFor !== account) return;
         this.seenThrough = readAt;
         this.deletedIds = tombstones.filter(row => row.value === true)
           .map(row => row.key.slice(DELETED_PREFIX.length));
+        this.localMissed = fallbackRecords.flatMap(row => {
+          const value = row.value as { peer?: unknown; createdAt?: unknown } | null;
+          const suffix = row.key.slice(LOCAL_MISSED_PREFIX.length);
+          const [peer, id] = suffix.split(":");
+          if (!value || !/^[0-9a-f]{64}$/.test(peer || "") || !/^[0-9a-f]{32}$/.test(id || "") ||
+            typeof value.createdAt !== "number" || !Number.isFinite(value.createdAt)) return [];
+          return [{ id: suffix, peer, createdAt: value.createdAt, text: "未接来电",
+            missed: true, direction: "incoming" as const }];
+        });
         this.ready = true;
         this.observe(account, token);
       })();
@@ -85,10 +101,30 @@ export const useCallHistoryStore = defineStore("callHistory", {
         },
       });
     },
+    /**
+     * A verified, authorized caller's cancel can arrive even when its ordinary
+     * missed-call log is delayed or unavailable. Retain an account-scoped local
+     * fallback, deduplicated with the later NIP-17 log by peer/callId.
+     */
+    async recordIncomingMissed(accountPubkey: string, peerPubkey: string, callId: string, createdAt: number) {
+      const account = accountPubkey.toLowerCase(), peer = peerPubkey.toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(account) || !/^[0-9a-f]{64}$/.test(peer)
+        || !/^[0-9a-f]{32}$/.test(callId) || peer === account || !Number.isFinite(createdAt)) return;
+      await this.load(account);
+      if (this.loadedFor !== account || !this.ready) return;
+      const id = `${peer}:${callId}`;
+      if (this.localMissed.some(item => item.id === id)) return;
+      const item: CallHistoryItem = { id, peer, createdAt, text: "未接来电",
+        missed: true, direction: "incoming" };
+      await metaRepository.put(account, LOCAL_MISSED_PREFIX + id, { peer, createdAt });
+      if (this.loadedFor === account && !this.localMissed.some(row => row.id === id)) {
+        this.localMissed = [item, ...this.localMissed];
+      }
+    },
     async acknowledge(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
       if (this.loadedFor !== account || !this.ready || !account) return;
-      const timestamp = Math.max(this.seenThrough, Math.floor(Date.now() / 1000));
+      const timestamp = Math.max(this.seenThrough, Math.floor(Date.now() / 1000) - 1);
       if (timestamp === this.seenThrough) return;
       this.seenThrough = timestamp;
       this.recentMissed = [];
@@ -110,6 +146,7 @@ export const useCallHistoryStore = defineStore("callHistory", {
       this.seenThrough = 0;
       this.deletedIds = [];
       this.recentMissed = [];
+      this.localMissed = [];
     },
   },
 });
