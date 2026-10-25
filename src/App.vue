@@ -2,6 +2,7 @@
   <div class="app-root" :class="{ 'login-route': hideAppChrome, 'compose-fab-page': isPrimaryRoute }">
     <UpdateNotification />
     <AndroidUpdateNotification />
+    <CallNotificationRecovery />
     <CallOverlay v-if="call.phase !== 'idle'" />
     <HeaderBar v-if="!hideAppChrome" />
     <router-view v-slot="{ Component }">
@@ -54,6 +55,7 @@
 <script lang="ts">
 import { computed, defineAsyncComponent, defineComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import CallNotificationRecovery from "@/components/CallNotificationRecovery.vue";
 import HeaderBar from "@/components/HeaderBar.vue";
 import ToastContainer from "@/components/ToastContainer.vue";
 import UpdateNotification from "@/components/UpdateNotification.vue";
@@ -83,7 +85,7 @@ const loadCallOverlay = () => import("@/components/CallOverlay.vue");
 const CallOverlay = defineAsyncComponent(loadCallOverlay);
 
 export default defineComponent({
-  components: { HeaderBar, ToastContainer, PostEditorModal, UpdateNotification, AndroidUpdateNotification, CallOverlay },
+  components: { CallNotificationRecovery, HeaderBar, ToastContainer, PostEditorModal, UpdateNotification, AndroidUpdateNotification, CallOverlay },
   setup() {
     const route = useRoute();
     const router = useRouter();

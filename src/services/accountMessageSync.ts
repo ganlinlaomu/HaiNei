@@ -1,3 +1,4 @@
+import { observeRecoverySignal, clearRecoveryObservations } from "@/services/callNotificationRecovery";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { getActivePinia } from "pinia";
 import { getRelaysFromStorage, inspectRelays, onRelayConnectionState, releaseUnusedRelayConnections } from "@/nostr/relays";
@@ -437,6 +438,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
           const recipient = message.recipientPubkeys.map(value => value.toLowerCase()).find(value => value !== account) || account;
           try {
             const engine = await loadCallEngine();
+            observeRecoverySignal({ account, sender, peer: sender === account ? recipient : sender, eventId: message.transportEventId || "", signal, createdAt: message.createdAt });
             // Do not hold message ingestion while a call tears down its room.
             void engine.handleCallSignal(sender, recipient, signal, message.createdAt, message.id).catch(error => {
               debugLog("system", "call_signal_unhandled", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
@@ -580,6 +582,12 @@ export async function restartAccountMessageSync() {
   return startAccountMessageSync(activeKeys);
 }
 
+export async function recoverCallNotificationInbox() {
+  if (!activeKeys?.isLoggedIn) return false;
+  await accountMessageSyncManager.recoverNotificationInbox();
+  return true;
+}
+
 export async function resumeAccountMessageSync(source: "reconnect" | "resume" | "manual" = "manual") {
   if (!activeKeys?.isLoggedIn) return false;
   await accountMessageSyncManager.resume(source);
@@ -593,6 +601,7 @@ export async function markAccountConversationRead(conversationId: string) {
 }
 
 export function stopAccountMessageSync() {
+  clearRecoveryObservations();
   const account = activeKeys?.pkHex.toLowerCase() || accountSyncSnapshot.accountPubkey;
   accountSyncGeneration++;
   clearStartupUnreadGraceTimer();

@@ -972,7 +972,7 @@ describe("call engine", () => {
 
   it("shows an in-app incoming call as a banner and withdraws system notifications", () => {
     const overlay = readFileSync("src/components/CallOverlay.vue", "utf8");
-    expect(overlay).toContain('const showBanner = computed(() => call.phase === "incoming" && !expanded.value);');
+    expect(overlay).toContain('const showBanner = computed(() => call.phase === "incoming" && !expanded.value && !call.notificationExpanded);');
     expect(overlay).toContain('<div v-if="showBanner" class="call-banner"');
     const sw = readFileSync("public/service-worker.js", "utf8");
     expect(sw).toContain("for (const notification of await self.registration.getNotifications({ tag })) notification.close();");
