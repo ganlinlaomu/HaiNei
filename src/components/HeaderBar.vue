@@ -106,14 +106,15 @@ export default defineComponent({
 
 .bottom-nav {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  /* Keep the bar clear of iPhone home indicator and screen edges. */
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
 
-  /* 尺寸 */
-  height: calc(62px + env(safe-area-inset-bottom));
-  padding-top: 5px;
-  padding-bottom: calc(5px + env(safe-area-inset-bottom));
+  /* Fixed-height floating bar: safe area is in the outside gap. */
+  box-sizing: border-box;
+  height: 64px;
+  padding: 6px 8px;
 
   /* 布局 */
   display: flex;
@@ -122,8 +123,9 @@ export default defineComponent({
 
   /* 视觉（替代 backdrop-filter，性能友好） */
   background: var(--bg-rgba-255-255-255-0-94);
-  border-top: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 -1px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 22px;
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.13);
 
   /* 层级 */
   z-index: var(--z-bottom-nav, 9999);
@@ -138,10 +140,10 @@ export default defineComponent({
   pointer-events: auto;
 }
 
-/* Single mobile-only selector; track follows the nav content box and safe area. */
+/* Keep the selected pill aligned with the five touch targets inside the inset bar. */
 .nav-liquid-track {
   position: absolute;
-  inset: 5px 0 calc(5px + env(safe-area-inset-bottom));
+  inset: 6px 8px;
   display: flex;
   align-items: center;
   z-index: 0;
@@ -339,6 +341,7 @@ export default defineComponent({
 
   .bottom-nav {
     top: 0;
+    left: 0;
     right: auto;
     bottom: 0;
     width: var(--navigation-rail-width);
@@ -347,8 +350,9 @@ export default defineComponent({
     flex-direction: column;
     justify-content: center;
     gap: 12px;
-    border-top: 0;
+    border: 0;
     border-right: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 0;
     box-shadow: 1px 0 8px rgba(0, 0, 0, 0.05);
     transform: none;
     -webkit-transform: none;
