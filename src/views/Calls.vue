@@ -26,8 +26,8 @@
         @touchmove="onTouchMove($event, item.id)"
         @touchend="onTouchEnd(item.id)"
         @touchcancel="onTouchCancel(item.id)">
-        <div class="call-swipe-actions">
-          <button class="call-delete" type="button" :aria-label="`删除 ${name(item.peer)} 的通话记录`"
+        <div class="call-swipe-actions hainei-swipe-actions" style="--swipe-action-count:1">
+          <button class="call-delete hainei-swipe-button" data-action="delete" type="button" :aria-label="`删除 ${name(item.peer)} 的通话记录`"
             :disabled="deletingId === item.id" @click.stop="deleteCallRecord(item)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
         </div>
         <div class="call-row" :style="swipeStyle(item.id)">
@@ -89,7 +89,7 @@ const router = useRouter(), call = useCallStore(), callHistory = useCallHistoryS
 const records = ref<CallHistoryItem[]>([]), limit = ref(50), missedOnly = ref(false), hasMore = ref(false), loading = ref(true), error = ref(""), busy = ref(false);
 const showPicker = ref(false), search = ref(""), contactSearch = ref(""), deletingId = ref("");
 const { close: closeSwipe, isOpen: isSwipeOpen, onTouchStart, onTouchMove,
-  onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 76 });
+  onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 64 });
 const { container, pullDistance, refreshing } = usePullToRefresh({ onRefresh: async () => {
   if (keys.pkHex && keys.isUnlocked) await resumeAccountMessageSync("manual");
 } });
@@ -172,15 +172,13 @@ async function startCall(peer: string) {
 .calls-filters button{min-height:35px;padding:0 17px;border:0;border-radius:999px;background:var(--bg-eef2f6);color:var(--fg-536471);font-size:13px;font-weight:650}
 .calls-filters button[aria-pressed=true]{background:#1687e8;color:#fff}
 .calls-list{margin:0;padding:0;list-style:none}.call-swipe-row{position:relative;overflow:hidden;touch-action:pan-y;border-bottom:1px solid var(--bd-eff1f3)}
-.call-swipe-actions{position:absolute;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;width:76px}
+.call-swipe-actions{position:absolute;top:0;right:0;bottom:0;display:flex}
 .call-row{position:relative;z-index:1;display:flex;align-items:center;gap:2px;padding:4px 12px;background:var(--bg-fff);transition:transform 200ms ease-out}
 .call-record{display:flex;align-items:center;gap:11px;min-height:64px;min-width:0;flex:1;padding:6px 2px;border:0;background:transparent;color:inherit;text-align:left}
 .call-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:5px}.call-copy strong,.call-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .call-copy strong{font-size:15px}.call-copy span{font-size:12px;color:var(--fg-64748b)}.call-copy .missed{color:#dc2626}
 .call-record time{align-self:flex-start;margin-top:9px;color:var(--fg-94a3b8);font-size:11px;white-space:nowrap}
 .call-back{display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border:0;border-radius:50%;background:transparent;color:#1687e8}
-.call-delete{display:grid;place-items:center;width:52px;height:52px;border:0;border-radius:50%;background:#dc2626;color:white;cursor:pointer}
-.call-delete svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .call-remove-move,.call-remove-leave-active{transition:transform 200ms ease,opacity 200ms ease}
 .call-remove-leave-to{opacity:0;transform:translateX(-32px)}
 .call-remove-leave-active{position:absolute;left:0;right:0;z-index:2;pointer-events:none}

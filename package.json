@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.140",
-  "releaseSummary": "修复自动锁定误注销推送订阅",
+  "version": "0.1.141",
+  "releaseSummary": "统一左滑圆形图标按钮与无障碍标签",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
