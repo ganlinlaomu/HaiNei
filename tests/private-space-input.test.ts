@@ -65,7 +65,7 @@ describe("private space note media layout", () => {
   it("auto-sizes the note body instead of pushing attached images below a fixed-height input", () => {
     const source = readFileSync("src/views/PrivateSpace.vue", "utf8");
     expect(source).toMatch(/<textarea v-model="editor.body" v-auto-grow="editor.body"[^>]*rows="1"/s);
-    const bodyStyle = source.match(/\\.body-input\\{([^}]+)\\}/)?.[1];
+    const bodyStyle = source.match(/\.body-input\{([^}]+)\}/)?.[1];
     expect(bodyStyle).toBeDefined();
     expect(bodyStyle).toContain("resize:none");
     expect(bodyStyle).toContain("overflow-y:hidden");
