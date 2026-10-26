@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.146",
-  "releaseSummary": "私信标题栏同步提示不再被筛选切换遮挡",
+  "version": "0.1.147",
+  "releaseSummary": "通话记录秒开，私信未读计数排除免打扰",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

@@ -2,7 +2,7 @@
    1/2/4 slots expose exactly 64/128/256px without clipping. */
 .hainei-swipe-actions{display:flex;align-items:center;width:calc(var(--swipe-action-count,1) * 64px);box-sizing:border-box}
 .hainei-swipe-actions .hainei-swipe-button{flex:0 0 48px;display:grid;place-items:center;box-sizing:border-box;width:48px;height:48px;min-width:48px;min-height:48px;padding:0;margin:0 8px;border:0;border-radius:50%;color:#fff;cursor:pointer;background:#536471}
-.hainei-swipe-actions .hainei-swipe-button svg{display:block;flex:none;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.hainei-swipe-actions .hainei-swipe-button svg{display:block;flex:none;width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .hainei-swipe-actions .hainei-swipe-button[data-action="pin"]{background:#1d9bf0}
 .hainei-swipe-actions .hainei-swipe-button[data-action="mute"]{background:#f59e0b}
 .hainei-swipe-actions .hainei-swipe-button[data-action="delete"]{background:#f4212e}

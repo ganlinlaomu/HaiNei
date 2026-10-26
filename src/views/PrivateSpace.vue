@@ -88,7 +88,7 @@
               aria-label="编辑笔记或待办" @click.stop="editFromSwipe(note)"><SwipeLucideIcon name="pencil" /></button>
             <button type="button" class="swipe-action delete hainei-swipe-button" data-action="delete"
               :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
-              :aria-label="'删除' + label(note)" @click.stop="deleteFromSwipe(note)"><SwipeLucideIcon name="trash" /></button>
+              :aria-label="'删除' + label(note)" @click.stop="deleteFromSwipe(note)"><SwipeLucideIcon name="trash-2" /></button>
           </div>
           <div class="item-foreground" :style="canSwipeNote(note) ? swipeStyle(note.id) : undefined">
             <button type="button" class="item"

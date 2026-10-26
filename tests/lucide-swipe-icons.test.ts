@@ -26,12 +26,12 @@ function paths(name: string) {
 }
 describe("canonical Lucide swipe icon rendering", () => {
   it("renders distinct pin and pin-off, bell and bell-off paths from the same component", () => {
-    for (const icon of ["pin", "pin-off", "bell", "bell-off", "eye-off", "pencil", "undo-2", "trash", "check"]) {
+    for (const icon of ["pin", "pin-off", "bell", "bell-off", "eye-off", "pencil", "undo-2", "trash-2", "check"]) {
       expect(paths(icon).length).toBeGreaterThan(0);
     }
     expect(paths("pin")).not.toEqual(paths("pin-off"));
     expect(paths("bell")).not.toEqual(paths("bell-off"));
-    expect(paths("trash")).toContain("M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6");
+    expect(paths("trash-2")).toContain("M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6");
   });
   it("retains the 48/22px circular styles and action bindings in all five views", () => {
     const css = readFileSync("src/swipeActions.css", "utf8");
@@ -44,7 +44,7 @@ describe("canonical Lucide swipe icon rendering", () => {
     }
     const conversation = readFileSync("src/views/Conversations.vue", "utf8");
     expect(conversation).toContain("conversation.pinned ? 'pin-off' : 'pin'");
-    expect(conversation).toContain("conversation.muted ? 'bell-off' : 'bell'");
+    expect(conversation).toContain("conversation.muted ? 'bell' : 'bell-off'");
     expect(conversation).toContain('aria-label="隐藏私信"');
   });
 });

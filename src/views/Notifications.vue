@@ -45,7 +45,7 @@
           >
             <div class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
               <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><SwipeLucideIcon name="check" /></button>
-              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><SwipeLucideIcon name="trash" /></button>
+              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><SwipeLucideIcon name="trash-2" /></button>
             </div>
 
             <div
@@ -98,7 +98,7 @@
           >
             <div class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
               <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><SwipeLucideIcon name="check" /></button>
-              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><SwipeLucideIcon name="trash" /></button>
+              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><SwipeLucideIcon name="trash-2" /></button>
             </div>
 
             <div
@@ -150,7 +150,7 @@
           >
             <div class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
               <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><SwipeLucideIcon name="check" /></button>
-              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><SwipeLucideIcon name="trash" /></button>
+              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><SwipeLucideIcon name="trash-2" /></button>
             </div>
 
             <div
