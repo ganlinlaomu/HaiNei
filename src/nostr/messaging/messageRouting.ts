@@ -68,3 +68,9 @@ export function isConversationMessage(message: RoutableMessage) {
   return !hasMessageType(message.tags, CALL_LOG_TYPE)
     && classifyPrivateMessage(message) === "direct";
 }
+
+/** Indexed class: chat rows, call logs (Calls page), or anything else. */
+export function messageClassOf(message: RoutableMessage): "direct" | "call" | "other" {
+  if (isConversationMessage(message)) return "direct";
+  return hasMessageType(message.tags, CALL_LOG_TYPE) ? "call" : "other";
+}

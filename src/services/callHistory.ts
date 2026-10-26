@@ -3,6 +3,7 @@ import { metaRepository } from "@/repositories/metaRepository";
 import { CALL_LOG_TYPE, CALL_MISSED_TYPE } from "@/nostr/messaging/callControl";
 import { directMessagePeer } from "@/nostr/messaging/directMessages";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
+import { CALL_LOG_CLASS_MIGRATION_KEY } from "@/repositories/syncedMessageRepository";
 
 export const CALL_RECORD_TAG = "hainei-call-record";
 export type CallHistoryItem = { id: string; peer: string; createdAt: number; text: string; missed: boolean; direction: "incoming" | "outgoing" | "unknown" };
@@ -68,13 +69,26 @@ export async function loadDeletedCallIds(account: string) {
  * Dexie's liveQuery makes a tombstone refresh the page and keeps old Relay
  * copies hidden even when more history is loaded.
  */
+/**
+ * Stored records that may be call logs, created after `since`. Uses the
+ * "call" class index once this account's reclassification has finished;
+ * until then every DM row is scanned. Callers still validate each record.
+ */
+export async function callLogCandidates(account: string, since = 0) {
+  const indexed = (await db.accountMeta.get([account, CALL_LOG_CLASS_MIGRATION_KEY]))?.value === true;
+  // IndexedDB does not permit +/-Infinity as compound-key members.
+  return indexed
+    ? db.syncedMessages.where("[accountPubkey+messageClass+createdAt+id]")
+      .between([account, "call", since, ""], [account, "call", Number.MAX_SAFE_INTEGER, "\uffff"])
+    : db.syncedMessages.where("[accountPubkey+createdAt+id]")
+      .between([account, since, ""], [account, Number.MAX_SAFE_INTEGER, "\uffff"]);
+}
+
 export async function readVisibleCallHistoryPage(account: string, requested: number, missedOnly: boolean) {
   const count = Math.max(1, Math.floor(requested));
   const deleted = await loadDeletedCallIds(account);
   const seen = new Set<string>(), items: CallHistoryItem[] = [];
-  await db.syncedMessages.where("[accountPubkey+createdAt+id]")
-    // IndexedDB does not permit +/-Infinity as compound-key members.
-    .between([account, 0, ""], [account, Number.MAX_SAFE_INTEGER, "\uffff"])
+  await (await callLogCandidates(account))
     .reverse().until(() => items.length > count).each(record => {
       const item = callHistoryItem(record, account);
       if (!item || (missedOnly && !item.missed) || deleted.has(item.id) || seen.has(item.id)) return;

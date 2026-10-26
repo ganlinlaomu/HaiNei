@@ -1,5 +1,5 @@
 import { directMessagePeer, isDirectMessageTags } from "@/nostr/messaging/directMessages";
-import { isConversationMessage } from "@/nostr/messaging/messageRouting";
+import { isConversationMessage, messageClassOf } from "@/nostr/messaging/messageRouting";
 import { disappearingMetadata, hasDisappearingMarker, isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
 import { isCallControl } from "@/nostr/messaging/callControl";
 import Dexie from "dexie";
@@ -37,6 +37,9 @@ export const UNSUPPORTED_MESSAGE_CLEANUP_VERSION = 2;
 export const unsupportedMessageCleanupMetaKey = (version = UNSUPPORTED_MESSAGE_CLEANUP_VERSION) =>
   `message-maintenance:unsupported-nip17-v${version}`;
 
+/** accountMeta flag: every stored call log carries messageClass "call". */
+export const CALL_LOG_CLASS_MIGRATION_KEY = "migration:call-log-class-v1";
+
 export type MessageCleanupMigrationResult = {
   ran: boolean;
   purged: number;
@@ -51,7 +54,7 @@ function toRecord(accountPubkey: string, message: CanonicalMessage, nowMs: numbe
     senderPubkey: message.senderPubkey.toLowerCase(),
     recipientPubkeys: message.recipientPubkeys.map(value => value.toLowerCase()),
     conversationId: message.conversationId || message.id,
-    messageClass: isConversationMessage(message) ? "direct" : "other",
+    messageClass: messageClassOf(message),
     plaintext: message.plaintext,
     ciphertext: message.ciphertext,
     createdAt: message.createdAt,
@@ -514,7 +517,7 @@ export class SyncedMessageRepository {
       async () => {
         if ((await this.database.accountMeta.get([account, key]))?.value === true) return;
         await this.database.syncedMessages.where("accountPubkey").equals(account).modify(record => {
-          record.messageClass = isConversationMessage(record) ? "direct" : "other";
+          record.messageClass = messageClassOf(record);
         });
         await this.database.conversationStates.where("accountPubkey").equals(account).modify(record => {
           delete record.unreadCache;
@@ -525,6 +528,36 @@ export class SyncedMessageRepository {
         });
       },
     );
+  }
+
+  /**
+   * One-time per account: mark stored call logs so Calls can read them by
+   * index. Batched in the background so unlock and message sync are not held
+   * by one long transaction; Calls falls back to a full scan until it is done.
+   */
+  async migrateCallLogClassAfterUnlock(accountPubkey: string, isCurrent: () => boolean = () => true, batchSize = 500) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    if ((await this.database.accountMeta.get([account, CALL_LOG_CLASS_MIGRATION_KEY]))?.value === true) return;
+    let after: [string, number, string] = [account, 0, ""];
+    for (;;) {
+      if (!isCurrent()) return;
+      const done = await this.database.transaction("rw", this.database.syncedMessages, async () => {
+        const batch = await this.database.syncedMessages.where("[accountPubkey+createdAt+id]")
+          .between(after, [account, Number.MAX_SAFE_INTEGER, "\uffff"], false, true)
+          .limit(batchSize).toArray();
+        for (const record of batch) {
+          if (record.messageClass !== "call" && messageClassOf(record) === "call") {
+            await this.database.syncedMessages.update([account, record.id], { messageClass: "call" });
+          }
+        }
+        const last = batch[batch.length - 1];
+        if (last) after = [account, last.createdAt, last.id];
+        return batch.length < batchSize;
+      });
+      if (done) break;
+    }
+    if (!isCurrent()) return;
+    await this.database.accountMeta.put({ accountPubkey: account, key: CALL_LOG_CLASS_MIGRATION_KEY, value: true });
   }
 
   async listDirectConversationHeads(accountPubkey: string, conversationId?: string) {
