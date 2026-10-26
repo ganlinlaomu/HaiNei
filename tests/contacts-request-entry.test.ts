@@ -10,7 +10,18 @@ function block(start: string, end: string) {
 }
 const entry = compile(block('<button v-if="activeSection === \'accepted\'" class="contacts-requests"', '</button>\n    <button v-else class="contacts-requests-back" type="button" aria-label="返回好友列表"\n      @click="activeSection = \'accepted\'"><span aria-hidden="true">‹</span> 返回通讯录</button>'));
 const accept = compile(block('<button class="btn request-accept"', '</button>'));
-const withdraw = compile(block('<button class="swipe-action withdraw"', '</button>'));
+const withdraw = compile(block('<button class="swipe-action withdraw hainei-swipe-button"', '</button>'));
+
+function renderedButton(vnode: any): any {
+  if (vnode?.type === "button") return vnode;
+  if (Array.isArray(vnode?.children)) {
+    for (const child of vnode.children) {
+      const button = renderedButton(child);
+      if (button) return button;
+    }
+  }
+  return null;
+}
 
 function textContent(vnode: any): string {
   if (typeof vnode === "string") return vnode;
@@ -22,17 +33,17 @@ function textContent(vnode: any): string {
 describe("contacts request inbox navigation", () => {
   it("shows the incoming count only when needed, and returns to friend list", () => {
     const model = { activeSection: "accepted", incomingRequests: [{}, {}] };
-    const button = entry(model as any, []) as any;
+    const button = renderedButton(entry(model as any, [])) as any;
     expect(button.props["aria-label"]).toBe("查看好友请求");
     expect(textContent(button)).toContain("2");
     button.props.onClick();
     expect(model.activeSection).toBe("incoming");
-    const back = entry(model as any, []) as any;
+    const back = renderedButton(entry(model as any, [])) as any;
     expect(back.props["aria-label"]).toBe("返回好友列表");
     back.props.onClick();
     expect(model.activeSection).toBe("accepted");
     model.incomingRequests = [];
-    const zero = entry(model as any, []) as any;
+    const zero = renderedButton(entry(model as any, [])) as any;
     expect(textContent(zero)).not.toMatch(/\\b0\\b/);
   });
   it("keeps accept and withdraw actions available inside the unified request view", () => {
@@ -42,11 +53,11 @@ describe("contacts request inbox navigation", () => {
       friendships: { requestDelivery: () => "sent" },
       acceptRequest: accepted, withdrawFromSwipe: withdrawn,
     };
-    const acceptVNode = accept(props as any, []) as any;
+    const acceptVNode = renderedButton(accept(props as any, [])) as any;
     expect(acceptVNode.props.disabled).toBe(false);
     acceptVNode.props.onClick();
     expect(accepted).toHaveBeenCalledWith("abc");
-    const withdrawVNode = withdraw(props as any, []) as any;
+    const withdrawVNode = renderedButton(withdraw(props as any, [])) as any;
     expect(withdrawVNode.props.disabled).toBe(false);
     withdrawVNode.props.onClick({ stopPropagation: () => {} });
     expect(withdrawn).toHaveBeenCalledWith("abc");
