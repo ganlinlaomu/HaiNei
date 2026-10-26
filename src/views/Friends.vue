@@ -47,8 +47,8 @@
       <div class="list" v-else>
         <div v-for="f in filteredAcceptedFriends" :key="f.pubkey" class="friend-swipe" @touchstart="onTouchStart($event, f.pubkey)" @touchmove="onTouchMove($event, f.pubkey)" @touchend="onTouchEnd(f.pubkey)" @touchcancel="onTouchCancel(f.pubkey)">
           <div class="friend-swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
-            <button class="swipe-action edit hainei-swipe-button" data-action="edit" type="button" :aria-label="`编辑 ${contactName(f.pubkey)}`" @click.stop="editFromSwipe(f)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16 1-5L16 2l6 6-11 11-5 1-2-4zM14 4l6 6M4 22h16"/></svg></button>
-            <button class="swipe-action delete hainei-swipe-button" data-action="delete" type="button" :aria-label="`删除 ${contactName(f.pubkey)}`" @click.stop="deleteFromSwipe(f)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
+            <button class="swipe-action edit hainei-swipe-button" data-action="edit" type="button" :aria-label="`编辑 ${contactName(f.pubkey)}`" @click.stop="editFromSwipe(f)"><SwipeLucideIcon name="pencil" /></button>
+            <button class="swipe-action delete hainei-swipe-button" data-action="delete" type="button" :aria-label="`删除 ${contactName(f.pubkey)}`" @click.stop="deleteFromSwipe(f)"><SwipeLucideIcon name="trash" /></button>
           </div>
           <div class="friend-item" :style="swipeStyle(f.pubkey)">
             <button class="friend-profile avatar-profile" type="button" :aria-label="`查看 ${contactName(f.pubkey)} 的资料`" @click="openFriendProfile(f.pubkey, $event)">
@@ -95,8 +95,8 @@
       <div v-else class="list">
         <div v-for="request in outgoingRequests" :key="request.peerPubkey" class="friend-swipe" @touchstart="onTouchStart($event, request.peerPubkey)" @touchmove="onTouchMove($event, request.peerPubkey)" @touchend="onTouchEnd(request.peerPubkey)" @touchcancel="onTouchCancel(request.peerPubkey)">
           <div class="friend-swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
-            <button class="swipe-action edit hainei-swipe-button" data-action="edit" type="button" aria-label="编辑好友请求" @click.stop="editPendingFromSwipe(request.peerPubkey)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16 1-5L16 2l6 6-11 11-5 1-2-4zM14 4l6 6M4 22h16"/></svg></button>
-            <button class="swipe-action withdraw hainei-swipe-button" data-action="withdraw" type="button" aria-label="撤回好友请求" :disabled="friendships.requestDelivery(request.peerPubkey) !== 'sent' || relationshipBusy.has(request.peerPubkey)" @click.stop="withdrawFromSwipe(request.peerPubkey)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2M4 7a9 9 0 1 1-1 9M9 12h7"/></svg></button>
+            <button class="swipe-action edit hainei-swipe-button" data-action="edit" type="button" aria-label="编辑好友请求" @click.stop="editPendingFromSwipe(request.peerPubkey)"><SwipeLucideIcon name="pencil" /></button>
+            <button class="swipe-action withdraw hainei-swipe-button" data-action="withdraw" type="button" aria-label="撤回好友请求" :disabled="friendships.requestDelivery(request.peerPubkey) !== 'sent' || relationshipBusy.has(request.peerPubkey)" @click.stop="withdrawFromSwipe(request.peerPubkey)"><SwipeLucideIcon name="undo-2" /></button>
           </div>
           <div class="friend-item" :style="swipeStyle(request.peerPubkey)">
           <ProfileAvatar :pubkey="request.peerPubkey" :local-name="localContactName(request.peerPubkey)" :size="38" />
@@ -202,6 +202,7 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { useRoute, useRouter } from "vue-router";
 import { formatRelativeTime } from "@/utils/format";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import SwipeLucideIcon from "@/components/SwipeLucideIcon.vue";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { openProfile } from "@/utils/profileNavigation";
 import { useSwipeActions } from "@/composables/useSwipeActions";
@@ -212,7 +213,7 @@ import { loadAccountStoresOnce, storesLoadedForAccount, waitForFirstPaint } from
 
 export default defineComponent({
   name: "Friends",
-  components: { ProfileAvatar, QrScannerSheet },
+  components: { ProfileAvatar, QrScannerSheet, SwipeLucideIcon },
   setup() {
     const friends = useFriendsStore();
     const friendships = useFriendshipsStore();
