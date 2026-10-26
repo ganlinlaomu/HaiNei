@@ -232,6 +232,21 @@ function ensureRelayModes(items: RelayConfig[]): RelayConfig[] {
   return next;
 }
 
+/**
+ * An old built-in Relay can still appear in the account's persisted NIP-17
+ * kind-10050 inbox list after the default changes. Do not reconnect it solely
+ * because it was advertised in the past. An explicitly configured read Relay
+ * (user/NIP-65) is still respected.
+ */
+export function filterRetiredDefaultRelayHints(
+  hintedUrls: readonly string[],
+  configuredReadUrls: readonly string[],
+): string[] {
+  const configured = new Set(configuredReadUrls.map(normalizeRelayUrl).filter(Boolean));
+  return [...new Set(hintedUrls.map(normalizeRelayUrl).filter(Boolean))]
+    .filter(url => !RETIRED_DEFAULT_RELAY_URLS.has(url) || configured.has(url));
+}
+
 export function hasUsableRelayConfiguration(items: RelayConfig[]): boolean {
   const active = items.filter(item => item.enabled && !item.deleted);
   return active.some(item => item.read) && active.some(item => item.write);
