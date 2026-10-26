@@ -246,6 +246,22 @@ async function registerSubscription(subscription: PushSubscription, pubkey: stri
   deviceStorage.setItem(endpointKey(pubkey), subscription.endpoint);
 }
 
+/** Detach this device's endpoint from an outgoing account; keep the browser
+ * subscription intact so the incoming account can reuse it after unlocking. */
+export async function unsubscribeAccountPushOnExit(pubkey: string, signEvent: SignEvent) {
+  if (!supportsPushNotifications()) return false;
+  const savedEndpoint = deviceStorage.getItem(endpointKey(pubkey));
+  const endpoint = savedEndpoint || (await withTimeout(
+    navigator.serviceWorker.ready, SERVICE_WORKER_TIMEOUT_MS, "service worker 未就绪",
+  ).then(registration => registration.pushManager.getSubscription()))?.endpoint;
+  if (!endpoint) return false;
+  await authenticatedPost("/api/push/unsubscribe", { endpoint }, pubkey, signEvent);
+  deviceStorage.removeItem(endpointKey(pubkey));
+  // Preserve the opt-in flag: the next time this account unlocks on this device
+  // its browser subscription must be registered again with the worker.
+  return true;
+}
+
 export async function disablePushNotifications(pubkey: string, signEvent: SignEvent) {
   if (!supportsPushNotifications()) return;
   const registration = await navigator.serviceWorker.ready;
