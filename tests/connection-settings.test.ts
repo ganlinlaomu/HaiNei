@@ -13,6 +13,7 @@ import {
   ACTIVE_RELAY_CONFIGS_KEY,
   DEFAULT_MEDIA_SERVERS,
   DEFAULT_RELAY_URLS,
+  filterRetiredDefaultRelayHints,
   type MediaServer,
   type RelayConfig
 } from "@/services/connectionSettings";
@@ -58,6 +59,20 @@ describe("Relay configuration", () => {
     expect(DEFAULT_MEDIA_SERVERS).toEqual([
       expect.objectContaining({ url: "https://blossom-imgbed.noster.workers.dev" })
     ]);
+  });
+
+  it("does not revive a retired default Relay just because an old NIP-17 inbox advertised it", () => {
+    const retired = "wss://nostr.dzo-hadar.ts.net";
+    const current = [
+      "wss://relay-jp.nostr.wirednet.jp",
+      "wss://cloudflare-nostr-relay.noster.workers.dev"
+    ];
+    expect(filterRetiredDefaultRelayHints([retired, current[0], current[0]], current))
+      .toEqual([current[0]]);
+    expect(filterRetiredDefaultRelayHints([retired, current[0]], [...current, retired]))
+      .toEqual([retired, current[0]]);
+    expect(filterRetiredDefaultRelayHints(["wss://other-device.example", current[0]], current))
+      .toEqual(["wss://other-device.example", current[0]]);
   });
 
   it("defaults read receipts on and preserves an explicit privacy opt-out", () => {
