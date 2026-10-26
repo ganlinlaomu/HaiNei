@@ -600,7 +600,12 @@ function offerDispositionUndo(
           const restored = await privateSpaceRepository.undoDisposition(
             account, saved.id, field, saved.revision, at, prior,
           );
-          if (!restored) return;
+          if (!restored) {
+            if (keys.isUnlocked && keys.pkHex.toLowerCase() === account &&
+                keys.sessionGeneration === generation)
+              ui.addToast("这一项已被修改，未撤销", 2_600, "info");
+            return;
+          }
           // The write is account-scoped even if a logout raced the transaction.
           // On the next unlock, dirty revisions will be reconciled to cloud.
           if (!keys.isUnlocked || keys.pkHex.toLowerCase() !== account ||
@@ -618,10 +623,6 @@ function offerDispositionUndo(
 
 async function deleteFromSwipe(note: PrivateSpaceRecord) {
   if (backupBusy.value || loading.value || editorTransitionBusy.value || rowActionBusyId.value || !canSwipeNote(note)) return;
-  if (!window.confirm("将「" + label(note).slice(0, 60) + "」移到最近删除？可以从最近删除中恢复。")) {
-    closeSwipe(note.id);
-    return;
-  }
   rowActionBusyId.value = note.id;
   try {
     const { account, isCurrent } = sessionSnapshot();
