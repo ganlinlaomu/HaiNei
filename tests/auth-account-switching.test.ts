@@ -2,7 +2,7 @@ import "fake-indexeddb/auto";
 import { createPinia, setActivePinia } from "pinia";
 import { getPublicKey } from "nostr-tools";
 import { hexToBytes } from "nostr-tools/utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { listDeviceAccounts } from "@/services/accountRegistry";
 import { deviceStorage } from "@/services/deviceStorage";
@@ -40,6 +40,51 @@ beforeEach(async () => {
   for (const key of [...SESSION_KEYS, `encrypted_sk_${PRIVATE_PUBKEY}`]) deviceStorage.removeItem(key);
   await removeDevicePrivateKey(PRIVATE_PUBKEY);
   setActivePinia(createPinia());
+});
+
+afterEach(() => { vi.unstubAllGlobals(); });
+
+describe("push subscription cleanup on account departure", () => {
+  function stubPush(fetchImpl: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal("window", { PushManager: {}, Notification: {} });
+    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({
+      pushManager: { getSubscription: async () => ({ endpoint: "https://web.push.apple.com/current" }) },
+    }) } });
+    vi.stubGlobal("fetch", fetchImpl);
+  }
+
+  it("unsubscribes the previous account's endpoint on logout, retaining opt-in for a future login", async () => {
+    const store = createStore();
+    await store.loginWithNsec(PRIVATE_KEY);
+    const endpoint = "https://web.push.apple.com/previous";
+    deviceStorage.setItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`, endpoint);
+    deviceStorage.setItem(`hainei_push_enabled_${PRIVATE_PUBKEY}`, "1");
+    const sent = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    stubPush(sent);
+
+    await store.clearActiveSession();
+    expect(store.pkHex).toBe("");
+    const outgoing = sent.mock.calls.find(call => String(call[0]).endsWith("/api/push/unsubscribe"));
+    expect(outgoing).toBeDefined();
+    const payload = JSON.parse(outgoing![1].body);
+    expect(payload.endpoint).toBe(endpoint);
+    expect(payload.event.pubkey).toBe(PRIVATE_PUBKEY);
+    expect(deviceStorage.getItem(`hainei_push_enabled_${PRIVATE_PUBKEY}`)).toBe("1");
+    expect(deviceStorage.getItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`)).toBeNull();
+  });
+
+  it("does not block switching to a new private key when the unsubscribe request fails", async () => {
+    const store = createStore();
+    await store.loginWithNsec(PRIVATE_KEY);
+    deviceStorage.setItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`, "https://web.push.apple.com/previous");
+    const sent = vi.fn(async () => { throw new Error("offline"); });
+    stubPush(sent);
+    const otherSecret = "02".padStart(64, "0");
+
+    await store.loginWithSk(otherSecret);
+    expect(store.pkHex).toBe(getPublicKey(hexToBytes(otherSecret)));
+    expect(sent.mock.calls.some(call => String(call[0]).endsWith("/api/push/unsubscribe"))).toBe(true);
+  });
 });
 
 describe("private-key authentication", () => {
