@@ -50,9 +50,9 @@
       >
         <div class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:4">
           <button class="action pin hainei-swipe-button" type="button" :aria-label="conversation.pinned ? '取消置顶' : '置顶'" data-action="pin" @click.stop="togglePin(conversation.peerPubkey)"><SwipeLucideIcon :name="conversation.pinned ? 'pin-off' : 'pin'" /></button>
-          <button class="action mute hainei-swipe-button" type="button" :aria-label="conversation.muted ? '取消免打扰' : '免打扰'" data-action="mute" @click.stop="toggleMute(conversation.peerPubkey)"><SwipeLucideIcon :name="conversation.muted ? 'bell-off' : 'bell'" /></button>
+          <button class="action mute hainei-swipe-button" type="button" :aria-label="conversation.muted ? '取消免打扰' : '免打扰'" data-action="mute" @click.stop="toggleMute(conversation.peerPubkey)"><SwipeLucideIcon :name="conversation.muted ? 'bell' : 'bell-off'" /></button>
           <button class="action hide hainei-swipe-button" type="button" aria-label="隐藏私信" data-action="hide" @click.stop="hideConversation(conversation.peerPubkey)"><SwipeLucideIcon name="eye-off" /></button>
-          <button class="action delete hainei-swipe-button" data-action="delete" type="button" :aria-label="`删除与 ${displayName(conversation.peerPubkey)} 的聊天记录`" @click.stop="deleteConversation(conversation.peerPubkey)"><SwipeLucideIcon name="trash" /></button>
+          <button class="action delete hainei-swipe-button" data-action="delete" type="button" :aria-label="`删除与 ${displayName(conversation.peerPubkey)} 的聊天记录`" @click.stop="deleteConversation(conversation.peerPubkey)"><SwipeLucideIcon name="trash-2" /></button>
         </div>
         <button
           class="conversation-main"
@@ -158,7 +158,7 @@ watch(currentSyncLabel, label => {
 }, { immediate: true });
 const stopSyncStatusListener = onAccountMessageSyncStatus(snapshot => { syncSnapshot.value = snapshot; });
 const filterMode = ref<"all" | "unread">("all");
-const unreadConversationCount = computed(() => conversations.value.filter(item => item.unread > 0).length);
+const unreadConversationCount = computed(() => conversations.value.filter(item => item.unread > 0 && !item.muted).length);
 const conversationFilterOptions = computed(() => [
   { key: "all", label: "全部" },
   { key: "unread", label: "未读", count: unreadConversationCount.value },

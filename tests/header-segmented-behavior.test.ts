@@ -61,8 +61,8 @@ describe("HeaderSegmented template and listener lifetime", () => {
       compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
     }).outputText;
     const fakeButtons = [
-      { dataset: { spaceTab: "all" }, offsetLeft: 3, offsetWidth: 102 },
-      { dataset: { spaceTab: "unread" }, offsetLeft: 108, offsetWidth: 104 },
+      { dataset: { segmentKey: "all" }, offsetLeft: 3, offsetWidth: 102 },
+      { dataset: { segmentKey: "unread" }, offsetLeft: 108, offsetWidth: 104 },
     ];
     const bar = { querySelectorAll: () => fakeButtons };
     const mounts: Array<() => void> = [], unmounts: Array<() => void> = [];

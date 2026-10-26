@@ -2,6 +2,7 @@ import { db, type SyncedMessageRecord } from "@/db/dexie";
 import { metaRepository } from "@/repositories/metaRepository";
 import { CALL_LOG_TYPE, CALL_MISSED_TYPE } from "@/nostr/messaging/callControl";
 import { directMessagePeer } from "@/nostr/messaging/directMessages";
+import { onBeforeAccountLock } from "@/services/accountLifecycle";
 
 export const CALL_RECORD_TAG = "hainei-call-record";
 export type CallHistoryItem = { id: string; peer: string; createdAt: number; text: string; missed: boolean; direction: "incoming" | "outgoing" | "unknown" };
@@ -82,3 +83,28 @@ export async function readVisibleCallHistoryPage(account: string, requested: num
     });
   return { items: items.slice(0, count), hasMore: items.length > count };
 }
+
+// The page scan above walks every DM record, so reopening Calls (not kept
+// alive) used to flash "正在读取通话记录…". Keep the last visible page per
+// session in memory and paint it first; liveQuery then replaces it.
+type CachedCallPage = { items: CallHistoryItem[]; hasMore: boolean };
+const pageCache = new Map<string, CachedCallPage>();
+let pageCacheSession = "";
+const pageKey = (account: string, missedOnly: boolean) => `${account}:${missedOnly ? "missed" : "all"}`;
+function usePageCacheSession(session: string) {
+  if (session !== pageCacheSession) { pageCache.clear(); pageCacheSession = session; }
+}
+export function cachedCallHistoryPage(session: string, account: string, requested: number, missedOnly: boolean): CachedCallPage | null {
+  usePageCacheSession(session);
+  const cached = pageCache.get(pageKey(account, missedOnly));
+  if (!cached) return null;
+  const count = Math.max(1, Math.floor(requested));
+  return { items: cached.items.slice(0, count), hasMore: cached.hasMore || cached.items.length > count };
+}
+export function rememberCallHistoryPage(session: string, account: string, missedOnly: boolean, page: CachedCallPage) {
+  usePageCacheSession(session);
+  pageCache.set(pageKey(account, missedOnly), { items: page.items, hasMore: page.hasMore });
+}
+export function clearCallHistoryPageCache() { pageCache.clear(); pageCacheSession = ""; }
+const stopPageCacheLockClear = onBeforeAccountLock(() => { clearCallHistoryPageCache(); });
+if (import.meta.hot) import.meta.hot.dispose(stopPageCacheLockClear);

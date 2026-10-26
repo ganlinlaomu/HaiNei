@@ -27,7 +27,7 @@
         @touchcancel="onTouchCancel(item.id)">
         <div class="call-swipe-actions hainei-swipe-actions" style="--swipe-action-count:1">
           <button class="call-delete hainei-swipe-button" data-action="delete" type="button" :aria-label="`删除 ${name(item.peer)} 的通话记录`"
-            :disabled="deletingId === item.id" @click.stop="deleteCallRecord(item)"><SwipeLucideIcon name="trash" /></button>
+            :disabled="deletingId === item.id" @click.stop="deleteCallRecord(item)"><SwipeLucideIcon name="trash-2" /></button>
         </div>
         <div class="call-row" :style="swipeStyle(item.id)">
           <button class="call-record" type="button" :aria-label="`查看 ${name(item.peer)} 的资料`"
@@ -71,7 +71,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { liveQuery } from "dexie";
-import { readVisibleCallHistoryPage, uniqueCallHistory, type CallHistoryItem } from "@/services/callHistory";
+import { cachedCallHistoryPage, clearCallHistoryPageCache, readVisibleCallHistoryPage, rememberCallHistoryPage, uniqueCallHistory, type CallHistoryItem } from "@/services/callHistory";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useFriendsStore } from "@/stores/friends";
@@ -123,12 +123,16 @@ function subscribe() {
   subscription?.unsubscribe(); const token = ++generation;
   records.value = []; error.value = ""; hasMore.value = false;
   const account = keys.pkHex, count = limit.value, missed = missedOnly.value;
-  if (!account || !keys.isUnlocked) { loading.value = false; return; }
-  loading.value = true;
+  if (!account || !keys.isUnlocked) { clearCallHistoryPageCache(); loading.value = false; return; }
+  const session = `${keys.sessionGeneration}`;
+  const cached = cachedCallHistoryPage(session, account, count, missed);
+  if (cached) { records.value = cached.items; hasMore.value = cached.hasMore; }
+  loading.value = !cached;
   subscription = liveQuery(() => readVisibleCallHistoryPage(account, count, missed))
     .subscribe({ next: page => {
     if (token !== generation) return;
     records.value = page.items; hasMore.value = page.hasMore; loading.value = false;
+    rememberCallHistoryPage(session, account, missed, page);
   }, error: () => { if (token === generation) { loading.value = false; error.value = "读取通话记录失败，请重试"; } } });
 }
 watch(() => [keys.pkHex, keys.isUnlocked, limit.value, missedOnly.value], subscribe, { immediate: true, flush: "sync" });

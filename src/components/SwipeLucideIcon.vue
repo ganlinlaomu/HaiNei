@@ -37,7 +37,7 @@
       <path d="M9 14 4 9l5-5" />
       <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" />
     </template>
-    <template v-else-if="name === 'trash'">
+    <template v-else-if="name === 'trash-2'">
       <path d="M10 11v6" />
       <path d="M14 11v6" />
       <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
@@ -48,5 +48,5 @@
   </svg>
 </template>
 <script setup lang="ts">
-defineProps<{ name: "pin" | "pin-off" | "bell" | "bell-off" | "eye-off" | "pencil" | "undo-2" | "trash" | "check" }>();
+defineProps<{ name: "pin" | "pin-off" | "bell" | "bell-off" | "eye-off" | "pencil" | "undo-2" | "trash-2" | "check" }>();
 </script>

@@ -1,7 +1,7 @@
 <template>
   <div ref="tabBar" class="header-segmented" role="tablist" aria-label="列表筛选">
     <span class="header-segmented-pill" :class="{ 'no-motion': !pillReady }" :style="pillStyle" aria-hidden="true"></span>
-    <button v-for="option in options" :key="option.key" :data-space-tab="option.key"
+    <button v-for="option in options" :key="option.key" :data-segment-key="option.key"
       type="button" role="tab" :class="{ selected: modelValue === option.key }"
       :aria-selected="modelValue === option.key" @click="emit('update:modelValue', option.key)">
       {{ option.label }}<span v-if="option.count && option.count > 0" class="header-segmented-count">{{ option.count > 99 ? '99+' : option.count }}</span>
@@ -24,8 +24,8 @@ let disposed = false;
 
 function measure() {
   if (disposed || !tabBar.value) return;
-  const geometries = [...tabBar.value.querySelectorAll<HTMLButtonElement>("[data-space-tab]")].map(node => ({
-    key: node.dataset.spaceTab || "", offsetLeft: node.offsetLeft, offsetWidth: node.offsetWidth,
+  const geometries = [...tabBar.value.querySelectorAll<HTMLButtonElement>("[data-segment-key]")].map(node => ({
+    key: node.dataset.segmentKey || "", offsetLeft: node.offsetLeft, offsetWidth: node.offsetWidth,
   }));
   const pill = selectedTabPill(geometries, props.modelValue);
   if (!pill) {
@@ -61,6 +61,6 @@ onBeforeUnmount(() => {
 .header-segmented-pill.no-motion{transition:none}
 .header-segmented button{position:relative;z-index:1;min-width:0;height:30px;border:0;padding:0 4px;border-radius:8px;background:transparent;color:var(--fg-64748b);font:inherit;font-size:12px;white-space:nowrap;display:flex;align-items:center;justify-content:center;gap:4px}
 .header-segmented button.selected{font-weight:650;color:var(--fg-0f172a)}
-.header-segmented-count{display:inline-flex;align-items:center;justify-content:center;min-width:14px;height:14px;border-radius:999px;background:#ef4444;color:white;font-size:10px;padding:0 3px}
+.header-segmented-count{display:inline-flex;align-items:center;justify-content:center;min-width:14px;height:14px;border-radius:999px;background:#1d9bf0;color:#fff;font-size:10px;padding:0 3px}
 @media(prefers-reduced-motion:reduce){.header-segmented-pill{transition:none}}
 </style>
