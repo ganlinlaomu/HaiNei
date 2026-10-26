@@ -45,7 +45,7 @@
           >
             <div class="swipe-actions">
               <button class="action read" @click.stop="markRead(n)">已读</button>
-              <button class="action delete" @click.stop="dismiss(n)">忽略</button>
+              <button class="action delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
             </div>
 
             <div
@@ -98,7 +98,7 @@
           >
             <div class="swipe-actions">
               <button class="action read" @click.stop="markRead(n)">已读</button>
-              <button class="action delete" @click.stop="dismiss(n)">忽略</button>
+              <button class="action delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
             </div>
 
             <div
@@ -150,7 +150,7 @@
           >
             <div class="swipe-actions">
               <button class="action read" @click.stop="markRead(n)">已读</button>
-              <button class="action delete" @click.stop="dismiss(n)">忽略</button>
+              <button class="action delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
             </div>
 
             <div
@@ -456,7 +456,24 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   background: #3b82f6;
 }
 .action.delete {
+  display: grid;
+  place-items: center;
+  align-self: center;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  margin: 0 6px;
+  border-radius: 50%;
   background: #ef4444;
+}
+.action.delete svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .notification-item {
   display: flex;

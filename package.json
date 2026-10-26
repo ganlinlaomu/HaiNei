@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.136",
-  "releaseSummary": "修复过滤推送的静音通知与账号切换订阅清理",
+  "version": "0.1.139",
+  "releaseSummary": "统一左滑垃圾桶即时删除与通话记录动画",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

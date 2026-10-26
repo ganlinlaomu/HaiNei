@@ -20,7 +20,7 @@
     <p v-if="error" class="calls-state" role="alert">{{ error }} <button type="button" @click="subscribe">重试</button></p>
     <p v-else-if="loading" class="calls-state" role="status">正在读取通话记录…</p>
     <p v-else-if="!filtered.length" class="calls-state">{{ search.trim() ? "没有匹配的通话" : missedOnly ? "暂无未接来电" : "暂无通话记录" }}</p>
-    <ul v-else class="calls-list">
+    <TransitionGroup v-else name="call-remove" tag="ul" class="calls-list">
       <li v-for="item in filtered" :key="item.id" class="call-swipe-row"
         @touchstart="onTouchStart($event, item.id)"
         @touchmove="onTouchMove($event, item.id)"
@@ -28,7 +28,7 @@
         @touchcancel="onTouchCancel(item.id)">
         <div class="call-swipe-actions">
           <button class="call-delete" type="button" :aria-label="`删除 ${name(item.peer)} 的通话记录`"
-            :disabled="deletingId === item.id" @click.stop="deleteCallRecord(item)">删除</button>
+            :disabled="deletingId === item.id" @click.stop="deleteCallRecord(item)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
         </div>
         <div class="call-row" :style="swipeStyle(item.id)">
           <button class="call-record" type="button" :aria-label="`查看 ${name(item.peer)} 的资料`"
@@ -46,7 +46,7 @@
           </button>
         </div>
       </li>
-    </ul>
+    </TransitionGroup>
     <button v-if="hasMore && !search.trim()" class="load-more" type="button" :disabled="loading" @click="limit += 50">加载更多</button>
     <p class="calls-note">显示此设备已同步的通话记录。历史版本可能缺少呼入或呼出信息。</p>
 
@@ -89,7 +89,7 @@ const router = useRouter(), call = useCallStore(), callHistory = useCallHistoryS
 const records = ref<CallHistoryItem[]>([]), limit = ref(50), missedOnly = ref(false), hasMore = ref(false), loading = ref(true), error = ref(""), busy = ref(false);
 const showPicker = ref(false), search = ref(""), contactSearch = ref(""), deletingId = ref("");
 const { close: closeSwipe, isOpen: isSwipeOpen, onTouchStart, onTouchMove,
-  onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 88 });
+  onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 76 });
 const { container, pullDistance, refreshing } = usePullToRefresh({ onRefresh: async () => {
   if (keys.pkHex && keys.isUnlocked) await resumeAccountMessageSync("manual");
 } });
@@ -140,7 +140,7 @@ watch(() => [keys.pkHex, keys.isUnlocked] as const, ([account, unlocked]) => {
 // the account's local and server history has hydrated, or race an offline call.
 async function deleteCallRecord(item: CallHistoryItem) {
   const account = keys.pkHex;
-  if (!account || deletingId.value || !window.confirm(`删除与 ${name(item.peer)} 的这条通话记录？`)) return;
+  if (!account || deletingId.value || !keys.isUnlocked) return;
   deletingId.value = item.id;
   closeSwipe(item.id);
   try {
@@ -172,14 +172,18 @@ async function startCall(peer: string) {
 .calls-filters button{min-height:35px;padding:0 17px;border:0;border-radius:999px;background:var(--bg-eef2f6);color:var(--fg-536471);font-size:13px;font-weight:650}
 .calls-filters button[aria-pressed=true]{background:#1687e8;color:#fff}
 .calls-list{margin:0;padding:0;list-style:none}.call-swipe-row{position:relative;overflow:hidden;touch-action:pan-y;border-bottom:1px solid var(--bd-eff1f3)}
-.call-swipe-actions{position:absolute;top:0;right:0;bottom:0;display:flex;width:88px}
+.call-swipe-actions{position:absolute;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;width:76px}
 .call-row{position:relative;z-index:1;display:flex;align-items:center;gap:2px;padding:4px 12px;background:var(--bg-fff);transition:transform 200ms ease-out}
 .call-record{display:flex;align-items:center;gap:11px;min-height:64px;min-width:0;flex:1;padding:6px 2px;border:0;background:transparent;color:inherit;text-align:left}
 .call-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:5px}.call-copy strong,.call-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .call-copy strong{font-size:15px}.call-copy span{font-size:12px;color:var(--fg-64748b)}.call-copy .missed{color:#dc2626}
 .call-record time{align-self:flex-start;margin-top:9px;color:var(--fg-94a3b8);font-size:11px;white-space:nowrap}
 .call-back{display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border:0;border-radius:50%;background:transparent;color:#1687e8}
-.call-delete{display:grid;place-items:center;width:88px;min-height:64px;border:0;background:#dc2626;color:white;font-size:14px;font-weight:700}
+.call-delete{display:grid;place-items:center;width:52px;height:52px;border:0;border-radius:50%;background:#dc2626;color:white;cursor:pointer}
+.call-delete svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.call-remove-move,.call-remove-leave-active{transition:transform 200ms ease,opacity 200ms ease}
+.call-remove-leave-to{opacity:0;transform:translateX(-32px)}
+.call-remove-leave-active{position:absolute;left:0;right:0;z-index:2;pointer-events:none}
 .call-delete:disabled{opacity:.5}
 @media (prefers-reduced-motion:reduce){.call-row{transition:none}}
 .call-back:disabled{opacity:.35}.calls-state{text-align:center;padding:34px 16px;color:var(--fg-64748b);font-size:14px}.calls-note{padding:14px 16px;color:var(--fg-94a3b8);font-size:12px}
