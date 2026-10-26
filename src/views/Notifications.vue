@@ -43,9 +43,9 @@
             @touchend="onTouchEnd(n.id)"
             @touchcancel="onTouchCancel(n.id)"
           >
-            <div class="swipe-actions">
-              <button class="action read" @click.stop="markRead(n)">已读</button>
-              <button class="action delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
+            <div class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
+              <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg></button>
+              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
             </div>
 
             <div
@@ -96,9 +96,9 @@
             @touchend="onTouchEnd(n.id)"
             @touchcancel="onTouchCancel(n.id)"
           >
-            <div class="swipe-actions">
-              <button class="action read" @click.stop="markRead(n)">已读</button>
-              <button class="action delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
+            <div class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
+              <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg></button>
+              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
             </div>
 
             <div
@@ -148,9 +148,9 @@
             @touchend="onTouchEnd(n.id)"
             @touchcancel="onTouchCancel(n.id)"
           >
-            <div class="swipe-actions">
-              <button class="action read" @click.stop="markRead(n)">已读</button>
-              <button class="action delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
+            <div class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
+              <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg></button>
+              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
             </div>
 
             <div
@@ -272,7 +272,7 @@ function formatRelativeTime(ts: number) {
 }
 
 /* ---------- 左滑 ---------- */
-const { close: closeSwipe, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions();
+const { close: closeSwipe, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions({ actionWidth: 128 });
 
 /* ---------- 操作 ---------- */
 function markRead(n: any) {
@@ -445,35 +445,6 @@ function summarizeNotificationText(text: string, maxLength = 40) {
   top: 0;
   height: 100%;
   display: flex;
-}
-.action {
-  width: 60px;
-  color: #fff;
-  font-size: 12px;
-  border: none;
-}
-.action.read {
-  background: #3b82f6;
-}
-.action.delete {
-  display: grid;
-  place-items: center;
-  align-self: center;
-  flex: 0 0 48px;
-  width: 48px;
-  height: 48px;
-  margin: 0 6px;
-  border-radius: 50%;
-  background: #ef4444;
-}
-.action.delete svg {
-  width: 22px;
-  height: 22px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.9;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 .notification-item {
   display: flex;
