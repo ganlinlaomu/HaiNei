@@ -2,6 +2,12 @@
   <main ref="container" class="app-page calls-page">
     <header class="calls-header primary-page-header">
       <h1 class="primary-page-title">通话</h1>
+      <div ref="callTabs" class="call-header-tabs" role="tablist" aria-label="通话记录筛选">
+        <span class="call-tab-pill" :class="{ 'no-motion': !tabPillReady }" :style="tabPillStyle" aria-hidden="true"></span>
+        <button data-space-tab="all" type="button" role="tab" :aria-selected="!missedOnly" :class="{ selected: !missedOnly }" @click="missedOnly = false">全部</button>
+        <button data-space-tab="missed" type="button" role="tab" :aria-selected="missedOnly" :class="{ selected: missedOnly }" @click="missedOnly = true">未接来电</button>
+      </div>
+      
       <button class="new-call primary-header-action" type="button" aria-label="发起新通话" @click="showPicker = true">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       </button>
@@ -13,10 +19,6 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
       <input v-model="search" type="search" autocomplete="off" placeholder="搜索通话记录" aria-label="搜索通话记录"/>
     </label>
-    <div class="calls-filters" role="group" aria-label="通话记录筛选">
-      <button type="button" :aria-pressed="!missedOnly" @click="missedOnly = false">全部</button>
-      <button type="button" :aria-pressed="missedOnly" @click="missedOnly = true">未接来电</button>
-    </div>
     <p v-if="error" class="calls-state" role="alert">{{ error }} <button type="button" @click="subscribe">重试</button></p>
     <p v-else-if="loading" class="calls-state" role="status">正在读取通话记录…</p>
     <p v-else-if="!filtered.length" class="calls-state">{{ search.trim() ? "没有匹配的通话" : missedOnly ? "暂无未接来电" : "暂无通话记录" }}</p>
@@ -69,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { liveQuery } from "dexie";
 import { readVisibleCallHistoryPage, uniqueCallHistory, type CallHistoryItem } from "@/services/callHistory";
@@ -81,6 +83,7 @@ import { loadCallEngine, loadedCallEngine, useCallStore } from "@/stores/call";
 import { loadAccountStoresOnce } from "@/utils/bottomTabActivation";
 import { useCallHistoryStore } from "@/stores/callHistory";
 import { useSwipeActions } from "@/composables/useSwipeActions";
+import { createTabPillObserver, selectedTabPill } from "@/utils/tabPillGeometry";
 import { usePullToRefresh } from "@/components/usePullToRefresh";
 import { resumeAccountMessageSync } from "@/services/accountMessageSync";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
@@ -88,6 +91,30 @@ const keys = useKeyStore(), friendships = useFriendshipsStore(), friends = useFr
 const router = useRouter(), call = useCallStore(), callHistory = useCallHistoryStore();
 const records = ref<CallHistoryItem[]>([]), limit = ref(50), missedOnly = ref(false), hasMore = ref(false), loading = ref(true), error = ref(""), busy = ref(false);
 const showPicker = ref(false), search = ref(""), contactSearch = ref(""), deletingId = ref("");
+const callTabs = ref<HTMLElement | null>(null);
+const tabPillStyle = ref<Record<string, string>>({ opacity: "0", width: "0px", transform: "translateX(0px)" });
+const tabPillReady = ref(false);
+let tabPillFrame: number | null = null;
+function refreshTabPill() {
+  const bar = callTabs.value;
+  if (!bar) return;
+  const geometry = [...bar.querySelectorAll<HTMLButtonElement>("[data-space-tab]")].map(node => ({
+    key: node.dataset.spaceTab || "", offsetLeft: node.offsetLeft, offsetWidth: node.offsetWidth,
+  }));
+  const pill = selectedTabPill(geometry, missedOnly.value ? "missed" : "all");
+  if (!pill) return;
+  tabPillStyle.value = { opacity: "1", width: `${pill.width}px`, transform: `translateX(${pill.translateX}px)` };
+  if (!tabPillReady.value && tabPillFrame === null) {
+    tabPillFrame = requestAnimationFrame(() => { tabPillReady.value = true; tabPillFrame = null; });
+  }
+}
+const callPillObserver = createTabPillObserver(refreshTabPill);
+watch(missedOnly, () => { void nextTick(refreshTabPill); });
+onMounted(() => {
+  callPillObserver.attach(callTabs.value);
+  window.addEventListener("resize", refreshTabPill, { passive: true });
+  void document.fonts?.ready.then(refreshTabPill);
+});
 const { close: closeSwipe, isOpen: isSwipeOpen, onTouchStart, onTouchMove,
   onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 64 });
 const { container, pullDistance, refreshing } = usePullToRefresh({ onRefresh: async () => {
@@ -148,7 +175,13 @@ async function deleteCallRecord(item: CallHistoryItem) {
   } catch { error.value = "删除失败，请重试"; }
   finally { deletingId.value = ""; }
 }
-onBeforeUnmount(() => { generation++; subscription?.unsubscribe(); });
+onBeforeUnmount(() => {
+  generation++; subscription?.unsubscribe();
+  callPillObserver.disconnect();
+  if (tabPillFrame !== null) cancelAnimationFrame(tabPillFrame);
+  window.removeEventListener("resize", refreshTabPill);
+});
+
 function preload() { void loadCallEngine().catch(() => {}); }
 async function startCall(peer: string) {
   if (busy.value || call.phase !== "idle" || !friendships.isAccepted(peer)) return;
@@ -168,9 +201,13 @@ async function startCall(peer: string) {
 <style scoped>
 .calls-page{position:relative;max-width:760px;margin:0 auto;min-height:100vh;overscroll-behavior:contain;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 20px);background:var(--bg-fff);color:var(--fg-0f1419)}
 .call-back svg,.picker-row svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
-.calls-filters{display:flex;gap:8px;padding:2px 16px 12px}
-.calls-filters button{min-height:35px;padding:0 17px;border:0;border-radius:999px;background:var(--bg-eef2f6);color:var(--fg-536471);font-size:13px;font-weight:650}
-.calls-filters button[aria-pressed=true]{background:#1687e8;color:#fff}
+.calls-header{position:relative}
+.call-header-tabs{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px;width:min(220px,51vw);height:36px;padding:3px;box-sizing:border-box;border-radius:10px;background:var(--bg-f1f5f9);isolation:isolate}
+.call-header-tabs .call-tab-pill{position:absolute;top:3px;left:0;height:30px;border-radius:8px;background:var(--bg-dfe8f4);z-index:0;transition:transform 200ms ease,opacity 180ms ease}
+.call-header-tabs .call-tab-pill.no-motion{transition:none}
+.call-header-tabs button{position:relative;z-index:1;min-width:0;height:30px;border:0;padding:0 4px;border-radius:8px;background:transparent;color:var(--fg-64748b);font:inherit;font-size:12px;white-space:nowrap}
+.call-header-tabs button.selected{font-weight:650;color:var(--fg-0f172a)}
+@media(prefers-reduced-motion:reduce){.call-header-tabs .call-tab-pill{transition:none}}
 .calls-list{margin:0;padding:0;list-style:none}.call-swipe-row{position:relative;overflow:hidden;touch-action:pan-y;border-bottom:1px solid var(--bd-eff1f3)}
 .call-swipe-actions{position:absolute;top:0;right:0;bottom:0;display:flex}
 .call-row{position:relative;z-index:1;display:flex;align-items:center;gap:2px;padding:4px 12px;background:var(--bg-fff);transition:transform 200ms ease-out}
