@@ -96,7 +96,7 @@ export const DEVICE_ID_STORAGE_KEY = "hainei_device_id";
 export const ACTIVE_RELAY_CONFIGS_KEY = "hainei_active_relay_configs";
 
 export const DEFAULT_RELAY_URLS = [
-  "wss://nostr.dzo-hadar.ts.net",
+  "wss://relay-jp.nostr.wirednet.jp",
   "wss://cloudflare-nostr-relay.noster.workers.dev"
 ] as const;
 
@@ -112,7 +112,8 @@ const RETIRED_DEFAULT_RELAY_URLS = new Set([
   "",
   "wss://relay.mostr.pub",
   "wss://relay.damus.io",
-  "wss://relay.gulugulu.moe"
+  "wss://relay.gulugulu.moe",
+  "wss://nostr.dzo-hadar.ts.net"
 ]);
 const RETIRED_DEFAULT_MEDIA = new Set([
   "",
