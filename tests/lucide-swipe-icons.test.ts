@@ -9,9 +9,10 @@ function paths(name: string) {
   const vnode = render({ name } as any, []);
   const ds: string[] = [];
   function walk(node: any) {
+    if (Array.isArray(node)) { node.forEach(walk); return; }
     if (!node || typeof node !== "object") return;
     if (node.type === "path") ds.push(node.props?.d);
-    if (Array.isArray(node.children)) node.children.forEach(walk);
+    if (Array.isArray(node.children)) walk(node.children);
   }
   walk(vnode);
   return ds;
