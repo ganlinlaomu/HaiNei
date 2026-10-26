@@ -1322,6 +1322,7 @@ describe("PR3 background catch-up lifecycle", () => {
     const decodeStarted = new Promise<void>(resolve => { startedDecode = resolve; });
     const subscriptions: Array<{
       historical: boolean;
+      filters: any[];
       handlers: Record<string, Array<(...args: any[]) => void>>;
       unsub: ReturnType<typeof vi.fn>;
     }> = [];
@@ -1329,7 +1330,7 @@ describe("PR3 background catch-up lifecycle", () => {
     const subscribeFake = (_relays: string[], filters: any[]) => {
       const historical = filters.some(filter => filter.until !== undefined);
       const handlers: Record<string, Array<(...args: any[]) => void>> = {};
-      const entry = { historical, handlers, unsub: vi.fn() };
+      const entry = { historical, filters, handlers, unsub: vi.fn() };
       subscriptions.push(entry);
       if (historical) historyRequests++;
       const requestNumber = historyRequests;
@@ -1386,6 +1387,9 @@ describe("PR3 background catch-up lifecycle", () => {
       // incoming messages while optional catch-up is suspended.
       const realtime = subscriptions.find(item => !item.historical);
       expect(realtime).toBeTruthy();
+      // Live-only: a replayed REQ must not re-download the stored 48h window.
+      expect(realtime!.filters).toEqual([expect.objectContaining({ kinds: [1059], "#p": [ACCOUNT_A], limit: 0 })]);
+      expect(realtime!.filters[0].since).toBeLessThan(Math.floor(Date.now() / 1000) - 2 * 24 * 60 * 60 + 60);
       realtime!.handlers.event?.forEach(handler => handler({
         id: "wrap-realtime",
         created_at: 501,
