@@ -11,9 +11,19 @@ export function installPushPresence(keys: Signer) {
   let timer: ReturnType<typeof setInterval> | null = null;
   const report = (foreground: boolean) => {
     const pubkey = keys.pkHex;
+    if (!foreground || !pubkey || !keys.isUnlocked) {
+      void import("@/services/pushNotifications")
+        .then(({ clearCallHandledChallenge }) => clearCallHandledChallenge())
+        .catch(() => undefined);
+    }
     if (!pubkey || !keys.isUnlocked) return;
     void import("@/services/pushNotifications")
-      .then(({ reportPushForeground }) => reportPushForeground(pubkey, keys.signEvent.bind(keys), foreground))
+      .then(({ reportPushForeground, prefetchCallHandledChallenge }) => {
+        // Warm before a call arrives; periodic presence updates also replenish
+        // a consumed/expired one-time challenge while this account is unlocked.
+        if (foreground) void prefetchCallHandledChallenge(pubkey).catch(() => undefined);
+        return reportPushForeground(pubkey, keys.signEvent.bind(keys), foreground);
+      })
       .catch(() => undefined);
   };
   const update = () => {

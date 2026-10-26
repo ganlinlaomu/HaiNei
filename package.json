@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.137",
-  "releaseSummary": "私人空间左滑直接删除并提示撤销冲突",
+  "version": "0.1.138",
+  "releaseSummary": "前台预取来电确认授权以减少通知交接延迟",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

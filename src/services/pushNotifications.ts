@@ -1,7 +1,7 @@
 import type { EventTemplate, VerifiedEvent, NostrEvent } from "nostr-tools";
 import { deviceStorage } from "@/services/deviceStorage";
 import { debugLog, startupMark } from "@/utils/debugLog";
-import { signedWorkerPost } from "@/services/workerAuth";
+import { signWorkerRequest, signedWorkerPost } from "@/services/workerAuth";
 import { DEFAULT_HAINEI_WORKER_URL, haineiWorkerBaseUrl, resolveHaiNeiWorkerBaseUrl } from "@/services/workerUrl";
 import { friendRepository } from "@/repositories/friendRepository";
 
@@ -309,6 +309,55 @@ export async function triggerGenericPush(
   }
 }
 
+
+type CallHandledChallenge = { account: string; challenge: string; expiresAt: number };
+const CALL_CHALLENGE_EXPIRY_MARGIN_SECONDS = 10;
+let readyCallChallenge: CallHandledChallenge | null = null;
+let callChallengeFlight: { account: string; promise: Promise<boolean> } | null = null;
+let callChallengeEpoch = 0;
+
+function takeCallHandledChallenge(account: string) {
+  const ready = readyCallChallenge;
+  readyCallChallenge = null; // Worker consumes challenges exactly once.
+  return ready?.account === account.toLowerCase()
+    && ready.expiresAt > Math.floor(Date.now() / 1000) + CALL_CHALLENGE_EXPIRY_MARGIN_SECONDS
+    ? ready : null;
+}
+
+/** Drop cached authorization when the account locks or the page hides. */
+export function clearCallHandledChallenge() {
+  callChallengeEpoch++;
+  readyCallChallenge = null;
+}
+
+/** Warm one single-use call-handled challenge while the app is unlocked and visible. */
+export async function prefetchCallHandledChallenge(pubkey: string) {
+  const account = pubkey.toLowerCase();
+  if (!account || !supportsPushNotifications() || !pushEnabledForAccount(account)
+    || document.visibilityState !== "visible") return false;
+  if (readyCallChallenge?.account === account
+    && readyCallChallenge.expiresAt > Math.floor(Date.now() / 1000) + CALL_CHALLENGE_EXPIRY_MARGIN_SECONDS) return true;
+  readyCallChallenge = null;
+  if (callChallengeFlight?.account === account) return callChallengeFlight.promise;
+  const epoch = ++callChallengeEpoch;
+  const promise = (async () => {
+    const result = await responseJson(
+      await pushFetch(`${baseUrl()}/api/auth/challenge`, { method: "POST" }),
+      "获取来电确认授权失败",
+    );
+    const challenge = String(result?.challenge || "").toLowerCase();
+    const expiresAt = Number(result?.expiresAt);
+    if (!/^[0-9a-f]{64}$/.test(challenge) || !Number.isFinite(expiresAt)
+      || expiresAt <= Math.floor(Date.now() / 1000) + CALL_CHALLENGE_EXPIRY_MARGIN_SECONDS
+      || epoch !== callChallengeEpoch || document.visibilityState !== "visible") return false;
+    readyCallChallenge = { account, challenge, expiresAt };
+    return true;
+  })();
+  callChallengeFlight = { account, promise };
+  try { return await promise; }
+  finally { if (callChallengeFlight?.promise === promise) callChallengeFlight = null; }
+}
+
 /** Call only after the incoming UI has mounted, never for mere visibility. */
 export async function acknowledgeCallNotification(
   pubkey: string, signEvent: SignEvent, senderPubkey: string, messageId: string,
@@ -319,9 +368,26 @@ export async function acknowledgeCallNotification(
   const registration = await withTimeout(navigator.serviceWorker.ready, SERVICE_WORKER_TIMEOUT_MS, "service worker 未就绪");
   const subscription = await registration.pushManager.getSubscription();
   if (!subscription || document.visibilityState !== "visible" || !isCurrent()) return;
-  const response = await authenticatedPost("/api/push/call-handled", {
-    endpoint: subscription.endpoint, senderPubkey, messageId,
-  }, pubkey, signEvent);
+  const payload = { endpoint: subscription.endpoint, senderPubkey, messageId };
+  const cached = takeCallHandledChallenge(pubkey);
+  let response;
+  if (cached) {
+    const url = `${baseUrl()}/api/push/call-handled`;
+    const event = await signWorkerRequest(signEvent, pubkey, {
+      action: PUSH_ACTION, url, method: "POST", payload,
+      content: "Authorize HaiNei push action",
+      challenge: cached.challenge, expiresAt: cached.expiresAt,
+    });
+    // Signing can outlive a fast decline or account switch.
+    if (document.visibilityState !== "visible" || !isCurrent()) return;
+    response = await responseJson(await pushFetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, challenge: cached.challenge, event }),
+    }), "来电确认失败");
+  } else {
+    // Original single-trip (with challenge fallback) when cache is unavailable or expired.
+    response = await authenticatedPost("/api/push/call-handled", payload, pubkey, signEvent);
+  }
   startupMark("call_notification_handoff", { acknowledged: response?.acknowledged === true });
 }
 
