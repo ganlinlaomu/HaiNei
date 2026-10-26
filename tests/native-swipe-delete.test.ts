@@ -83,9 +83,9 @@ describe("iPhone-style immediate swipe deletion", () => {
     ], { closeSwipe, relationshipBusy: new Set(), friendships: { cancelRequest },
       ui, confirm: forbiddenConfirm }, ["withdrawFromSwipe"]);
     withdrawFromSwipe(PEER);
-    await vi.waitFor(() => expect(cancelRequest).toHaveBeenCalledWith(PEER));
+    await vi.waitFor(() => expect(ui.addToast).toHaveBeenCalledWith("好友请求已撤回", 1500, "info"));
+    expect(cancelRequest).toHaveBeenCalledWith(PEER);
     expect(closeSwipe).toHaveBeenCalledWith(PEER);
-    expect(ui.addToast).toHaveBeenCalledWith("好友请求已撤回", 1500, "info");
     expect(forbiddenConfirm).not.toHaveBeenCalled();
   });
 
