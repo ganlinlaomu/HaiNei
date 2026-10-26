@@ -36,7 +36,7 @@ describe("private space list swipe actions", () => {
     swipe.onTouchStart(start, "note-1");
     swipe.onTouchMove(horizontal, "note-1");
     swipe.onTouchEnd("note-1");
-    expect(swipe.swipeStyle("note-1")).toEqual({ transform: "translateX(-140px)" });
+    expect(swipe.swipeStyle("note-1")).toEqual({ transform: "translateX(-128px)" });
     swipe.open("note-2");
     expect(swipe.isOpen("note-1")).toBe(false);
     expect(swipe.isOpen("note-2")).toBe(true);
