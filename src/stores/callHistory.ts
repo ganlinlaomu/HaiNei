@@ -1,9 +1,8 @@
 import { defineStore } from "pinia";
 import { liveQuery } from "dexie";
-import { db } from "@/db/dexie";
 import { metaRepository } from "@/repositories/metaRepository";
 import {
-  CALL_HISTORY_DELETED_PREFIX, CALL_HISTORY_SYNC_PREFIX, callHistoryItem, deletedCallIds,
+  CALL_HISTORY_DELETED_PREFIX, CALL_HISTORY_SYNC_PREFIX, callHistoryItem, callLogCandidates, deletedCallIds,
   loadDeletedCallIds, uniqueCallHistory, type CallHistoryItem,
 } from "@/services/callHistory";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
@@ -88,9 +87,7 @@ export const useCallHistoryStore = defineStore("callHistory", {
       subscription = liveQuery(async () => {
         const deleted = await loadDeletedCallIds(account);
         const found: CallHistoryItem[] = [];
-        await db.syncedMessages.where("[accountPubkey+createdAt+id]")
-          .between([account, cutoff + 1, ""],
-            [account, Number.MAX_SAFE_INTEGER, "\uffff"])
+        await (await callLogCandidates(account, cutoff + 1))
           .each(record => {
             const item = callHistoryItem(record, account);
             if (item?.missed && !deleted.has(item.id)) found.push(item);

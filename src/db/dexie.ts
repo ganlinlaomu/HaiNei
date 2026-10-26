@@ -3,8 +3,8 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.147";
-export const DB_VERSION = 23;
+export const APP_VERSION = "0.1.148";
+export const DB_VERSION = 24;
 export const DATABASE_NAME = "closed_community_db";
 
 export type DBMessage = {
@@ -65,7 +65,7 @@ export type SyncedMessageRecord = {
   senderPubkey: string;
   recipientPubkeys: string[];
   conversationId: string;
-  messageClass?: "direct" | "other";
+  messageClass?: "direct" | "call" | "other";
   plaintext?: string;
   ciphertext?: string;
   createdAt: number;
@@ -783,7 +783,11 @@ export class HaiNeiDatabase extends Dexie {
       syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+conversationId+createdAt+id], [accountPubkey+createdAt+id], [accountPubkey+conversationId+messageClass+createdAt+id], [accountPubkey+createdAt], [accountPubkey+senderPubkey], *transportEventIds, [accountPubkey+disappearingExpiresAt]"
     });
 
-
+    // Calls reads call logs by class instead of decrypting every DM. Existing
+    // rows are reclassified after unlock (tags are sealed during upgrade).
+    this.version(24).stores({
+      syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+conversationId+createdAt+id], [accountPubkey+createdAt+id], [accountPubkey+conversationId+messageClass+createdAt+id], [accountPubkey+messageClass+createdAt+id], [accountPubkey+createdAt], [accountPubkey+senderPubkey], *transportEventIds, [accountPubkey+disappearingExpiresAt]"
+    });
   }
 }
 
