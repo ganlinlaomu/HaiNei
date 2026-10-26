@@ -52,7 +52,7 @@ function media(id: string, source: MediaServer["source"], patch: Partial<MediaSe
 describe("Relay configuration", () => {
   it("uses the current built-in Relay and media fallbacks", () => {
     expect(DEFAULT_RELAY_URLS).toEqual([
-      "wss://nostr.dzo-hadar.ts.net",
+      "wss://relay-jp.nostr.wirednet.jp",
       "wss://cloudflare-nostr-relay.noster.workers.dev"
     ]);
     expect(DEFAULT_MEDIA_SERVERS).toEqual([
@@ -114,9 +114,42 @@ describe("Relay configuration", () => {
     expect(migrated.relays.some(item => item.url === "wss://relay.0xchat.com" && item.source === "user")).toBe(true);
     expect(migrated.relays.some(item => item.url === "wss://relay.mostr.pub" && item.source === "default")).toBe(false);
     expect(migrated.relays.some(item => item.url === "wss://relay.damus.io" && item.source === "default")).toBe(false);
-    expect(migrated.relays.some(item => item.url === "wss://nostr.dzo-hadar.ts.net" && item.source === "default")).toBe(true);
+    expect(migrated.relays.some(item => item.url === "wss://relay-jp.nostr.wirednet.jp" && item.source === "default")).toBe(true);
     expect(migrated.mediaServers.some(item => item.url === "https://blossom.lostr.space")).toBe(true);
     expect(migrated.mediaServers.some(item => item.url === "https://blossom-imgbed.noster.workers.dev")).toBe(true);
+  });
+
+
+  it("replaces the retired dzo-hadar system Relay across local and cloud settings", () => {
+    const retired = "wss://nostr.dzo-hadar.ts.net";
+    const replacement = "wss://relay-jp.nostr.wirednet.jp";
+    const migrated = migrateConnectionSettings({
+      relays: [
+        relay(retired, "default", { updatedBy: "builtin", updatedAt: NOW + 200 }),
+        relay("wss://custom.example", "user")
+      ]
+    }, { deviceId: "device-a", now: NOW });
+
+    expect(migrated.relays.some(item => item.url === retired)).toBe(false);
+    expect(migrated.relays.find(item => item.url === replacement)).toMatchObject({
+      source: "default", enabled: true, read: true, write: true
+    });
+    expect(migrated.relays.find(item => item.url === "wss://custom.example")?.source).toBe("user");
+    expect(migrateConnectionSettings(migrated, { deviceId: "device-a", now: NOW + 1000 })
+      .relays.some(item => item.url === retired)).toBe(false);
+
+    const merged = mergeRelayConfigs(migrated.relays, [
+      relay(retired, "default", { updatedAt: NOW + 999, updatedBy: "builtin" })
+    ]);
+    expect(merged.some(item => item.url === retired)).toBe(false);
+    expect(selectRelayConfigs(merged, 5, NOW).map(item => item.url)).toContain(replacement);
+
+    const userAdded = migrateConnectionSettings({
+      relays: [relay(retired, "user", { updatedBy: "device-user" })]
+    }, { deviceId: "device-a", now: NOW });
+    expect(userAdded.relays.find(item => item.url === retired)?.source).toBe("user");
+    expect(mergeRelayConfigs(migrated.relays, [relay(retired, "nip65")])
+      .find(item => item.url === retired)?.source).toBe("nip65");
   });
 
   it("retires the replaced system Relay from persisted config without touching user-added Relay", () => {
@@ -355,7 +388,7 @@ describe("per-item settings sync", () => {
     expect(mergeRelayConfigs([local], [remote]).map(item => item.url).sort()).toEqual([
       "wss://cloudflare-nostr-relay.noster.workers.dev",
       "wss://local.example",
-      "wss://nostr.dzo-hadar.ts.net",
+      "wss://relay-jp.nostr.wirednet.jp",
       "wss://remote.example"
     ]);
   });
