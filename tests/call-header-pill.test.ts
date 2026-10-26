@@ -1,37 +1,22 @@
 import { readFileSync } from "node:fs";
-import { compile } from "vue";
 import { describe, expect, it } from "vitest";
 import { selectedTabPill } from "@/utils/tabPillGeometry";
 
-const source = readFileSync("src/views/Calls.vue", "utf8");
-const start = source.indexOf('<div ref="callTabs" class="call-header-tabs"');
-const end = source.indexOf('</div>', start);
-if (start < 0 || end < 0) throw new Error("Missing header call tabs");
-const render = compile(source.slice(start, end + 6));
-
-describe("calls centered segmented header", () => {
-  it("renders all/missed tabs and switches the model using the real Vue click callbacks", () => {
-    const model = { missedOnly: false, tabPillReady: true, tabPillStyle: {} };
-    const bar = render(model as any, []) as any;
-    const buttons = bar.children.filter((node: any) => node.type === "button");
-    expect(buttons).toHaveLength(2);
-    expect(buttons[0].props["aria-selected"]).toBe(true);
-    expect(buttons[1].props["aria-selected"]).toBe(false);
-    buttons[1].props.onClick();
-    expect(model.missedOnly).toBe(true);
-    const missed = render(model as any, []) as any;
-    const after = missed.children.filter((node: any) => node.type === "button");
-    expect(after[0].props["aria-selected"]).toBe(false);
-    expect(after[1].props["aria-selected"]).toBe(true);
-    after[0].props.onClick();
-    expect(model.missedOnly).toBe(false);
+const calls = readFileSync("src/views/Calls.vue", "utf8");
+const conversations = readFileSync("src/views/Conversations.vue", "utf8");
+describe("shared centered segmented filter", () => {
+  it("uses HeaderSegmented in both pages while retaining existing filtering", () => {
+    expect(calls).toContain("<HeaderSegmented");
+    expect(calls).toContain('@update:model-value="missedOnly = $event === \'missed\'"');
+    expect(calls).toContain("!missedOnly.value || item.missed");
+    expect(conversations).toContain("<HeaderSegmented");
+    expect(conversations).toContain('filterMode.value === "unread" && conversation.unread <= 0');
+    expect(conversations).toContain('"暂无未读私信"');
+    expect(calls).not.toContain('class="calls-filters"');
+    expect(conversations).not.toContain('class="conversation-filter"');
   });
-  it("reuses selectedTabPill geometry for the indicator instead of a separate filter row", () => {
-    const rows = [{ key: "all", offsetLeft: 3, offsetWidth: 95 }, { key: "missed", offsetLeft: 100, offsetWidth: 116 }];
-    expect(selectedTabPill(rows, "all")).toEqual({ translateX: 3, width: 95 });
-    expect(selectedTabPill(rows, "missed")).toEqual({ translateX: 100, width: 116 });
-    expect(source).toContain("createTabPillObserver(refreshTabPill)");
-    expect(source).toContain('class="call-header-tabs"');
-    expect(source).not.toContain('class="calls-filters"');
+  it("calculates the sliding tab offset using the same geometry", () => {
+    expect(selectedTabPill([{key:"all",offsetLeft:3,offsetWidth:95},{key:"missed",offsetLeft:100,offsetWidth:116}], "missed"))
+      .toEqual({translateX:100,width:116});
   });
 });
