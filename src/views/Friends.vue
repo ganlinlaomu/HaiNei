@@ -4,13 +4,16 @@
       <h1 class="primary-page-title">通讯录</h1>
       <button class="contact-add primary-header-action" type="button" aria-label="添加好友" title="添加好友" @click="startAdd"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
     </header>
-    <label class="contacts-search primary-page-search">
+    <label v-if="activeSection === 'accepted'" class="contacts-search primary-page-search">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
       <input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索联系人、备注或分组" aria-label="搜索联系人"/>
     </label>
-    <button v-if="incomingRequests.length > 0" class="contacts-requests" type="button" @click="activeSection = 'incoming'">
-      <span>新的好友请求</span><strong>{{ incomingRequests.length }}</strong><span aria-hidden="true">›</span>
+    <button v-if="activeSection === 'accepted'" class="contacts-requests" type="button"
+      aria-label="查看好友请求" @click="activeSection = 'incoming'">
+      <span>好友请求</span><strong v-if="incomingRequests.length > 0" aria-label="收到的好友请求数量">{{ incomingRequests.length }}</strong><span aria-hidden="true">›</span>
     </button>
+    <button v-else class="contacts-requests-back" type="button" aria-label="返回好友列表"
+      @click="activeSection = 'accepted'"><span aria-hidden="true">‹</span> 返回通讯录</button>
     <div v-if="initialLoading" class="friends-load-state" role="status" aria-live="polite">
       <span class="load-spinner" aria-hidden="true"></span>
       <span>正在加载好友…</span>
@@ -31,11 +34,6 @@
       <span class="sync-icon">✓</span> 已同步
     </div>
 
-    <nav class="friend-tabs" aria-label="好友分类">
-      <button type="button" :class="{ active: activeSection === 'accepted' }" @click="activeSection = 'accepted'">全部好友</button>
-      <button type="button" :class="{ active: activeSection === 'incoming' }" @click="activeSection = 'incoming'">收到请求 <span>{{ incomingRequests.length }}</span></button>
-      <button type="button" :class="{ active: activeSection === 'outgoing' }" @click="activeSection = 'outgoing'">已发送 <span>{{ outgoingRequests.length }}</span></button>
-    </nav>
 
     <!-- Friend List -->
     <div v-show="activeSection === 'accepted'" class="card">
@@ -74,7 +72,7 @@
       </div>
     </div>
 
-    <div v-show="activeSection === 'incoming'" id="incoming-requests" class="card">
+    <div v-show="activeSection !== 'accepted'" id="incoming-requests" class="card">
       <h3>收到的请求（{{ incomingRequests.length }}）</h3>
       <div v-if="incomingRequests.length === 0" class="small">暂无收到的好友请求</div>
       <div v-else class="list">
@@ -92,7 +90,7 @@
       </div>
     </div>
 
-    <div v-show="activeSection === 'outgoing'" class="card">
+    <div v-show="activeSection !== 'accepted'" class="card">
       <h3>已发送请求（{{ outgoingRequests.length }}）</h3>
       <div v-if="outgoingRequests.length === 0" class="small">暂无等待确认的请求</div>
       <div v-else class="list">
@@ -778,6 +776,8 @@ export default defineComponent({
 <style scoped>
 .contacts-requests{display:flex;align-items:center;gap:12px;width:calc(100% - 32px);min-height:52px;margin:0 16px 12px;padding:0 13px;border:0;border-radius:12px;background:var(--bg-eef2f6);color:var(--fg-172033);font-size:14px}
 .contacts-requests span:first-child{flex:1;text-align:left}.contacts-requests strong{display:grid;place-items:center;min-width:22px;height:22px;padding:0 5px;border-radius:999px;background:#ef4444;color:white;font-size:12px}
+.contacts-requests-back{display:flex;align-items:center;gap:8px;margin:0 16px 12px;padding:0 8px;min-height:44px;border:0;background:transparent;color:var(--fg-1687e8);font:inherit;font-size:14px;cursor:pointer}
+.contacts-requests-back span{font-size:28px;line-height:1}
 .call-contact-button:disabled{opacity:.35}
 .contacts-header button:focus-visible,.contacts-requests:focus-visible,.call-contact-button:focus-visible{outline:2px solid #1687e8;outline-offset:2px}
 
