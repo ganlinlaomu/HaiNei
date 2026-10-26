@@ -88,7 +88,7 @@
               @click.stop="editFromSwipe(note)">编辑</button>
             <button type="button" class="swipe-action delete"
               :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
-              @click.stop="deleteFromSwipe(note)">删除</button>
+              :aria-label="'删除' + label(note)" @click.stop="deleteFromSwipe(note)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
           </div>
           <div class="item-foreground" :style="canSwipeNote(note) ? swipeStyle(note.id) : undefined">
             <button type="button" class="item"
@@ -999,7 +999,8 @@ button{font:inherit;cursor:pointer}
 .swipe-actions{position:absolute;top:0;right:0;bottom:0;width:140px;display:flex}
 .swipe-action{flex:1;min-width:0;border:0;font-size:13px;font-weight:650;color:#fff}
 .swipe-action.edit{background:#536471}
-.swipe-action.delete{background:#dc2626}
+.swipe-action.delete{flex:0 0 52px;width:52px;height:52px;align-self:center;margin:0 9px;border-radius:50%;background:#dc2626;display:grid;place-items:center}
+.swipe-action.delete svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .item-foreground{position:relative;z-index:1;display:flex;align-items:stretch;width:100%;background:var(--bg-fff);transition:transform .2s ease;will-change:transform}
 .item-foreground .item{flex:1;min-width:0}
 .row-actions-toggle{width:40px;flex:0 0 40px;border:0;background:var(--bg-fff);color:var(--fg-64748b);font-size:16px;letter-spacing:1px}
