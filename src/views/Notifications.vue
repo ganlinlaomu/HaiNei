@@ -44,8 +44,8 @@
             @touchcancel="onTouchCancel(n.id)"
           >
             <div class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
-              <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg></button>
-              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
+              <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><SwipeLucideIcon name="check" /></button>
+              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><SwipeLucideIcon name="trash" /></button>
             </div>
 
             <div
@@ -97,8 +97,8 @@
             @touchcancel="onTouchCancel(n.id)"
           >
             <div class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
-              <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg></button>
-              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
+              <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><SwipeLucideIcon name="check" /></button>
+              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><SwipeLucideIcon name="trash" /></button>
             </div>
 
             <div
@@ -149,8 +149,8 @@
             @touchcancel="onTouchCancel(n.id)"
           >
             <div class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2">
-              <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12 5 5L20 6"/></svg></button>
-              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
+              <button class="action read hainei-swipe-button" data-action="read" type="button" aria-label="标记已读" @click.stop="markRead(n)"><SwipeLucideIcon name="check" /></button>
+              <button class="action delete hainei-swipe-button" data-action="delete" type="button" aria-label="忽略这条通知" @click.stop="dismiss(n)"><SwipeLucideIcon name="trash" /></button>
             </div>
 
             <div
@@ -199,6 +199,7 @@ import { useInteractionsStore } from "@/stores/interactions";
 import { useMessagesStore } from "@/stores/messages";
 import NotificationTypeIcon from "@/components/NotificationTypeIcon.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import SwipeLucideIcon from "@/components/SwipeLucideIcon.vue";
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { openProfile } from "@/utils/profileNavigation";
