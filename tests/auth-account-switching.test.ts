@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { listDeviceAccounts } from "@/services/accountRegistry";
 import { deviceStorage } from "@/services/deviceStorage";
+import { autoLockKey, installBackgroundLock } from "@/services/autoLock";
 import { useKeyStore } from "@/stores/keys";
 import { hasEncryptedKey } from "@/utils/crypto";
 import { hasDevicePrivateKey, removeDevicePrivateKey } from "@/services/devicePrivateKey";
@@ -42,7 +43,7 @@ beforeEach(async () => {
   setActivePinia(createPinia());
 });
 
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("push subscription cleanup on account departure", () => {
   function stubPush(fetchImpl: ReturnType<typeof vi.fn>) {
@@ -71,6 +72,91 @@ describe("push subscription cleanup on account departure", () => {
     expect(payload.event.pubkey).toBe(PRIVATE_PUBKEY);
     expect(deviceStorage.getItem(`hainei_push_enabled_${PRIVATE_PUBKEY}`)).toBe("1");
     expect(deviceStorage.getItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`)).toBeNull();
+  });
+
+
+  it("auto-locks the same remembered account without unsubscribing its push endpoint, and keeps it after unlock", async () => {
+    const store = createStore();
+    await store.loginWithNsec(PRIVATE_KEY, "local-password");
+    const endpoint = "https://web.push.apple.com/previous";
+    deviceStorage.setItem(`hainei_push_enabled_${PRIVATE_PUBKEY}`, "1");
+    deviceStorage.setItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`, endpoint);
+    deviceStorage.setItem(autoLockKey(PRIVATE_PUBKEY), "1");
+    const sent = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    stubPush(sent);
+
+    // Trigger the real visibility timeout path without freezing async Dexie/vault work.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const target = new EventTarget() as Document;
+    Object.defineProperty(target, "visibilityState", { value: "visible", writable: true });
+    const stop = installBackgroundLock({
+      account: () => store.pkHex,
+      eligible: () => store.isEncrypted && store.isUnlocked && store.credentialMode !== "device",
+      lock: async () => { await store.selectRememberedAccount(store.pkHex); },
+    }, target);
+    try {
+      (target as any).visibilityState = "hidden";
+      target.dispatchEvent(new Event("visibilitychange"));
+      clock.mockReturnValue(301_000);
+      (target as any).visibilityState = "visible";
+      target.dispatchEvent(new Event("visibilitychange"));
+      clock.mockRestore();
+      await vi.waitFor(() => expect(store.isUnlocked).toBe(false));
+      expect(store.pkHex).toBe(PRIVATE_PUBKEY);
+      expect(sent.mock.calls.filter(call => String(call[0]).endsWith("/api/push/unsubscribe"))).toHaveLength(0);
+      expect(deviceStorage.getItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`)).toBe(endpoint);
+      expect(deviceStorage.getItem(`hainei_push_enabled_${PRIVATE_PUBKEY}`)).toBe("1");
+
+      await store.unlockWithPassword("local-password");
+      expect(store.isUnlocked).toBe(true);
+      expect(store.pkHex).toBe(PRIVATE_PUBKEY);
+      const subscription = await (await (navigator as any).serviceWorker.ready).pushManager.getSubscription();
+      expect(subscription.endpoint).toBe("https://web.push.apple.com/current");
+      expect(deviceStorage.getItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`)).toBe(endpoint);
+      expect(sent.mock.calls.filter(call => String(call[0]).endsWith("/api/push/unsubscribe"))).toHaveLength(0);
+    } finally {
+      stop();
+      clock.mockRestore();
+      deviceStorage.removeItem(autoLockKey(PRIVATE_PUBKEY));
+      deviceStorage.removeItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`);
+      deviceStorage.removeItem(`hainei_push_enabled_${PRIVATE_PUBKEY}`);
+    }
+  });
+
+  it("reselecting or logging in with the same pubkey does not unsubscribe", async () => {
+    const store = createStore();
+    await store.loginWithNsec(PRIVATE_KEY, "local-password");
+    deviceStorage.setItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`, "https://web.push.apple.com/previous");
+    const sent = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    stubPush(sent);
+
+    await store.loginWithNsec(PRIVATE_KEY, "local-password");
+    await store.loginWithSk(PRIVATE_KEY);
+    expect(store.pkHex).toBe(PRIVATE_PUBKEY);
+    expect(sent.mock.calls.some(call => String(call[0]).endsWith("/api/push/unsubscribe"))).toBe(false);
+    deviceStorage.removeItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`);
+  });
+
+  it("switching to a different remembered account unsubscribes only the old pubkey", async () => {
+    const otherSecret = "02".padStart(64, "0");
+    const otherPubkey = getPublicKey(hexToBytes(otherSecret));
+    const store = createStore();
+    await store.loginWithNsec(PRIVATE_KEY, "local-password");
+    await store.loginWithNsec(otherSecret, "other-password");
+    const endpoint = "https://web.push.apple.com/old-account";
+    deviceStorage.setItem(`hainei_push_endpoint_${otherPubkey}`, endpoint);
+    const sent = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    stubPush(sent);
+
+    await expect(store.selectRememberedAccount(PRIVATE_PUBKEY)).resolves.toBe("unlock");
+    const unsubscribe = sent.mock.calls.find(call => String(call[0]).endsWith("/api/push/unsubscribe"));
+    expect(unsubscribe).toBeDefined();
+    expect(JSON.parse(unsubscribe![1].body)).toMatchObject({
+      endpoint, event: { pubkey: otherPubkey },
+    });
+    expect(store.pkHex).toBe(PRIVATE_PUBKEY);
+    expect(store.isUnlocked).toBe(false);
+    deviceStorage.removeItem(`hainei_push_endpoint_${otherPubkey}`);
   });
 
   it("does not block switching to a new private key when the unsubscribe request fails", async () => {
