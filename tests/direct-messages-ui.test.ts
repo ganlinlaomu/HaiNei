@@ -369,6 +369,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(source).toContain("全部");
     expect(source).toContain("未读");
     expect(source).toContain('<HeaderSegmented aria-label="私信筛选" :options="conversationFilterOptions"');
+    // The sync label must stay left of the centred segmented control (min(220px,51vw) wide).
+    expect(source).toContain(".page-title{display:flex;min-width:0;max-width:calc(50% - min(110px,25.5vw) - 6px);flex-direction:column");
     expect(source).toContain('filterMode = ref<"all" | "unread">("all")');
     expect(source).toContain('filterMode.value === "unread" && conversation.unread <= 0');
     expect(source).toContain("暂无未读私信");
