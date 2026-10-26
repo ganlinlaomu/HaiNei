@@ -5,7 +5,7 @@
         <h1 class="primary-page-title">私信</h1>
         <span v-if="syncLabel" class="sync-label" role="status" aria-live="polite">{{ syncLabel }}</span>
       </div>
-      <HeaderSegmented :options="conversationFilterOptions" :model-value="filterMode"
+      <HeaderSegmented aria-label="私信筛选" :options="conversationFilterOptions" :model-value="filterMode"
         @update:model-value="setConversationFilter" />
       <div class="conversation-header-actions">
         <button class="new-conversation-button primary-header-action" type="button" aria-label="发起新私信" @click="ui.openNewConversation()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
