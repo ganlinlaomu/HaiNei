@@ -30,8 +30,8 @@ describe("round swipe actions actual render and event behavior", () => {
     expect(normal.vnode.props?.["aria-label"]).toBe("置顶");
     expect(active.vnode.props?.["aria-label"]).toBe("取消置顶");
     expect(normal.paths).not.toEqual(active.paths);
-    normal.vnode.props?.onClick();
-    active.vnode.props?.onClick();
+    normal.vnode.props?.onClick({ stopPropagation: () => {} });
+    active.vnode.props?.onClick({ stopPropagation: () => {} });
     expect(normal.click).toHaveBeenCalledWith("peer-1");
     expect(active.click).toHaveBeenCalledWith("peer-1");
   });
@@ -40,7 +40,7 @@ describe("round swipe actions actual render and event behavior", () => {
     expect(normal.vnode.props?.["aria-label"]).toBe("免打扰");
     expect(active.vnode.props?.["aria-label"]).toBe("取消免打扰");
     expect(normal.paths).not.toEqual(active.paths);
-    normal.vnode.props?.onClick();
+    normal.vnode.props?.onClick({ stopPropagation: () => {} });
     expect(normal.click).toHaveBeenCalledWith("peer-1");
   });
   it("uses a single stylesheet and matching 64px slots for all swipe lists", () => {
