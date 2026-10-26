@@ -24,7 +24,7 @@ afterEach(async () => {
 
 describe("private space list swipe actions", () => {
   it("uses the shared gesture without opening on a vertical scroll, and supports explicit keyboard/mouse opening", () => {
-    const swipe = useSwipeActions({ actionWidth: 140, openThreshold: 70 });
+    const swipe = useSwipeActions({ actionWidth: 128, openThreshold: 64 });
     const start = { touches: [{ clientX: 180, clientY: 80 }] } as unknown as TouchEvent;
     const vertical = { touches: [{ clientX: 177, clientY: 160 }], cancelable: true, preventDefault: vi.fn() } as unknown as TouchEvent;
     const horizontal = { touches: [{ clientX: 30, clientY: 83 }], cancelable: true, preventDefault: vi.fn() } as unknown as TouchEvent;
