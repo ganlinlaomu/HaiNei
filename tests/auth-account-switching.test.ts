@@ -85,7 +85,8 @@ describe("push subscription cleanup on account departure", () => {
     const sent = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
     stubPush(sent);
 
-    vi.useFakeTimers();
+    // Trigger the real visibility timeout path without freezing async Dexie/vault work.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const target = new EventTarget() as Document;
     Object.defineProperty(target, "visibilityState", { value: "visible", writable: true });
     const stop = installBackgroundLock({
@@ -96,7 +97,10 @@ describe("push subscription cleanup on account departure", () => {
     try {
       (target as any).visibilityState = "hidden";
       target.dispatchEvent(new Event("visibilitychange"));
-      await vi.advanceTimersByTimeAsync(300_000);
+      clock.mockReturnValue(301_000);
+      (target as any).visibilityState = "visible";
+      target.dispatchEvent(new Event("visibilitychange"));
+      clock.mockRestore();
       await vi.waitFor(() => expect(store.isUnlocked).toBe(false));
       expect(store.pkHex).toBe(PRIVATE_PUBKEY);
       expect(sent.mock.calls.filter(call => String(call[0]).endsWith("/api/push/unsubscribe"))).toHaveLength(0);
@@ -112,6 +116,7 @@ describe("push subscription cleanup on account departure", () => {
       expect(sent.mock.calls.filter(call => String(call[0]).endsWith("/api/push/unsubscribe"))).toHaveLength(0);
     } finally {
       stop();
+      clock.mockRestore();
       deviceStorage.removeItem(autoLockKey(PRIVATE_PUBKEY));
       deviceStorage.removeItem(`hainei_push_endpoint_${PRIVATE_PUBKEY}`);
       deviceStorage.removeItem(`hainei_push_enabled_${PRIVATE_PUBKEY}`);
