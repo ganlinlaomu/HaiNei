@@ -249,6 +249,17 @@ export const useKeyStore = defineStore("keys", {
       // Message sync (and the push inbox) start only after this.
       startupMark("dm_refresh", { durationMs: Date.now() - dmRefreshStarted });
       if (!isCurrent()) return;
+      // Re-register an opted-in browser endpoint for the newly unlocked account.
+      // This runs independently of the slower remote account-state restoration.
+      void import("@/services/pushNotifications").then(async ({ pushEnabledForAccount, syncPushAuthorizationPolicy }) => {
+        if (!isCurrent() || !pushEnabledForAccount(pk)) return;
+        await syncPushAuthorizationPolicy(pk, useFriendshipsStore().records
+          .filter(record => record.state === "accepted").map(record => record.peerPubkey), this.signEvent.bind(this));
+      }).catch(error => {
+        if (isCurrent()) debugLog("system", "push_account_restore_failed", {
+          reason: error instanceof Error ? error.message : "unknown",
+        }, "warn");
+      });
       // Start message sync now so messages already delivered by Push (stored
       // encrypted by the service worker) appear without waiting for the Worker
       // round trips below. Relay streams wait on historyGate: history must not
@@ -325,6 +336,27 @@ export const useKeyStore = defineStore("keys", {
           }).catch(() => {
             debugLog("account", "background_restore_unavailable", {}, "warn");
           });
+      }
+    },
+
+    /** A failed/unreachable push service must never prevent logout or account switching.
+     * Give the old signer a short opportunity before its credentials are cleared. */
+    async releaseCurrentPush() {
+      const account = this.pkHex;
+      if (!account || !this.isUnlocked) return;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          import("@/services/pushNotifications").then(({ unsubscribeAccountPushOnExit }) =>
+            unsubscribeAccountPushOnExit(account, this.signEvent.bind(this))),
+          new Promise<void>(resolve => { timeout = setTimeout(resolve, 850); }),
+        ]);
+      } catch (error) {
+        debugLog("system", "push_unsubscribe_on_exit_failed", {
+          reason: error instanceof Error ? error.message : "unknown",
+        }, "warn");
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
       }
     },
 
@@ -485,7 +517,7 @@ export const useKeyStore = defineStore("keys", {
     async clearActiveSession() {
       const currentPk = this.pkHex;
       const currentMethod = this.loginMethod;
-      if (currentPk) { await prepareAccountLock(currentPk); await flushDeviceWrites(); this.resetAccountStores(currentPk); }
+      if (currentPk) { await this.releaseCurrentPush(); await prepareAccountLock(currentPk); await flushDeviceWrites(); this.resetAccountStores(currentPk); }
       if (currentPk && currentMethod === "nip46") {
         await disconnectRemoteSigner(currentPk);
         remoteSignerLastReconnectAt.delete(currentPk);
@@ -509,7 +541,7 @@ export const useKeyStore = defineStore("keys", {
         if (!nip46FeatureEnabled()) throw new Error("远程签名器 Beta 当前未启用");
         if (!await hasRemoteSignerCredential(account.pubkey)) throw new Error("远程签名器本机凭据已丢失，请重新连接");
         const credential = await unlockRemoteSignerCredential(account.pubkey);
-        if (this.pkHex) { await prepareAccountLock(this.pkHex); await flushDeviceWrites(); this.resetAccountStores(this.pkHex); }
+        if (this.pkHex) { await this.releaseCurrentPush(); await prepareAccountLock(this.pkHex); await flushDeviceWrites(); this.resetAccountStores(this.pkHex); }
         this.skHex = "";
         this.pkHex = account.pubkey;
         this.loginMethod = "nip46";
@@ -532,7 +564,7 @@ export const useKeyStore = defineStore("keys", {
       } else if (account.credentialMode === "passkey") {
         if (!hasBiometricUnlock(account.pubkey)) throw new Error("通行密钥凭据已丢失，请重新输入私钥");
       }
-      if (this.pkHex) { await prepareAccountLock(this.pkHex); await flushDeviceWrites(); this.resetAccountStores(this.pkHex); }
+      if (this.pkHex) { await this.releaseCurrentPush(); await prepareAccountLock(this.pkHex); await flushDeviceWrites(); this.resetAccountStores(this.pkHex); }
       this.skHex = "";
       this.pkHex = account.pubkey;
       this.loginMethod = "private-key";
@@ -841,6 +873,7 @@ export const useKeyStore = defineStore("keys", {
         connectedAccount = credential.accountPubkey;
         await storeRemoteSignerCredential(credential);
         if (previousPubkey) {
+          await this.releaseCurrentPush();
           await prepareAccountLock(previousPubkey);
           await flushDeviceWrites();
           this.resetAccountStores(previousPubkey);
@@ -881,7 +914,7 @@ export const useKeyStore = defineStore("keys", {
     },
     async loginWithSk(sk: string) {
       const previousPubkey = this.pkHex;
-      if (previousPubkey) { await prepareAccountLock(previousPubkey); await flushDeviceWrites(); this.resetAccountStores(previousPubkey); }
+      if (previousPubkey) { await this.releaseCurrentPush(); await prepareAccountLock(previousPubkey); await flushDeviceWrites(); this.resetAccountStores(previousPubkey); }
       await this.clearPersistedSession();
 
       this.skHex = sk;
@@ -944,7 +977,7 @@ export const useKeyStore = defineStore("keys", {
           const encrypted = await encryptPrivateKey(skHex, password);
           await storeEncryptedKey(pk, encrypted);
           await removeDevicePrivateKey(pk);
-          if (previousPubkey) { await prepareAccountLock(previousPubkey); await flushDeviceWrites(); this.resetAccountStores(previousPubkey); }
+          if (previousPubkey) { await this.releaseCurrentPush(); await prepareAccountLock(previousPubkey); await flushDeviceWrites(); this.resetAccountStores(previousPubkey); }
           
           this.skHex = skHex;
           this.pkHex = pk;
@@ -959,7 +992,7 @@ export const useKeyStore = defineStore("keys", {
         } else if (keepOnDevice) {
           await storeDevicePrivateKey(pk, skHex);
           await Promise.all([removeEncryptedKey(pk), removeBiometricUnlock(pk)]);
-          if (previousPubkey) { await prepareAccountLock(previousPubkey); await flushDeviceWrites(); this.resetAccountStores(previousPubkey); }
+          if (previousPubkey) { await this.releaseCurrentPush(); await prepareAccountLock(previousPubkey); await flushDeviceWrites(); this.resetAccountStores(previousPubkey); }
           this.skHex = skHex;
           this.pkHex = pk;
           this.loginMethod = "private-key";
