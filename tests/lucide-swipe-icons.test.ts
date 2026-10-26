@@ -9,7 +9,14 @@ function paths(name: string) {
   // Vue hoists constant SVG paths into static VNodes; inspect the matching
   // conditional branch while still executing the real render for the prop.
   const vnode = render({ name } as any, []);
-  expect(vnode.props?.["data-lucide"]).toBe(name);
+  // The leading source comment makes the root a Fragment, not a bare SVG.
+  function findSvg(node: any): any {
+    if (Array.isArray(node)) return node.map(findSvg).find(Boolean);
+    if (!node || typeof node !== "object") return null;
+    if (node.type === "svg") return node;
+    return Array.isArray(node.children) ? findSvg(node.children) : null;
+  }
+  expect(findSvg(vnode)?.props?.["data-lucide"]).toBe(name);
   const marker = new RegExp(`(?:v-if|v-else-if)="name === '${name}'"[^>]*>`);
   const start = template.search(marker);
   if (start < 0) throw new Error("Missing Lucide branch: " + name);
