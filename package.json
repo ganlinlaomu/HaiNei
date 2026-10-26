@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.142",
-  "releaseSummary": "通话筛选移至标题栏中央滑动分段按钮",
+  "version": "0.1.143",
+  "releaseSummary": "通讯录好友请求独立入口与同页返回",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
