@@ -81,12 +81,12 @@
           @touchmove="canSwipeNote(note) && onNoteTouchMove($event, note.id)"
           @touchend="canSwipeNote(note) && onNoteTouchEnd($event, note.id)"
           @touchcancel="canSwipeNote(note) && onNoteTouchCancel(note.id)">
-          <div v-if="canSwipeNote(note)" class="swipe-actions" role="group"
+          <div v-if="canSwipeNote(note)" class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2" role="group"
             :aria-label="'操作：' + label(note)" :aria-hidden="!isSwipeOpen(note.id)">
-            <button type="button" class="swipe-action edit"
+            <button type="button" class="swipe-action edit hainei-swipe-button" data-action="edit"
               :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
-              @click.stop="editFromSwipe(note)">编辑</button>
-            <button type="button" class="swipe-action delete"
+              aria-label="编辑笔记或待办" @click.stop="editFromSwipe(note)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16 1-5L16 2l6 6-11 11-5 1-2-4zM14 4l6 6M4 22h16"/></svg></button>
+            <button type="button" class="swipe-action delete hainei-swipe-button" data-action="delete"
               :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
               :aria-label="'删除' + label(note)" @click.stop="deleteFromSwipe(note)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
           </div>
@@ -397,7 +397,7 @@ const rowActionBusyId = ref("");
 const blockedSwipeClickId = ref("");
 let unblockSwipeClickTimer: ReturnType<typeof setTimeout> | undefined;
 const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, open: openSwipe,
-  onTouchStart, onTouchMove, onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 140, openThreshold: 70 });
+  onTouchStart, onTouchMove, onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 128, openThreshold: 64 });
 let swipeStart: { id: string; x: number; y: number } | null = null;
 let handlingQuickCreate = false;
 const query = ref("");
