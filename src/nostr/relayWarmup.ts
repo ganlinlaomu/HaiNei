@@ -1,4 +1,5 @@
 import { getRelaysFromStorage, warmRelays } from "@/nostr/relays";
+import { filterRetiredDefaultRelayHints } from "@/services/connectionSettings";
 import { getOwnDmRelayStatus } from "@/services/dmRelayDirectory";
 
 export type RelayWarmupSession = {
@@ -24,9 +25,10 @@ export async function warmDmRelaysForSession(
   isCurrent: () => boolean,
 ) {
   if (!accountPubkey || !session.isLoggedIn || !session.isUnlocked || !isCurrent()) return false;
-  const { relays } = await getOwnDmRelayStatus(accountPubkey);
+  const { relays: advertisedRelays } = await getOwnDmRelayStatus(accountPubkey);
   // The IndexedDB lookup can complete after the user locks or switches accounts.
   if (!session.isLoggedIn || !session.isUnlocked || !isCurrent()) return false;
+  const relays = filterRetiredDefaultRelayHints(advertisedRelays, getRelaysFromStorage("read"));
   if (!relays.length) return false;
   warmRelays(relays);
   return true;

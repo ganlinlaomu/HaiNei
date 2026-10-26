@@ -27,6 +27,13 @@ describe("account relay startup ordering", () => {
     expect(warmup).not.toContain("subscribe(");
   });
 
+  it("does not subscribe or preconnect retired default inbox Relay hints", () => {
+    const sync = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
+    const warmup = readFileSync(join(process.cwd(), "src/nostr/relayWarmup.ts"), "utf8");
+    expect(sync).toContain("filterRetiredDefaultRelayHints(advertisedDmRelays, legacyReadRelays)");
+    expect(warmup).toContain("filterRetiredDefaultRelayHints(advertisedRelays, getRelaysFromStorage(\"read\"))");
+  });
+
   it("does not serialize managed Relay network requests or healthy resume catch-up", () => {
     const source = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
     expect(source).not.toContain("await useSettingsStore().refreshManagedRelay()");

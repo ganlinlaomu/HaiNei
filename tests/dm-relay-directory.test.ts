@@ -269,6 +269,38 @@ describe("own kind 10050 publication", () => {
     });
   });
 
+  it("keeps retired system inbox hints out of self-routing without rewriting valid custom relay hints", async () => {
+    const retired = "wss://nostr.dzo-hadar.ts.net";
+    await dmRelayDirectoryRepository.put({
+      accountPubkey: account, ownerPubkey: account,
+      relays: [retired, "wss://own-one.test"],
+      fetchedAt: Date.now(), expiresAt: Number.MAX_SAFE_INTEGER, source: "own",
+    });
+    await expect(resolveDmRelays(account, account, ["wss://fallback.test"])).resolves.toMatchObject({
+      relays: ["wss://own-one.test"],
+    });
+    mocks.getRelaysFromStorage.mockReturnValue(["wss://own-one.test", retired]);
+    await expect(resolveDmRelays(account, account, ["wss://fallback.test"])).resolves.toMatchObject({
+      relays: [retired, "wss://own-one.test"],
+    });
+  });
+
+  it("republishes an outdated remote inbox with a retired built-in Relay instead of adopting it", async () => {
+    const retired = "wss://nostr.dzo-hadar.ts.net";
+    const remote = dmRelayEvent(accountSecret, [retired, "wss://own-one.test"]);
+    mocks.subscribe.mockImplementation((relays: string[]) => subscription(relays, [remote]));
+    const signer = vi.fn(async (template: EventTemplate) => signed(accountSecret, template));
+
+    await expect(ensureOwnDmRelayList(account, signer)).resolves.toBe(true);
+    expect(signer).toHaveBeenCalledOnce();
+    expect(signer.mock.calls[0][0].tags).toEqual([
+      ["relay", "wss://own-one.test"], ["relay", "wss://own-two.test"]
+    ]);
+    expect(await dmRelayDirectoryRepository.get(account, account)).toMatchObject({
+      relays: ["wss://own-one.test", "wss://own-two.test"], source: "own"
+    });
+  });
+
   it("keeps the prior advertisement when no read relay is currently connected", async () => {
     await dmRelayDirectoryRepository.put({
       accountPubkey: account,

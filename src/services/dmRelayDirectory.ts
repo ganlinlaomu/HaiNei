@@ -3,7 +3,7 @@ import { getRelaysFromStorage, inspectRelays, type RelayRuntimeStatus } from "@/
 import { verifySignedEvent } from "@/nostr/messaging/protocol/common";
 import { dmRelayDirectoryRepository } from "@/repositories/dmRelayDirectoryRepository";
 import { replaceableEventOutboxRepository } from "@/repositories/replaceableEventOutboxRepository";
-import { DEFAULT_RELAY_URLS, normalizeRelayUrl } from "@/services/connectionSettings";
+import { DEFAULT_RELAY_URLS, filterRetiredDefaultRelayHints, normalizeRelayUrl } from "@/services/connectionSettings";
 import { nostrClient } from "@/services/nostrClient";
 import { closeSubscription } from "@/utils/subscriptions";
 import { logger } from "@/utils/logger";
@@ -309,7 +309,9 @@ export async function resolveDmRelays(
   if (owner === account) {
     const stored = await dmRelayDirectoryRepository.get(account, account);
     assertCurrent(account, generation);
-    const own = stored?.source === "own" ? stored.relays : selectOwnDmRelays();
+    const configured = getRelaysFromStorage("read");
+    const advertised = stored?.source === "own" ? stored.relays : selectOwnDmRelays(configured);
+    const own = filterRetiredDefaultRelayHints(advertised, configured);
     return { relays: own.length ? own : fallback, source: "own-10050", eventId: stored?.eventId, cached: true };
   }
 
@@ -543,7 +545,13 @@ async function ensureOwnDmRelayListOnce(
         // overwriting it from transient local connection order.
         await dmRelayDirectoryRepository.put(existing);
         assertCurrent(account, generation);
-        return true;
+        // Retired built-in Relay tags from older devices must be republished,
+        // not adopted indefinitely as an extra live NIP-17 receive socket.
+        // Other valid cross-device choices stay sticky.
+        const configured = getRelaysFromStorage("read");
+        if (sameRelayList(filterRetiredDefaultRelayHints(existing.relays, configured), existing.relays)) {
+          return true;
+        }
       }
     }
   }

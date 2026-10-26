@@ -1,3 +1,4 @@
+import { filterRetiredDefaultRelayHints } from "@/services/connectionSettings";
 import { observeRecoverySignal, clearRecoveryObservations } from "@/services/callNotificationRecovery";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { getActivePinia } from "pinia";
@@ -368,7 +369,8 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
     const storedOwnDm = await getOwnDmRelayStatus(account);
     if (!isCurrent()) return false;
     const legacyReadRelays = getRelaysFromStorage("read");
-    const dmRelays = storedOwnDm.relays.length ? storedOwnDm.relays : selectOwnDmRelays(legacyReadRelays);
+    const advertisedDmRelays = storedOwnDm.relays.length ? storedOwnDm.relays : selectOwnDmRelays(legacyReadRelays);
+    const dmRelays = filterRetiredDefaultRelayHints(advertisedDmRelays, legacyReadRelays);
     subscribedReadRelaySignature = readRelaySignature(legacyReadRelays);
     const messageRelays = [...new Set([...dmRelays, ...legacyReadRelays])];
     // Connectivity is independent of historical repair. Observe first, then
