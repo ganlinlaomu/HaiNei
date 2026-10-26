@@ -44,7 +44,7 @@ describe("private space list swipe actions", () => {
     expect(swipe.isOpen("note-2")).toBe(false);
   });
 
-  it("only reveals actions on active records and does not bypass confirmation or the trash", () => {
+  it("only reveals actions on active records and still uses the recoverable trash", () => {
     const view = readFileSync(join(process.cwd(), "src/views/PrivateSpace.vue"), "utf8");
     expect(view).toContain("@touchstart=\"canSwipeNote(note) && onNoteTouchStart($event, note.id)\"");
     expect(view).toContain("@touchmove=\"canSwipeNote(note) && onNoteTouchMove($event, note.id)\"");
@@ -54,7 +54,7 @@ describe("private space list swipe actions", () => {
     expect(view).toContain("if (blockedSwipeClickId.value === note.id) return;");
     expect(view).toContain("@click.stop=\"editFromSwipe(note)\"");
     expect(view).toContain("@click.stop=\"deleteFromSwipe(note)\"");
-    expect(view).toContain('if (!window.confirm("将「"');
+    expect(view).toContain("offerDispositionUndo(deleted, \"deletedAt\"");
     expect(view).toContain("privateSpaceRepository.moveToTrash(account, note.id)");
     expect(view).toContain("notePrivateSpaceMutation(keys)");
     expect(view).toContain("const { account, isCurrent } = sessionSnapshot()");
