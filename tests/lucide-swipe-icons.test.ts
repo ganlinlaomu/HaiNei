@@ -6,16 +6,16 @@ const component = readFileSync("src/components/SwipeLucideIcon.vue", "utf8");
 const template = component.slice(component.indexOf("<template>") + 10, component.indexOf("</template>\n<script"));
 const render = compile(template);
 function paths(name: string) {
+  // Vue hoists constant SVG paths into static VNodes; inspect the matching
+  // conditional branch while still executing the real render for the prop.
   const vnode = render({ name } as any, []);
-  const ds: string[] = [];
-  function walk(node: any) {
-    if (Array.isArray(node)) { node.forEach(walk); return; }
-    if (!node || typeof node !== "object") return;
-    if (node.type === "path") ds.push(node.props?.d);
-    if (Array.isArray(node.children)) walk(node.children);
-  }
-  walk(vnode);
-  return ds;
+  expect(vnode.props?.["data-lucide"]).toBe(name);
+  const marker = new RegExp(`(?:v-if|v-else-if)="name === '${name}'"\\s*>`);
+  const start = template.search(marker);
+  if (start < 0) throw new Error("Missing Lucide branch: " + name);
+  const end = template.indexOf("</template>", start);
+  if (end < 0) throw new Error("Unclosed Lucide branch: " + name);
+  return Array.from(template.slice(start, end).matchAll(/<path d="([^"]+)"\\s*\\/>/g), match => match[1]);
 }
 describe("canonical Lucide swipe icon rendering", () => {
   it("renders distinct pin and pin-off, bell and bell-off paths from the same component", () => {
