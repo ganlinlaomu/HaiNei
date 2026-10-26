@@ -21,7 +21,7 @@ describe("separate DMs, missed calls, contacts and history deletion", () => {
     expect(calls).toContain("readVisibleCallHistoryPage(account, count, missed)");
     expect(src("src/services/callHistory.ts")).toContain('deleted.has(item.id)');
     expect(src("src/services/callHistory.ts")).toContain('loadDeletedCallIds(account)');
-    expect(calls).toContain('class="call-swipe-actions"');
+    expect(calls).toContain('class="call-swipe-actions hainei-swipe-actions"');
     expect(calls).toContain("onTouchMove");
     expect(calls).not.toContain("item.text }}");
     // The call picker avatar is a span. Flex-grow must be limited to the

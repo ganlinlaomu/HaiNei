@@ -383,9 +383,9 @@ describe("direct-message navigation and UI contract", () => {
   it("uses swipe actions instead of a more menu for conversation hide/delete", () => {
     const source = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     expect(source).toContain('@touchstart="onTouchStart($event, conversation.peerPubkey)"');
-    expect(source).toContain('class="swipe-actions"');
-    expect(source).toContain('class="action hide"');
-    expect(source).toContain('class="action delete"');
+    expect(source).toContain('class="swipe-actions hainei-swipe-actions"');
+    expect(source).toContain('class="action hide hainei-swipe-button"');
+    expect(source).toContain('class="action delete hainei-swipe-button"');
     expect(source).toContain("directMessages.hideConversation(pubkey)");
     expect(source).toContain("directMessages.deleteConversation(pubkey)");
     expect(source).toContain('useSwipeActions } from "@/composables/useSwipeActions"');
@@ -432,7 +432,7 @@ describe("direct-message navigation and UI contract", () => {
     const home = readThemedSource(join(process.cwd(), "src/views/Home.vue"), "utf8");
     const conversations = readThemedSource(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
     expect(friends).toContain('useSwipeActions } from "@/composables/useSwipeActions"');
-    expect(friends).toContain('class="friend-swipe-actions"');
+    expect(friends).toContain('class="friend-swipe-actions hainei-swipe-actions"');
     expect(friends).toContain("loadAccountStoresOnce(account, stores)");
     expect(friends).toContain("storesLoadedForAccount(account, stores)");
     expect(friends).toContain("正在加载好友…");
