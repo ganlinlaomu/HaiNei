@@ -430,8 +430,12 @@ export class MessageSyncManager {
     // checkpointed catch-up below owns every gap since the last session; an
     // old watermark here would reopen an unbounded backlog stream (and replay
     // it on every reconnect). buildMessageSubscriptions still applies the
-    // NIP-17 48h wrapper skew.
-    const filters = buildMessageSubscriptions(accountPubkey, options.authors, nowSeconds);
+    // NIP-17 48h wrapper skew, which new wraps need to match live.
+    // limit: 0 skips the stored part of that 48h window. The relay replays
+    // this REQ on every reconnect, and without it each resume re-downloaded
+    // every wrap of the last two days, all already known.
+    const filters = buildMessageSubscriptions(accountPubkey, options.authors, nowSeconds)
+      .map(filter => ({ ...filter, limit: 0 }));
 
     // Subscribe before catch-up so an event arriving during the historical query
     // is already covered. Both streams converge in the same idempotent pipeline.
