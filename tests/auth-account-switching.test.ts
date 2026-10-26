@@ -46,7 +46,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("push subscription cleanup on account departure", () => {
   function stubPush(fetchImpl: ReturnType<typeof vi.fn>) {
-    vi.stubGlobal("window", { PushManager: {}, Notification: {} });
+    vi.stubGlobal("window", { PushManager: {}, Notification: {}, location: { origin: "https://app.test" } });
     vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({
       pushManager: { getSubscription: async () => ({ endpoint: "https://web.push.apple.com/current" }) },
     }) } });
