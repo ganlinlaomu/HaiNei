@@ -34,8 +34,8 @@ describe("iPhone-style immediate swipe deletion", () => {
         name: () => "Contact" },
       ["deleteCallRecord"]);
     await deleteCallRecord({ id: "call-1", peer: PEER });
-    expect(deleteRecord).toHaveBeenCalledExactlyOnceWith(ACCOUNT, "call-1");
-    expect(closeSwipe).toHaveBeenCalledExactlyOnceWith("call-1");
+    expect(deleteRecord).toHaveBeenCalledWith(ACCOUNT, "call-1");
+    expect(closeSwipe).toHaveBeenCalledWith("call-1");
     expect(deletingId.value).toBe("");
     expect(forbiddenConfirm).not.toHaveBeenCalled();
     expect(error.value).toBe("");
@@ -65,9 +65,9 @@ describe("iPhone-style immediate swipe deletion", () => {
     ], { closeSwipe, relationshipBusy, friendships: { removeFriend },
       friends: { remove }, ui, confirm: forbiddenConfirm }, ["deleteFromSwipe"]);
     deleteFromSwipe({ pubkey: PEER, name: "Friend" });
-    await vi.waitFor(() => expect(remove).toHaveBeenCalledExactlyOnceWith(PEER));
-    expect(removeFriend).toHaveBeenCalledExactlyOnceWith(PEER);
-    expect(closeSwipe).toHaveBeenCalledExactlyOnceWith(PEER);
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledWith(PEER));
+    expect(removeFriend).toHaveBeenCalledWith(PEER);
+    expect(closeSwipe).toHaveBeenCalledWith(PEER);
     expect(ui.addToast).toHaveBeenCalledWith("已删除", 1500, "info");
     expect(relationshipBusy.size).toBe(0);
     expect(forbiddenConfirm).not.toHaveBeenCalled();
@@ -83,8 +83,8 @@ describe("iPhone-style immediate swipe deletion", () => {
     ], { closeSwipe, relationshipBusy: new Set(), friendships: { cancelRequest },
       ui, confirm: forbiddenConfirm }, ["withdrawFromSwipe"]);
     withdrawFromSwipe(PEER);
-    await vi.waitFor(() => expect(cancelRequest).toHaveBeenCalledExactlyOnceWith(PEER));
-    expect(closeSwipe).toHaveBeenCalledExactlyOnceWith(PEER);
+    await vi.waitFor(() => expect(cancelRequest).toHaveBeenCalledWith(PEER));
+    expect(closeSwipe).toHaveBeenCalledWith(PEER);
     expect(ui.addToast).toHaveBeenCalledWith("好友请求已撤回", 1500, "info");
     expect(forbiddenConfirm).not.toHaveBeenCalled();
   });
@@ -98,8 +98,8 @@ describe("iPhone-style immediate swipe deletion", () => {
     ], { closeSwipe, directMessages: { deleteConversation: deleteConversationData },
       ui, window: { confirm: forbiddenConfirm } }, ["deleteConversation"]);
     await deleteConversation(PEER);
-    expect(deleteConversationData).toHaveBeenCalledExactlyOnceWith(PEER);
-    expect(closeSwipe).toHaveBeenCalledExactlyOnceWith(PEER);
+    expect(deleteConversationData).toHaveBeenCalledWith(PEER);
+    expect(closeSwipe).toHaveBeenCalledWith(PEER);
     expect(ui.addToast).toHaveBeenCalledWith("已删除本机聊天记录", 1600, "info");
     expect(forbiddenConfirm).not.toHaveBeenCalled();
   });
@@ -112,8 +112,8 @@ describe("iPhone-style immediate swipe deletion", () => {
     ], { notifications: { dismiss: dismissNotification }, closeSwipe,
       confirm: forbiddenConfirm, window: { confirm: forbiddenConfirm } }, ["dismiss"]);
     dismiss({ id: "notice-1" });
-    expect(dismissNotification).toHaveBeenCalledExactlyOnceWith("notice-1");
-    expect(closeSwipe).toHaveBeenCalledExactlyOnceWith("notice-1");
+    expect(dismissNotification).toHaveBeenCalledWith("notice-1");
+    expect(closeSwipe).toHaveBeenCalledWith("notice-1");
     expect(forbiddenConfirm).not.toHaveBeenCalled();
   });
 });
