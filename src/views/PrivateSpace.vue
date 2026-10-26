@@ -122,8 +122,8 @@
       <input v-model="editor.title" class="title-input" aria-label="笔记标题"
         placeholder="标题（可不填）" maxlength="500" @input="queueSave" />
       <template v-if="editor.kind === 'note'">
-        <textarea v-model="editor.body" aria-label="笔记内容" class="body-input"
-          placeholder="开始记录…" rows="10" maxlength="100000" @input="queueSave"></textarea>
+        <textarea v-model="editor.body" v-auto-grow="editor.body" aria-label="笔记内容" class="body-input"
+          placeholder="开始记录…" rows="1" maxlength="100000" @input="queueSave"></textarea>
       </template>
       <template v-else>
         <div class="tasks">
@@ -1017,7 +1017,7 @@ button{font:inherit;cursor:pointer}
 .editor-actions button,.editor-footer button{border:0;background:transparent;color:var(--fg-475569);padding:10px 3px;font-size:13px}
 .save-state{font-size:11px;color:var(--fg-64748b);white-space:nowrap}
 .title-input{width:100%;margin-top:20px;padding:8px 2px;font-weight:650;font-size:21px;border:0;outline:none}
-.body-input{width:100%;min-height:35vh;resize:vertical;border:0;outline:none;margin-top:16px;font:inherit;line-height:1.65;color:inherit}
+.body-input{display:block;box-sizing:border-box;width:100%;resize:none;overflow-y:hidden;overflow-wrap:anywhere;border:0;outline:none;margin-top:16px;padding:0;background:transparent;font:inherit;line-height:1.65;color:inherit}
 .tasks{margin-top:24px}.lists-label{margin:18px 16px 6px;color:var(--fg-8b98a5);font-size:13px}.task-due{position:relative;display:inline-flex;overflow:hidden;flex:0 0 auto;align-items:center;min-height:32px;padding:0 6px;border-radius:10px;color:var(--fg-8b98a5);font-size:12px;white-space:nowrap;cursor:pointer}.task-due.set{background:var(--bg-eff3f4);color:var(--fg-0f1419)}.task-due input{position:absolute;inset:0;width:100%;min-width:0;max-width:100%;height:100%;margin:0;padding:0;border:0;opacity:0;-webkit-appearance:none;appearance:none;cursor:pointer}
 .task{display:flex;align-items:center;gap:10px;min-height:48px;border-bottom:1px solid var(--bd-f1f3f5)}
 .task input[type="checkbox"]{width:19px;height:19px;accent-color:var(--fg-334155);flex:0 0 auto}
