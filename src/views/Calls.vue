@@ -30,7 +30,7 @@
         @touchcancel="onTouchCancel(item.id)">
         <div class="call-swipe-actions hainei-swipe-actions" style="--swipe-action-count:1">
           <button class="call-delete hainei-swipe-button" data-action="delete" type="button" :aria-label="`删除 ${name(item.peer)} 的通话记录`"
-            :disabled="deletingId === item.id" @click.stop="deleteCallRecord(item)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
+            :disabled="deletingId === item.id" @click.stop="deleteCallRecord(item)"><SwipeLucideIcon name="trash" /></button>
         </div>
         <div class="call-row" :style="swipeStyle(item.id)">
           <button class="call-record" type="button" :aria-label="`查看 ${name(item.peer)} 的资料`"
@@ -87,6 +87,7 @@ import { createTabPillObserver, selectedTabPill } from "@/utils/tabPillGeometry"
 import { usePullToRefresh } from "@/components/usePullToRefresh";
 import { resumeAccountMessageSync } from "@/services/accountMessageSync";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import SwipeLucideIcon from "@/components/SwipeLucideIcon.vue";
 const keys = useKeyStore(), friendships = useFriendshipsStore(), friends = useFriendsStore(), profiles = useProfilesStore();
 const router = useRouter(), call = useCallStore(), callHistory = useCallHistoryStore();
 const records = ref<CallHistoryItem[]>([]), limit = ref(50), missedOnly = ref(false), hasMore = ref(false), loading = ref(true), error = ref(""), busy = ref(false);
