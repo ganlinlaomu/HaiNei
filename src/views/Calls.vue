@@ -2,7 +2,7 @@
   <main ref="container" class="app-page calls-page">
     <header class="calls-header primary-page-header">
       <h1 class="primary-page-title">通话</h1>
-      <HeaderSegmented :options="callFilterOptions" :model-value="missedOnly ? 'missed' : 'all'"
+      <HeaderSegmented aria-label="通话记录筛选" :options="callFilterOptions" :model-value="missedOnly ? 'missed' : 'all'"
         @update:model-value="missedOnly = $event === 'missed'" />
       
       <button class="new-call primary-header-action" type="button" aria-label="发起新通话" @click="showPicker = true">
