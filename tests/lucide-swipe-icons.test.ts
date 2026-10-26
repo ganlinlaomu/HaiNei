@@ -10,12 +10,12 @@ function paths(name: string) {
   // conditional branch while still executing the real render for the prop.
   const vnode = render({ name } as any, []);
   expect(vnode.props?.["data-lucide"]).toBe(name);
-  const marker = new RegExp(`(?:v-if|v-else-if)="name === '${name}'"\\s*>`);
+  const marker = new RegExp(`(?:v-if|v-else-if)="name === '${name}'"[^>]*>`);
   const start = template.search(marker);
   if (start < 0) throw new Error("Missing Lucide branch: " + name);
   const end = template.indexOf("</template>", start);
   if (end < 0) throw new Error("Unclosed Lucide branch: " + name);
-  return Array.from(template.slice(start, end).matchAll(/<path d="([^"]+)"\\s*\\/>/g), match => match[1]);
+  return Array.from(template.slice(start, end).matchAll(/<path d="([^"]+)"[^>]*>/g), match => match[1]);
 }
 describe("canonical Lucide swipe icon rendering", () => {
   it("renders distinct pin and pin-off, bell and bell-off paths from the same component", () => {
