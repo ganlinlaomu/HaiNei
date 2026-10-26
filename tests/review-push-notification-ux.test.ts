@@ -122,7 +122,10 @@ describe("review #11: push notification behavior", () => {
     expect(sw.shown[0].close).not.toHaveBeenCalled();
     // Repeated provider delivery of the same push cannot create another alert.
     await sw.push("6".repeat(64), "call");
-    expect(sw.showNotification).toHaveBeenCalledOnce();
+    expect(sw.showNotification).toHaveBeenCalledTimes(2);
+    expect(sw.showNotification.mock.calls[1][1]).toMatchObject({ silent: true, tag: "hainei-rejected-push" });
+    expect(sw.shown.at(-1)!.close).toHaveBeenCalledOnce();
+    expect(sw.shown[0].close).not.toHaveBeenCalled();
   });
 
   it("shows a background call and focuses the existing session without navigation", async () => {

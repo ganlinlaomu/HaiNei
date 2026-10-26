@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.135"; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.136"; // ⚠️ 更新代码时同步修改此版本号
 const BUILD_ID = "source-328b9451a4e413fd"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
@@ -396,7 +396,20 @@ self.addEventListener('push', (event) => {
         // silently: WebKit revokes subscriptions whose pushes show nothing.
         acknowledge = async () => {};
       }
-      if (!acknowledge) return;
+      if (!acknowledge) {
+        // WebKit requires every delivered push to show a notification, even if
+        // this recipient is stale or this notification has already been seen.
+        // Never touch the unread badge, seen list, or encrypted inbox here.
+        const tag = 'hainei-rejected-push';
+        await self.registration.showNotification('HaiNei', {
+          body: '通知已处理', icon: '/icon-192.png', tag,
+          silent: true, data: { type: 'rejected' }
+        });
+        try {
+          for (const notification of await self.registration.getNotifications({ tag })) notification.close();
+        } catch { /* already displayed; cleanup is best effort */ }
+        return;
+      }
       const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       const appVisible = windows.some(client => client.visibilityState === 'visible');
       // Every push must still display a notification: WebKit revokes the

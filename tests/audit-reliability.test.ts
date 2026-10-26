@@ -122,7 +122,7 @@ it("deduplicates push across worker restarts and ignores inactive account scope"
         handlers[name] = handler;
       },
       clients: { matchAll: async () => [] },
-      registration: { showNotification: show },
+      registration: { showNotification: show, getNotifications: async () => [{ close: vi.fn() }] },
       navigator: { setAppBadge: badge, clearAppBadge: vi.fn() },
     };
     runInNewContext(
@@ -189,7 +189,7 @@ it("deduplicates push across worker restarts and ignores inactive account scope"
         }),
     },
   });
-  expect(show).toHaveBeenCalledTimes(2);
+  expect(show).toHaveBeenCalledTimes(4);
   expect(badge).toHaveBeenNthCalledWith(1, 1);
   expect(badge).toHaveBeenNthCalledWith(2, 2);
 });
