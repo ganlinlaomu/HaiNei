@@ -3,8 +3,8 @@ import { compile } from "vue";
 import { describe, expect, it } from "vitest";
 
 const component = readFileSync("src/components/SwipeLucideIcon.vue", "utf8");
-const template = component.split("<template>")[1].split("</template>")[0];
-const render = compile("<svg " + template.split("<svg ")[1]);
+const template = component.slice(component.indexOf("<template>") + 10, component.indexOf("</template>\n<script"));
+const render = compile(template);
 function paths(name: string) {
   const vnode = render({ name } as any, []);
   const ds: string[] = [];
