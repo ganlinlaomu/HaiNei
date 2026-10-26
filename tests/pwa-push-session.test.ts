@@ -13,7 +13,10 @@ function harness() {
   const handlers = new Map<string, (event: any) => void>();
   const cacheRows = new Map<string, Map<string, Response>>();
   const pending: Promise<unknown>[] = [];
-  const showNotification = vi.fn(async () => {});
+  const notifications: Array<{ tag?: string; close: ReturnType<typeof vi.fn> }> = [];
+  const showNotification = vi.fn(async (_title: string, options: { tag?: string }) => {
+    notifications.push({ tag: options.tag, close: vi.fn() });
+  });
   const caches = { open: async (name: string) => {
     let rows = cacheRows.get(name);
     if (!rows) cacheRows.set(name, rows = new Map());
@@ -27,13 +30,14 @@ function harness() {
     addEventListener: (name: string, handler: (event: any) => void) => handlers.set(name, handler),
     navigator: { setAppBadge: vi.fn(async () => {}), clearAppBadge: vi.fn(async () => {}) },
     clients: { matchAll: async () => [] },
-    registration: { showNotification },
+    registration: { showNotification, getNotifications: vi.fn(async ({ tag }: { tag?: string } = {}) =>
+      notifications.filter(n => (!tag || n.tag === tag) && n.close.mock.calls.length === 0)) },
   };
   runInNewContext(readFileSync("public/service-worker.js", "utf8"), { self, caches, URL, URLSearchParams, Response, console });
   const postMessage = (data: unknown) => handlers.get("message")!({ data, waitUntil: (promise: Promise<unknown>) => pending.push(promise) });
   const target = { clearAppBadge: vi.fn(async () => {}), setAppBadge: vi.fn(async () => {}),
     serviceWorker: { controller: { postMessage }, ready: Promise.resolve({ active: { postMessage } }) } } as any;
-  return { target, pending, cacheRows, showNotification, backgroundSetAppBadge: self.navigator.setAppBadge,
+  return { target, pending, cacheRows, showNotification, notifications, backgroundSetAppBadge: self.navigator.setAppBadge,
     inbox: async (type: string, accountScope: string, ids: string[] = []) => {
       let value: any = null;
       handlers.get("message")!({
@@ -103,7 +107,9 @@ describe("PWA push across account lock and restore", () => {
     expect(worker.showNotification).toHaveBeenCalledTimes(2);
     worker.push(payload);
     await worker.settle();
-    expect(worker.showNotification).toHaveBeenCalledTimes(2);
+    expect(worker.showNotification).toHaveBeenCalledTimes(3);
+    expect(worker.showNotification.mock.calls.at(-1)![1]).toMatchObject({ silent: true, tag: "hainei-rejected-push" });
+    expect(worker.notifications.at(-1)!.close).toHaveBeenCalledOnce();
   });
 
   it("still shows the generic push while the remembered account is locked", async () => {
@@ -148,13 +154,18 @@ describe("PWA push across account lock and restore", () => {
       await worker.settle();
       worker.push({ type: "message", accountScope: await scope(ACCOUNT), notificationId: "logged-out" });
       await worker.settle();
-      expect(worker.showNotification).not.toHaveBeenCalled();
+      expect(worker.showNotification).toHaveBeenCalledOnce();
+      expect(worker.showNotification.mock.calls[0][1]).toMatchObject({ silent: true, tag: "hainei-rejected-push" });
+      expect(worker.notifications[0].close).toHaveBeenCalledOnce();
       keys.pkHex = OTHER;
       await worker.settle();
       worker.push({ type: "message", accountScope: await scope(ACCOUNT), notificationId: "old-account" });
       worker.push({ type: "message", accountScope: await scope(OTHER), notificationId: "new-account" });
       await worker.settle();
-      expect(worker.showNotification).toHaveBeenCalledOnce();
+      expect(worker.showNotification).toHaveBeenCalledTimes(3);
+      expect(worker.notifications[1].close).toHaveBeenCalledOnce();
+      expect(worker.showNotification.mock.calls[1][1]).toMatchObject({ silent: true, tag: "hainei-rejected-push" });
+      expect(worker.notifications[2].close).not.toHaveBeenCalled();
     } finally { stop(); }
   });
   it("caches opaque encrypted gift wraps and consumes them independently of notification taps", async () => {
@@ -196,9 +207,28 @@ describe("PWA push across account lock and restore", () => {
 
     worker.push({ type: "message", accountScope: firstScope, notificationId: "1".repeat(64) });
     await worker.settle();
-    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    expect(worker.showNotification).toHaveBeenCalledTimes(2);
+    expect(worker.notifications[1].close).toHaveBeenCalledOnce();
+    expect(worker.showNotification.mock.calls[1][1]).toMatchObject({ silent: true, tag: "hainei-rejected-push" });
   });
 
+
+  it("displays and closes malformed pushes without recording seen IDs or incrementing badge", async () => {
+    const worker = harness();
+    await syncAppBadge(0, worker.target, ACCOUNT);
+    await worker.settle();
+    const validScope = await scope(ACCOUNT);
+    worker.push({ type: "message", notificationId: "has-no-scope" });
+    worker.push({ type: "message", accountScope: validScope });
+    await worker.settle();
+    expect(worker.showNotification).toHaveBeenCalledTimes(2);
+    expect(worker.notifications.every(n => n.close.mock.calls.length === 1)).toBe(true);
+    expect(worker.backgroundSetAppBadge).not.toHaveBeenCalled();
+    worker.push({ type: "message", notificationId: "has-no-scope", accountScope: validScope });
+    await worker.settle();
+    expect(worker.notifications.at(-1)!.close).not.toHaveBeenCalled();
+    expect(worker.showNotification.mock.calls.at(-1)![1]).not.toHaveProperty("silent", true);
+  });
   it("prunes expired ciphertext hints before delivering to the app", async () => {
     const worker = harness();
     await syncAppBadge(0, worker.target, ACCOUNT);
