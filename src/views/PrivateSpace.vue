@@ -85,10 +85,10 @@
             :aria-label="'操作：' + label(note)" :aria-hidden="!isSwipeOpen(note.id)">
             <button type="button" class="swipe-action edit hainei-swipe-button" data-action="edit"
               :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
-              aria-label="编辑笔记或待办" @click.stop="editFromSwipe(note)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16 1-5L16 2l6 6-11 11-5 1-2-4zM14 4l6 6M4 22h16"/></svg></button>
+              aria-label="编辑笔记或待办" @click.stop="editFromSwipe(note)"><SwipeLucideIcon name="pencil" /></button>
             <button type="button" class="swipe-action delete hainei-swipe-button" data-action="delete"
               :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
-              :aria-label="'删除' + label(note)" @click.stop="deleteFromSwipe(note)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
+              :aria-label="'删除' + label(note)" @click.stop="deleteFromSwipe(note)"><SwipeLucideIcon name="trash" /></button>
           </div>
           <div class="item-foreground" :style="canSwipeNote(note) ? swipeStyle(note.id) : undefined">
             <button type="button" class="item"
@@ -186,6 +186,7 @@ import { privateNoteSource } from "@/services/privateSpaceSource";
 import { privateSpaceDisplay } from "@/services/privateSpaceContent";
 import { getPrivateSpaceTab, rememberPrivateSpaceTab } from "@/services/privateSpaceNavigation";
 import { useSwipeActions } from "@/composables/useSwipeActions";
+import SwipeLucideIcon from "@/components/SwipeLucideIcon.vue";
 import { vAutoGrow } from "@/directives/autoGrowTextarea";
 import { shouldSubmitTaskOnEnter } from "@/utils/taskInput";
 import { describeDue } from "@/utils/todoPlanning";

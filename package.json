@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.144",
-  "releaseSummary": "通话与私信共用标题栏分段切换",
+  "version": "0.1.145",
+  "releaseSummary": "左滑操作统一 Lucide 官方图标",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

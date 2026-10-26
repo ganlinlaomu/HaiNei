@@ -18,7 +18,7 @@ function action(name: "pin" | "mute", state: boolean) {
   const paths: string[] = [];
   const walk = (node: any) => {
     if (!node || typeof node !== "object") return;
-    if (node.type === "path") paths.push(node.props?.d);
+    if (node.props?.name) paths.push(node.props.name);
     if (Array.isArray(node.children)) node.children.forEach(walk);
   };
   walk(vnode);
