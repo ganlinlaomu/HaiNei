@@ -185,7 +185,48 @@ export async function enablePushNotifications(pubkey: string, signEvent: SignEve
   deviceStorage.setItem(enabledKey, "1");
 }
 
-export async function syncPushAuthorizationPolicy(
+type PolicySync = { running: Promise<boolean>; next?: { senderPubkeys: string[]; signEvent: SignEvent; result: Promise<boolean> } };
+const policySyncs = new Map<string, PolicySync>();
+
+/**
+ * Startup and friendship changes can request a resync at the same moment.
+ * Run one at a time per account; calls made meanwhile share a single
+ * follow-up run with the latest sender list.
+ */
+export function syncPushAuthorizationPolicy(
+  pubkey: string,
+  senderPubkeys: string[],
+  signEvent: SignEvent,
+): Promise<boolean> {
+  const key = pubkey.toLowerCase();
+  const current = policySyncs.get(key);
+  if (current) {
+    if (current.next) {
+      current.next.senderPubkeys = senderPubkeys;
+      current.next.signEvent = signEvent;
+      return current.next.result;
+    }
+    const next = { senderPubkeys, signEvent } as NonNullable<PolicySync["next"]>;
+    next.result = current.running.catch(() => false).then(() => {
+      const entry = { running: runPushAuthorizationPolicySync(pubkey, next.senderPubkeys, next.signEvent) };
+      policySyncs.set(key, entry);
+      return trackPolicySync(key, entry);
+    });
+    current.next = next;
+    return next.result;
+  }
+  const entry: PolicySync = { running: runPushAuthorizationPolicySync(pubkey, senderPubkeys, signEvent) };
+  policySyncs.set(key, entry);
+  return trackPolicySync(key, entry);
+}
+
+function trackPolicySync(key: string, entry: PolicySync) {
+  return entry.running.finally(() => {
+    if (policySyncs.get(key) === entry && !entry.next) policySyncs.delete(key);
+  });
+}
+
+async function runPushAuthorizationPolicySync(
   pubkey: string,
   senderPubkeys: string[],
   signEvent: SignEvent,

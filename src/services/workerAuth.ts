@@ -96,6 +96,9 @@ export async function signWorkerRequest(
   const now = Math.floor(Date.now() / 1000);
   const method = (options.method || "POST").toUpperCase();
   const payloadHash = await workerPayloadHash(options.payload);
+  // The worker blocks replay by event id. Without a nonce, two identical
+  // requests signed in the same second share an id and the second is refused.
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
   const event = await signEvent({
     kind: 27235,
     created_at: now,
@@ -109,6 +112,7 @@ export async function signWorkerRequest(
       ["u", options.url],
       ["method", method],
       ["payload", payloadHash],
+      ["nonce", nonce],
     ],
   });
   if (event.pubkey.toLowerCase() !== accountPubkey.toLowerCase()) {

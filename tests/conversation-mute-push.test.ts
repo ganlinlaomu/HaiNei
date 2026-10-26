@@ -56,4 +56,30 @@ describe("push policy and muted conversations", () => {
     const policy = bodies.find(item => item.url.endsWith("/api/push/policy"));
     expect(policy.body.senderPubkeys).toEqual([NORMAL]);
   });
+
+  it("runs concurrent resyncs one at a time and coalesces the waiting ones", async () => {
+    const policies: string[][] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      inFlight -= 1;
+      if (url.endsWith("/api/push/policy")) policies.push(JSON.parse(String(init?.body || "{}")).senderPubkeys);
+      return new Response(JSON.stringify({ accepted: true, subscribed: true }), { status: 200 });
+    }));
+    const sign = async (event: any) => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any;
+
+    const results = await Promise.all([
+      syncPushAuthorizationPolicy(ACCOUNT, [NORMAL], sign),
+      syncPushAuthorizationPolicy(ACCOUNT, [MUTED], sign),
+      syncPushAuthorizationPolicy(ACCOUNT, [MUTED, NORMAL], sign),
+    ]);
+
+    expect(results).toEqual([true, true, true]);
+    expect(maxInFlight).toBe(1);
+    // The first run, then one follow-up with the latest list.
+    expect(policies).toEqual([[NORMAL], [MUTED, NORMAL]]);
+  });
 });

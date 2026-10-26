@@ -61,4 +61,12 @@ describe("single-trip worker auth", () => {
     expect(challenge).not.toHaveBeenCalled();
     expect(forbidden.challenge).not.toHaveBeenCalled();
   });
+
+  it("signs identical requests in the same second as distinct events", async () => {
+    const send = vi.fn(async () => json({}));
+    await Promise.all([post(send).run(), post(send).run()]);
+    const nonces = signEvent.mock.calls.map(([template]) => template.tags.filter((tag: string[]) => tag[0] === "nonce"));
+    expect(nonces.every(tags => tags.length === 1 && /^[0-9a-f]{32}$/.test(tags[0][1]))).toBe(true);
+    expect(nonces[0][0][1]).not.toBe(nonces[1][0][1]);
+  });
 });
