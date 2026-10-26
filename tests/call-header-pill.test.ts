@@ -6,10 +6,10 @@ const calls = readFileSync("src/views/Calls.vue", "utf8");
 const conversations = readFileSync("src/views/Conversations.vue", "utf8");
 describe("shared centered segmented filter", () => {
   it("uses HeaderSegmented in both pages while retaining existing filtering", () => {
-    expect(calls).toContain("<HeaderSegmented");
+    expect(calls).toContain("<HeaderSegmented aria-label=\"通话记录筛选\"");
     expect(calls).toContain('@update:model-value="missedOnly = $event === \'missed\'"');
     expect(calls).toContain("!missedOnly.value || item.missed");
-    expect(conversations).toContain("<HeaderSegmented");
+    expect(conversations).toContain("<HeaderSegmented aria-label=\"私信筛选\"");
     expect(conversations).toContain('filterMode.value === "unread" && conversation.unread <= 0');
     expect(conversations).toContain('"暂无未读私信"');
     expect(calls).not.toContain('class="calls-filters"');
