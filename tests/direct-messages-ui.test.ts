@@ -368,7 +368,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(source).toContain("私信</h1>");
     expect(source).toContain("全部");
     expect(source).toContain("未读");
-    expect(source).toContain('@click="toggleFilter"');
+    expect(source).toContain('<HeaderSegmented :options="conversationFilterOptions"');
     expect(source).toContain('filterMode = ref<"all" | "unread">("all")');
     expect(source).toContain('filterMode.value === "unread" && conversation.unread <= 0');
     expect(source).toContain("暂无未读私信");
