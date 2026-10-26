@@ -5,10 +5,9 @@
         <h1 class="primary-page-title">私信</h1>
         <span v-if="syncLabel" class="sync-label" role="status" aria-live="polite">{{ syncLabel }}</span>
       </div>
+      <HeaderSegmented :options="conversationFilterOptions" :model-value="filterMode"
+        @update:model-value="setConversationFilter" />
       <div class="conversation-header-actions">
-        <button class="conversation-filter" type="button" :aria-label="`当前显示${filterMode === 'all' ? '全部' : '未读'}私信，点击切换`" :aria-pressed="filterMode === 'unread'" @click="toggleFilter">
-          {{ filterMode === 'all' ? '全部' : '未读' }} <span aria-hidden="true">⌄</span>
-        </button>
         <button class="new-conversation-button primary-header-action" type="button" aria-label="发起新私信" @click="ui.openNewConversation()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
       </div>
     </header>
@@ -93,6 +92,7 @@ import { nearbyPresence, nearbyUnread } from "@/services/nearbyUnread";
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import NewConversationSheet from "@/components/NewConversationSheet.vue";
+import HeaderSegmented from "@/components/HeaderSegmented.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { directMessagePreview } from "@/nostr/messaging/directMessages";
 import { hasDisappearingMarker } from "@/nostr/messaging/disappearingMessages";
@@ -157,6 +157,11 @@ watch(currentSyncLabel, label => {
 }, { immediate: true });
 const stopSyncStatusListener = onAccountMessageSyncStatus(snapshot => { syncSnapshot.value = snapshot; });
 const filterMode = ref<"all" | "unread">("all");
+const unreadConversationCount = computed(() => conversations.value.filter(item => item.unread > 0).length);
+const conversationFilterOptions = computed(() => [
+  { key: "all", label: "全部" },
+  { key: "unread", label: "未读", count: unreadConversationCount.value },
+]);
 // Four 64px actions: pin, mute, hide, delete.
 const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, onTouchCancel, onTouchEnd, onTouchMove, onTouchStart, swipeStyle } = useSwipeActions({ actionWidth: 256 });
 const canonicalConversations = computed(() => buildDirectConversationSummaries(
@@ -227,8 +232,9 @@ const emptyFilteredMessage = computed(() => {
   return "暂无私信";
 });
 
-function toggleFilter() {
-  filterMode.value = filterMode.value === "all" ? "unread" : "all";
+function setConversationFilter(value: string) {
+  if (value !== "all" && value !== "unread") return;
+  filterMode.value = value;
   closeOtherSwipes();
 }
 
@@ -318,11 +324,11 @@ onDeactivated(() => {
 </script>
 
 <style scoped>
+.page-header{position:relative}
 .conversation-header-actions{display:flex;align-items:center;gap:10px}
 .assistant-avatar{display:grid;width:48px;height:48px;flex:0 0 48px;place-items:center;border-radius:50%;background:var(--bg-f1f5f9);color:var(--fg-172033)}
 .assistant-avatar svg{width:25px;height:25px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round}
 .conversations-page{position:relative;overscroll-behavior:contain;width:100%;min-height:100vh;margin:0 auto;box-sizing:border-box;padding:0 0 calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 28px);background:var(--bg-fff);color:var(--fg-0f1419)}
-.page-title{display:flex;align-items:baseline;gap:8px}.sync-label{color:var(--fg-64748b);font-size:13px;font-weight:500}.conversation-filter{display:flex;min-height:36px;align-items:center;gap:2px;padding:0 2px 0 10px;border:0;border-radius:999px;background:transparent;color:var(--fg-536471);font-size:14px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}.conversation-filter:active{background:var(--bg-f1f5f9)}.conversation-filter span{font-size:16px;line-height:1;transform:translateY(-1px)}
-.conversation-list{display:flex;width:100%;flex-direction:column;border-top:1px solid var(--bd-eff1f3)}.conversation-row{position:relative;width:100%;min-height:72px;overflow:hidden;border-bottom:1px solid var(--bd-eff1f3);background:var(--bg-fff);color:var(--fg-0f1419);touch-action:pan-y}.swipe-actions{position:absolute;inset:0 0 0 auto;display:flex}.conversation-main{position:relative;z-index:1;display:grid;width:100%;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:12px;min-width:0;min-height:72px;padding:11px 16px;border:0;background:var(--bg-fff);color:inherit;text-align:left;cursor:pointer;transition:transform .2s ease}.conversation-main:active{background:var(--bg-f7f9f9)}.conversation-copy{display:flex;min-width:0;flex-direction:column;gap:4px}.conversation-copy strong,.preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.conversation-copy strong{display:flex;min-width:0;align-items:center;gap:4px;font-size:15px}.conversation-row.pinned .conversation-main{background:var(--bg-f7f9f9)}.row-flag{width:14px;height:14px;flex:0 0 14px;fill:none;stroke:var(--fg-536471);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.unread-dot{width:9px;height:9px;margin:4px 4px 5px;border-radius:50%;background:var(--fg-94a3b8)}.preview{color:var(--fg-536471);font-size:13px}.conversation-meta{display:flex;align-items:flex-end;gap:7px;flex-direction:column;color:var(--fg-536471);font-size:11px}.unread-badge{display:grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#1d9bf0;color:#fff;font-size:10px;font-weight:700}
+.page-title{display:flex;align-items:baseline;gap:8px}.sync-label{color:var(--fg-64748b);font-size:13px;font-weight:500}.conversation-list{display:flex;width:100%;flex-direction:column;border-top:1px solid var(--bd-eff1f3)}.conversation-row{position:relative;width:100%;min-height:72px;overflow:hidden;border-bottom:1px solid var(--bd-eff1f3);background:var(--bg-fff);color:var(--fg-0f1419);touch-action:pan-y}.swipe-actions{position:absolute;inset:0 0 0 auto;display:flex}.conversation-main{position:relative;z-index:1;display:grid;width:100%;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:12px;min-width:0;min-height:72px;padding:11px 16px;border:0;background:var(--bg-fff);color:inherit;text-align:left;cursor:pointer;transition:transform .2s ease}.conversation-main:active{background:var(--bg-f7f9f9)}.conversation-copy{display:flex;min-width:0;flex-direction:column;gap:4px}.conversation-copy strong,.preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.conversation-copy strong{display:flex;min-width:0;align-items:center;gap:4px;font-size:15px}.conversation-row.pinned .conversation-main{background:var(--bg-f7f9f9)}.row-flag{width:14px;height:14px;flex:0 0 14px;fill:none;stroke:var(--fg-536471);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.unread-dot{width:9px;height:9px;margin:4px 4px 5px;border-radius:50%;background:var(--fg-94a3b8)}.preview{color:var(--fg-536471);font-size:13px}.conversation-meta{display:flex;align-items:flex-end;gap:7px;flex-direction:column;color:var(--fg-536471);font-size:11px}.unread-badge{display:grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#1d9bf0;color:#fff;font-size:10px;font-weight:700}
 .empty-state{display:flex;min-height:44vh;align-items:center;justify-content:center;flex-direction:column;gap:7px;padding:24px;color:var(--fg-536471);text-align:center}.empty-state strong{color:var(--fg-0f1419);font-size:19px}.empty-state span{font-size:14px}.empty-action{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:var(--bg-0f1419);color:#fff;font-size:14px;font-weight:650}.search-empty{padding:48px 20px;color:var(--fg-536471);font-size:14px;text-align:center}
 </style>
