@@ -4,6 +4,7 @@ import { createPinia } from "pinia";
 import App from "./App.vue";
 import "./styles.css";
 import "./theme-tokens.css";
+import "./swipeActions.css";
 import router from "./router";
 
 import { useKeyStore } from "@/stores/keys";
