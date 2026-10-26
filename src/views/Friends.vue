@@ -51,7 +51,7 @@
         <div v-for="f in filteredAcceptedFriends" :key="f.pubkey" class="friend-swipe" @touchstart="onTouchStart($event, f.pubkey)" @touchmove="onTouchMove($event, f.pubkey)" @touchend="onTouchEnd(f.pubkey)" @touchcancel="onTouchCancel(f.pubkey)">
           <div class="friend-swipe-actions">
             <button class="swipe-action edit" type="button" @click.stop="editFromSwipe(f)">编辑</button>
-            <button class="swipe-action delete" type="button" @click.stop="deleteFromSwipe(f)">删除</button>
+            <button class="swipe-action delete" type="button" :aria-label="`删除 ${contactName(f.pubkey)}`" @click.stop="deleteFromSwipe(f)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>
           </div>
           <div class="friend-item" :style="swipeStyle(f.pubkey)">
             <button class="friend-profile avatar-profile" type="button" :aria-label="`查看 ${contactName(f.pubkey)} 的资料`" @click="openFriendProfile(f.pubkey, $event)">
@@ -99,7 +99,7 @@
         <div v-for="request in outgoingRequests" :key="request.peerPubkey" class="friend-swipe" @touchstart="onTouchStart($event, request.peerPubkey)" @touchmove="onTouchMove($event, request.peerPubkey)" @touchend="onTouchEnd(request.peerPubkey)" @touchcancel="onTouchCancel(request.peerPubkey)">
           <div class="friend-swipe-actions">
             <button class="swipe-action edit" type="button" @click.stop="editPendingFromSwipe(request.peerPubkey)">编辑</button>
-            <button class="swipe-action delete" type="button" :disabled="friendships.requestDelivery(request.peerPubkey) !== 'sent' || relationshipBusy.has(request.peerPubkey)" @click.stop="withdrawFromSwipe(request.peerPubkey)">撤回</button>
+            <button class="swipe-action withdraw" type="button" :disabled="friendships.requestDelivery(request.peerPubkey) !== 'sent' || relationshipBusy.has(request.peerPubkey)" @click.stop="withdrawFromSwipe(request.peerPubkey)">撤回</button>
           </div>
           <div class="friend-item" :style="swipeStyle(request.peerPubkey)">
           <ProfileAvatar :pubkey="request.peerPubkey" :local-name="localContactName(request.peerPubkey)" :size="38" />
@@ -613,7 +613,7 @@ export default defineComponent({
     };
 
     const confirmDelete = async (friend: Friend) => {
-      if (relationshipBusy.has(friend.pubkey) || !confirm(`确定要删除好友 "${friend.name}" 吗？`)) return;
+      if (relationshipBusy.has(friend.pubkey)) return;
       relationshipBusy.add(friend.pubkey);
       try {
         await friendships.removeFriend(friend.pubkey);
@@ -660,7 +660,7 @@ export default defineComponent({
     const withdrawFromSwipe = (pubkey: string) => { closeSwipe(pubkey); void withdrawRequest(pubkey); };
 
     const withdrawRequest = async (pubkey: string) => {
-      if (relationshipBusy.has(pubkey) || !confirm("确定撤回这条好友请求吗？")) return;
+      if (relationshipBusy.has(pubkey)) return;
       relationshipBusy.add(pubkey);
       try {
         await friendships.cancelRequest(pubkey);
@@ -782,7 +782,7 @@ export default defineComponent({
 .contacts-header button:focus-visible,.contacts-requests:focus-visible,.call-contact-button:focus-visible{outline:2px solid #1687e8;outline-offset:2px}
 
 .pubkey-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.scan-qr-button{min-width:64px;border:1px solid #1687e8;border-radius:9px;background:var(--bg-fff);color:var(--fg-1687e8);font-weight:700}.optional{color:var(--fg-94a3b8);font-size:12px;font-weight:400}
-.friend-swipe{position:relative;overflow:hidden;touch-action:pan-y}.friend-swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:120px}.swipe-action{width:60px;border:0;color:#fff;font-size:12px;font-weight:650}.swipe-action.edit{background:#536471}.swipe-action.delete{background:#ef4444}.friend-swipe .friend-item{position:relative;z-index:1;background:var(--bg-fff);transition:transform .2s ease}.friends-empty{display:flex;min-height:28vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:var(--fg-64748b);text-align:center}.friends-empty strong{color:var(--fg-0f1419);font-size:18px}.friends-empty span{font-size:14px}.friends-empty button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:var(--bg-0f1419);color:#fff;font-size:14px;font-weight:650}
+.friend-swipe{position:relative;overflow:hidden;touch-action:pan-y}.friend-swipe-actions{position:absolute;inset:0 0 0 auto;display:flex;width:120px}.swipe-action{width:60px;border:0;color:#fff;font-size:12px;font-weight:650}.swipe-action.edit{background:#536471}.swipe-action.delete{flex:0 0 48px;width:48px;height:48px;margin:auto 6px;display:grid;place-items:center;border-radius:50%;background:#ef4444}.swipe-action.delete svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.swipe-action.withdraw{background:#ef4444}.friend-swipe .friend-item{position:relative;z-index:1;background:var(--bg-fff);transition:transform .2s ease}.friends-empty{display:flex;min-height:28vh;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:24px;color:var(--fg-64748b);text-align:center}.friends-empty strong{color:var(--fg-0f1419);font-size:18px}.friends-empty span{font-size:14px}.friends-empty button{min-height:40px;margin-top:8px;padding:0 18px;border:0;border-radius:999px;background:var(--bg-0f1419);color:#fff;font-size:14px;font-weight:650}
 
 .friends-container {
   position: relative;
