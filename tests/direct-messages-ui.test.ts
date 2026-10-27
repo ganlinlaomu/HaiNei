@@ -213,9 +213,13 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain('@touchstart="handleMessageTouchStart(message, $event)"');
     expect(chat).toContain('@touchmove="handleMessageTouchMove(message, $event)"');
     expect(chat).toContain("SWIPE_REPLY_THRESHOLD");
-    expect(chat).toContain("LONG_PRESS_MS");
-    expect(chat).toContain('class="message-action-menu" :class="{ dragging: actionMenuDragging }"');
-    expect(chat).toContain('@touchmove.passive="onActionMenuTouchMove"');
+    const gestures = readThemedSource(join(process.cwd(), "src/composables/useMessageGestures.ts"), "utf8");
+    const actionMenu = readThemedSource(join(process.cwd(), "src/components/MessageActionMenu.vue"), "utf8");
+    expect(gestures).toContain("LONG_PRESS_MS");
+    expect(actionMenu).toContain('class="message-action-menu" :class="{ dragging }"');
+    expect(actionMenu).toContain('@touchmove.passive="onTouchMove"');
+    expect(chat).toContain('<MessageActionMenu');
+    expect(chat).toContain(':key="actionMenuMessage.id"');
     expect(chat).toContain("actionMenuPosition");
     expect(chat).toContain('querySelector<HTMLElement>(".message-bubble")');
     expect(chat).toContain("fitsBelow");
@@ -228,8 +232,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).not.toContain('@touchstart.prevent="handleMessageTouchStart');
     expect(chat).toContain("replyFromActionMenu");
     expect(chat).toContain("copyFromActionMenu");
-    expect(chat).toContain("isMediaGestureTarget");
-    expect(chat).toContain(".post-image-preview, .optimistic-image, .voice-message");
+    expect(gestures).toContain("isMediaGestureTarget");
+    expect(gestures).toContain(".post-image-preview, .optimistic-image, .voice-message");
     expect(chat).toContain('target.scrollIntoView({ behavior: "smooth", block: "center" })');
     expect(chat).toContain("'message-highlight': highlightedMessageId === message.id");
     expect(chat).toContain("directMessages.send(peerPubkey.value, text, image, replyTo, disappearingSeconds.value ?? undefined)");
