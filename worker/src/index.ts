@@ -3,6 +3,7 @@ import { createDevicePair, pollDevicePair, offerDevicePair, deliverDevicePair, f
 import { createMediaSession } from "./media";
 import { createRelaySession, relayPublicConfig } from "./relay";
 import { createTurnCredentials } from "./turn";
+import { handleTileRequest, isTilePath } from "./tiles";
 import {
   getPushPublicKey,
   removePushSubscription, setPushForeground, acknowledgeVisibleCall,
@@ -51,6 +52,9 @@ export async function handleRequest(request: Request, env: Env) {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   const path = new URL(request.url).pathname.replace(/\/+$/, "") || "/";
   try {
+    if (isTilePath(path) && request.method === "GET") {
+      return await handleTileRequest(request, path);
+    }
     if (path === "/api/relay/config" && request.method === "GET") {
       return json(relayPublicConfig(env));
     }

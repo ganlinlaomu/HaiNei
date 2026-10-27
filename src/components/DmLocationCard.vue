@@ -12,27 +12,40 @@
     <template v-if="!live || status !== 'ended'">
       <p class="location-card-coordinates">{{ coordinates }}</p>
       <div class="location-card-actions">
-        <a class="location-card-open" :href="url" target="_blank" rel="noopener noreferrer" @click.stop>在地图中打开</a>
+        <button type="button" class="location-card-open" @click.stop="mapOpen = true">查看地图</button>
         <button v-if="ownActive" type="button" class="location-card-stop" @click.stop="stop">停止共享</button>
         <button v-else type="button" class="location-card-copy" @click.stop="copy">{{ copied ? "已复制" : "复制坐标" }}</button>
       </div>
     </template>
+    <LocationMapSheet
+      v-if="mapOpen"
+      :peer-name="own ? '我' : peerName"
+      :peer-pubkey="own ? keys.pkHex : peer"
+      :location="shown"
+      :my-location="myLocation"
+      :status="detail"
+      @close="mapOpen = false"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { formatCoordinates, mapsUrl, type LocationShare } from "@/nostr/messaging/locationShare";
+import LocationMapSheet from "@/components/LocationMapSheet.vue";
+import { formatCoordinates, type LocationShare } from "@/nostr/messaging/locationShare";
+import { useKeyStore } from "@/stores/keys";
 import { useLiveLocationStore } from "@/stores/liveLocation";
 
 /**
  * A location in a chat: a one-time position, or the opening card of a live
- * share that follows the latest in-memory update. It shows coordinates only
- * and loads no map tiles: a tile server would learn the location. "在地图中
- * 打开" hands it to the system maps app on an explicit tap.
+ * share that follows the latest in-memory update. The card itself loads no
+ * map; "查看地图" opens LocationMapSheet (tiles via the HaiNei Worker, so
+ * OSM never sees this device), which also links to the system maps app.
  */
-const props = defineProps<{ location: LocationShare; own: boolean; peer: string }>();
+const props = defineProps<{ location: LocationShare; own: boolean; peer: string; peerName: string }>();
 const liveStore = useLiveLocationStore();
+const keys = useKeyStore();
+const mapOpen = ref(false);
 const live = computed(() => props.location.live);
 // A live card that has not ended yet needs the clock for its countdown and
 // staleness, including before the first update has arrived.
@@ -76,7 +89,12 @@ const detail = computed(() => {
   return `更新于 ${info.ageSeconds < 60 ? "刚刚" : `${Math.floor(info.ageSeconds / 60)} 分钟前`} · ${remaining}`;
 });
 const coordinates = computed(() => formatCoordinates(shown.value));
-const url = computed(() => mapsUrl(shown.value));
+/** On a friend's location, also mark ours if we are sharing with them now. */
+const myLocation = computed(() => {
+  if (props.own) return undefined;
+  const share = liveStore.outgoingFor(props.peer);
+  return share && share.expiresAt > Math.floor(liveStore.now / 1000) ? share.last : undefined;
+});
 
 const copied = ref(false);
 async function copy() {

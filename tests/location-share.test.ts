@@ -87,7 +87,7 @@ describe("location UI", () => {
     const html = await render(DmLocationCard, { location: { lat: 31.23042, lng: 121.4737, accuracy: 15, at: AT }, own: false, peer: "b".repeat(64) });
     expect(html).toContain("31.23042, 121.47370");
     expect(html).toContain("精度约 ±15 米");
-    expect(html).toContain("在地图中打开");
+    expect(html).toContain("查看地图");
     expect(html).toContain("复制坐标");
     expect(html).not.toMatch(/<img|<iframe|tile/i);
   });
