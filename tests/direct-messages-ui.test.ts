@@ -154,13 +154,15 @@ describe("direct-message navigation and UI contract", () => {
     expect(recipientBranch).toContain('v-else-if="canShowTemporaryText(message)"');
     expect(chat).toContain('@click.stop="revealDisappearing(message)"');
     expect(chat).toContain('临时消息已销毁');
-    expect(chat).toContain('return !isOwn(message) && !isBurned(message)');
+    const burn = readThemedSource(join(process.cwd(), "src/composables/useBurnMessages.ts"), "utf8");
+    expect(burn).toContain('return !options.isOwn(message) && !isBurned(message)');
   });
 
   it("marks a disappearing message read only after an explicit reveal and an exact receipt", () => {
     const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const store = readThemedSource(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
-    expect(chat).toContain("void directMessages.acknowledgeOpenedDisappearing(peer, message, deadline)");
+    const burn = readThemedSource(join(process.cwd(), "src/composables/useBurnMessages.ts"), "utf8");
+    expect(burn).toContain("void directMessages.acknowledgeOpenedDisappearing(peer, message, deadline)");
     expect(store).toContain("this.scheduleOpenedBurn(peer, id, deadline)");
     expect(chat).toContain('v-if="isBurned(message)" class="burned-placeholder"');
     expect(chat).toContain('return directMessages.outgoingReceiptStatus(peerPubkey.value, message) || "sent"');
@@ -644,10 +646,11 @@ describe("direct-message navigation and UI contract", () => {
 
     expect(chat).toContain('aria-label="搜索当前聊天"');
     expect(chat).toContain('placeholder="搜索当前聊天"');
+    const search = readThemedSource(join(process.cwd(), "src/composables/useDmSearch.ts"), "utf8");
     expect(chat).toContain("scheduleSearch");
-    expect(chat).toContain("directMessages.searchPeerMessages(peer, query, {");
-    expect(chat).toContain("new AbortController()");
-    expect(chat).toContain("searchAbortController?.abort()");
+    expect(chat).toContain("directMessages.searchPeerMessages(peer, query, options)");
+    expect(search).toContain("new AbortController()");
+    expect(search).toContain("searchAbortController?.abort()");
     expect(chat).toContain("visibleSearchResults");
     expect(chat).toContain("searchComplete");
     expect(chat).toContain("directMessages.loadPeerMessageContext(peerPubkey.value, messageId, 20)");

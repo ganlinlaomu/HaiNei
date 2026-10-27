@@ -78,8 +78,9 @@ describe("burn countdown", () => {
 
   it("the chat only advances its render clock when a countdown deadline is crossed", () => {
     const chat = readFileSync("src/views/Messages.vue", "utf8");
+    const burn = readFileSync("src/composables/useBurnMessages.ts", "utf8");
     expect(chat).toContain('<DmBurnCountdown class="temporary-countdown" :deadline="openedDeadlines[message.id]" />');
-    expect(chat).toContain("deadline > clockNow.value && deadline <= now");
+    expect(burn).toContain("deadline > clockNow.value && deadline <= now");
     expect(chat).not.toContain('{{ remainingBurnSeconds(message) }}');
   });
 
