@@ -271,10 +271,10 @@ describe("direct-message navigation and UI contract", () => {
     expect(system).toContain("存储 / Cache");
     expect(system).toContain("高级设置 / Diagnostics");
     expect(system).toContain('<SecondaryPageHeader title="设置" back-label="返回我的" />');
-    expect(friends).toContain('<header class="contacts-header primary-page-header">');
+    expect(friends).toContain('<header v-else class="contacts-header primary-page-header">');
     expect(friends).toContain('<h1 class="primary-page-title">通讯录</h1>');
     expect(friends).toContain('filteredAcceptedFriends');
-    expect(friends).toContain('components: { ProfileAvatar, QrScannerSheet, SwipeLucideIcon }');
+    expect(friends).toContain('components: { ProfileAvatar, QrScannerSheet, SecondaryPageHeader, SwipeLucideIcon }');
     expect(saved).toContain('<SecondaryPageHeader title="已收藏" back-label="返回我的" />');
     expect(saved).not.toContain("收藏会先保存在本机，并通过加密同步到其他设备");
     expect(saved).not.toContain("收藏仅保存在当前设备和账号中");
@@ -305,7 +305,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(friends).toContain('relationshipBusy = reactive(new Set<string>())');
     expect(friends).toContain(':disabled="relationshipBusy.has(request.peerPubkey)"');
     expect(friends).toContain('if (relationshipBusy.has(pubkey)) return');
-    expect(friends).toContain('else activeSection.value = "accepted"');
+    expect(friends).toMatch(/else \{\s*activeSection\.value = "accepted";/);
     expect(friends).toContain("await friends.upsertMetadata(hexKey");
     expect(friends).toContain("const ok = await friends.remove(friend.pubkey)");
   });

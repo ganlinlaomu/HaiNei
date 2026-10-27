@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.151",
-  "releaseSummary": "切换到通话页不再闪烁，头像直接显示",
+  "version": "0.1.152",
+  "releaseSummary": "好友请求页的返回按钮移到顶部标题栏，支持系统返回手势",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

@@ -1,6 +1,8 @@
 <template>
   <div class="friends-container app-page">
-    <header class="contacts-header primary-page-header">
+    <SecondaryPageHeader v-if="activeSection !== 'accepted'" title="好友请求" back-label="返回通讯录"
+      back-mode="emit" @back="closeRequests" />
+    <header v-else class="contacts-header primary-page-header">
       <h1 class="primary-page-title">通讯录</h1>
       <button class="contact-add primary-header-action" type="button" aria-label="添加好友" title="添加好友" @click="startAdd"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
     </header>
@@ -9,11 +11,9 @@
       <input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索联系人、备注或分组" aria-label="搜索联系人"/>
     </label>
     <button v-if="activeSection === 'accepted'" class="contacts-requests" type="button"
-      aria-label="查看好友请求" @click="activeSection = 'incoming'">
+      aria-label="查看好友请求" @click="showSection('incoming')">
       <span>好友请求</span><strong v-if="incomingRequests.length > 0" aria-label="收到的好友请求数量">{{ incomingRequests.length }}</strong><span aria-hidden="true">›</span>
     </button>
-    <button v-else class="contacts-requests-back" type="button" aria-label="返回好友列表"
-      @click="activeSection = 'accepted'"><span aria-hidden="true">‹</span> 返回通讯录</button>
     <div v-if="initialLoading" class="friends-load-state" role="status" aria-live="polite">
       <span class="load-spinner" aria-hidden="true"></span>
       <span>正在加载好友…</span>
@@ -202,6 +202,7 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { useRoute, useRouter } from "vue-router";
 import { formatRelativeTime } from "@/utils/format";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
+import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import SwipeLucideIcon from "@/components/SwipeLucideIcon.vue";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { openProfile } from "@/utils/profileNavigation";
@@ -213,7 +214,7 @@ import { loadAccountStoresOnce, storesLoadedForAccount, waitForFirstPaint } from
 
 export default defineComponent({
   name: "Friends",
-  components: { ProfileAvatar, QrScannerSheet, SwipeLucideIcon },
+  components: { ProfileAvatar, QrScannerSheet, SecondaryPageHeader, SwipeLucideIcon },
   setup() {
     const friends = useFriendsStore();
     const friendships = useFriendshipsStore();
@@ -231,6 +232,34 @@ export default defineComponent({
     const relationshipBusy = reactive(new Set<string>());
     const editingPending = ref(false);
     const activeSection = ref<"accepted" | "incoming" | "outgoing">("accepted");
+    // The request view is a route state (?section=), so the system back
+    // gesture/button returns to the contact list like any secondary page.
+    let requestsPushed = false;
+    const withSection = (section?: "incoming" | "outgoing") => {
+      const query = { ...route.query };
+      if (section) query.section = section;
+      else delete query.section;
+      return { query };
+    };
+    function showSection(section: "incoming" | "outgoing") {
+      activeSection.value = section;
+      if (route.query.section === section) return;
+      if (route.query.section) {
+        void router.replace(withSection(section));
+      } else {
+        requestsPushed = true;
+        void router.push(withSection(section));
+      }
+    }
+    function closeRequests() {
+      activeSection.value = "accepted";
+      if (!route.query.section) return;
+      // Pop the entry we pushed; a deep link (e.g. from a notification) has
+      // none to pop, so replace it instead of leaving the app's history.
+      if (requestsPushed) router.back();
+      else void router.replace(withSection());
+      requestsPushed = false;
+    }
     const call = useCallStore();
     const callBusy = ref(false);
     const searchQuery = ref("");
@@ -374,7 +403,10 @@ export default defineComponent({
     watch(() => route.query.section, section => {
       if (section === "incoming") activeSection.value = "incoming";
       else if (section === "outgoing") activeSection.value = "outgoing";
-      else activeSection.value = "accepted";
+      else {
+        activeSection.value = "accepted";
+        requestsPushed = false;
+      }
     }, { immediate: true });
     watch(showModal, visible => {
       ui.setBlockingOverlay("friends-editor", visible);
@@ -417,7 +449,7 @@ export default defineComponent({
       if (state === "incoming_pending") {
         ui.addToast("对方正在等待你的确认", 2_200, "info");
         showModal.value = false;
-        activeSection.value = "incoming";
+        showSection("incoming");
         return;
       }
 
@@ -571,13 +603,13 @@ export default defineComponent({
           if (currentState === "outgoing_pending") {
             ui.addToast("好友请求已保存，请在已发送列表查看进度", 2200, "info");
             closeModal(true);
-            activeSection.value = "outgoing";
+            showSection("outgoing");
             return;
           }
           if (currentState === "incoming_pending") {
             ui.addToast("对方正在等待你的确认", 2200, "info");
             closeModal(true);
-            activeSection.value = "incoming";
+            showSection("incoming");
             return;
           }
 
@@ -597,7 +629,7 @@ export default defineComponent({
           await friendships.sendRequest(hexKey);
           if (keys.pkHex !== account) return;
           ui.addToast("好友请求已保存，正在发送", 2400, "success");
-          activeSection.value = "outgoing";
+          showSection("outgoing");
           closeModal(true);
         }
       } catch (e) {
@@ -727,6 +759,8 @@ export default defineComponent({
       incomingRequests,
       outgoingRequests,
       activeSection,
+      showSection,
+      closeRequests,
       contactName,
       localContactName,
       requestAge,
@@ -776,8 +810,6 @@ export default defineComponent({
 <style scoped>
 .contacts-requests{display:flex;align-items:center;gap:12px;width:calc(100% - 32px);min-height:52px;margin:0 16px 12px;padding:0 13px;border:0;border-radius:12px;background:var(--bg-eef2f6);color:var(--fg-172033);font-size:14px}
 .contacts-requests span:first-child{flex:1;text-align:left}.contacts-requests strong{display:grid;place-items:center;min-width:22px;height:22px;padding:0 5px;border-radius:999px;background:#ef4444;color:white;font-size:12px}
-.contacts-requests-back{display:flex;align-items:center;gap:8px;margin:0 16px 12px;padding:0 8px;min-height:44px;border:0;background:transparent;color:var(--fg-1687e8);font:inherit;font-size:14px;cursor:pointer}
-.contacts-requests-back span{font-size:28px;line-height:1}
 .call-contact-button:disabled{opacity:.35}
 .contacts-header button:focus-visible,.contacts-requests:focus-visible,.call-contact-button:focus-visible{outline:2px solid #1687e8;outline-offset:2px}
 
