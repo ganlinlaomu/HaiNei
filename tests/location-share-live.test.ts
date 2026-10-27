@@ -33,6 +33,7 @@ import { createHomeMessageHandler } from "@/nostr/messaging/homeDelivery";
 import { decodeMessageEvent, encryptDirectMessage, decryptDirectMessage, nip17Adapter } from "@/nostr/messaging/protocol";
 import { distanceMetres, LIVE_STALE_SECONDS, useLiveLocationStore } from "@/stores/liveLocation";
 import DmLocationCard from "@/components/DmLocationCard.vue";
+import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import LocationShareSheet from "@/components/LocationShareSheet.vue";
 
 const ACCOUNT = "a".repeat(64);
@@ -118,6 +119,38 @@ describe("live location payloads", () => {
 });
 
 describe("receiving a live share", () => {
+  it("treats the opening card as the position until an update arrives, then follows updates", () => {
+    vi.useFakeTimers();
+    const store = useLiveLocationStore();
+    store.now = Date.now();
+    const opening = { lat: 31.2, lng: 121.4, at: now(), live: { id: ID, expiresAt: now() + 900 } };
+    expect(store.incomingStatus(ID, PEER, opening)).toMatchObject({ state: "live", location: { lat: 31.2 } });
+    vi.advanceTimersByTime((LIVE_STALE_SECONDS + 5) * 1000);
+    store.now = Date.now();
+    // No update at all: "stale" (the sender may be in the background), never "ended".
+    expect(store.incomingStatus(ID, PEER, opening).state).toBe("stale");
+    store.receiveControl(update(1, 31.3, opening.live.expiresAt));
+    expect(store.incomingStatus(ID, PEER, opening)).toMatchObject({ state: "live", location: { lat: 31.3 } });
+    vi.advanceTimersByTime(901_000);
+    store.now = Date.now();
+    expect(store.incomingStatus(ID, PEER, opening).state).toBe("ended");
+  });
+
+  it("keeps the clock running for a visible card even with no update yet", () => {
+    const store = useLiveLocationStore();
+    // The clock is module state: clear one an earlier test left on real timers.
+    store.stopRuntimeIfIdle();
+    vi.useFakeTimers();
+    const release = store.holdClock();
+    const before = store.now;
+    vi.advanceTimersByTime(31_000);
+    expect(store.now).toBeGreaterThan(before);
+    release();
+    const stopped = store.now;
+    vi.advanceTimersByTime(31_000);
+    expect(store.now).toBe(stopped);
+  });
+
   it("keeps the newest update, ignores replays, other senders and our own copies", () => {
     const store = useLiveLocationStore();
     store.receiveControl(update(2, 31.2));
@@ -168,6 +201,8 @@ describe("sharing our location", () => {
     expect(mocks.sendFastControl).toHaveBeenCalledOnce();
     const sent = mocks.sendFastControl.mock.calls[0][0];
     expect(sent.wrapTtlSeconds).toBe(600);
+    // The built-in relays both sides share, plus our own write relays.
+    expect(sent.relays).toEqual(expect.arrayContaining(["wss://relay.test", ...DEFAULT_RELAY_URLS]));
     expect(sent.tags).toEqual(liveLocationControlTags());
     expect(decodeLiveLocationControl({ tags: sent.tags, plaintext: sent.content })).toMatchObject({ kind: "update", seq: 1 });
 
@@ -217,9 +252,19 @@ describe("live location UI", () => {
     expect(live).toContain("实时位置");
     expect(live).toContain("31.25000, 121.40000");
     expect(live).toMatch(/更新于 刚刚 · 剩余 15 分钟/);
-    const ended = await render(DmLocationCard, { location: card(), own: false, peer: PEER });
+    const ended = await render(DmLocationCard, { location: card(now() - 1), own: false, peer: PEER });
     expect(ended).toContain("位置共享已结束");
     expect(ended).not.toContain("31.20000");
+    const stopped = await render(DmLocationCard, { location: card(), own: false, peer: PEER }, store => store.receiveControl(stop()));
+    expect(stopped).toContain("位置共享已结束");
+  });
+
+  it("shows the opening card as live before the first update arrives (it used to say ended)", async () => {
+    const html = await render(DmLocationCard, { location: { ...card(), at: now() }, own: false, peer: PEER });
+    expect(html).toContain("实时位置");
+    expect(html).not.toContain("位置共享已结束");
+    expect(html).toContain("31.20000, 121.40000");
+    expect(html).toMatch(/更新于 刚刚 · 剩余 15 分钟/);
   });
 
   it("offers to stop our own running share", async () => {

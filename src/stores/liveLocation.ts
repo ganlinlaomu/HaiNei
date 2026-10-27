@@ -10,6 +10,7 @@ import {
 } from "@/nostr/messaging/locationShare";
 import { sendFastControl } from "@/nostr/messaging/service";
 import { getRelaysFromStorage } from "@/nostr/relays";
+import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { useDirectMessagesStore } from "@/stores/directMessages";
 import { useKeyStore } from "@/stores/keys";
@@ -61,6 +62,8 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
 let watchId: number | null = null;
 let clock: ReturnType<typeof setInterval> | null = null;
 let visibilityListener: (() => void) | null = null;
+/** Live cards on screen keep the clock running even before any update arrives. */
+let clockHolds = 0;
 
 /**
  * Live location sharing for the signed-in account. Not tied to a page, so a
@@ -83,16 +86,23 @@ export const useLiveLocationStore = defineStore("liveLocation", {
     outgoingFor(peer: string) {
       return this.outgoing[peer.toLowerCase()];
     },
-    /** What a card for share `id` from `peer` should show right now. */
-    incomingStatus(id: string, peer: string): LiveShareStatus {
+    /**
+     * What a card for share `id` from `peer` should show right now. Until the
+     * first update arrives, the opening card itself is the latest position
+     * (the sender's first update can be up to 30 s later).
+     */
+    incomingStatus(id: string, peer: string, opening?: LocationShare): LiveShareStatus {
       const share = this.incoming[id];
       const now = Math.floor(this.now / 1000);
-      if (!share || share.peer !== peer.toLowerCase() || share.stopped || !share.location || share.expiresAt <= now) return { state: "ended" };
-      const ageSeconds = Math.max(0, now - share.location.at);
+      if (share && (share.peer !== peer.toLowerCase() || share.stopped)) return { state: "ended" };
+      const location = share?.location ?? (opening?.live?.id === id ? opening : undefined);
+      const expiresAt = share?.expiresAt ?? opening?.live?.expiresAt ?? 0;
+      if (!location || expiresAt <= now) return { state: "ended" };
+      const ageSeconds = Math.max(0, now - location.at);
       return {
         state: ageSeconds > LIVE_STALE_SECONDS ? "stale" : "live",
-        location: share.location,
-        remainingSeconds: share.expiresAt - now,
+        location,
+        remainingSeconds: expiresAt - now,
         ageSeconds,
       };
     },
@@ -141,6 +151,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
         this.incoming[control.id] = existing
           ? { ...existing, stopped: true }
           : { peer, id: control.id, expiresAt: control.at + 3600, seq: Number.MAX_SAFE_INTEGER, receivedAt: Date.now(), stopped: true };
+        debugLog("system", "live_location_stopped", {}, "info");
         return;
       }
       if (control.expiresAt <= nowSeconds()) return;
@@ -149,6 +160,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
         peer, id: control.id, expiresAt: control.expiresAt, seq: control.seq,
         location: control.location, receivedAt: Date.now(), stopped: false,
       };
+      debugLog("system", "live_location_received", { seq: control.seq, ageSeconds: Math.max(0, nowSeconds() - control.location.at) }, "info");
       this.startClock();
     },
 
@@ -160,7 +172,9 @@ export const useLiveLocationStore = defineStore("liveLocation", {
           recipientPubkeys: [share.peer],
           content,
           tags: liveLocationControlTags(),
-          relays: getRelaysFromStorage("write"),
+          // Like call signals: the built-in relays are the channel both sides
+          // always share, plus ours, so a friend with other relays still gets it.
+          relays: [...new Set([...DEFAULT_RELAY_URLS, ...getRelaysFromStorage("write")])],
           wrapTtlSeconds,
           context: {
             senderPubkey: share.account,
@@ -214,6 +228,18 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       this.stopRuntimeIfIdle();
     },
 
+    /** A visible live card: keep "剩余 N 分钟" and staleness current. Returns the release. */
+    holdClock() {
+      clockHolds += 1;
+      this.startClock();
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        clockHolds = Math.max(0, clockHolds - 1);
+        this.stopRuntimeIfIdle();
+      };
+    },
     startClock() {
       if (clock) return;
       this.now = Date.now();
@@ -240,7 +266,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       watchId = null;
       if (visibilityListener && typeof document !== "undefined") document.removeEventListener("visibilitychange", visibilityListener);
       visibilityListener = null;
-      if (!Object.keys(this.incoming).length && clock) {
+      if (!Object.keys(this.incoming).length && !clockHolds && clock) {
         clearInterval(clock);
         clock = null;
       }

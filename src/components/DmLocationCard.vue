@@ -21,7 +21,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { formatCoordinates, mapsUrl, type LocationShare } from "@/nostr/messaging/locationShare";
 import { useLiveLocationStore } from "@/stores/liveLocation";
 
@@ -34,13 +34,20 @@ import { useLiveLocationStore } from "@/stores/liveLocation";
 const props = defineProps<{ location: LocationShare; own: boolean; peer: string }>();
 const liveStore = useLiveLocationStore();
 const live = computed(() => props.location.live);
+// A live card that has not ended yet needs the clock for its countdown and
+// staleness, including before the first update has arrived.
+let releaseClock: (() => void) | null = null;
+onMounted(() => {
+  if (live.value && live.value.expiresAt > Math.floor(Date.now() / 1000)) releaseClock = liveStore.holdClock();
+});
+onBeforeUnmount(() => releaseClock?.());
 const remainingMinutes = (seconds: number) => Math.max(1, Math.ceil(seconds / 60));
 
 /** Our share is running only on the device that runs it, and only until it ends. */
 const ownActive = computed(() => props.own && !!live.value
   && liveStore.outgoingFor(props.peer)?.id === live.value.id
   && live.value.expiresAt > Math.floor(liveStore.now / 1000));
-const incoming = computed(() => !props.own && live.value ? liveStore.incomingStatus(live.value.id, props.peer) : null);
+const incoming = computed(() => !props.own && live.value ? liveStore.incomingStatus(live.value.id, props.peer, props.location) : null);
 const status = computed<"once" | "live" | "stale" | "ended">(() => {
   if (!live.value) return "once";
   if (props.own) return ownActive.value ? "live" : "ended";
