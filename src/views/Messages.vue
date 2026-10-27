@@ -352,47 +352,17 @@
       </form>
       <input ref="imageInput" class="attachment-file-input sr-file-input" type="file" accept="image/*" :disabled="!accepted || !keys.pkHex" @change="selectImage" />
     </div>
-    <div v-if="recommendationPickerOpen" class="recommendation-picker-overlay" @click.self="closeRecommendationPicker">
-      <section class="recommendation-picker" role="dialog" aria-modal="true" aria-label="推荐朋友">
-        <header class="recommendation-picker-header">
-          <h2>推荐朋友</h2>
-          <button type="button" aria-label="关闭推荐朋友" @click="closeRecommendationPicker">×</button>
-        </header>
-        <template v-if="selectedRecommendation">
-          <div class="recommendation-send-preview">
-            <span class="recommendation-eyebrow">确认推荐的名片</span>
-            <div class="recommendation-identity">
-              <ProfileAvatar :pubkey="selectedRecommendation.pubkey" :size="44" />
-              <div class="recommendation-identity-text">
-                <strong>{{ selectedRecommendation.nickname || "未设置昵称" }}</strong>
-                <small>{{ shortNpub(selectedRecommendation.pubkey, 13, 8) }}</small>
-              </div>
-            </div>
-            <p class="recommendation-bio">{{ selectedRecommendation.bio || "暂无简介" }}</p>
-          </div>
-          <p class="recommendation-privacy-note">确认后会将该好友本人设置的昵称和简介作为名片快照，以加密私信发送给 {{ displayName }}。对方即使还不是他的好友，也能看到这些资料。</p>
-          <div class="recommendation-confirm-actions">
-            <button type="button" @click="selectedRecommendation = null">返回选择</button>
-            <button type="button" class="recommendation-confirm-send" @click="sendRecommendation">确认发送</button>
-          </div>
-        </template>
-        <template v-else>
-          <p class="recommendation-picker-help">选择一位好友，将其昵称、简介和公钥加密发送给 {{ displayName }}。</p>
-          <input v-model.trim="recommendationQuery" class="recommendation-search" type="search" autocomplete="off" placeholder="搜索好友" aria-label="搜索要推荐的好友" />
-          <div class="recommendation-picker-list">
-            <button v-for="friend in recommendableFriends" :key="friend.pubkey" class="recommendation-picker-item" type="button" @click="selectRecommendation(friend.pubkey)">
-              <ProfileAvatar :pubkey="friend.pubkey" :local-name="recommendationPickerName(friend.pubkey)" :size="40" />
-              <span class="recommendation-picker-identity">
-                <strong>{{ recommendationPickerName(friend.pubkey) }}</strong>
-                <small>{{ recommendationPickerBio(friend.pubkey) || "暂无简介" }}</small>
-              </span>
-              <span class="recommendation-picker-arrow" aria-hidden="true">→</span>
-            </button>
-            <p v-if="recommendableFriends.length === 0" class="recommendation-picker-empty">没有可推荐的好友</p>
-          </div>
-        </template>
-      </section>
-    </div>
+    <RecommendationPicker
+      v-if="recommendationPickerOpen"
+      v-model:query="recommendationQuery"
+      :peer-name="displayName"
+      :selected="selectedRecommendation"
+      :candidates="recommendableFriends"
+      @close="closeRecommendationPicker"
+      @select="selectRecommendation"
+      @back="selectedRecommendation = null"
+      @confirm="sendRecommendation"
+    />
   </main>
 </template>
 
@@ -409,8 +379,9 @@ import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import MentionText from "@/components/MentionText.vue";
 import MessageActionMenu from "@/components/MessageActionMenu.vue";
+import RecommendationPicker from "@/components/RecommendationPicker.vue";
 import { DIRECT_MESSAGE_TYPE, directMessagePreview } from "@/nostr/messaging/directMessages";
-import { parseFriendRecommendation, serializeFriendRecommendation, type FriendRecommendation } from "@/nostr/messaging/friendRecommendation";
+import { parseFriendRecommendation } from "@/nostr/messaging/friendRecommendation";
 import { shortNpub } from "@/utils/nostrQr";
 import { hasDisappearingMarker, DISAPPEARING_DM_TYPE, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -440,6 +411,8 @@ import { useMentionComposer } from "@/composables/useMentionComposer";
 import { useDmSearch } from "@/composables/useDmSearch";
 import { useBurnMessages } from "@/composables/useBurnMessages";
 import { useVoiceRecorder } from "@/composables/useVoiceRecorder";
+import { useDmDraft } from "@/composables/useDmDraft";
+import { useFriendRecommendations } from "@/composables/useFriendRecommendations";
 import { SWIPE_INTENT_THRESHOLD, SWIPE_REPLY_THRESHOLD, useMessageGestures } from "@/composables/useMessageGestures";
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import { dmDeliveryLabel } from "@/utils/networkOperationFeedback";
@@ -526,6 +499,16 @@ const lookupMessage = (id?: string) => id
   ? messages.value.find(message => message.id === id) || searchContextMessages.value.find(message => message.id === id)
   : undefined;
 const replyingToMessage = computed(() => lookupMessage(replyingToId.value) || (draftReplyMessage.value?.id === replyingToId.value ? draftReplyMessage.value : undefined));
+const { scheduleDraftSave, flushDraft, pauseDraftPersistence, restoreDraft, clearAfterSend } = useDmDraft({
+  account: () => keys.pkHex,
+  peer: () => peerPubkey.value,
+  isDisposed: () => disposed,
+  messages: () => messages.value,
+  draft,
+  replyingToId,
+  draftReplyMessage,
+  directMessages,
+});
 const {
   searchOpen, searchQuery, searchResults, searching, searchComplete,
   visibleSearchResults, hiddenSearchResultCount, searchStatusText,
@@ -538,15 +521,14 @@ const {
 const searchInput = ref<HTMLInputElement | null>(null);
 const selectedImage = ref<{ file: File; preview: string } | null>(null);
 const attachmentMenuOpen = ref(false);
-const recommendationPickerOpen = ref(false);
-const recommendationQuery = ref("");
-const selectedRecommendation = ref<FriendRecommendation | null>(null);
-const recommendationRequestPubkey = ref("");
-const recommendableFriends = computed(() => {
-  const query = recommendationQuery.value.trim().toLocaleLowerCase();
-  return friends.getAcceptedList(friendships.isAccepted)
-    .filter(friend => friend.pubkey !== peerPubkey.value && friend.pubkey !== keys.pkHex)
-    .filter(friend => !query || [recommendationPickerName(friend.pubkey), friend.pubkey].some(value => value.toLocaleLowerCase().includes(query)));
+const {
+  recommendationPickerOpen, recommendationQuery, selectedRecommendation, recommendableFriends,
+  recommendationName, recommendationBio, recommendationActionLabel, recommendationActionDisabled,
+  actOnRecommendation, showRecommendationPicker, closeRecommendationPicker, selectRecommendation, sendRecommendation,
+} = useFriendRecommendations({
+  peer: () => peerPubkey.value,
+  accepted: () => accepted.value,
+  isDisposed: () => disposed,
 });
 const disappearingSeconds = ref<BurnDuration | null>(null);
 const {
@@ -665,59 +647,10 @@ let restoreOverflowAnchorFrame: number | null = null;
 let disposed = false;
 let composerFocused = false;
 let composerFocusSettleTimer: number | null = null;
-let draftSaveTimer: number | null = null;
-let draftReady = false;
-let suppressDraftPersistence = false;
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
 const messageText = (content: string) => ["[图片]", "[语音]", "[好友推荐]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
 const friendRecommendation = parseFriendRecommendation;
-// Only profiles delivered by their own author to this account are trusted as owner-authored.
-function ownKnownRecommendationProfile(pubkey: string) {
-  return profiles.loadedFor === keys.pkHex && friendships.isAccepted(pubkey)
-    ? profiles.getProfile(pubkey)
-    : undefined;
-}
-function recommendationName(card: FriendRecommendation) {
-  return ownKnownRecommendationProfile(card.pubkey)?.nickname?.trim() || card.nickname || "未设置昵称";
-}
-function recommendationBio(card: FriendRecommendation) {
-  return ownKnownRecommendationProfile(card.pubkey)?.bio?.trim() || card.bio || "";
-}
-function recommendationPickerName(pubkey: string) {
-  return ownKnownRecommendationProfile(pubkey)?.nickname?.trim() || shortNpub(pubkey, 13, 8) || "未设置昵称";
-}
-function recommendationPickerBio(pubkey: string) {
-  return ownKnownRecommendationProfile(pubkey)?.bio?.trim() || "";
-}
-function recommendationActionLabel(pubkey: string) {
-  if (pubkey === keys.pkHex) return "这是你自己";
-  const status = friendships.getState(pubkey);
-  if (status === "accepted") return "查看资料";
-  if (status === "outgoing_pending") return "申请已保存";
-  if (status === "incoming_pending") return "接受好友申请";
-  return "添加好友";
-}
-function recommendationActionDisabled(pubkey: string) {
-  return !keys.pkHex || pubkey === keys.pkHex || recommendationRequestPubkey.value !== ""
-    || friendships.getState(pubkey) === "outgoing_pending"
-    || (friendships.getState(pubkey) !== "accepted" && !keys.supportsNip44);
-}
-async function actOnRecommendation(pubkey: string) {
-  if (recommendationActionDisabled(pubkey)) return;
-  if (friendships.isAccepted(pubkey)) return void openProfile(router, keys.pkHex, pubkey);
-  const account = keys.pkHex;
-  recommendationRequestPubkey.value = pubkey;
-  try {
-    if (friendships.getState(pubkey) === "incoming_pending") await friendships.acceptRequest(pubkey);
-    else await friendships.sendRequest(pubkey);
-    if (!disposed && keys.pkHex === account) ui.addToast(friendships.isAccepted(pubkey) ? "已添加好友" : "好友申请已保存，正在发送", 2000, "success");
-  } catch (error) {
-    if (!disposed && keys.pkHex === account) ui.addToast(error instanceof Error ? error.message : "操作失败，请稍后重试", 2200, "error");
-  } finally {
-    recommendationRequestPubkey.value = "";
-  }
-}
 const audioMedia = (message: InboxItem) => parsePrivateAudioMessage(message.content)?.media || null;
 const hasAudio = (message: InboxItem) => !!message.outgoing?.hasAudio || !!audioMedia(message);
 const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreviewUrl || hasImage(message.content);
@@ -975,28 +908,6 @@ function exitSearchContext() {
   searchContextMessages.value = [];
   resetMessageWindow();
 }
-function clearDraftSaveTimer() {
-  if (draftSaveTimer !== null) window.clearTimeout(draftSaveTimer);
-  draftSaveTimer = null;
-}
-function scheduleDraftSave() {
-  if (!draftReady || suppressDraftPersistence) return;
-  clearDraftSaveTimer();
-  const account = keys.pkHex;
-  const peer = peerPubkey.value;
-  const text = draft.value;
-  const replyTo = replyingToId.value || undefined;
-  if (!account || !peer) return;
-  draftSaveTimer = window.setTimeout(() => {
-    draftSaveTimer = null;
-    void directMessages.saveDraft(peer, { text, replyTo }, account);
-  }, 300);
-}
-function flushDraft(account: string = keys.pkHex, peer: string = peerPubkey.value) {
-  clearDraftSaveTimer();
-  if (!draftReady || suppressDraftPersistence || !account || !peer) return;
-  return directMessages.saveDraft(peer, { text: draft.value, replyTo: replyingToId.value || undefined }, account);
-}
 const stopBeforeLock = onBeforeAccountLock(async account => {
   if (account !== keys.pkHex) return;
   // Do not leave an unlocked temporary message mounted while the account locks.
@@ -1004,24 +915,8 @@ const stopBeforeLock = onBeforeAccountLock(async account => {
   stopBurnClock();
   closeRecommendationPicker();
   await flushDraft(account);
-  draftReady = false;
+  pauseDraftPersistence();
 });
-async function restoreDraft(account: string, peer: string) {
-  draftReady = false;
-  clearDraftSaveTimer();
-  const saved = await directMessages.loadDraft(peer, account);
-  if (disposed || keys.pkHex !== account || peerPubkey.value !== peer) return;
-  draft.value = saved?.text || "";
-  replyingToId.value = saved?.replyTo || "";
-  draftReplyMessage.value = undefined;
-  if (saved?.replyTo && !messages.value.some(message => message.id === saved.replyTo)) {
-    const context = await directMessages.loadPeerMessageContext(peer, saved.replyTo, 0);
-    if (disposed || keys.pkHex !== account || peerPubkey.value !== peer) return;
-    draftReplyMessage.value = context.find(message => message.id === saved.replyTo);
-  }
-  await nextTick();
-  draftReady = true;
-}
 function setMessageListToBottom() {
   const list = messageList.value;
   refreshRetainedPlaybackMessage();
@@ -1353,37 +1248,8 @@ function openRecommendationPicker() {
     ui.addToast("当前账号无法发送加密好友名片", 2000, "info");
     return;
   }
-  recommendationQuery.value = "";
-  selectedRecommendation.value = null;
   textInput.value?.blur();
-  recommendationPickerOpen.value = true;
-}
-function closeRecommendationPicker() {
-  recommendationPickerOpen.value = false;
-  recommendationQuery.value = "";
-  selectedRecommendation.value = null;
-}
-function selectRecommendation(pubkey: string) {
-  if (!accepted.value || !friendships.isAccepted(pubkey)
-    || pubkey === peerPubkey.value || pubkey === keys.pkHex) return;
-  const profile = ownKnownRecommendationProfile(pubkey);
-  selectedRecommendation.value = {
-    pubkey,
-    ...(profile?.nickname?.trim() ? { nickname: profile.nickname.trim() } : {}),
-    ...(profile?.bio?.trim() ? { bio: profile.bio.trim() } : {}),
-  };
-}
-function sendRecommendation() {
-  const card = selectedRecommendation.value;
-  if (!card || !recommendationPickerOpen.value || !accepted.value || !friendships.isAccepted(card.pubkey)
-    || card.pubkey === peerPubkey.value || card.pubkey === keys.pkHex) return;
-  try {
-    directMessages.send(peerPubkey.value, serializeFriendRecommendation(card.pubkey, card), undefined, undefined, undefined, { preserveDraft: true });
-    closeRecommendationPicker();
-    ui.addToast("好友名片已加入发送队列", 1800, "success");
-  } catch (error) {
-    ui.addToast(error instanceof Error ? error.message : "推荐朋友失败", 2200, "error");
-  }
+  showRecommendationPicker();
 }
 function chooseImageFromMenu() {
   attachmentMenuOpen.value = false;
@@ -1442,14 +1308,10 @@ function submitMessage() {
     const replyTo = replyingToMessage.value?.id;
     try {
       directMessages.sendAudio(peerPubkey.value, audio, replyTo);
-      clearDraftSaveTimer();
-      suppressDraftPersistence = true;
-      draft.value = "";
-      clearRecordedAudio();
-      cancelReply();
-      void nextTick(() => {
-        suppressDraftPersistence = false;
-        if (draft.value || replyingToId.value) scheduleDraftSave();
+      clearAfterSend(() => {
+        draft.value = "";
+        clearRecordedAudio();
+        cancelReply();
       });
     } catch (error) {
       voiceError.value = error instanceof Error ? error.message : "语音发送失败";
@@ -1464,14 +1326,10 @@ function submitMessage() {
     directMessages.send(peerPubkey.value, text, image, replyTo, disappearingSeconds.value ?? undefined);
     disappearingSeconds.value = null;
     attachmentMenuOpen.value = false;
-    clearDraftSaveTimer();
-    suppressDraftPersistence = true;
-    draft.value = "";
-    removeSelectedImage();
-    cancelReply();
-    void nextTick(() => {
-      suppressDraftPersistence = false;
-      if (draft.value || replyingToId.value) scheduleDraftSave();
+    clearAfterSend(() => {
+      draft.value = "";
+      removeSelectedImage();
+      cancelReply();
     });
   } catch (error) {
     ui.addToast(error instanceof Error ? error.message : "发送失败，请稍后重试", 2200, "error");
@@ -1558,8 +1416,7 @@ watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
   closeRecommendationPicker();
   openingMessageId.value = "";
   if (previous?.[0] && previous?.[1]) flushDraft(previous[0], previous[1]);
-  draftReady = false;
-  clearDraftSaveTimer();
+  pauseDraftPersistence();
   closeSearch();
   exitSearchContext();
   cancelVoiceRecording();
@@ -1663,8 +1520,7 @@ onBeforeUnmount(() => {
   stopBeforeLock();
   disposed = true;
   flushDraft();
-  draftReady = false;
-  clearDraftSaveTimer();
+  pauseDraftPersistence();
   cancelSearchRequest();
   window.removeEventListener("pagehide", handlePageHide);
   document.removeEventListener("visibilitychange", handleBurnVisibility);
@@ -1714,7 +1570,7 @@ onBeforeUnmount(() => {
 .temporary-composer-mode{display:flex;align-items:center;gap:8px;margin:0 24px 7px;padding:6px 9px 6px 12px;border:1px solid var(--bd-f4ddd9);border-radius:13px;background:var(--bg-fff8f7);color:var(--fg-94423c);font-size:12px}
 .temporary-composer-mode>span{font-weight:650;flex:1;white-space:nowrap}.temporary-composer-mode label{color:var(--fg-8d5752)}.temporary-composer-mode select{max-width:100px;min-height:30px;padding:3px 6px;border:1px solid var(--bd-e9c8c3);border-radius:9px;background:var(--bg-fff);color:var(--fg-5d342f);font:inherit;font-size:13px}
 .temporary-composer-mode button{width:28px;height:30px;flex-shrink:0;padding:0;border:0;background:transparent;color:var(--fg-8d5752);font-size:23px}
-/* NIP-17 friend recommendation cards and friend picker. */
+/* NIP-17 friend recommendation cards (the picker is RecommendationPicker.vue). */
 .message-line .recommendation-bubble{min-width:215px;max-width:min(80vw,320px);padding:0;border:1px solid var(--bd-e1e7ed);background:var(--bg-fff);color:var(--fg-0f1419);overflow:hidden}
 .recommended-friend-card{display:flex;flex-direction:column;gap:10px;min-width:215px;padding:14px;box-sizing:border-box}
 .recommendation-eyebrow{font-size:11px;font-weight:700;color:var(--fg-536471)}
@@ -1726,19 +1582,6 @@ onBeforeUnmount(() => {
 .recommendation-action{min-height:38px;padding:8px;border:0;border-radius:10px;background:#1687e8;color:#fff;font-size:13px;font-weight:650}
 .recommendation-action:disabled{background:var(--bg-eef2f6);color:var(--fg-8493a2)}
 .recommendation-hint{color:var(--fg-8b98a5);font-size:10px;line-height:1.45}
-.recommendation-picker-overlay{position:fixed;z-index:30;inset:0;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.36)}
-.recommendation-picker{width:100%;max-width:640px;max-height:min(76vh,640px);display:flex;flex-direction:column;gap:12px;box-sizing:border-box;padding:18px 18px calc(18px + env(safe-area-inset-bottom));border-radius:22px 22px 0 0;background:var(--bg-fff);box-shadow:0 -14px 45px rgba(15,23,42,.12)}
-.recommendation-picker-header{display:flex;justify-content:space-between;align-items:center}
-.recommendation-picker-header h2{font-size:18px;margin:0}.recommendation-picker-header button{width:34px;height:34px;border:0;background:var(--bg-f1f5f9);border-radius:50%;font-size:24px;color:var(--fg-475569)}
-.recommendation-picker-help{margin:0;color:var(--fg-64748b);font-size:12px;line-height:1.5}
-.recommendation-search{width:100%;min-height:42px;box-sizing:border-box;padding:0 13px;border:1px solid var(--bd-e2e8f0);border-radius:11px;background:var(--bg-f8fafc);font:inherit;font-size:16px;outline-offset:2px}
-.recommendation-picker-list{min-height:64px;overflow:auto;overscroll-behavior:contain}
-.recommendation-picker-item{display:flex;width:100%;min-height:64px;align-items:center;gap:11px;padding:8px 2px;border:0;border-bottom:1px solid var(--bd-f1f5f9);background:var(--bg-fff);text-align:left;color:var(--fg-0f1419);font-size:14px}
-.recommendation-picker-identity{display:flex;min-width:0;flex:1;flex-direction:column;gap:3px}.recommendation-picker-identity strong{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.recommendation-picker-identity small{color:var(--fg-64748b);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.recommendation-send-preview{display:flex;flex-direction:column;gap:11px;border:1px solid var(--bd-e2e8f0);border-radius:15px;padding:14px}
-.recommendation-privacy-note{color:var(--fg-64748b);font-size:12px;line-height:1.6;margin:0}
-.recommendation-confirm-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.recommendation-confirm-actions button{min-height:44px;border:1px solid var(--bd-cbd5e1);border-radius:12px;background:var(--bg-fff);color:var(--fg-334155);font-weight:650;font:inherit}.recommendation-confirm-actions .recommendation-confirm-send{background:#1687e8;border-color:#1687e8;color:#fff}
-.recommendation-picker-arrow{color:var(--fg-94a3b8)}.recommendation-picker-empty{padding:16px;text-align:center;color:var(--fg-64748b);font-size:13px}
 .sr-file-input{position:absolute!important;width:1px!important;height:1px!important;left:-9999px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}
 .message-line .disappearing-bubble{min-width:154px;max-width:min(76vw,290px);border:1px solid var(--bd-eae2e0);background:var(--bg-fcf9f8);color:var(--fg-3b3030)}
 .message-line.own .disappearing-bubble{border-color:var(--bd-e9d0cd);background:var(--bg-fbebea)}

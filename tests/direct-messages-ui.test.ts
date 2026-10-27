@@ -663,8 +663,9 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("await focusMessage(messageId)");
     expect(chat).toContain("'message-highlight': highlightedMessageId === message.id");
     expect(chat).toContain("watch([draft, replyingToId], scheduleDraftSave)");
-    expect(chat).toContain("}, 300)");
-    expect(chat).toContain("directMessages.saveDraft(peer, { text, replyTo }, account)");
+    const draft = readThemedSource(join(process.cwd(), "src/composables/useDmDraft.ts"), "utf8");
+    expect(draft).toContain("const DRAFT_SAVE_DELAY_MS = 300;");
+    expect(draft).toContain("directMessages.saveDraft(peer, { text, replyTo }, account)");
     expect(chat).toContain('window.addEventListener("pagehide", handlePageHide)');
     expect(store).toContain("syncedMessageRepository.listConversationPage(account, conversationId, before, limit)");
     expect(store).toContain("scanMessageSearchPages");

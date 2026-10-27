@@ -53,11 +53,9 @@ describe("useVoiceRecorder", () => {
     const { voice, send } = setup();
     voice.handleVoiceTouchStart({ changedTouches: [touch(100, 500)] } as any);
     expect(voice.voiceCaptureOwnsAudioSession.value).toBe(true);
-    await settle();
-    expect(voice.recording.value).toBe(session);
+    await vi.waitFor(() => expect(voice.recording.value).toBe(session));
     listeners.get("touchend")!({ changedTouches: [touch(100, 500)], cancelable: true, preventDefault() {} });
-    await settle();
-    expect(send).toHaveBeenCalledWith(result, ACCOUNT, PEER);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith(result, ACCOUNT, PEER));
     expect(voice.recording.value).toBeNull();
     expect(voice.voiceCaptureOwnsAudioSession.value).toBe(false);
   });
@@ -67,7 +65,7 @@ describe("useVoiceRecorder", () => {
     recorder.create.mockResolvedValue(session);
     const { voice, send } = setup();
     voice.handleVoiceTouchStart({ changedTouches: [touch(200, 500)] } as any);
-    await settle();
+    await vi.waitFor(() => expect(voice.recording.value).toBe(session));
     listeners.get("touchmove")!({ touches: [touch(100, 500)], cancelable: true, preventDefault() {} });
     expect(voice.voiceGestureHint.value).toBe("cancel");
     listeners.get("touchend")!({ changedTouches: [touch(100, 500)], cancelable: true, preventDefault() {} });
@@ -81,7 +79,7 @@ describe("useVoiceRecorder", () => {
     recorder.create.mockResolvedValue(session);
     const { voice, send } = setup();
     voice.handleVoiceTouchStart({ changedTouches: [touch(200, 500)] } as any);
-    await settle();
+    await vi.waitFor(() => expect(voice.recording.value).toBe(session));
     listeners.get("touchmove")!({ touches: [touch(200, 400)], cancelable: true, preventDefault() {} });
     listeners.get("touchend")!({ changedTouches: [touch(200, 400)], cancelable: true, preventDefault() {} });
     expect(voice.voiceLocked.value).toBe(true);
@@ -99,11 +97,10 @@ describe("useVoiceRecorder", () => {
     recorder.create.mockReturnValue(new Promise(r => { resolve = r; }));
     const { voice } = setup();
     voice.handleVoiceTouchStart({ changedTouches: [touch(200, 500)] } as any);
-    await settle();
+    await vi.waitFor(() => expect(recorder.create).toHaveBeenCalled());
     listeners.get("touchcancel")!({ cancelable: true, preventDefault() {} });
     resolve(session);
-    await settle();
-    expect(session.cancel).toHaveBeenCalled();
+    await vi.waitFor(() => expect(session.cancel).toHaveBeenCalled());
     expect(voice.recording.value).toBeNull();
   });
 
