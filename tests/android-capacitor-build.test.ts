@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readSystemSettingsSource } from "./helpers/systemSettingsSource";
 
 describe("Android Capacitor build", () => {
   it("keeps the native shell configuration minimal and points at Vite output", () => {
@@ -60,7 +61,7 @@ describe("Android Capacitor build", () => {
 
   it("mounts Android update UI without replacing the existing PWA updater", () => {
     const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
-    const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    const settings = readSystemSettingsSource();
     expect(app).toContain("<UpdateNotification />");
     expect(app).toContain("<AndroidUpdateNotification />");
     expect(settings).toContain("应用更新 / Update");

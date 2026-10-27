@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { isAccountResourceStale, loadAccountStoresOnce, runWhenIdle, storesLoadedForAccount } from "@/utils/bottomTabActivation";
+import { readSystemSettingsSource } from "./helpers/systemSettingsSource";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -74,7 +75,7 @@ describe("bottom-tab activation loading", () => {
 
   it("preloads and keeps system settings local-first while deferring diagnostics", () => {
     const conversations = readFileSync(join(process.cwd(), "src/views/Conversations.vue"), "utf8");
-    const systemSettings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    const systemSettings = readSystemSettingsSource();
     const settings = readFileSync(join(process.cwd(), "src/views/Settings.vue"), "utf8");
     const app = readFileSync(join(process.cwd(), "src/App.vue"), "utf8");
     const routes = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");

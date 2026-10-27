@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readSystemSettingsSource } from "./helpers/systemSettingsSource";
 
 describe("System Settings status UX", () => {
-  const source = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+  const source = readSystemSettingsSource();
 
   it("shows useful Relay transport details without changing relay controls", () => {
     expect(source).toContain('<span v-if="relay.read" class="pill">Read</span>');
