@@ -36,6 +36,7 @@ import {
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, profileAvatarInitial, useProfilesStore } from "@/stores/profiles";
 import { loadPrivateProfileAvatar } from "@/utils/profileAvatar";
+import { cachedAvatarObjectUrl, forgetAvatarObjectUrl, rememberAvatarObjectUrl } from "@/utils/avatarObjectUrls";
 
 const props = withDefaults(defineProps<{ pubkey: string; localName?: string; size?: number }>(), { size: 38 });
 const keys = useKeyStore();
@@ -59,17 +60,13 @@ const avatarStyle = computed(() => ({
   "--avatar-color": `hsl(${hue.value} 48% 48%)`
 }));
 
-let objectUrl = "";
+// Object URLs are shared via avatarObjectUrls, which owns and revokes them.
+let shownAvatar: { account: string; reference: string } | null = null;
 let generation = 0;
 let controller: AbortController | null = null;
 let visibilityObserver: IntersectionObserver | null = null;
 let active = true;
 let scheduledGeneration = -1;
-
-function clearObjectUrl() {
-  if (objectUrl) URL.revokeObjectURL(objectUrl);
-  objectUrl = "";
-}
 
 function cancelPendingLoad() {
   generation += 1;
@@ -80,10 +77,22 @@ function cancelPendingLoad() {
 
 function resetAvatarState() {
   cancelPendingLoad();
-  clearObjectUrl();
+  shownAvatar = null;
   picture.value = "";
   imageLoaded.value = false;
   imageFailed.value = false;
+}
+
+/** Paint an avatar this session already decrypted on the first frame, without the fade. */
+function showCachedAvatar() {
+  const account = keys.pkHex;
+  const reference = privateProfile.value?.avatar;
+  if (!account || !reference) return;
+  const url = cachedAvatarObjectUrl(account, reference);
+  if (!url) return;
+  shownAvatar = { account, reference };
+  picture.value = url;
+  imageLoaded.value = true;
 }
 
 async function loadVisibleAvatar(targetGeneration: number) {
@@ -117,18 +126,8 @@ async function loadVisibleAvatar(targetGeneration: number) {
       || props.pubkey !== pubkey
       || profiles.getProfile(pubkey)?.avatar !== avatar
     ) return;
-    const nextObjectUrl = URL.createObjectURL(blob);
-    if (
-      requestController.signal.aborted
-      || targetGeneration !== generation
-      || keys.pkHex !== account
-      || props.pubkey !== pubkey
-    ) {
-      URL.revokeObjectURL(nextObjectUrl);
-      return;
-    }
-    objectUrl = nextObjectUrl;
-    picture.value = objectUrl;
+    shownAvatar = { account, reference: avatar };
+    picture.value = rememberAvatarObjectUrl(account, avatar, blob);
   } catch (error) {
     if (requestController.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
     if (targetGeneration === generation && keys.pkHex === account && props.pubkey === pubkey) imageFailed.value = true;
@@ -176,16 +175,18 @@ watch(
   [() => keys.pkHex, () => props.pubkey, () => privateProfile.value?.avatar],
   () => {
     resetAvatarState();
+    showCachedAvatar();
     if (active && nearVisible.value) requestVisibleAvatar();
   },
   { immediate: true },
 );
 
 function handleImageError() {
+  if (shownAvatar) forgetAvatarObjectUrl(shownAvatar.account, shownAvatar.reference, picture.value);
+  shownAvatar = null;
   imageLoaded.value = false;
   imageFailed.value = true;
   picture.value = "";
-  clearObjectUrl();
 }
 
 onMounted(() => {
@@ -210,7 +211,6 @@ onBeforeUnmount(() => {
   active = false;
   disconnectVisibilityObserver();
   cancelPendingLoad();
-  clearObjectUrl();
 });
 </script>
 

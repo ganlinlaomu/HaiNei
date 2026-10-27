@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { liveQuery } from "dexie";
 import { cachedCallHistoryPage, clearCallHistoryPageCache, readVisibleCallHistoryPage, rememberCallHistoryPage, uniqueCallHistory, type CallHistoryItem } from "@/services/callHistory";
@@ -90,7 +90,7 @@ const router = useRouter(), call = useCallStore(), callHistory = useCallHistoryS
 const records = ref<CallHistoryItem[]>([]), limit = ref(50), missedOnly = ref(false), hasMore = ref(false), loading = ref(true), error = ref(""), busy = ref(false);
 const showPicker = ref(false), search = ref(""), contactSearch = ref(""), deletingId = ref("");
 const callFilterOptions = [{ key: "all", label: "全部" }, { key: "missed", label: "未接来电" }];
-const { close: closeSwipe, isOpen: isSwipeOpen, onTouchStart, onTouchMove,
+const { close: closeSwipe, closeOthers: closeAllSwipes, isOpen: isSwipeOpen, onTouchStart, onTouchMove,
   onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 64 });
 const { container, pullDistance, refreshing } = usePullToRefresh({ onRefresh: async () => {
   if (keys.pkHex && keys.isUnlocked) await resumeAccountMessageSync("manual");
@@ -136,14 +136,29 @@ function subscribe() {
   }, error: () => { if (token === generation) { loading.value = false; error.value = "读取通话记录失败，请重试"; } } });
 }
 watch(() => [keys.pkHex, keys.isUnlocked, limit.value, missedOnly.value], subscribe, { immediate: true, flush: "sync" });
+// Viewing the Calls tab acknowledges the badge. Do not mark unread before
+// the account's local and server history has hydrated, or race an offline call.
+function acknowledgeCalls() {
+  const account = keys.pkHex;
+  if (account && keys.isUnlocked) void callHistory.load(account).then(() => callHistory.acknowledge(account)).catch(() => {});
+}
 watch(() => [keys.pkHex, keys.isUnlocked] as const, ([account, unlocked]) => {
   if (account && unlocked) {
     void loadAccountStoresOnce(account, [friends, friendships, profiles]).catch(() => {});
-    void callHistory.load(account).then(() => callHistory.acknowledge(account)).catch(() => {});
+    acknowledgeCalls();
   } else showPicker.value = false;
 }, { immediate: true });
-// Viewing the Calls tab acknowledges the badge. Do not mark unread before
-// the account's local and server history has hydrated, or race an offline call.
+// The tab is kept alive (no remount flash), so each later visit must
+// acknowledge again; leaving it closes transient UI.
+let firstActivation = true;
+onActivated(() => {
+  if (firstActivation) { firstActivation = false; return; }
+  acknowledgeCalls();
+});
+onDeactivated(() => {
+  showPicker.value = false;
+  closeAllSwipes();
+});
 async function deleteCallRecord(item: CallHistoryItem) {
   const account = keys.pkHex;
   if (!account || deletingId.value || !keys.isUnlocked) return;
