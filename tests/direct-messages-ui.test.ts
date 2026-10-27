@@ -175,11 +175,14 @@ describe("direct-message navigation and UI contract", () => {
 
   it("shows a compact timestamp for every direct-message type", () => {
     const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(chat).toContain('v-if="!isMediaCaption(message) || isDisappearing(message)" class="message-meta"');
-    expect(chat).toContain('<time>{{ formatBubbleTime(message.created_at) }}</time>');
-    expect(chat).toContain(".message-meta{display:flex");
-    expect(chat).toContain("font-size:9px");
-    expect(chat).toContain("font-variant-numeric:tabular-nums");
+    const meta = readThemedSource(join(process.cwd(), "src/components/DmMessageMeta.vue"), "utf8");
+    expect(chat).toContain('<DmMessageMeta v-if="!isMediaCaption(message) || isDisappearing(message)" variant="bubble"');
+    expect(chat).toContain('<DmMessageMeta variant="caption"');
+    expect(chat).toContain(':time="formatBubbleTime(message.created_at)"');
+    expect(meta).toContain("<time>{{ time }}</time>");
+    expect(meta).toContain(".message-meta{display:flex");
+    expect(meta).toContain("font-size:9px");
+    expect(meta).toContain("font-variant-numeric:tabular-nums");
     expect(chat).not.toContain('class="message-status"');
   });
 
@@ -786,9 +789,10 @@ describe("direct-message navigation and UI contract", () => {
     expect(dmDeliveryLabel("sent")).toBe("✓ Relay 已接受");
     expect(dmDeliveryLabel("upload_failed")).toBe("上传失败");
     expect(dmDeliveryLabel("send_failed")).toBe("发送失败");
-    expect(chat).toContain("font-size:9px;font-weight:400");
-    expect(chat).toContain("opacity:.85");
-    expect(chat).toContain("retryOutgoingMessage(message.outgoing.localId)");
+    const meta = readThemedSource(join(process.cwd(), "src/components/DmMessageMeta.vue"), "utf8");
+    expect(meta).toContain("font-size:9px;font-weight:400");
+    expect(meta).toContain("opacity:.85");
+    expect(chat).toContain('@retry="message.outgoing && retryOutgoingMessage(message.outgoing.localId)"');
     expect(chat).toContain('draft.value = ""');
     expect(chat).not.toContain("sendError");
     expect(chat).not.toContain("sending.value");

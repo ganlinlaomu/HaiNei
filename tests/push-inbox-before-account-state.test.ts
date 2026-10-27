@@ -148,9 +148,12 @@ describe("push inbox on cold start", () => {
       accountPubkey: ACCOUNT, relays: ["wss://relay.test"], authors: [PEER, ACCOUNT],
       decodeContext: { accountPubkey: ACCOUNT }, onMessage: async () => "accepted" as any,
     });
-    await flush();
-    const failure = useDebugLogsStore().startupMarks().find(mark => mark.event === "startup_catchup_failed");
-    expect(failure?.data).toMatchObject({ name: "TypeError", message: "relay pool exploded" });
+    // The start path awaits several IndexedDB round trips first; a fixed
+    // number of ticks was not always enough under a loaded full test run.
+    await vi.waitFor(() => {
+      const failure = useDebugLogsStore().startupMarks().find(mark => mark.event === "startup_catchup_failed");
+      expect(failure?.data).toMatchObject({ name: "TypeError", message: "relay pool exploded" });
+    }, { timeout: 5_000 });
     manager.stop();
     await started.catch(() => undefined);
   });

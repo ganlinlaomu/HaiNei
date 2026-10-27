@@ -1,4 +1,6 @@
 // Drafts and the friend-recommendation picker moved out of Messages.vue.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSSRApp, h, nextTick, ref } from "vue";
 import { renderToString } from "vue/server-renderer";
@@ -106,5 +108,11 @@ describe("RecommendationPicker", () => {
     expect(html).toContain("摄影");
     expect(html).toContain("确认发送");
     expect(html).not.toContain("搜索要推荐的好友");
+  });
+
+  it("keeps the confirm button blue: its rule must outrank the shared button rule", () => {
+    const source = readFileSync(join(process.cwd(), "src/components/RecommendationPicker.vue"), "utf8");
+    expect(source).toContain(".recommendation-confirm-actions .recommendation-confirm-send{background:#1687e8");
+    expect(source).not.toMatch(/(^|\n)\.recommendation-confirm-send\{/);
   });
 });

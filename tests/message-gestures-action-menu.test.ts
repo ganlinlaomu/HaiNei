@@ -102,3 +102,31 @@ describe("MessageActionMenu", () => {
     expect(html).toMatch(/<button[^>]*disabled[^>]*>[\s\S]*?摘录中…/);
   });
 });
+
+describe("DmMessageMeta", () => {
+  const render = async (props: Record<string, unknown>) => {
+    const { default: DmMessageMeta } = await import("@/components/DmMessageMeta.vue");
+    return renderToString(createSSRApp({ render: () => h(DmMessageMeta, {
+      variant: "bubble", time: "21:05", own: true, status: "已读", read: true, failed: false, retryable: false, retrying: false, ...props,
+    }) }));
+  };
+
+  it("shows time and status for our messages, only time for theirs", async () => {
+    const own = await render({});
+    expect(own).toContain("21:05");
+    expect(own).toContain("已读");
+    expect(own).toMatch(/class="message-meta read"/);
+    const theirs = await render({ own: false });
+    expect(theirs).toContain("21:05");
+    expect(theirs).not.toContain("已读");
+  });
+
+  it("offers retry on a failed send, disabled while retrying, in either variant", async () => {
+    const failed = await render({ variant: "caption", failed: true, read: false, retryable: true, status: "发送失败" });
+    expect(failed).toMatch(/class="caption-meta failed"/);
+    expect(failed).toContain('aria-label="重试发送这条私信"');
+    expect(failed).toContain(">重试<");
+    const retrying = await render({ failed: true, read: false, retryable: true, retrying: true });
+    expect(retrying).toMatch(/<button[^>]*disabled[^>]*>重试中…/);
+  });
+});
