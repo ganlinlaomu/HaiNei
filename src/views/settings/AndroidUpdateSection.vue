@@ -1,7 +1,15 @@
 <template>
   <details class="technical-section">
     <summary class="section-heading">
-      <div><h3>应用更新 / Update</h3><p>{{ androidUpdateSummary }}</p></div>
+      <div class="section-heading-main">
+        <span class="section-heading-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4"/><path d="M5 21h14"/></svg>
+        </span>
+        <div>
+          <h3>应用更新 / Update</h3>
+          <p>{{ androidUpdateSummary }}</p>
+        </div>
+      </div>
     </summary>
     <div class="account-row">
       <span class="small">{{ androidVersionName ? `当前版本：${androidVersionName}` : "Android APK 自动检查更新" }}</span>

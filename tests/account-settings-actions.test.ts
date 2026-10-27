@@ -7,7 +7,7 @@ describe("account actions in Settings", () => {
     const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
     expect(settings).toContain('<details class="technical-section account-section identity-section">');
     expect(settings).toContain('<summary class="section-heading account-heading">');
-    expect(settings).toContain('class="account-heading-icon"');
+    expect(settings).toContain('class="section-heading-icon"');
     expect(settings).not.toContain('<details class="account-section top-level-group">');
     expect(settings).toContain('@click="switchAccount"');
     expect(settings).toContain("切换账号");

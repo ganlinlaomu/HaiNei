@@ -1,7 +1,15 @@
 <template>
   <details class="technical-section" open>
     <summary class="section-heading">
-      <div><h3>隐私 / Privacy</h3><p>{{ settings.settings.privacy.readReceipts ? "已读回执已开启" : "已读回执已关闭" }}</p></div>
+      <div class="section-heading-main">
+        <span class="section-heading-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        </span>
+        <div>
+          <h3>隐私 / Privacy</h3>
+          <p>{{ settings.settings.privacy.readReceipts ? "已读回执已开启" : "已读回执已关闭" }}</p>
+        </div>
+      </div>
     </summary>
     <div class="account-row">
       <div class="privacy-copy">

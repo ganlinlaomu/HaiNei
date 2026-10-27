@@ -1,6 +1,16 @@
 <template>
   <details class="technical-section diagnostics-section">
-    <summary class="section-heading"><div><h3>高级设置 / Diagnostics</h3><p>{{ diagnosticsSummary }}</p></div></summary>
+    <summary class="section-heading">
+      <div class="section-heading-main">
+        <span class="section-heading-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+        </span>
+        <div>
+          <h3>高级设置 / Diagnostics</h3>
+          <p>{{ diagnosticsSummary }}</p>
+        </div>
+      </div>
+    </summary>
     <div class="diagnostics-grid">
       <span><strong>{{ connectedRelayCount }}/{{ enabledRelayCount }}</strong><small>Relay 已连接</small></span>
       <span><strong>{{ syncStatusLabel }}</strong><small>消息同步</small></span>
