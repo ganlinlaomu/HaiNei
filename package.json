@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.164",
-  "releaseSummary": "修复实时位置共享对方显示已结束",
+  "version": "0.1.165",
+  "releaseSummary": "位置卡片可查看地图",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

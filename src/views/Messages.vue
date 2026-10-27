@@ -154,7 +154,7 @@
                   <span class="recommendation-hint">昵称和简介由推荐人转发，尚未由被推荐人向你确认</span>
                 </div>
               </template>
-              <DmLocationCard v-else-if="locationShare(message.content)" :location="locationShare(message.content)!" :own="isOwn(message)" :peer="peerPubkey" />
+              <DmLocationCard v-else-if="locationShare(message.content)" :location="locationShare(message.content)!" :own="isOwn(message)" :peer="peerPubkey" :peer-name="displayName" />
               <template v-else-if="isMediaCaption(message)">
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else :content="message.content" :show-all="true" alt-text="私信图片" />
