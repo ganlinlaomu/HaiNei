@@ -154,7 +154,7 @@
                   <span class="recommendation-hint">昵称和简介由推荐人转发，尚未由被推荐人向你确认</span>
                 </div>
               </template>
-              <DmLocationCard v-else-if="locationShare(message.content)" :location="locationShare(message.content)!" :own="isOwn(message)" />
+              <DmLocationCard v-else-if="locationShare(message.content)" :location="locationShare(message.content)!" :own="isOwn(message)" :peer="peerPubkey" />
               <template v-else-if="isMediaCaption(message)">
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else :content="message.content" :show-all="true" alt-text="私信图片" />
@@ -395,6 +395,7 @@ import LocationShareSheet from "@/components/LocationShareSheet.vue";
 import { DIRECT_MESSAGE_TYPE, directMessagePreview } from "@/nostr/messaging/directMessages";
 import { parseFriendRecommendation } from "@/nostr/messaging/friendRecommendation";
 import { parseLocationShare, serializeLocationShare, type LocationShare } from "@/nostr/messaging/locationShare";
+import { useLiveLocationStore } from "@/stores/liveLocation";
 import { shortNpub } from "@/utils/nostrQr";
 import { hasDisappearingMarker, DISAPPEARING_DM_TYPE, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -666,6 +667,7 @@ const messageText = (content: string) => ["[图片]", "[语音]", "[好友推荐
 const friendRecommendation = parseFriendRecommendation;
 const locationShare = parseLocationShare;
 const locationSheetOpen = ref(false);
+const liveLocation = useLiveLocationStore();
 const audioMedia = (message: InboxItem) => parsePrivateAudioMessage(message.content)?.media || null;
 const hasAudio = (message: InboxItem) => !!message.outgoing?.hasAudio || !!audioMedia(message);
 const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreviewUrl || hasImage(message.content);
@@ -1277,9 +1279,17 @@ function openLocationSheet() {
   textInput.value?.blur();
   locationSheetOpen.value = true;
 }
-function sendLocation(location: LocationShare) {
+async function sendLocation(location: LocationShare, durationSeconds = 0) {
   locationSheetOpen.value = false;
   if (!accepted.value) return;
+  if (durationSeconds > 0) {
+    try {
+      await liveLocation.startSharing(peerPubkey.value, durationSeconds, location);
+    } catch (error) {
+      ui.addToast(error instanceof Error ? error.message : "位置共享失败", 2200, "error");
+    }
+    return;
+  }
   try {
     // Like a friend card: a separate message that leaves the typed draft alone.
     directMessages.send(peerPubkey.value, serializeLocationShare(location), undefined, undefined, undefined, { preserveDraft: true });

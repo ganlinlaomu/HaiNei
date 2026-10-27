@@ -42,6 +42,11 @@ export interface OutgoingMessage {
   tags?: string[][];
   /** Opt-in disappearing DM; normal NIP-17 messages are unchanged. */
   burnAfterSeconds?: 10 | 30 | 60;
+  /**
+   * NIP-40 expiration on the gift wraps only, for ephemeral controls (live
+   * location updates) that relays should drop. Ignored for disappearing DMs.
+   */
+  wrapTtlSeconds?: number;
 }
 
 export interface EncodedMessage {

@@ -19,6 +19,8 @@ export const RUMOR_KIND = 14;
 const TWO_DAYS_SECONDS = 2 * 24 * 60 * 60;
 // Separate outer expiry for each recipient to reduce deterministic cross-wrap linkage.
 const WRAP_EXPIRATION_JITTER_SECONDS = 15 * 60;
+const MIN_WRAP_TTL_SECONDS = 60;
+const MAX_WRAP_TTL_SECONDS = 24 * 60 * 60;
 
 type Rumor = UnsignedEvent & { id: string; sig?: never };
 
@@ -232,8 +234,11 @@ export async function buildNip17Message(message: OutgoingMessage, context: Encod
     });
     if (seal.pubkey !== sender || !verifySignedEvent(seal)) throw new Error("signer returned an invalid NIP-17 seal");
     const ephemeralSecret = generateSecretKey();
-    const wrapExpiresAt = expiresAt === undefined ? undefined
-      : expiresAt - Math.floor(Math.random() * WRAP_EXPIRATION_JITTER_SECONDS);
+    const wrapExpiresAt = expiresAt !== undefined
+      ? expiresAt - Math.floor(Math.random() * WRAP_EXPIRATION_JITTER_SECONDS)
+      : message.wrapTtlSeconds !== undefined
+        ? Math.floor(Date.now() / 1000) + Math.min(MAX_WRAP_TTL_SECONDS, Math.max(MIN_WRAP_TTL_SECONDS, Math.floor(message.wrapTtlSeconds)))
+        : undefined;
     const wrap = finalizeEvent({
       kind: GIFT_WRAP_KIND,
       created_at: randomPastTimestamp(),

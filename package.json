@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.161",
-  "releaseSummary": "私信可发送当前位置（端到端加密，单次）",
+  "version": "0.1.162",
+  "releaseSummary": "私信可实时共享位置 15 分钟或 1 小时",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
