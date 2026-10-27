@@ -130,6 +130,38 @@ describe("service worker navigation", () => {
     expect(await (await sw.navigate()).text()).toBe("cached shell");
   });
 
+  it("precaches this build's shell at install, so the first launch after an update opens offline", async () => {
+    let online = true;
+    const sw = worker({ fetch: async () => { if (!online) throw new TypeError("offline"); return sameOrigin("this build's shell"); } });
+    sw.install();
+    await sw.settle();
+    online = false;
+    expect(await (await sw.navigate()).text()).toBe("this build's shell");
+  });
+
+  it("fails the install when the shell cannot be fetched, keeping the current worker", async () => {
+    const sw = worker({ fetch: async (request: any) => {
+      if ((typeof request === "string" ? request : request.url) === "https://app.test/") throw new TypeError("offline");
+      return sameOrigin("asset");
+    } });
+    sw.install();
+    await expect(sw.settle()).rejects.toThrow("offline");
+    expect(sw.rows.has("https://app.test/")).toBe(false);
+  });
+
+  it("answers any app URL offline with the cached shell", async () => {
+    const sw = worker({ fetch: async () => { throw new TypeError("offline"); } });
+    sw.rows.set("https://app.test/", new Response("cached shell"));
+    expect(await (await sw.navigate("https://app.test/?source=pwa")).text()).toBe("cached shell");
+  });
+
+  it("shows an offline page instead of rejecting when nothing is cached", async () => {
+    const sw = worker({ fetch: async () => { throw new TypeError("offline"); } });
+    const response = await sw.navigate();
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("当前离线");
+  });
+
   it("still loads the page when CacheStorage is unavailable", async () => {
     const sw = worker({ fetch: async () => sameOrigin("network page"), cacheFails: true });
     expect(await (await sw.navigate()).text()).toBe("network page");
