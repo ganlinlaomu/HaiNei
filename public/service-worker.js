@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.152"; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.153"; // ⚠️ 更新代码时同步修改此版本号
 const BUILD_ID = "source-328b9451a4e413fd"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
@@ -10,6 +10,8 @@ const HTML_CACHE = `${CACHE_PREFIX}-html-${VERSION}-${BUILD_ID}`;
 const RUNTIME_STATE_CACHE = `${CACHE_PREFIX}-runtime-state`;
 const BADGE_STATE_URL = new URL('/__hainei_badge_state__', self.location.origin).href;
 const PUSH_INBOX_URL = new URL('/__hainei_push_inbox__', self.location.origin).href;
+// Hash routing: every page of the app is this one document.
+const SHELL_URL = new URL('/', self.location.origin).href;
 const PUSH_HINT_TTL_MS = 24 * 60 * 60 * 1000;
 const PUSH_HINT_MAX_ITEMS = 32;
 // One replaceable DM notification instead of one per message.
@@ -19,9 +21,25 @@ const CALL_NOTIFICATION_TAG = 'hainei-call';
 // Every built JS/CSS chunk, so lazily loaded pages open offline too.
 const PRECACHE_ASSETS = []; // filled in by build-plugins/swPrecache.ts
 
+// Activating deletes the previous build's HTML cache, so this build must own
+// a shell before it can take over. Otherwise the first launch after an update
+// that happens offline had no page at all (Safari: "FetchEvent.respondWith
+// received an error: TypeError: Load failed"). A failed fetch fails the
+// install; the current worker and its shell stay until the next attempt.
+async function precacheShell() {
+  const response = await fetch(SHELL_URL, { cache: 'reload' });
+  if (!response.ok || response.type !== 'basic') throw new Error(`shell precache failed: ${response.status}`);
+  // A redirected response cannot answer a navigation in Safari.
+  const page = response.redirected
+    ? new Response(await response.blob(), { status: response.status, statusText: response.statusText, headers: response.headers })
+    : response;
+  const cache = await caches.open(HTML_CACHE);
+  await cache.put(SHELL_URL, page);
+}
+
 self.addEventListener('install', (event) => {
   console.log('[SW] install', VERSION, BUILD_ID);
-  event.waitUntil(
+  event.waitUntil(Promise.all([precacheShell(),
     caches.open(ASSETS_CACHE).then(async (cache) => {
       await cache.addAll([
         '/manifest.json',
@@ -41,7 +59,7 @@ self.addEventListener('install', (event) => {
       const failed = results.filter((result) => result.status === 'rejected').length;
       console.log('[SW] precached', PRECACHE_ASSETS.length - failed, '/', PRECACHE_ASSETS.length);
     })
-  );
+  ]));
 });
 
 self.addEventListener('activate', (event) => {
@@ -342,8 +360,26 @@ async function navigationResponse(event, request) {
   // Registered now, while the event is active; it may outlive respondWith.
   event.waitUntil(network.then(() => storeCopy, () => {}));
 
-  const cached = await caches.open(HTML_CACHE).then((cache) => cache.match(request)).catch(() => undefined);
-  return cached || network;
+  const cached = await cachedShell(request);
+  if (cached) return cached;
+  // Never let respondWith reject: Safari then shows a bare error page.
+  return network.catch(async () => (await cachedShell(request)) || offlinePage());
+}
+
+async function cachedShell(request) {
+  try {
+    const cache = await caches.open(HTML_CACHE);
+    return (await cache.match(request, { ignoreSearch: true })) || (await cache.match(SHELL_URL));
+  } catch {
+    return undefined;
+  }
+}
+
+function offlinePage() {
+  return new Response(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HaiNei</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:16px -apple-system,system-ui,sans-serif;background:#fff;color:#0f1419}@media(prefers-color-scheme:dark){body{background:#000;color:#e7e9ea}}main{padding:24px;text-align:center}button{margin-top:16px;min-height:44px;padding:0 20px;border:0;border-radius:22px;background:#1687e8;color:#fff;font:inherit}</style></head>
+<body><main><p>当前离线，且本机还没有这个版本的页面。</p><p>联网后重试即可。</p><button type="button" onclick="location.reload()">重试</button></main></body></html>`,
+    { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
 // Fetch 拦截：确保不缓存 API 请求

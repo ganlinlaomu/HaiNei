@@ -47,7 +47,6 @@
       </li>
     </TransitionGroup>
     <button v-if="hasMore && !search.trim()" class="load-more" type="button" :disabled="loading" @click="limit += 50">加载更多</button>
-    <p class="calls-note">显示此设备已同步的通话记录。历史版本可能缺少呼入或呼出信息。</p>
 
     <div v-if="showPicker" class="picker-backdrop" @click.self="showPicker = false">
       <section class="picker-sheet" role="dialog" aria-modal="true" aria-label="发起语音通话">
@@ -204,7 +203,7 @@ async function startCall(peer: string) {
 .call-remove-leave-active{position:absolute;left:0;right:0;z-index:2;pointer-events:none}
 .call-delete:disabled{opacity:.5}
 @media (prefers-reduced-motion:reduce){.call-row{transition:none}}
-.call-back:disabled{opacity:.35}.calls-state{text-align:center;padding:34px 16px;color:var(--fg-64748b);font-size:14px}.calls-note{padding:14px 16px;color:var(--fg-94a3b8);font-size:12px}
+.call-back:disabled{opacity:.35}.calls-state{text-align:center;padding:34px 16px;color:var(--fg-64748b);font-size:14px}
 .load-more{display:block;margin:12px auto;border:0;background:transparent;color:#1687e8;min-height:44px}
 .picker-backdrop{position:fixed;inset:0;z-index:15000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.46)}
 .picker-sheet{display:flex;flex-direction:column;width:100%;max-width:760px;max-height:82dvh;padding:16px 16px calc(env(safe-area-inset-bottom) + 20px);border-radius:22px 22px 0 0;background:var(--bg-fff);color:var(--fg-172033)}
