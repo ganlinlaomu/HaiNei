@@ -1,7 +1,15 @@
 <template>
   <details class="technical-section">
     <summary class="section-heading">
-      <div><h3>存储 / Cache</h3><p>内存 {{ formatSize(cacheStats.size) }} / {{ formatSize(IMAGE_MEMORY_CACHE_MAX_BYTES) }} · 本地 {{ formatSize(cacheStats.persistentSize) }} / {{ formatSize(IMAGE_PERSISTENT_CACHE_MAX_BYTES) }}</p></div>
+      <div class="section-heading-main">
+        <span class="section-heading-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg>
+        </span>
+        <div>
+          <h3>存储 / Cache</h3>
+          <p>内存 {{ formatSize(cacheStats.size) }} / {{ formatSize(IMAGE_MEMORY_CACHE_MAX_BYTES) }} · 本地 {{ formatSize(cacheStats.persistentSize) }} / {{ formatSize(IMAGE_PERSISTENT_CACHE_MAX_BYTES) }}</p>
+        </div>
+      </div>
     </summary>
     <div class="cache-info">
       <div class="small">

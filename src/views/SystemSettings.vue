@@ -29,8 +29,8 @@
 
       <details v-if="keyStore.loginMethod === 'private-key'" class="technical-section account-section security-section">
         <summary class="section-heading account-heading">
-          <div class="account-heading-main">
-            <span class="account-heading-icon" aria-hidden="true">
+          <div class="section-heading-main">
+            <span class="section-heading-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
             </span>
             <div>
@@ -105,8 +105,8 @@
 
       <details class="technical-section account-section identity-section">
         <summary class="section-heading account-heading">
-          <div class="account-heading-main">
-            <span class="account-heading-icon" aria-hidden="true">
+          <div class="section-heading-main">
+            <span class="section-heading-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>
             </span>
             <div>
@@ -558,12 +558,7 @@ onBeforeUnmount(() => {
 .top-level-group[open] > .top-level-row .row-chevron { transform: rotate(90deg); }
 .top-level-content { padding: 4px 16px 16px; border-top: 1px solid var(--bd-eef2f6); }
 .top-level-content.account-row { min-height: 64px; }
-.account-heading-main{display:flex;min-width:0;align-items:center;gap:12px}
 .identity-section{margin-top:18px;border-top:2px solid var(--bd-e2e8f0)}
-.account-heading-icon{display:grid;width:24px;height:24px;flex:0 0 24px;place-items:center;color:var(--fg-475569)}
-.account-heading-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.account-heading-main>div{min-width:0}
-.account-heading-main p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .account-panel{padding:2px 0 18px 36px}
 .account-control-card{overflow:hidden;border:1px solid var(--bd-e5eaf0);border-radius:16px;background:var(--bg-fff);box-shadow:0 1px 2px rgba(15,23,42,.025)}
 .account-setting-row{display:flex;min-height:72px;align-items:center;gap:14px;padding:14px 15px}

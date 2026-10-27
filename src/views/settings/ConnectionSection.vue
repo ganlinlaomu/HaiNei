@@ -1,9 +1,14 @@
 <template>
   <details class="technical-section" open>
     <summary class="section-heading">
-      <div>
-        <h3>连接</h3>
-        <p>{{ relayList.filter(relay => relay.enabled).length }} 个服务器已启用</p>
+      <div class="section-heading-main">
+        <span class="section-heading-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+        </span>
+        <div>
+          <h3>连接</h3>
+          <p>{{ relayList.filter(relay => relay.enabled).length }} 个服务器已启用</p>
+        </div>
       </div>
     </summary>
     <p class="section-detail">海内自带的服务器始终开启，保证你和好友之间至少有一条共同的通道；也可以添加自己的服务器作为备用。</p>

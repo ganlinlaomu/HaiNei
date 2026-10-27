@@ -1,7 +1,15 @@
 <template>
   <details class="technical-section">
     <summary class="section-heading">
-      <div><h3>后台推送 / {{ isNativeApp ? "Android Push" : "Web Push" }}</h3><p>{{ pushStatusText }}</p></div>
+      <div class="section-heading-main">
+        <span class="section-heading-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>
+        </span>
+        <div>
+          <h3>后台推送 / {{ isNativeApp ? "Android Push" : "Web Push" }}</h3>
+          <p>{{ pushStatusText }}</p>
+        </div>
+      </div>
     </summary>
     <p class="section-detail">推送用于消息与来电提醒，显示“你有新的私信消息”或“你有一个语音来电”，不会包含好友名称、消息内容或图片信息。</p>
     <div class="account-row">

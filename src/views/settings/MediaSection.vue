@@ -1,9 +1,14 @@
 <template>
   <details class="technical-section">
     <summary class="section-heading">
-      <div>
-        <h3>图片与视频 / Media</h3>
-        <p>{{ mediaList.filter(server => server.enabled).length }} 个已启用 · Primary 与 fallback</p>
+      <div class="section-heading-main">
+        <span class="section-heading-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
+        </span>
+        <div>
+          <h3>图片与视频 / Media</h3>
+          <p>{{ mediaList.filter(server => server.enabled).length }} 个已启用 · Primary 与 fallback</p>
+        </div>
       </div>
     </summary>
     <p class="section-detail">按 Primary、其他用户服务器、默认 fallback 的顺序上传。媒体服务器仅支持 HTTPS；localhost 可用于本地调试。</p>

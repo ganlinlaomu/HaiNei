@@ -52,6 +52,18 @@ describe("system settings sections", () => {
     }
   });
 
+  it("gives every settings heading the same icon + title + summary layout", () => {
+    const dir = join(process.cwd(), "src/views/settings");
+    const sources = [readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8"),
+      ...readdirSync(dir).filter(name => name.endsWith("Section.vue")).map(name => readFileSync(join(dir, name), "utf8"))];
+    const headings = sources.flatMap(source => [...source.matchAll(/<summary class="section-heading[^"]*">([\s\S]*?)<\/summary>/g)].map(match => match[1]));
+    expect(headings.length).toBeGreaterThanOrEqual(11);
+    for (const heading of headings) {
+      expect(heading).toContain('class="section-heading-main"');
+      expect(heading).toMatch(/class="section-heading-icon" aria-hidden="true">\s*<svg viewBox="0 0 24 24">/);
+    }
+  });
+
   it("every section includes the shared section styles scoped, and the page mounts them all", () => {
     const dir = join(process.cwd(), "src/views/settings");
     const sections = readdirSync(dir).filter(name => name.endsWith("Section.vue"));

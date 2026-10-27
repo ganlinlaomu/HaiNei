@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.159",
-  "releaseSummary": "修复账号设置行排版；设置页继续按节拆分",
+  "version": "0.1.160",
+  "releaseSummary": "设置页各项统一为左侧图标加文字",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
