@@ -4,6 +4,7 @@ import { hasDisappearingMarker, isExpiredDisappearing } from "@/nostr/messaging/
 import { isConversationMessage } from "@/nostr/messaging/messageRouting";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { parseFriendRecommendation } from "@/nostr/messaging/friendRecommendation";
+import { parseLocationShare } from "@/nostr/messaging/locationShare";
 import { privateSpaceRepository, type PrivateSpaceRepository } from "@/repositories/privateSpaceRepository";
 import { extractPrivateSpaceContent, privateSpaceTitle } from "@/services/privateSpaceContent";
 import type { PrivateSpaceSource } from "@/db/dexie";
@@ -51,6 +52,7 @@ export function canImportDirectMessage(
     && !isHomeControl(message.tags, message.content)
     && !parsePrivateAudioMessage(message.content)
     && !parseFriendRecommendation(message.content)
+    && !parseLocationShare(message.content)
     && (!message.outgoing || message.outgoing.state === "sent")
     && !!extractPrivateSpaceContent(message.content, false).text;
 }

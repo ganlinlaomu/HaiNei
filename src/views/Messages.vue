@@ -93,7 +93,7 @@
             <svg viewBox="0 0 24 24"><path d="M9 8 4 12l5 4"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg>
           </span>
           <div class="message-stack">
-            <div class="message-bubble" :class="{ 'media-caption-bubble': !isDisappearing(message) && isMediaCaption(message), 'audio-bubble': !isDisappearing(message) && hasAudio(message), 'disappearing-bubble': isDisappearing(message), 'recommendation-bubble': !isDisappearing(message) && !!friendRecommendation(message.content) }">
+            <div class="message-bubble" :class="{ 'media-caption-bubble': !isDisappearing(message) && isMediaCaption(message), 'audio-bubble': !isDisappearing(message) && hasAudio(message), 'disappearing-bubble': isDisappearing(message), 'recommendation-bubble': !isDisappearing(message) && !!friendRecommendation(message.content), 'location-bubble': !isDisappearing(message) && !!locationShare(message.content) }">
               <template v-if="isDisappearing(message)">
                 <div v-if="isBurned(message)" class="burned-placeholder" role="status">
                   <span aria-hidden="true">✓</span> 临时消息已销毁
@@ -154,6 +154,7 @@
                   <span class="recommendation-hint">昵称和简介由推荐人转发，尚未由被推荐人向你确认</span>
                 </div>
               </template>
+              <DmLocationCard v-else-if="locationShare(message.content)" :location="locationShare(message.content)!" :own="isOwn(message)" />
               <template v-else-if="isMediaCaption(message)">
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else :content="message.content" :show-all="true" alt-text="私信图片" />
@@ -235,6 +236,9 @@
         </button>
         <button type="button" role="menuitem" @click="openRecommendationPicker">
           <span aria-hidden="true">♧</span> 推荐朋友
+        </button>
+        <button type="button" role="menuitem" @click="openLocationSheet">
+          <span aria-hidden="true">⌖</span> 位置
         </button>
         <button type="button" role="menuitem" @click="enableDisappearing">
           <span aria-hidden="true">♨</span> 阅后即焚
@@ -352,6 +356,12 @@
       </form>
       <input ref="imageInput" class="attachment-file-input sr-file-input" type="file" accept="image/*" :disabled="!accepted || !keys.pkHex" @change="selectImage" />
     </div>
+    <LocationShareSheet
+      v-if="locationSheetOpen"
+      :peer-name="displayName"
+      @close="locationSheetOpen = false"
+      @send="sendLocation"
+    />
     <RecommendationPicker
       v-if="recommendationPickerOpen"
       v-model:query="recommendationQuery"
@@ -380,8 +390,11 @@ import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import MentionText from "@/components/MentionText.vue";
 import MessageActionMenu from "@/components/MessageActionMenu.vue";
 import RecommendationPicker from "@/components/RecommendationPicker.vue";
+import DmLocationCard from "@/components/DmLocationCard.vue";
+import LocationShareSheet from "@/components/LocationShareSheet.vue";
 import { DIRECT_MESSAGE_TYPE, directMessagePreview } from "@/nostr/messaging/directMessages";
 import { parseFriendRecommendation } from "@/nostr/messaging/friendRecommendation";
+import { parseLocationShare, serializeLocationShare, type LocationShare } from "@/nostr/messaging/locationShare";
 import { shortNpub } from "@/utils/nostrQr";
 import { hasDisappearingMarker, DISAPPEARING_DM_TYPE, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
@@ -649,8 +662,10 @@ let composerFocused = false;
 let composerFocusSettleTimer: number | null = null;
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
-const messageText = (content: string) => ["[图片]", "[语音]", "[好友推荐]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
+const messageText = (content: string) => ["[图片]", "[语音]", "[好友推荐]", "[位置]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
 const friendRecommendation = parseFriendRecommendation;
+const locationShare = parseLocationShare;
+const locationSheetOpen = ref(false);
 const audioMedia = (message: InboxItem) => parsePrivateAudioMessage(message.content)?.media || null;
 const hasAudio = (message: InboxItem) => !!message.outgoing?.hasAudio || !!audioMedia(message);
 const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreviewUrl || hasImage(message.content);
@@ -914,6 +929,7 @@ const stopBeforeLock = onBeforeAccountLock(async account => {
   openedDeadlines.value = {};
   stopBurnClock();
   closeRecommendationPicker();
+  locationSheetOpen.value = false;
   await flushDraft(account);
   pauseDraftPersistence();
 });
@@ -1251,6 +1267,26 @@ function openRecommendationPicker() {
   textInput.value?.blur();
   showRecommendationPicker();
 }
+function openLocationSheet() {
+  attachmentMenuOpen.value = false;
+  if (!accepted.value) return;
+  if (disappearingSeconds.value !== null) {
+    ui.addToast("阅后即焚仅支持纯文字消息", 2200, "info");
+    return;
+  }
+  textInput.value?.blur();
+  locationSheetOpen.value = true;
+}
+function sendLocation(location: LocationShare) {
+  locationSheetOpen.value = false;
+  if (!accepted.value) return;
+  try {
+    // Like a friend card: a separate message that leaves the typed draft alone.
+    directMessages.send(peerPubkey.value, serializeLocationShare(location), undefined, undefined, undefined, { preserveDraft: true });
+  } catch (error) {
+    ui.addToast(error instanceof Error ? error.message : "位置发送失败", 2200, "error");
+  }
+}
 function chooseImageFromMenu() {
   attachmentMenuOpen.value = false;
   if (accepted.value && disappearingSeconds.value === null) imageInput.value?.click();
@@ -1414,6 +1450,7 @@ watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
   disappearingSeconds.value = null;
   attachmentMenuOpen.value = false;
   closeRecommendationPicker();
+  locationSheetOpen.value = false;
   openingMessageId.value = "";
   if (previous?.[0] && previous?.[1]) flushDraft(previous[0], previous[1]);
   pauseDraftPersistence();
@@ -1571,6 +1608,7 @@ onBeforeUnmount(() => {
 .temporary-composer-mode>span{font-weight:650;flex:1;white-space:nowrap}.temporary-composer-mode label{color:var(--fg-8d5752)}.temporary-composer-mode select{max-width:100px;min-height:30px;padding:3px 6px;border:1px solid var(--bd-e9c8c3);border-radius:9px;background:var(--bg-fff);color:var(--fg-5d342f);font:inherit;font-size:13px}
 .temporary-composer-mode button{width:28px;height:30px;flex-shrink:0;padding:0;border:0;background:transparent;color:var(--fg-8d5752);font-size:23px}
 /* NIP-17 friend recommendation cards (the picker is RecommendationPicker.vue). */
+.message-line .location-bubble{min-width:215px;max-width:min(80vw,320px);padding:0;border:1px solid var(--bd-e1e7ed);background:var(--bg-fff);color:var(--fg-0f1419);overflow:hidden}
 .message-line .recommendation-bubble{min-width:215px;max-width:min(80vw,320px);padding:0;border:1px solid var(--bd-e1e7ed);background:var(--bg-fff);color:var(--fg-0f1419);overflow:hidden}
 .recommended-friend-card{display:flex;flex-direction:column;gap:10px;min-width:215px;padding:14px;box-sizing:border-box}
 .recommendation-eyebrow{font-size:11px;font-weight:700;color:var(--fg-536471)}
