@@ -217,6 +217,16 @@ if (!manifest.includes("android.permission.REQUEST_INSTALL_PACKAGES")) {
     '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n\n    <application'
   );
 }
+// Sending a location from a chat: the WebView's geolocation prompt
+// (Capacitor's WebChromeClient) needs these declared to ask at runtime.
+for (const permission of ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"]) {
+  if (!manifest.includes(`android.permission.${permission}`)) {
+    manifest = manifest.replace(
+      "<application",
+      `    <uses-permission android:name="android.permission.${permission}" />\n\n    <application`
+    );
+  }
+}
 if (!manifest.includes(".fileprovider")) {
   manifest = manifest.replace(
     "</application>",

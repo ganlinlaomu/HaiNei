@@ -1,6 +1,7 @@
 import type { CanonicalMessage } from "./protocol";
 import { parsePrivateAudioMessage } from "./privateMedia";
 import { parseFriendRecommendation } from "./friendRecommendation";
+import { parseLocationShare } from "./locationShare";
 
 import { isDirectMessageTags } from "./messageRouting";
 export { DIRECT_MESSAGE_TYPE, isDirectMessageTags } from "./messageRouting";
@@ -31,6 +32,7 @@ export function directMessagePeer(
 
 export function directMessagePreview(content: string) {
   if (parseFriendRecommendation(content)) return "[好友推荐]";
+  if (parseLocationShare(content)) return "[位置]";
   if (parsePrivateAudioMessage(content)) return "[语音]";
   const hasImage = /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
   const text = content
