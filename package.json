@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.154",
-  "releaseSummary": "内部重构：私信页拆分搜索与阅后即焚逻辑",
+  "version": "0.1.155",
+  "releaseSummary": "内部重构：私信页拆分录音逻辑",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
