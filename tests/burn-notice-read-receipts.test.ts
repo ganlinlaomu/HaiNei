@@ -84,13 +84,14 @@ describe("why an open confirmation may never arrive", () => {
 
 describe("sender bubble", () => {
   const view = readFileSync("src/views/Messages.vue", "utf8");
+  const burn = readFileSync("src/composables/useBurnMessages.ts", "utf8");
 
   it("explains the 48-hour fallback under our unopened disappearing message", () => {
     const ownBranch = view.slice(view.indexOf('<div v-else-if="isOwn(message)" class="temporary-message">'), view.indexOf('<div v-else-if="canShowTemporaryText(message)"'));
     expect(ownBranch).toContain('v-if="burnFallbackNotice(message)"');
-    expect(view).toContain('"对方关闭了已读回执，消息将在 48 小时后销毁"');
-    const notice = view.slice(view.indexOf("function burnFallbackNotice"), view.indexOf("function burnDuration"));
-    expect(notice).toContain('outgoingReceiptStatus(peerPubkey.value, message) === "read"');
+    expect(burn).toContain('"对方关闭了已读回执，消息将在 48 小时后销毁"');
+    const notice = burn.slice(burn.indexOf("function burnFallbackNotice"), burn.indexOf("function burnDuration"));
+    expect(notice).toContain('outgoingReceiptStatus(options.peer(), message) === "read"');
     expect(notice).toContain("isBurned(message)");
   });
 

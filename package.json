@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.153",
-  "releaseSummary": "修复更新后首次离线打开显示 Safari 错误页",
+  "version": "0.1.154",
+  "releaseSummary": "内部重构：私信页拆分搜索与阅后即焚逻辑",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
