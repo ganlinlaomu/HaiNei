@@ -64,6 +64,8 @@ let clock: ReturnType<typeof setInterval> | null = null;
 let visibilityListener: (() => void) | null = null;
 /** Live cards on screen keep the clock running even before any update arrives. */
 let clockHolds = 0;
+/** Newest GPS fix while sharing; a heartbeat sends this, not the last sent one. */
+let latestFix: LocationShare | null = null;
 
 /**
  * Live location sharing for the signed-in account. Not tied to a page, so a
@@ -166,7 +168,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
 
     async sendControl(share: OutgoingLiveShare, content: string, wrapTtlSeconds: number) {
       const keys = useKeyStore();
-      if (keys.pkHex.toLowerCase() !== share.account) return;
+      if (keys.pkHex.toLowerCase() !== share.account) return false;
       try {
         await sendFastControl({
           recipientPubkeys: [share.peer],
@@ -182,9 +184,11 @@ export const useLiveLocationStore = defineStore("liveLocation", {
             signEvent: keys.signEvent.bind(keys),
           },
         });
+        return true;
       } catch (error) {
         // Best effort: the next update supersedes a lost one.
         debugLog("system", "live_location_send_failed", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
+        return false;
       }
     },
 
@@ -192,8 +196,12 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       const current = this.outgoing[share.peer];
       if (!current || current.id !== share.id) return;
       const seq = current.seq + 1;
+      const moved = Math.round(distanceMetres(current.last, location));
       this.outgoing[share.peer] = { ...current, seq, last: location, lastSentAt: Date.now() };
-      await this.sendControl(current, serializeLiveLocationControl({ kind: "update", id: current.id, expiresAt: current.expiresAt, seq, location }), UPDATE_WRAP_TTL_SECONDS);
+      if (await this.sendControl(current, serializeLiveLocationControl({ kind: "update", id: current.id, expiresAt: current.expiresAt, seq, location }), UPDATE_WRAP_TTL_SECONDS)) {
+        // Sequence and distance only: never coordinates in diagnostics.
+        debugLog("system", "live_location_sent", { seq, moved }, "info");
+      }
     },
 
     /** A new GPS fix: send it to every share it moved far enough for. */
@@ -204,6 +212,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
         ...(Number.isFinite(position.coords.accuracy) ? { accuracy: position.coords.accuracy } : {}),
         at: nowSeconds(),
       };
+      latestFix = location;
       for (const share of Object.values(this.outgoing)) {
         if (distanceMetres(share.last, location) >= LIVE_MOVE_METRES || Date.now() - share.lastSentAt >= LIVE_HEARTBEAT_MS) {
           void this.sendUpdate(share, location);
@@ -218,8 +227,9 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       for (const share of Object.values(this.outgoing)) {
         if (share.expiresAt <= now) void this.stopSharing(share.peer, false);
         else if (force || Date.now() - share.lastSentAt >= LIVE_HEARTBEAT_MS) {
-          // Stationary: the position is unchanged, the timestamp says "still sharing".
-          void this.sendUpdate(share, { ...share.last, at: now });
+          // The newest fix (small moves under the distance threshold add up),
+          // stamped now: the timestamp also says "still sharing".
+          void this.sendUpdate(share, { ...(latestFix ?? share.last), at: now });
         }
       }
       for (const [id, share] of Object.entries(this.incoming)) {
@@ -264,6 +274,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       if (Object.keys(this.outgoing).length) return;
       if (watchId !== null && typeof navigator !== "undefined") navigator.geolocation?.clearWatch(watchId);
       watchId = null;
+      latestFix = null;
       if (visibilityListener && typeof document !== "undefined") document.removeEventListener("visibilitychange", visibilityListener);
       visibilityListener = null;
       if (!Object.keys(this.incoming).length && !clockHolds && clock) {

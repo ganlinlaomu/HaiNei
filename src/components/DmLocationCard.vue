@@ -66,8 +66,15 @@ const status = computed<"once" | "live" | "stale" | "ended">(() => {
   if (props.own) return ownActive.value ? "live" : "ended";
   return incoming.value?.state ?? "ended";
 });
-/** Latest received position for a live share, else the card's own. */
-const shown = computed(() => incoming.value && incoming.value.state !== "ended" ? incoming.value.location : props.location);
+/**
+ * What to show: a friend's newest received position; for our own running
+ * share, the newest position we sent (what the friend sees); else the card's.
+ */
+const shown = computed(() => {
+  if (incoming.value && incoming.value.state !== "ended") return incoming.value.location;
+  if (ownActive.value) return liveStore.outgoingFor(props.peer)?.last ?? props.location;
+  return props.location;
+});
 
 const title = computed(() => {
   if (!live.value) return props.own ? "我的位置" : "位置";
