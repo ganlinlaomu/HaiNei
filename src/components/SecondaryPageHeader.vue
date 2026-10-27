@@ -15,16 +15,19 @@ const props = withDefaults(defineProps<{
   title: string;
   backTo?: string;
   backLabel?: string;
-  backMode?: "push" | "history";
+  /** "emit": the page decides how to go back (e.g. an in-page section). */
+  backMode?: "push" | "history" | "emit";
 }>(), {
   backTo: "/settings",
   backLabel: "返回我的",
   backMode: "push"
 });
+const emit = defineEmits<{ back: [] }>();
 const router = useRouter();
 
 function goBack() {
-  if (props.backMode === "history") router.back();
+  if (props.backMode === "emit") emit("back");
+  else if (props.backMode === "history") router.back();
   else router.push(props.backTo || "/settings");
 }
 </script>
