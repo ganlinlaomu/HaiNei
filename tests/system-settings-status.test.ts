@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readSystemSettingsSource } from "./helpers/systemSettingsSource";
@@ -25,12 +25,17 @@ describe("System Settings status UX", () => {
   });
 
   it("explains the DM inbox in plain words and keeps protocol details on the Debug page", () => {
-    const settingsTemplate = source.slice(0, source.indexOf("</template>"));
+    // Every user-facing settings template except the Diagnostics section.
+    const settingsDir = join(process.cwd(), "src/views/settings");
+    const templateOf = (path: string) => { const text = readFileSync(path, "utf8"); return text.slice(0, text.indexOf("</template>")); };
+    const settingsTemplate = [join(process.cwd(), "src/views/SystemSettings.vue"),
+      ...readdirSync(settingsDir).filter(name => name.endsWith(".vue") && name !== "DiagnosticsSection.vue").map(name => join(settingsDir, name))]
+      .map(templateOf).join("\n");
     expect(settingsTemplate).toContain("<div class=\"item-url\">收信地址</div>");
     expect(settingsTemplate).toContain("好友会把私信送到这里，系统自动选择，一般不需要修改。");
     expect(source).toContain("getOwnDmRelayStatus(account)");
     for (const jargon of ["kind 10050", "NIP-17", "NIP-65", "公共目录"]) {
-      expect(settingsTemplate.slice(0, settingsTemplate.indexOf("高级设置")), jargon).not.toContain(jargon);
+      expect(settingsTemplate, jargon).not.toContain(jargon);
     }
     const debug = readFileSync(join(process.cwd(), "src/views/Debug.vue"), "utf8");
     expect(debug).toContain("私信收件 Relay（kind 10050 / NIP-17）");

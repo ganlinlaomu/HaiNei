@@ -30,6 +30,28 @@ describe("system settings sections", () => {
     expect(native).not.toContain("开启推送");
   });
 
+  it("keeps every styled class styled in the file that uses it, the page included", () => {
+    // Scoped styles do not reach another component, so a class used in a
+    // template needs its rules in that file or in the shared section CSS.
+    // (v0.1.158 moved .privacy-copy into PrivacySection while the page's
+    // account rows still used it.)
+    const dir = join(process.cwd(), "src/views/settings");
+    const shared = readFileSync(join(dir, "systemSettingsSection.css"), "utf8");
+    const files = [join(process.cwd(), "src/views/SystemSettings.vue"),
+      ...readdirSync(dir).filter(name => name.endsWith(".vue")).map(name => join(dir, name))];
+    const cssClasses = (css: string) => new Set([...css.matchAll(/\.([a-zA-Z][\w-]*)/g)].map(match => match[1]));
+    const ownCss = (source: string) => [...source.matchAll(/<style scoped>([\s\S]*?)<\/style>/g)].map(match => match[1]).join("\n");
+    const styled = cssClasses(shared + files.map(file => ownCss(readFileSync(file, "utf8"))).join("\n"));
+    for (const file of files) {
+      const source = readFileSync(file, "utf8");
+      const template = source.slice(0, source.indexOf("</template>"));
+      const used = [...template.matchAll(/\bclass="([^"]+)"/g)].flatMap(match => match[1].split(/\s+/));
+      const available = cssClasses(shared + ownCss(source));
+      const missing = [...new Set(used.filter(name => styled.has(name) && !available.has(name)))];
+      expect(missing, file).toEqual([]);
+    }
+  });
+
   it("every section includes the shared section styles scoped, and the page mounts them all", () => {
     const dir = join(process.cwd(), "src/views/settings");
     const sections = readdirSync(dir).filter(name => name.endsWith("Section.vue"));

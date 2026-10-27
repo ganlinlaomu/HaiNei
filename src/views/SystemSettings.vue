@@ -7,147 +7,9 @@
       已同步设置：<span v-if="settings.lastRelaySyncTimestamp">Relay {{ formatSyncTimestamp(settings.lastRelaySyncTimestamp) }}</span><span v-if="settings.lastRelaySyncTimestamp && settings.lastMediaSyncTimestamp"> · </span><span v-if="settings.lastMediaSyncTimestamp">Media {{ formatSyncTimestamp(settings.lastMediaSyncTimestamp) }}</span>
     </div>
     <section class="system-content">
-      <details class="technical-section" open>
-        <summary class="section-heading">
-          <div>
-            <h3>连接</h3>
-            <p>{{ relayList.filter(relay => relay.enabled).length }} 个服务器已启用</p>
-          </div>
-        </summary>
-        <p class="section-detail">海内自带的服务器始终开启，保证你和好友之间至少有一条共同的通道；也可以添加自己的服务器作为备用。</p>
+      <ConnectionSection :runtime="relayRuntime" />
 
-        <article class="item-card dm-relay-card">
-          <div class="item-header">
-            <div class="item-main">
-              <div class="item-url">收信地址</div>
-              <div class="meta-row">
-                <span class="pill" :class="dmRelayStatusTone">{{ dmRelayStatusLabel }}</span>
-              </div>
-            </div>
-          </div>
-          <p class="dm-relay-copy">好友会把私信送到这里，系统自动选择，一般不需要修改。</p>
-          <button class="text-button" type="button" @click="router.push('/debug')">查看技术详情</button>
-        </article>
-
-        <form class="add-form" @submit.prevent="addRelay">
-          <input
-            v-model="newRelay"
-            class="input"
-            inputmode="url"
-            autocapitalize="none"
-            autocomplete="off"
-            placeholder="wss://relay.example.com"
-          />
-          <button class="btn btn-primary" type="submit">添加</button>
-        </form>
-
-        <div class="item-list">
-          <article v-for="relay in relayList" :key="relay.url" class="item-card">
-            <div class="item-header">
-              <div class="item-main">
-                <div class="item-url">{{ relay.url }}</div>
-                <div class="meta-row">
-                  <span class="pill">{{ isBuiltinRelay(relay) ? "System" : relaySourceLabel(relay.source) }}</span>
-                  <span class="pill" :class="relayStatusTone(relay)">
-                    {{ relayStatusLabel(relay) }}
-                  </span>
-                  <span v-if="relay.read" class="pill">Read</span>
-                  <span v-if="relay.write" class="pill">Write</span>
-                  <span v-if="relay.latency" class="pill">{{ relay.latency }}ms</span>
-                </div>
-              </div>
-              <button
-                v-if="!isBuiltinRelay(relay)"
-                class="text-button danger"
-                type="button"
-                @click="removeRelay(relay)"
-              >
-                删除
-              </button>
-            </div>
-
-            <div v-if="relay.lastConnectedAt" class="relay-last-seen">最近连接：{{ formatTimestamp(relay.lastConnectedAt) }}</div>
-
-            <div class="control-row">
-              <template v-if="!isBuiltinRelay(relay)">
-                <label><input type="checkbox" :checked="relay.enabled" @change="toggleRelay(relay, 'enabled', $event)" />启用</label>
-                <label><input type="checkbox" :checked="relay.read" @change="toggleRelay(relay, 'read', $event)" />读取</label>
-                <label><input type="checkbox" :checked="relay.write" @change="toggleRelay(relay, 'write', $event)" />写入</label>
-              </template>
-              <span v-else class="system-relay-lock">系统固定 · Read / Write</span>
-              <button class="text-button" type="button" @click="reconnect(relay.url)">重连</button>
-            </div>
-          </article>
-        </div>
-      </details>
-
-      <details class="technical-section">
-        <summary class="section-heading">
-          <div>
-            <h3>图片与视频 / Media</h3>
-            <p>{{ mediaList.filter(server => server.enabled).length }} 个已启用 · Primary 与 fallback</p>
-          </div>
-        </summary>
-        <p class="section-detail">按 Primary、其他用户服务器、默认 fallback 的顺序上传。媒体服务器仅支持 HTTPS；localhost 可用于本地调试。</p>
-
-        <form class="media-add-form" @submit.prevent="addMediaServer">
-          <select v-model="newMediaType" class="input compact-input">
-            <option value="blossom">Blossom</option>
-            <option value="imgbed">ImgBed</option>
-            <option value="custom">Custom</option>
-          </select>
-          <input
-            v-model="newMediaUrl"
-            class="input"
-            inputmode="url"
-            autocapitalize="none"
-            autocomplete="off"
-            placeholder="https://media.example.com"
-          />
-          <button class="btn btn-primary" type="submit">添加</button>
-        </form>
-
-        <div class="item-list">
-          <article v-for="server in mediaList" :key="server.id" class="item-card">
-            <div class="item-header">
-              <div class="item-main">
-                <div class="item-url">{{ server.url }}</div>
-                <div class="meta-row">
-                  <span class="pill">{{ mediaTypeLabel(server.type) }}</span>
-                  <span class="pill">{{ server.source === "user" ? "用户" : "默认" }}</span>
-                  <span v-if="primaryMediaId === server.id" class="pill primary">Primary</span>
-                  <span v-else-if="server.source === 'default'" class="pill">Fallback</span>
-                </div>
-              </div>
-              <button
-                v-if="!isBuiltinMedia(server)"
-                class="text-button danger"
-                type="button"
-                @click="removeMediaServer(server)"
-              >
-                删除
-              </button>
-            </div>
-
-            <div class="health-grid">
-              <span>最近成功：{{ formatTimestamp(server.lastSuccessAt) }}</span>
-              <span>最近失败：{{ formatTimestamp(server.lastFailureAt) }}</span>
-            </div>
-
-            <div class="control-row">
-              <label><input type="checkbox" :checked="server.enabled" @change="toggleMediaServer(server, $event)" />启用</label>
-              <button
-                v-if="server.source === 'user' && server.enabled && primaryMediaId !== server.id"
-                class="text-button"
-                type="button"
-                @click="settings.setPrimaryMediaServer(server.id)"
-              >
-                设为 Primary
-              </button>
-            </div>
-          </article>
-        </div>
-      </details>
+      <MediaSection />
 
       <PrivacySection />
 
@@ -163,24 +25,7 @@
 
       <CacheSection />
 
-      <details class="technical-section diagnostics-section">
-        <summary class="section-heading"><div><h3>高级设置 / Diagnostics</h3><p>{{ diagnosticsSummary }}</p></div></summary>
-        <div class="diagnostics-grid">
-          <span><strong>{{ connectedRelayCount }}/{{ enabledRelayCount }}</strong><small>Relay 已连接</small></span>
-          <span><strong>{{ syncStatusLabel }}</strong><small>消息同步</small></span>
-          <span><strong>{{ lastCatchupLabel }}</strong><small>最近补拉</small></span>
-          <span><strong>{{ diagnostics.pendingOutgoing }}</strong><small>待发送</small></span>
-        </div>
-        <div class="account-row">
-          <span class="small">查看 Relay、NIP-17 与消息同步的本地实时日志</span>
-          <div class="button-row">
-            <button class="btn btn-secondary" type="button" :disabled="retryingQueue" @click="retryFailedQueue">
-              {{ retryingQueue ? "重试中…" : "重试发送" }}
-            </button>
-            <button class="btn btn-secondary" type="button" @click="router.push('/debug')">系统诊断</button>
-          </div>
-        </div>
-      </details>
+      <DiagnosticsSection :runtime="relayRuntime" />
 
       <details v-if="keyStore.loginMethod === 'private-key'" class="technical-section account-section security-section">
         <summary class="section-heading account-heading">
@@ -346,6 +191,10 @@ import { APP_VERSION } from "@/db/dexie";
 import { APP_UPDATE_SUMMARY } from "@/appRelease";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import AccountSwitcherSheet from "@/components/AccountSwitcherSheet.vue";
+import ConnectionSection from "./settings/ConnectionSection.vue";
+import MediaSection from "./settings/MediaSection.vue";
+import DiagnosticsSection from "./settings/DiagnosticsSection.vue";
+import { useRelayRuntimeStatus } from "./settings/useRelayRuntimeStatus";
 import PrivacySection from "./settings/PrivacySection.vue";
 import BackgroundLockSection from "./settings/BackgroundLockSection.vue";
 import AppearanceSection from "./settings/AppearanceSection.vue";
@@ -353,7 +202,7 @@ import DataSaverSection from "./settings/DataSaverSection.vue";
 import AndroidUpdateSection from "./settings/AndroidUpdateSection.vue";
 import PushSection from "./settings/PushSection.vue";
 import CacheSection from "./settings/CacheSection.vue";
-import { computed, defineAsyncComponent, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { nip19 } from "nostr-tools";
 import { hexToBytes } from "nostr-tools/utils";
 import { accountDisplayName } from "@/services/accountRegistry";
@@ -361,30 +210,13 @@ import { biometricMethodLabel } from "@/utils/biometricLabel";
 const GoogleRecoveryPanel = defineAsyncComponent(() => import("@/components/GoogleRecoveryPanel.vue"));
 import { useRouter } from "vue-router";
 
-import {
-  inspectRelays,
-  onRelayConnectionState,
-  reconnectRelay,
-  type RelayRuntimeStatus
-} from "@/nostr/relays";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useProfilesStore } from "@/stores/profiles";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
-import { registerOutgoingPushSigner, retryFailedOutgoing } from "@/nostr/messaging/service";
-import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
-import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
-import {
-  DEFAULT_RELAY_URLS,
-  type MediaServer,
-  type MediaServerType,
-  type RelayConfig,
-  type RelaySource
-} from "@/services/connectionSettings";
 import { runWhenIdle } from "@/utils/bottomTabActivation";
 import { isNativeAndroidApp } from "@/services/androidUpdater";
-import { getOwnDmRelayStatus } from "@/services/dmRelayDirectory";
 
 const keyStore = useKeyStore();
 const friendships = useFriendshipsStore();
@@ -395,17 +227,8 @@ const router = useRouter();
 
 const nickname = computed(() => profiles.getProfile(keyStore.pkHex)?.nickname?.trim() || "未设置昵称");
 const shortPk = computed(() => keyStore.pkHex ? `${keyStore.pkHex.slice(0, 8)}...${keyStore.pkHex.slice(-6)}` : "");
-const relayList = computed(() => settings.relayList);
-const mediaList = computed(() => settings.mediaList);
-const primaryMediaId = computed(() =>
-  settings.activeMediaServers.find(server => server.source === "user")?.id || ""
-);
 
-const newRelay = ref("");
-const newMediaType = ref<MediaServerType>("blossom");
-const newMediaUrl = ref("");
-const statuses = reactive<Record<string, RelayRuntimeStatus | undefined>>({});
-const retryingQueue = ref(false);
+const relayRuntime = useRelayRuntimeStatus();
 const biometricSupported = ref(false);
 const biometricBusy = ref(false);
 const remoteSignerBusy = ref(false);
@@ -448,216 +271,11 @@ const accountProtectionText = computed(() => {
       ? "本机保持登录"
       : keyStore.credentialMode === "password" ? "本地密码保护" : "仅当前会话";
 });
-const enabledRelayCount = computed(() => relayList.value.filter(relay => relay.enabled).length);
-const connectedRelayCount = computed(() => relayList.value.filter(relay => relay.enabled && statuses[relay.url]?.state === "connected").length);
-const diagnostics = reactive({
-  syncStatus: "idle",
-  lastCatchupCompletedAt: 0,
-  pendingOutgoing: 0,
-});
-const dmRelayStatus = reactive<{
-  relays: string[];
-  eventId?: string;
-  publishedAt?: number;
-  pending: boolean;
-  attempts: number;
-  lastError?: string;
-}>({ relays: [], pending: false, attempts: 0 });
-const dmRelayStatusLabel = computed(() =>
-  dmRelayStatus.pending
-    ? "稍后自动重试"
-    : dmRelayStatus.publishedAt
-      ? "已就绪"
-      : "正在设置"
-);
-const dmRelayStatusTone = computed(() => ({
-  healthy: !!dmRelayStatus.publishedAt && !dmRelayStatus.pending,
-  pending: dmRelayStatus.pending || !dmRelayStatus.publishedAt,
-  failed: !!dmRelayStatus.lastError && dmRelayStatus.pending,
-}));
-function syncStatusText(status: string) {
-  if (status === "idle") return "Idle";
-  if (status === "connecting") return "连接中";
-  if (status === "catching-up") return "补拉中";
-  if (status === "live") return "Live";
-  if (status === "offline") return "离线";
-  if (status === "error") return "错误";
-  return status;
-}
-const syncStatusLabel = computed(() => syncStatusText(diagnostics.syncStatus));
-const lastCatchupLabel = computed(() => diagnostics.lastCatchupCompletedAt
-  ? formatRelativeTimestamp(diagnostics.lastCatchupCompletedAt)
-  : "—");
-const diagnosticsSummary = computed(() =>
-  `Relay ${connectedRelayCount.value}/${enabledRelayCount.value} · ${syncStatusLabel.value} · 待发送 ${diagnostics.pendingOutgoing}`
-);
-let statusInterval: ReturnType<typeof setInterval> | null = null;
-let statusUnsubscribe: (() => void) | null = null;
 let cancelDeferredRuntimeRefresh: (() => void) | null = null;
 let viewActive = false;
 
-function relaySourceLabel(source: RelaySource) {
-  return source === "user" ? "自己添加" : source === "nip65" ? "公开列表" : "默认";
-}
-
-function mediaTypeLabel(type: MediaServerType) {
-  return type === "blossom" ? "Blossom" : type === "imgbed" ? "ImgBed" : "Custom";
-}
-
-function isBuiltinRelay(relay: RelayConfig) {
-  return relay.source === "default" || (DEFAULT_RELAY_URLS as readonly string[]).includes(relay.url);
-}
-
-function isBuiltinMedia(server: MediaServer) {
-  return server.source === "default";
-}
-
-function relayStatusLabel(relay: RelayConfig) {
-  if (!relay.enabled) return "已停用";
-  const runtime = statuses[relay.url];
-  if (!runtime) return "未连接";
-  if (runtime.state === "connected") return "已连接";
-  if (runtime.state === "connecting") return "连接中…";
-  if (runtime.state === "waiting-retry") return "重试中";
-  return relay.lastFailureAt ? "连接失败" : "未连接";
-}
-
-function relayStatusTone(relay: RelayConfig) {
-  const state = statuses[relay.url]?.state;
-  return {
-    healthy: state === "connected",
-    pending: state === "connecting" || state === "waiting-retry",
-    failed: state === "disconnected" && !!relay.lastFailureAt
-  };
-}
-
-function formatTimestamp(timestamp?: number) {
-  return timestamp ? new Date(timestamp).toLocaleString() : "—";
-}
-
 function formatSyncTimestamp(timestamp?: number) {
   return timestamp ? new Date(timestamp * 1000).toLocaleString() : "—";
-}
-
-function formatRelativeTimestamp(timestamp?: number) {
-  if (!timestamp) return "—";
-  const ms = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000;
-  const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (seconds < 60) return `${seconds}s 前`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m 前`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h 前`;
-  return new Date(ms).toLocaleDateString();
-}
-
-async function refreshDiagnostics() {
-  const account = keyStore.pkHex;
-  if (!account) {
-    Object.assign(diagnostics, { syncStatus: "idle", lastCatchupCompletedAt: 0, pendingOutgoing: 0 });
-    Object.assign(dmRelayStatus, { relays: [], eventId: undefined, publishedAt: undefined, pending: false, attempts: 0, lastError: undefined });
-    return;
-  }
-  try {
-    const [syncState, pending, ownDmRelays] = await Promise.all([
-      syncedMessageRepository.getSyncState(account),
-      outgoingQueueRepository.listRetryable(account, true),
-      getOwnDmRelayStatus(account).catch(() => null),
-    ]);
-    if (keyStore.pkHex !== account) return;
-    diagnostics.syncStatus = syncState.status || "idle";
-    diagnostics.lastCatchupCompletedAt = syncState.lastCatchupCompletedAt || 0;
-    diagnostics.pendingOutgoing = pending.length;
-    if (ownDmRelays) Object.assign(dmRelayStatus, ownDmRelays);
-  } catch {
-    if (keyStore.pkHex === account) diagnostics.syncStatus = "error";
-  }
-}
-
-function showValidationError(fallback: string) {
-  ui.addToast(settings.validationError || fallback, 2_500, "error");
-}
-
-function addRelay() {
-  if (!settings.addRelay(newRelay.value)) {
-    showValidationError("请输入有效的 Relay 地址");
-    return;
-  }
-  newRelay.value = "";
-  refreshStatuses();
-}
-
-function removeRelay(relay: RelayConfig) {
-  if (!confirm(`确定要删除 ${relay.url} 吗？`)) return;
-  if (!settings.deleteRelay(relay.url)) {
-    showValidationError("删除 Relay 失败");
-    return;
-  }
-  delete statuses[relay.url];
-}
-
-function toggleRelay(relay: RelayConfig, field: "enabled" | "read" | "write", event: Event) {
-  if (!settings.updateRelay(relay.url, { [field]: (event.target as HTMLInputElement).checked })) {
-    showValidationError("更新 Relay 失败");
-  }
-}
-
-function reconnect(url: string) {
-  reconnectRelay(url);
-  refreshStatuses();
-}
-
-function addMediaServer() {
-  if (!settings.addMediaServer(newMediaType.value, newMediaUrl.value)) {
-    showValidationError("请输入有效的媒体服务器地址");
-    return;
-  }
-  newMediaUrl.value = "";
-}
-
-function removeMediaServer(server: MediaServer) {
-  if (!confirm(`确定要删除 ${server.url} 吗？`)) return;
-  if (!settings.deleteMediaServer(server.id)) {
-    showValidationError("删除媒体服务器失败");
-  }
-}
-
-function toggleMediaServer(server: MediaServer, event: Event) {
-  if (!settings.updateMediaServer(server.id, { enabled: (event.target as HTMLInputElement).checked })) {
-    showValidationError("更新媒体服务器失败");
-  }
-}
-
-function refreshStatuses() {
-  const current = inspectRelays();
-  const activeUrls = new Set(relayList.value.map(relay => relay.url));
-  for (const url of Object.keys(statuses)) {
-    if (!activeUrls.has(url)) delete statuses[url];
-  }
-  for (const relay of relayList.value) statuses[relay.url] = current[relay.url];
-}
-
-function startStatusPolling() {
-  refreshStatuses();
-  void refreshDiagnostics();
-  if (!statusInterval) statusInterval = setInterval(() => {
-    refreshStatuses();
-    void refreshDiagnostics();
-  }, 5_000);
-  if (!statusUnsubscribe) {
-    statusUnsubscribe = onRelayConnectionState(() => {
-      // onClose schedules retry immediately after emitting; next task observes
-      // the final connecting/backoff state rather than a transient disconnect.
-      window.setTimeout(refreshStatuses, 0);
-    });
-  }
-}
-
-function stopStatusPolling() {
-  if (statusInterval) clearInterval(statusInterval);
-  statusInterval = null;
-  statusUnsubscribe?.();
-  statusUnsubscribe = null;
 }
 
 function scheduleDeferredRuntimeRefresh() {
@@ -665,7 +283,7 @@ function scheduleDeferredRuntimeRefresh() {
   cancelDeferredRuntimeRefresh = runWhenIdle(() => {
     cancelDeferredRuntimeRefresh = null;
     if (!viewActive || !keyStore.pkHex) return;
-    startStatusPolling();
+    relayRuntime.startStatusPolling();
     void refreshBiometricSupport();
   }, 1_000);
 }
@@ -828,26 +446,10 @@ async function doLogout() {
   location.href = "/#/login";
 }
 
-async function retryFailedQueue() {
-  const account = keyStore.pkHex;
-  if (!account || retryingQueue.value) return;
-  retryingQueue.value = true;
-  try {
-    registerOutgoingPushSigner(account, keyStore.signEvent.bind(keyStore));
-    const results = await retryFailedOutgoing(account);
-    const failures = results.filter(result => result.status === "rejected").length;
-    ui.addToast(failures ? `仍有 ${failures} 项发送失败` : "待发送内容已重试", 2_000, failures ? "error" : "success");
-  } finally {
-    retryingQueue.value = false;
-  }
-}
-
 watch(() => keyStore.pkHex, async pk => {
-  Object.assign(dmRelayStatus, { relays: [], eventId: undefined, publishedAt: undefined, pending: false, attempts: 0, lastError: undefined });
+  relayRuntime.resetRuntimeStatus(!pk);
   if (!pk) {
     settings.reset();
-    for (const url of Object.keys(statuses)) delete statuses[url];
-    Object.assign(diagnostics, { syncStatus: "idle", lastCatchupCompletedAt: 0, pendingOutgoing: 0 });
     return;
   }
   revealedNsec.value = "";
@@ -856,7 +458,7 @@ watch(() => keyStore.pkHex, async pk => {
   if (keyStore.pkHex !== pk || settings.loadedFor !== pk) return;
 
   // Relay state is already in memory, so this is safe for first paint.
-  refreshStatuses();
+  relayRuntime.refreshStatuses();
   scheduleDeferredRuntimeRefresh();
 }, { immediate: true });
 
@@ -870,13 +472,13 @@ onActivated(() => {
 });
 onDeactivated(() => {
   viewActive = false;
-  stopStatusPolling();
+  relayRuntime.stopStatusPolling();
   cancelDeferredRuntimeRefresh?.();
   cancelDeferredRuntimeRefresh = null;
 });
 onBeforeUnmount(() => {
   viewActive = false;
-  stopStatusPolling();
+  relayRuntime.stopStatusPolling();
   cancelDeferredRuntimeRefresh?.();
   cancelDeferredRuntimeRefresh = null;
 });
@@ -985,10 +587,7 @@ onBeforeUnmount(() => {
 .protection-modes:disabled{opacity:.6}
 .account-danger-button{width:100%;min-height:46px;border:1px solid var(--bd-fecaca);border-radius:13px;background:var(--bg-fff7f7);color:var(--fg-dc2626);font-size:.93rem;font-weight:600;cursor:pointer}
 @media(max-width:520px){.account-panel{padding-left:0}.account-actions-row{gap:8px}.account-action-button{min-height:46px}}
-.diagnostics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0 0 14px}
-.diagnostics-grid>span{display:grid;gap:3px;padding:10px;border:1px solid var(--bd-e2e8f0);border-radius:10px;background:var(--bg-f8fafc)}
-.diagnostics-grid strong{color:var(--fg-1e293b);font-size:.82rem}
-.diagnostics-grid small{color:var(--fg-64748b);font-size:.68rem}
+
 .technical-settings { padding-top: 0; }
 
 .sync-status {
@@ -1008,100 +607,6 @@ onBeforeUnmount(() => {
 .sync-ok {
   background: var(--bg-ecfdf5);
   color: var(--fg-047857);
-}
-
-.add-form,
-.media-add-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-
-.media-add-form {
-  grid-template-columns: 120px minmax(0, 1fr) auto;
-}
-
-.input {
-  min-height: 44px;
-  margin: 0;
-}
-
-.item-list {
-  display: grid;
-  gap: 10px;
-}
-
-.item-card {
-  padding: 13px;
-  border: 1px solid var(--bd-e2e8f0);
-  border-radius: 12px;
-  background: var(--bg-f8fafc);
-}
-
-.dm-relay-card { margin-bottom: 14px; }
-.dm-relay-copy { margin: 10px 0 8px; color: var(--fg-64748b); font-size: .75rem; line-height: 1.5; }
-.dm-relay-list { display: grid; gap: 4px; color: var(--fg-475569); font: .7rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
-
-.item-main {
-  min-width: 0;
-}
-
-.item-url {
-  color: var(--fg-1e293b);
-  font-size: 0.84rem;
-  overflow-wrap: anywhere;
-}
-
-.relay-last-seen{margin-top:8px;color:var(--fg-64748b);font-size:.7rem}
-.system-relay-lock{color:var(--fg-64748b);font-size:.76rem;font-weight:600}
-.meta-row {
-  margin-top: 7px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.control-row {
-  margin-top: 12px;
-  justify-content: flex-start;
-  flex-wrap: wrap;
-}
-
-.control-row label {
-  min-height: 36px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--fg-475569);
-  font-size: 0.78rem;
-}
-
-.control-row input {
-  width: 17px;
-  height: 17px;
-}
-
-.text-button {
-  min-height: 36px;
-  padding: 5px 8px;
-  border: 0;
-  background: transparent;
-  color: var(--fg-2563eb);
-  cursor: pointer;
-}
-
-.text-button.danger {
-  color: var(--fg-b91c1c);
-}
-
-.health-grid {
-  margin-top: 10px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  color: var(--fg-64748b);
-  font-size: 0.7rem;
 }
 
 .version-footer {
@@ -1124,22 +629,6 @@ onBeforeUnmount(() => {
 
   .settings-card {
     padding: 0;
-  }
-
-  .media-add-form {
-    grid-template-columns: 110px minmax(0, 1fr);
-  }
-
-  .media-add-form .btn {
-    grid-column: 1 / -1;
-  }
-
-  .health-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .diagnostics-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .account-panel {
