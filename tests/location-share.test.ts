@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createSSRApp, h } from "vue";
 import { renderToString } from "vue/server-renderer";
+import { createPinia } from "pinia";
 import DmLocationCard from "@/components/DmLocationCard.vue";
 import LocationShareSheet from "@/components/LocationShareSheet.vue";
 import { directMessagePreview } from "@/nostr/messaging/directMessages";
@@ -76,10 +77,14 @@ describe("reading the device location", () => {
 });
 
 describe("location UI", () => {
-  const render = (component: any, props: Record<string, unknown>) => renderToString(createSSRApp({ render: () => h(component, props) }));
+  const render = (component: any, props: Record<string, unknown>) => {
+    const app = createSSRApp({ render: () => h(component, props) });
+    app.use(createPinia());
+    return renderToString(app);
+  };
 
   it("renders a card with coordinates and accuracy, without loading any map", async () => {
-    const html = await render(DmLocationCard, { location: { lat: 31.23042, lng: 121.4737, accuracy: 15, at: AT }, own: false });
+    const html = await render(DmLocationCard, { location: { lat: 31.23042, lng: 121.4737, accuracy: 15, at: AT }, own: false, peer: "b".repeat(64) });
     expect(html).toContain("31.23042, 121.47370");
     expect(html).toContain("精度约 ±15 米");
     expect(html).toContain("在地图中打开");

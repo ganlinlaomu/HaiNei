@@ -19,6 +19,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
       <input v-model="searchQuery" type="search" placeholder="搜索私信" autocomplete="off" />
     </label>
+    <LiveLocationBanner :name-of="displayName" />
 
     <div class="conversation-row assistant-row">
       <button class="conversation-main" type="button" @click="router.push('/nearby')">
@@ -95,6 +96,7 @@ import NewConversationSheet from "@/components/NewConversationSheet.vue";
 import HeaderSegmented from "@/components/HeaderSegmented.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import SwipeLucideIcon from "@/components/SwipeLucideIcon.vue";
+import LiveLocationBanner from "@/components/LiveLocationBanner.vue";
 import { directMessagePreview } from "@/nostr/messaging/directMessages";
 import { hasDisappearingMarker } from "@/nostr/messaging/disappearingMessages";
 import { buildDirectConversationSummaries, useDirectMessagesStore, type DmDraft } from "@/stores/directMessages";

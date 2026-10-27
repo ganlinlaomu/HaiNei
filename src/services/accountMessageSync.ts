@@ -26,6 +26,7 @@ import { useMessagesStore } from "@/stores/messages";
 import { useSettingsStore } from "@/stores/settings";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useProfilesStore } from "@/stores/profiles";
+import { useLiveLocationStore } from "@/stores/liveLocation";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { onMessageAuthorizationChanged } from "@/services/messageAuthorizationEvents";
 import { pushEnabledForAccount, syncPushAuthorizationPolicy } from "@/services/pushNotifications";
@@ -441,6 +442,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
         isReceipt: isDmReceiptMessage,
         processReceipt: message => directMessages.processReceipt(message),
         processBurnControl: message => directMessages.processBurnControl(message),
+        processLiveLocation: message => { if (isCurrent()) useLiveLocationStore().receiveControl(message); },
         // The call engine (WebRTC, media) loads only when a call signal arrives.
         processCallControl: message => {
           const signal = parseCallSignal(message);

@@ -1,6 +1,7 @@
 import { DM_RECEIPT_TYPE, isDmReceiptPayload } from "./dmReceipts";
 import { DM_BURN_CONTROL_TYPE, isBurnControlPayload } from "./dmBurnControl";
 import { CALL_CONTROL_TYPE, CALL_LOG_TYPE, isCallPayload } from "./callControl";
+import { LIVE_LOCATION_CONTROL_TYPE } from "./locationShare";
 
 // Until 2026-10-10 18:30 JST, an unmarked NIP-17 rumor was a HaiNei Feed
 // post. Afterwards, newly authored posts have an explicit encrypted tag.
@@ -41,6 +42,7 @@ export function isHomeControl(tags: string[][] | undefined, content?: string) {
     || values.has(`t:${DM_RECEIPT_TYPE}`)
     || values.has(`t:${DM_BURN_CONTROL_TYPE}`)
     || values.has(`t:${CALL_CONTROL_TYPE}`)
+    || values.has(`t:${LIVE_LOCATION_CONTROL_TYPE}`)
     || isDmReceiptPayload(content)
     || isBurnControlPayload(content)
     || isCallPayload(content);
