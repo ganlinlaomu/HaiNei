@@ -9,7 +9,8 @@ import {
 } from "@/nostr/messaging/directMessages";
 import { buildDirectConversationSummaries, directMessagesForPeer } from "@/stores/directMessages";
 import type { InboxItem } from "@/stores/messages";
-import { readThemedSource } from "./helpers/themedSource";
+import { readThemedSource, themeSourceText } from "./helpers/themedSource";
+import { readSystemSettingsSource } from "./helpers/systemSettingsSource";
 
 const ACCOUNT = "a".repeat(64);
 const FRIEND = "b".repeat(64);
@@ -245,7 +246,7 @@ describe("direct-message navigation and UI contract", () => {
 
   it("keeps My settings and the new primary contacts page consistent", () => {
     const settings = readThemedSource(join(process.cwd(), "src/views/Settings.vue"), "utf8");
-    const system = readThemedSource(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
+    const system = readSystemSettingsSource(themeSourceText);
     const friends = readThemedSource(join(process.cwd(), "src/views/Friends.vue"), "utf8");
     const profile = readThemedSource(join(process.cwd(), "src/views/MyProfile.vue"), "utf8");
     const saved = readThemedSource(join(process.cwd(), "src/views/Saved.vue"), "utf8");

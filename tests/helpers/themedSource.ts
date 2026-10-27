@@ -16,5 +16,10 @@ function tokens() {
  * values, so visual-contract tests keep asserting the original light colors.
  */
 export function readThemedSource(path: string, _encoding: BufferEncoding = "utf8") {
-  return readFileSync(path, "utf8").replace(/var\((--(?:fg|bg|bd)-[a-z0-9-]+)\)/g, (match, name: string) => tokens().get(name) ?? match);
+  return themeSourceText(readFileSync(path, "utf8"));
+}
+
+/** readThemedSource for text already read (e.g. several files joined). */
+export function themeSourceText(text: string) {
+  return text.replace(/var\((--(?:fg|bg|bd)-[a-z0-9-]+)\)/g, (match, name: string) => tokens().get(name) ?? match);
 }

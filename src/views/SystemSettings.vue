@@ -149,107 +149,19 @@
         </div>
       </details>
 
-      <details class="technical-section" open>
-        <summary class="section-heading">
-          <div><h3>隐私 / Privacy</h3><p>{{ settings.settings.privacy.readReceipts ? "已读回执已开启" : "已读回执已关闭" }}</p></div>
-        </summary>
-        <div class="account-row">
-          <div class="privacy-copy">
-            <strong>已读回执</strong>
-            <span class="small">关闭后，你不会向好友发送“已读”，同时也不会看到对方的“已读”状态；“已送达”仍会正常显示。</span>
-          </div>
-          <label class="privacy-toggle">
-            <input
-              type="checkbox"
-              :checked="settings.settings.privacy.readReceipts"
-              aria-label="已读回执"
-              @change="toggleReadReceipts"
-            />
-            <span aria-hidden="true"></span>
-          </label>
-        </div>
-      </details>
+      <PrivacySection />
 
-      <section v-if="keyStore.credentialMode === 'password' || keyStore.credentialMode === 'passkey'" class="technical-section">
-        <label class="account-row">
-          <span>进入后台 5 分钟后锁定</span>
-          <input type="checkbox" :checked="backgroundLock" @change="toggleBackgroundLock" />
-        </label>
-        <p class="section-detail">短暂切换应用不会锁定。再次打开时使用本地密码或通行密钥解锁。</p>
-      </section>
+      <BackgroundLockSection v-if="keyStore.credentialMode === 'password' || keyStore.credentialMode === 'passkey'" />
 
-      <details class="technical-section">
-        <summary class="section-heading">
-          <div><h3>外观 / Appearance</h3><p>{{ themeLabel }}</p></div>
-        </summary>
-        <div class="data-mode" role="radiogroup" aria-label="外观">
-          <label><input type="radio" name="theme" :checked="themePreference === 'system'" @change="setThemePreference('system')" /> 跟随系统</label>
-          <label><input type="radio" name="theme" :checked="themePreference === 'light'" @change="setThemePreference('light')" /> 浅色</label>
-          <label><input type="radio" name="theme" :checked="themePreference === 'dark'" @change="setThemePreference('dark')" /> 深色</label>
-        </div>
-        <p class="section-detail">只对这台设备生效。「跟随系统」会随手机的深色模式自动切换。</p>
-      </details>
+      <AppearanceSection />
 
-      <details class="technical-section">
-        <summary class="section-heading">
-          <div><h3>数据使用 / Data Saver</h3><p>{{ settings.dataSaver ? "节省流量" : "标准" }}</p></div>
-        </summary>
-        <div class="data-mode" role="radiogroup" aria-label="数据使用模式">
-          <label><input type="radio" :checked="!settings.dataSaver" @change="settings.setDataSaver(false)" /> 标准</label>
-          <label><input type="radio" :checked="settings.dataSaver" @change="settings.setDataSaver(true)" /> 节省流量</label>
-        </div>
-        <p class="section-detail">节省流量模式会缩短图片预加载距离，并避免不必要的视频预加载。</p>
-      </details>
+      <DataSaverSection />
 
-      <details v-if="isNativeAndroid" class="technical-section">
-        <summary class="section-heading">
-          <div><h3>应用更新 / Update</h3><p>{{ androidUpdateSummary }}</p></div>
-        </summary>
-        <div class="account-row">
-          <span class="small">{{ androidVersionName ? `当前版本：${androidVersionName}` : "Android APK 自动检查更新" }}</span>
-          <button class="btn btn-secondary" type="button" :disabled="checkingAndroidUpdate" @click="checkForAndroidAppUpdate">
-            {{ checkingAndroidUpdate ? "检查中…" : "检查更新" }}
-          </button>
-        </div>
-      </details>
+      <AndroidUpdateSection v-if="isNativeAndroid" />
 
-      <details class="technical-section">
-        <summary class="section-heading">
-          <div><h3>后台推送 / {{ isNativeApp ? "Android Push" : "Web Push" }}</h3><p>{{ pushStatusText }}</p></div>
-        </summary>
-        <p class="section-detail">推送用于消息与来电提醒，显示“你有新的私信消息”或“你有一个语音来电”，不会包含好友名称、消息内容或图片信息。</p>
-        <div class="account-row">
-          <span class="small">{{ pushHelpText }}</span>
-          <button v-if="!isNativeApp" class="btn btn-secondary" type="button" :disabled="pushBusy || !pushSupported" @click="togglePush">
-            {{ pushBusy ? "处理中…" : pushEnabled ? "关闭推送" : "开启推送" }}
-          </button>
-          <span v-else class="pill pending">原生 Push 待启用</span>
-          <button v-if="!isNativeApp && pushEnabled" class="btn btn-secondary" type="button" :disabled="pushBusy" @click="testCurrentPush">测试本机推送</button>
-        </div>
-        <p v-if="pushTestResult" class="section-detail" role="status">{{ pushTestResult }}</p>
-      </details>
+      <PushSection :is-native-app="isNativeApp" />
 
-      <details class="technical-section">
-        <summary class="section-heading">
-          <div><h3>存储 / Cache</h3><p>内存 {{ formatSize(cacheStats.size) }} / {{ formatSize(IMAGE_MEMORY_CACHE_MAX_BYTES) }} · 本地 {{ formatSize(cacheStats.persistentSize) }} / {{ formatSize(IMAGE_PERSISTENT_CACHE_MAX_BYTES) }}</p></div>
-        </summary>
-        <div class="cache-info">
-          <div class="small">
-            <div>内存缓存：{{ cacheStats.count }} 个文件 · {{ formatSize(cacheStats.size) }} / {{ formatSize(IMAGE_MEMORY_CACHE_MAX_BYTES) }}</div>
-            <div>加密本地缓存：{{ cacheStats.persistentCount }} 个文件 · {{ formatSize(cacheStats.persistentSize) }} / {{ formatSize(IMAGE_PERSISTENT_CACHE_MAX_BYTES) }}</div>
-            <div>内存缓存会在锁定、切换账号或退出后清除；加密本地缓存保留，解锁后按需解密。</div>
-            <div v-if="cacheStats.persistentOldestTimestamp">最早本地缓存：{{ new Date(cacheStats.persistentOldestTimestamp).toLocaleDateString() }}</div>
-          </div>
-          <div class="button-row">
-            <button class="btn btn-secondary" type="button" :disabled="loadingCache" @click="refreshCacheStats(true)">
-              {{ loadingCache ? "加载中…" : "刷新统计" }}
-            </button>
-            <button class="btn btn-warning" type="button" :disabled="clearingCache" @click="clearCache">
-              {{ clearingCache ? "清理中…" : "清空缓存" }}
-            </button>
-          </div>
-        </div>
-      </details>
+      <CacheSection />
 
       <details class="technical-section diagnostics-section">
         <summary class="section-heading"><div><h3>高级设置 / Diagnostics</h3><p>{{ diagnosticsSummary }}</p></div></summary>
@@ -430,13 +342,17 @@
   </main>
 </template>
 <script setup lang="ts">
-import { deviceStorage } from "@/services/deviceStorage";
-import { setThemePreference, themePreference } from "@/services/theme";
 import { APP_VERSION } from "@/db/dexie";
 import { APP_UPDATE_SUMMARY } from "@/appRelease";
-import { autoLockKey } from "@/services/autoLock";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import AccountSwitcherSheet from "@/components/AccountSwitcherSheet.vue";
+import PrivacySection from "./settings/PrivacySection.vue";
+import BackgroundLockSection from "./settings/BackgroundLockSection.vue";
+import AppearanceSection from "./settings/AppearanceSection.vue";
+import DataSaverSection from "./settings/DataSaverSection.vue";
+import AndroidUpdateSection from "./settings/AndroidUpdateSection.vue";
+import PushSection from "./settings/PushSection.vue";
+import CacheSection from "./settings/CacheSection.vue";
 import { computed, defineAsyncComponent, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { nip19 } from "nostr-tools";
 import { hexToBytes } from "nostr-tools/utils";
@@ -445,7 +361,6 @@ import { biometricMethodLabel } from "@/utils/biometricLabel";
 const GoogleRecoveryPanel = defineAsyncComponent(() => import("@/components/GoogleRecoveryPanel.vue"));
 import { useRouter } from "vue-router";
 
-const themeLabel = computed(() => ({ system: "跟随系统", light: "浅色", dark: "深色" })[themePreference.value]);
 import {
   inspectRelays,
   onRelayConnectionState,
@@ -457,22 +372,9 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useProfilesStore } from "@/stores/profiles";
 import { useSettingsStore } from "@/stores/settings";
 import { useUIStore } from "@/stores/ui";
-import {
-  clearAllCache,
-  getCacheStats,
-  IMAGE_MEMORY_CACHE_MAX_BYTES,
-  IMAGE_PERSISTENT_CACHE_MAX_BYTES,
-} from "@/utils/imageCache";
 import { registerOutgoingPushSigner, retryFailedOutgoing } from "@/nostr/messaging/service";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
-import {
-  disablePushNotifications,
-  enablePushNotifications,
-  pushEnabledForAccount,
-  supportsPushNotifications,
-  testPushNotification
-} from "@/services/pushNotifications";
 import {
   DEFAULT_RELAY_URLS,
   type MediaServer,
@@ -480,12 +382,8 @@ import {
   type RelayConfig,
   type RelaySource
 } from "@/services/connectionSettings";
-import { isAccountResourceStale, runAfterFirstPaint, runWhenIdle } from "@/utils/bottomTabActivation";
-import {
-  checkAndroidUpdate,
-  getCurrentAndroidVersion,
-  isNativeAndroidApp,
-} from "@/services/androidUpdater";
+import { runWhenIdle } from "@/utils/bottomTabActivation";
+import { isNativeAndroidApp } from "@/services/androidUpdater";
 import { getOwnDmRelayStatus } from "@/services/dmRelayDirectory";
 
 const keyStore = useKeyStore();
@@ -507,13 +405,7 @@ const newRelay = ref("");
 const newMediaType = ref<MediaServerType>("blossom");
 const newMediaUrl = ref("");
 const statuses = reactive<Record<string, RelayRuntimeStatus | undefined>>({});
-const cacheStats = reactive({ count: 0, size: 0, oldestTimestamp: 0, persistentCount: 0, persistentSize: 0, persistentOldestTimestamp: 0 });
-const loadingCache = ref(false);
-const clearingCache = ref(false);
-const pushBusy = ref(false);
-const pushTestResult = ref("");
 const retryingQueue = ref(false);
-const pushEnabled = ref(false);
 const biometricSupported = ref(false);
 const biometricBusy = ref(false);
 const remoteSignerBusy = ref(false);
@@ -523,23 +415,6 @@ const isNativeApp = (() => {
   return capacitor?.isNativePlatform?.() === true;
 })();
 const isNativeAndroid = isNativeAndroidApp();
-const checkingAndroidUpdate = ref(false);
-const androidVersionName = ref("");
-const androidUpdateSummary = ref("自动检查更新");
-const pushSupported = !isNativeApp && supportsPushNotifications();
-const pushStatusText = computed(() => isNativeApp
-  ? "原生通知将在下一阶段启用"
-  : !pushSupported
-    ? "不支持"
-    : pushEnabled.value ? "已开启 · 通用隐私通知" : "未开启");
-const pushHelpText = computed(() => isNativeApp
-  ? "Android APK 已禁用 PWA Service Worker；后续将接入原生 Push 与 Badge。"
-  : pushSupported ? "需要你主动授权浏览器通知权限" : "当前浏览器不支持 Web Push");
-const backgroundLock = ref(deviceStorage.getItem(autoLockKey(keyStore.pkHex)) === "1");
-function toggleBackgroundLock(event: Event) {
- backgroundLock.value=(event.target as HTMLInputElement).checked;
- deviceStorage.setItem(autoLockKey(keyStore.pkHex),backgroundLock.value ? "1" : "0");
-}
 const biometricEnabled = computed(() => {
   void biometricRevision.value;
   return keyStore.hasBiometricUnlock();
@@ -618,14 +493,8 @@ const diagnosticsSummary = computed(() =>
 );
 let statusInterval: ReturnType<typeof setInterval> | null = null;
 let statusUnsubscribe: (() => void) | null = null;
-let cacheRequestId = 0;
-let cacheStatsAccount = "";
-let cacheStatsUpdatedAt = 0;
-let cacheRefresh: { account: string; promise: Promise<void> } | null = null;
-let cancelScheduledCacheRefresh: (() => void) | null = null;
 let cancelDeferredRuntimeRefresh: (() => void) | null = null;
 let viewActive = false;
-const CACHE_STATS_MAX_AGE_MS = 5 * 60_000;
 
 function relaySourceLabel(source: RelaySource) {
   return source === "user" ? "自己添加" : source === "nip65" ? "公开列表" : "默认";
@@ -759,10 +628,6 @@ function toggleMediaServer(server: MediaServer, event: Event) {
   }
 }
 
-function toggleReadReceipts(event: Event) {
-  settings.setReadReceipts((event.target as HTMLInputElement).checked);
-}
-
 function refreshStatuses() {
   const current = inspectRelays();
   const activeUrls = new Set(relayList.value.map(relay => relay.url));
@@ -801,77 +666,8 @@ function scheduleDeferredRuntimeRefresh() {
     cancelDeferredRuntimeRefresh = null;
     if (!viewActive || !keyStore.pkHex) return;
     startStatusPolling();
-    scheduleCacheStatsRefresh();
     void refreshBiometricSupport();
-    if (isNativeAndroid) void refreshAndroidVersion();
   }, 1_000);
-}
-
-async function refreshCacheStats(force = false) {
-  const account = keyStore.pkHex;
-  if (!account) {
-    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0, persistentCount: 0, persistentSize: 0, persistentOldestTimestamp: 0 });
-    return;
-  }
-  if (!force && !isAccountResourceStale(
-    account,
-    cacheStatsAccount,
-    cacheStatsUpdatedAt,
-    CACHE_STATS_MAX_AGE_MS
-  )) return;
-  if (!force && cacheRefresh?.account === account) return cacheRefresh.promise;
-  const requestId = ++cacheRequestId;
-  loadingCache.value = true;
-  const promise = (async () => {
-    try {
-      const stats = await getCacheStats(account);
-      if (requestId !== cacheRequestId || keyStore.pkHex !== account) return;
-      Object.assign(cacheStats, stats);
-      cacheStatsAccount = account;
-      cacheStatsUpdatedAt = Date.now();
-    } catch {
-      if (requestId === cacheRequestId && keyStore.pkHex === account) {
-        ui.addToast("获取缓存统计失败", 2_000, "error");
-      }
-    } finally {
-      if (requestId === cacheRequestId) loadingCache.value = false;
-      if (cacheRefresh?.promise === promise) cacheRefresh = null;
-    }
-  })();
-  cacheRefresh = { account, promise };
-  return promise;
-}
-
-function scheduleCacheStatsRefresh(force = false) {
-  if (cancelScheduledCacheRefresh && !force) return;
-  cancelScheduledCacheRefresh?.();
-  cancelScheduledCacheRefresh = runAfterFirstPaint(() => {
-    cancelScheduledCacheRefresh = null;
-    void refreshCacheStats(force);
-  });
-}
-
-async function clearCache() {
-  const account = keyStore.pkHex;
-  if (!account || !confirm("确定要清空所有图片缓存吗？")) return;
-  clearingCache.value = true;
-  try {
-    await clearAllCache(account);
-    if (keyStore.pkHex !== account) return;
-    await refreshCacheStats(true);
-    if (keyStore.pkHex === account) ui.addToast("缓存已清空", 2_000, "success");
-  } catch {
-    if (keyStore.pkHex === account) ui.addToast("清空缓存失败", 2_000, "error");
-  } finally {
-    clearingCache.value = false;
-  }
-}
-
-function formatSize(bytes: number) {
-  if (!bytes) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return `${(bytes / 1024 ** index).toFixed(2)} ${units[index]}`;
 }
 
 async function refreshBiometricSupport() {
@@ -1032,76 +828,6 @@ async function doLogout() {
   location.href = "/#/login";
 }
 
-async function testCurrentPush() {
-  const account = keyStore.pkHex;
-  if (!account || pushBusy.value) return;
-  pushBusy.value = true;
-  pushTestResult.value = "正在检查本机订阅并发送测试通知…";
-  try {
-    const result = await testPushNotification(account, event => keyStore.signEvent(event));
-    if (keyStore.pkHex === account) pushTestResult.value = result;
-  } catch (error) {
-    if (keyStore.pkHex === account) pushTestResult.value = error instanceof Error ? error.message : "测试推送失败";
-  } finally {
-    pushBusy.value = false;
-  }
-}
-
-async function togglePush() {
-  const account = keyStore.pkHex;
-  if (!account || pushBusy.value) return;
-  pushBusy.value = true;
-  try {
-    if (pushEnabled.value) await disablePushNotifications(account, event => keyStore.signEvent(event));
-    else {
-      if (friendships.loadedFor !== account || !friendships.authorizationReady) await friendships.load(account);
-      const acceptedSenders = friendships.records
-        .filter(record => record.state === "accepted")
-        .map(record => record.peerPubkey);
-      await enablePushNotifications(account, event => keyStore.signEvent(event), acceptedSenders);
-    }
-    if (keyStore.pkHex !== account) return;
-    pushEnabled.value = pushEnabledForAccount(account);
-    ui.addToast(pushEnabled.value ? "后台推送已开启" : "后台推送已关闭", 2_000, "success");
-  } catch (error) {
-    if (keyStore.pkHex === account) ui.addToast(error instanceof Error ? error.message : "推送设置失败", 2_500, "error");
-  } finally {
-    pushBusy.value = false;
-  }
-}
-
-async function refreshAndroidVersion() {
-  if (!isNativeAndroid) return;
-  try {
-    const current = await getCurrentAndroidVersion();
-    androidVersionName.value = current?.versionName || "";
-  } catch {
-    androidVersionName.value = "";
-  }
-}
-
-async function checkForAndroidAppUpdate() {
-  if (!isNativeAndroid || checkingAndroidUpdate.value) return;
-  checkingAndroidUpdate.value = true;
-  androidUpdateSummary.value = "正在检查…";
-  try {
-    const update = await checkAndroidUpdate(true);
-    if (update) {
-      androidUpdateSummary.value = `发现新版本 ${update.versionName}`;
-      ui.addToast(`发现新版本 ${update.versionName}`, 2_500, "success");
-    } else {
-      androidUpdateSummary.value = "已经是最新版本";
-      ui.addToast("当前已经是最新版本", 2_000, "success");
-    }
-    await refreshAndroidVersion();
-  } catch (error) {
-    androidUpdateSummary.value = "检查失败";
-    ui.addToast(error instanceof Error ? error.message : "检查更新失败", 2_500, "error");
-  } finally {
-    checkingAndroidUpdate.value = false;
-  }
-}
-
 async function retryFailedQueue() {
   const account = keyStore.pkHex;
   if (!account || retryingQueue.value) return;
@@ -1117,27 +843,15 @@ async function retryFailedQueue() {
 }
 
 watch(() => keyStore.pkHex, async pk => {
-  cacheRequestId += 1;
-  cacheRefresh = null;
   Object.assign(dmRelayStatus, { relays: [], eventId: undefined, publishedAt: undefined, pending: false, attempts: 0, lastError: undefined });
-  cancelScheduledCacheRefresh?.();
-  cancelScheduledCacheRefresh = null;
-  loadingCache.value = false;
   if (!pk) {
     settings.reset();
-    Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
-    cacheStatsAccount = "";
-    cacheStatsUpdatedAt = 0;
     for (const url of Object.keys(statuses)) delete statuses[url];
-    pushEnabled.value = false;
     Object.assign(diagnostics, { syncStatus: "idle", lastCatchupCompletedAt: 0, pendingOutgoing: 0 });
     return;
   }
-  if (cacheStatsAccount !== pk) Object.assign(cacheStats, { count: 0, size: 0, oldestTimestamp: 0 });
   revealedNsec.value = "";
   protectionChoice.value = currentProtection();
-  backgroundLock.value = deviceStorage.getItem(autoLockKey(pk)) === "1";
-  pushEnabled.value = pushEnabledForAccount(pk);
   if (settings.loadedFor !== pk) await settings.load(pk);
   if (keyStore.pkHex !== pk || settings.loadedFor !== pk) return;
 
@@ -1159,22 +873,18 @@ onDeactivated(() => {
   stopStatusPolling();
   cancelDeferredRuntimeRefresh?.();
   cancelDeferredRuntimeRefresh = null;
-  cancelScheduledCacheRefresh?.();
-  cancelScheduledCacheRefresh = null;
 });
 onBeforeUnmount(() => {
   viewActive = false;
   stopStatusPolling();
   cancelDeferredRuntimeRefresh?.();
   cancelDeferredRuntimeRefresh = null;
-  cancelScheduledCacheRefresh?.();
 });
 </script>
 
+<style scoped src="./settings/systemSettingsSection.css"></style>
 <style scoped>
 .system-content{padding:0 16px}.account-section{margin-top:8px}
-.privacy-copy{display:grid;min-width:0;flex:1;gap:4px}.privacy-copy strong{font-size:.9rem}.privacy-copy .small{line-height:1.45}
-.privacy-toggle{position:relative;width:46px;height:28px;flex:0 0 46px;cursor:pointer}.privacy-toggle input{position:absolute;opacity:0;pointer-events:none}.privacy-toggle span{display:block;width:46px;height:28px;border-radius:999px;background:var(--bg-cbd5e1);transition:background 150ms ease}.privacy-toggle span::after{content:"";display:block;width:22px;height:22px;margin:3px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.28);transition:transform 150ms ease}.privacy-toggle input:checked+span{background:#1687e8}.privacy-toggle input:checked+span::after{transform:translateX(18px)}.privacy-toggle input:focus-visible+span{outline:2px solid #2563eb;outline-offset:2px}
 
 .settings-container {
   width: 100%;
@@ -1219,21 +929,6 @@ onBeforeUnmount(() => {
 .my-profile-summary small {
   color: var(--fg-64748b);
   font-size: .78rem;
-}
-
-h2,
-h3,
-p {
-  margin-top: 0;
-}
-
-h2 {
-  margin-bottom: 4px;
-}
-
-h3 {
-  margin-bottom: 6px;
-  font-size: 1rem;
 }
 
 .top-level-row {
@@ -1296,65 +991,6 @@ h3 {
 .diagnostics-grid small{color:var(--fg-64748b);font-size:.68rem}
 .technical-settings { padding-top: 0; }
 
-.technical-section {
-  padding: 0;
-  border-top: 1px solid var(--bd-e2e8f0);
-}
-
-.technical-section:first-child {
-  border-top: 0;
-}
-
-.section-heading {
-  min-height: 68px;
-  padding: 13px 28px 13px 0;
-  position: relative;
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  list-style: none;
-}
-.section-heading::-webkit-details-marker { display: none; }
-.section-heading::after {
-  content: "›";
-  position: absolute;
-  right: 4px;
-  color: var(--fg-94a3b8);
-  font-size: 22px;
-  transform: rotate(90deg);
-  transition: transform 160ms ease;
-}
-.technical-section[open] > .section-heading::after { transform: rotate(-90deg); }
-
-.section-heading p {
-  margin: 2px 0 0;
-  color: var(--fg-64748b);
-  font-size: 0.78rem;
-  line-height: 1.5;
-}
-.data-mode {
-  display: flex;
-  gap: 8px;
-  padding: 2px 0 10px;
-}
-.data-mode label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 42px;
-  padding: 0 14px;
-  border: 1px solid var(--bd-e2e8f0);
-  border-radius: 10px;
-  color: var(--fg-334155);
-  cursor: pointer;
-}
-.section-detail {
-  margin: 0 0 14px;
-  color: var(--fg-64748b);
-  font-size: 0.78rem;
-  line-height: 1.55;
-}
-
 .sync-status {
   margin: 10px 12px;
   padding: 9px 12px;
@@ -1407,16 +1043,6 @@ h3 {
 .dm-relay-copy { margin: 10px 0 8px; color: var(--fg-64748b); font-size: .75rem; line-height: 1.5; }
 .dm-relay-list { display: grid; gap: 4px; color: var(--fg-475569); font: .7rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 
-.item-header,
-.control-row,
-.button-row,
-.account-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
 .item-main {
   min-width: 0;
 }
@@ -1434,30 +1060,6 @@ h3 {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-}
-
-.pill {
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: var(--bg-e2e8f0);
-  color: var(--fg-475569);
-  font-size: 0.68rem;
-}
-
-.pill.healthy,
-.pill.primary {
-  background: var(--bg-d1fae5);
-  color: var(--fg-047857);
-}
-
-.pill.failed {
-  background: var(--bg-fee2e2);
-  color: var(--fg-b91c1c);
-}
-
-.pill.pending {
-  background: var(--bg-fef3c7);
-  color: var(--fg-92400e);
 }
 
 .control-row {
@@ -1502,45 +1104,12 @@ h3 {
   font-size: 0.7rem;
 }
 
-.cache-info {
-  display: grid;
-  gap: 12px;
-  padding-bottom: 16px;
-}
-
-.technical-section > .add-form,
-.technical-section > .media-add-form,
-.technical-section > .item-list,
-.technical-section > .account-row { margin-bottom: 16px; }
-
-.small {
-  color: var(--fg-64748b);
-  font-size: 0.78rem;
-  line-height: 1.6;
-}
-
 .version-footer {
   padding: 22px 16px 4px;
   color: var(--fg-94a3b8);
   font-size: 0.68rem;
   line-height: 1.5;
   text-align: center;
-}
-
-.btn {
-  min-height: 42px;
-}
-
-.btn-secondary {
-  background: #475569;
-}
-
-.btn-warning {
-  background: #d97706;
-}
-
-.btn-danger {
-  background: #dc2626;
 }
 
 @media (max-width: 640px) {
@@ -1569,11 +1138,6 @@ h3 {
     grid-template-columns: 1fr;
   }
 
-  .account-row {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
   .diagnostics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1584,7 +1148,6 @@ h3 {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .section-heading::after,
   .row-chevron { transition: none; }
 }
 </style>

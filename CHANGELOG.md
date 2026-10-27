@@ -1,3 +1,7 @@
+## 0.1.158 — 2026-10-27
+
+- 内部重构（功能和界面不变）：设置页 `SystemSettings.vue` 的隐私、后台锁定、外观、数据使用、应用更新、后台推送、存储 7 节拆成 `src/views/settings/` 下的独立组件；各节共用的样式提取到 `systemSettingsSection.css`，页面和各组件以 scoped 方式引入。页面从 1590 行减少到约 1150 行。
+
 ## 0.1.157 — 2026-10-27
 
 - 内部重构（功能和界面不变）：私信页的草稿保存 / 恢复抽到 `useDmDraft`，推荐好友（名片按钮与选择器逻辑）抽到 `useFriendRecommendations`，选择器弹层拆成 `RecommendationPicker.vue`。`Messages.vue` 降到约 1650 行（拆分前 2390 行）。

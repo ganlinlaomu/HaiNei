@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.157",
-  "releaseSummary": "内部重构：私信页拆分草稿与推荐好友",
+  "version": "0.1.158",
+  "releaseSummary": "内部重构：设置页按节拆分",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
