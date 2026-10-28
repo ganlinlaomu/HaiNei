@@ -1,4 +1,4 @@
-import { onBeforeUnmount, ref, watch } from "vue";
+import { onScopeDispose, ref, watch } from "vue";
 import type { InboxItem } from "@/nostr/messaging/messageViewModel";
 import { useKeyStore } from "@/stores/keys";
 import { openTodoTasks, privateFeedItems, type OpenTodoTask } from "@/services/privateFeed";
@@ -9,6 +9,10 @@ import { startupMark } from "@/utils/debugLog";
  * for Home, from one read. Reloads when 私人空间
  * changes on this device or arrives from sync. Private-space modules are
  * loaded lazily so they stay out of the startup bundle.
+ *
+ * Home also pulls shared to-do lists: once when the account is ready (a cold
+ * start has no resume event), then every minute while Home is visible and a
+ * shared list exists, so a friend's ticks reach the to-do bar.
  */
 export function usePrivateFeedCards(onChange: () => void) {
   const keys = useKeyStore();
@@ -20,6 +24,8 @@ export function usePrivateFeedCards(onChange: () => void) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopSubscription: (() => void) | null = null;
   let disposed = false;
+  let hasShared = false;
+  let startupSyncedFor = "";
 
   async function reload() {
     const run = ++generation;
@@ -33,6 +39,7 @@ export function usePrivateFeedCards(onChange: () => void) {
         const records = await privateSpaceRepository.list(pubkey);
         next = privateFeedItems(records, pubkey);
         nextTodos = openTodoTasks(records);
+        hasShared = records.some(record => record.share && !record.deletedAt);
       } catch {
         // Locked or unavailable: keep what is shown rather than flashing empty.
         if (run !== generation) return;
@@ -49,7 +56,28 @@ export function usePrivateFeedCards(onChange: () => void) {
     }
     revision.value++;
     onChange();
+    syncOnceWhenReady();
   }
+
+  /** Friendships must be loaded first: only lists from accepted friends appear. */
+  function syncOnceWhenReady() {
+    const pubkey = keys.pkHex;
+    const session = pubkey + ":" + keys.sessionGeneration;
+    if (!pubkey || !keys.isUnlocked || keys.accountStoresReadyFor !== pubkey || startupSyncedFor === session) return;
+    startupSyncedFor = session;
+    void import("@/services/privateSpaceSync").then(({ schedulePrivateSpaceSync }) => {
+      if (!disposed && keys.pkHex === pubkey && keys.isUnlocked) schedulePrivateSpaceSync(keys, 2_000);
+    }).catch(() => undefined);
+  }
+
+  const SHARED_POLL_MS = 60_000;
+  const pollTimer = setInterval(() => {
+    if (!hasShared || !keys.isUnlocked || !keys.supportsNip44 || typeof document === "undefined"
+        || document.visibilityState !== "visible") return;
+    void import("@/services/privateSpaceSync").then(({ syncPrivateSpace }) => {
+      if (!disposed && keys.isUnlocked) void syncPrivateSpace(keys);
+    }).catch(() => undefined);
+  }, SHARED_POLL_MS);
 
   function scheduleReload() {
     if (timer) clearTimeout(timer);
@@ -65,10 +93,11 @@ export function usePrivateFeedCards(onChange: () => void) {
 
   watch(() => [keys.pkHex, keys.isUnlocked, keys.accountStoresReadyFor] as const, () => { void reload(); }, { immediate: true });
 
-  onBeforeUnmount(() => {
+  onScopeDispose(() => {
     disposed = true;
     generation++;
     if (timer) clearTimeout(timer);
+    clearInterval(pollTimer);
     stopSubscription?.();
   });
 

@@ -30,6 +30,8 @@ export type OpenTodoTask = {
   /** The to-do list's title, if any. */
   listTitle: string;
   pinned: boolean;
+  /** From a list shared with friends. */
+  shared?: boolean;
   /** Optional due time (Unix ms). */
   due?: number;
 };
@@ -47,6 +49,7 @@ export function openTodoTasks(records: PrivateSpaceRecord[]): OpenTodoTask[] {
       .filter(task => !task.done && task.text.trim())
       .map(task => ({
         recordId: record.id, taskId: task.id, text: task.text.trim(), listTitle: record.title.trim(), pinned: record.pinned,
+        ...(record.share ? { shared: true } : {}),
         ...(task.due ? { due: task.due } : {}),
       })));
   // Stable sort keeps the list order among untimed tasks.

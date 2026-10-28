@@ -6,7 +6,7 @@
       <span class="chevron">{{ expanded ? "收起 ▴" : "展开 ▾" }}</span>
     </button>
     <button v-if="!expanded && first" class="todo-peek" type="button" @click="openTask(first)">
-      <span v-if="first.pinned" aria-label="已置顶">📌 </span>{{ first.text }}<span v-if="first.due" class="peek-list" :class="{ overdue: dueOf(first).overdue }"> · {{ dueOf(first).label }}</span><span v-else-if="first.listTitle" class="peek-list"> · {{ first.listTitle }}</span>
+      <span v-if="first.pinned" aria-label="已置顶">📌 </span><span v-if="first.shared" aria-label="共享待办">👥 </span>{{ first.text }}<span v-if="first.due" class="peek-list" :class="{ overdue: dueOf(first).overdue }"> · {{ dueOf(first).label }}</span><span v-else-if="first.listTitle" class="peek-list"> · {{ first.listTitle }}</span>
     </button>
 
     <template v-if="expanded">
@@ -16,7 +16,7 @@
             :aria-label="`${isDone(task) ? '取消完成' : '完成'}：${task.text}`" @change="toggle(task)" />
           <button class="todo-item" type="button" @click="openTask(task)">
             <span class="todo-text">{{ task.text }}</span>
-            <span v-if="task.pinned || task.listTitle || task.due" class="todo-meta"><span v-if="task.pinned">📌</span><span v-if="task.due" :class="{ overdue: dueOf(task).overdue }">{{ dueOf(task).label }}{{ dueOf(task).overdue ? ' · 已逾期' : '' }}</span><span v-if="task.listTitle">{{ task.due ? ' · ' : '' }}{{ task.listTitle }}</span></span>
+            <span v-if="task.pinned || task.shared || task.listTitle || task.due" class="todo-meta"><span v-if="task.pinned">📌</span><span v-if="task.shared" aria-label="共享待办">👥</span><span v-if="task.due" :class="{ overdue: dueOf(task).overdue }">{{ dueOf(task).label }}{{ dueOf(task).overdue ? ' · 已逾期' : '' }}</span><span v-if="task.listTitle">{{ task.due ? ' · ' : '' }}{{ task.listTitle }}</span></span>
           </button>
         </li>
       </ul>
