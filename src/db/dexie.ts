@@ -3,7 +3,7 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.170";
+export const APP_VERSION = "0.1.171";
 export const DB_VERSION = 24;
 export const DATABASE_NAME = "closed_community_db";
 
@@ -320,6 +320,25 @@ export type PrivateSpaceSource = {
   peerPubkey?: string;
 };
 export type PrivateSpaceAttachment = { kind: "image" | "video"; url: string };
+/** The parts of a to-do list that every member of a shared list sees and edits. */
+export type SharedTodoContent = { title: string; tasks: PrivateSpaceTask[] };
+/**
+ * A to-do list shared with friends. Synced through the Worker's shared-todo
+ * store instead of the account's private notes; pinned/archived stay local.
+ */
+export type PrivateSpaceShare = {
+  owner: string;
+  /** Owner first; all member pubkeys. */
+  members: string[];
+  /** Hex list key (NIP-44 v2 conversation key for the list contents). */
+  key: string;
+  /** Last Worker version applied or published (0 = not yet created). */
+  version: number;
+  /** Local revision whose shared content was last confirmed remotely. */
+  syncedRevision: number;
+  /** Shared content at `version`, the base for three-way merges. */
+  base: SharedTodoContent;
+};
 export type PrivateSpaceRecord = {
   accountPubkey: string;
   id: string;
@@ -330,6 +349,7 @@ export type PrivateSpaceRecord = {
   pinned: boolean;
   source?: PrivateSpaceSource;
   attachments?: PrivateSpaceAttachment[];
+  share?: PrivateSpaceShare;
   archivedAt?: number;
   deletedAt?: number;
   createdAt: number;

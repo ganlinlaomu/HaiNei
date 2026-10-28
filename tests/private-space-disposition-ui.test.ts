@@ -67,6 +67,20 @@ describe("private-space swipe deletion and undo", () => {
     expect(h.refs.rowActionBusyId.value).toBe("");
   });
 
+  it("asks before deleting a shared list, and leaving it is not offered as Undo", async () => {
+    const h = harness();
+    const shared = { ...h.original, kind: "todo", share: { owner: "b".repeat(64), members: ["b".repeat(64), ACCOUNT] } };
+    h.repo.get.mockResolvedValue(shared as any);
+    h.window.confirm.mockReturnValueOnce(false);
+    await h.actions.deleteFromSwipe(shared as any);
+    expect(h.window.confirm).toHaveBeenCalledWith(expect.stringContaining("退出共享"));
+    expect(h.repo.moveToTrash).not.toHaveBeenCalled();
+    h.window.confirm.mockReturnValueOnce(true);
+    await h.actions.deleteFromSwipe(shared as any);
+    expect(h.repo.moveToTrash).toHaveBeenCalledWith(ACCOUNT, h.original.id);
+    expect(h.ui.addToast).not.toHaveBeenCalled();
+  });
+
   it("reports a revision conflict instead of silently claiming Undo succeeded", async () => {
     const h = harness(null);
     h.actions.offerDispositionUndo(h.deleted, "deletedAt");

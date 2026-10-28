@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.170",
-  "releaseSummary": "评论支持点赞爱心与点赞数",
+  "version": "0.1.171",
+  "releaseSummary": "待办清单可以共享给好友一起查看和编辑",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
