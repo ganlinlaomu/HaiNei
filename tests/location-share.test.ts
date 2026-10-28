@@ -83,12 +83,15 @@ describe("location UI", () => {
     return renderToString(app);
   };
 
-  it("renders a card with coordinates and accuracy, without loading any map", async () => {
+  it("renders a card with a lazy map preview, coordinates and accuracy", async () => {
     const html = await render(DmLocationCard, { location: { lat: 31.23042, lng: 121.4737, accuracy: 15, at: AT }, own: false, peer: "b".repeat(64) });
     expect(html).toContain("31.23042, 121.47370");
     expect(html).toContain("精度约 ±15 米");
-    expect(html).toContain("查看地图");
+    expect(html).toContain("查看大图");
+    expect(html).toContain("地图加载中…");
+    expect(html).toContain('aria-label="对方的位置"');
     expect(html).toContain("复制坐标");
+    // Server rendering and off-screen cards do not request tiles yet.
     expect(html).not.toMatch(/<img|<iframe|tile/i);
   });
 

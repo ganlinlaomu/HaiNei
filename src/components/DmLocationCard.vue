@@ -10,16 +10,24 @@
       </span>
     </div>
     <template v-if="!live || status !== 'ended'">
+      <button type="button" class="location-card-map" aria-label="打开全屏地图" @click.stop="mapOpen = true">
+        <LocationMapPreview
+          :location="shown"
+          :my-location="myLocation"
+          :peer-pubkey="own ? keys.pkHex : peer"
+          :label="`${displayName}的位置`"
+        />
+        <span class="location-card-map-expand">查看大图</span>
+      </button>
       <p class="location-card-coordinates">{{ coordinates }}</p>
       <div class="location-card-actions">
-        <button type="button" class="location-card-open" @click.stop="mapOpen = true">查看地图</button>
         <button v-if="ownActive" type="button" class="location-card-stop" @click.stop="stop">停止共享</button>
         <button v-else type="button" class="location-card-copy" @click.stop="copy">{{ copied ? "已复制" : "复制坐标" }}</button>
       </div>
     </template>
     <LocationMapSheet
       v-if="mapOpen"
-      :peer-name="own ? '我' : peerName"
+      :peer-name="displayName"
       :peer-pubkey="own ? keys.pkHex : peer"
       :location="shown"
       :my-location="myLocation"
@@ -31,6 +39,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import LocationMapPreview from "@/components/LocationMapPreview.vue";
 import LocationMapSheet from "@/components/LocationMapSheet.vue";
 import { formatCoordinates, type LocationShare } from "@/nostr/messaging/locationShare";
 import { useKeyStore } from "@/stores/keys";
@@ -38,15 +47,15 @@ import { useLiveLocationStore } from "@/stores/liveLocation";
 
 /**
  * A location in a chat: a one-time position, or the opening card of a live
- * share that follows the latest in-memory update. The card itself loads no
- * map; "查看地图" opens LocationMapSheet (tiles via the HaiNei Worker, so
- * OSM never sees this device), which also links to the system maps app.
+ * share that follows the latest in-memory update. A viewport-lazy preview
+ * loads tiles through the HaiNei Worker; tapping it opens LocationMapSheet.
  */
 const props = defineProps<{ location: LocationShare; own: boolean; peer: string; peerName: string }>();
 const liveStore = useLiveLocationStore();
 const keys = useKeyStore();
 const mapOpen = ref(false);
 const live = computed(() => props.location.live);
+const displayName = computed(() => props.own ? "我" : props.peerName || "对方");
 // A live card that has not ended yet needs the clock for its countdown and
 // staleness, including before the first update has arrived.
 let releaseClock: (() => void) | null = null;
@@ -119,7 +128,7 @@ function stop() {
 </script>
 
 <style scoped>
-.location-card{display:flex;flex-direction:column;gap:10px;min-width:215px;padding:14px;box-sizing:border-box}
+.location-card{display:flex;flex-direction:column;gap:10px;width:min(320px,calc(100vw - 70px));min-width:215px;padding:14px;box-sizing:border-box}
 .location-card-head{display:flex;align-items:center;gap:10px;min-width:0}
 .location-card-icon{display:grid;width:38px;height:38px;flex:0 0 38px;place-items:center;border-radius:50%;background:var(--bg-e0f2fe);color:#1687e8}
 .location-card.ended .location-card-icon{background:var(--bg-f1f5f9);color:var(--fg-64748b)}
@@ -128,10 +137,11 @@ function stop() {
 .location-card-title strong{font-size:15px}
 .location-card-title small{color:var(--fg-657786);font-size:11px}
 .location-card-title small.stale{color:#b45309}
+.location-card-map{position:relative;display:block;width:100%;padding:0;border:0;border-radius:12px;background:transparent;overflow:hidden;text-align:initial;cursor:pointer}
+.location-card-map-expand{position:absolute;right:8px;top:8px;z-index:4;padding:5px 8px;border-radius:12px;background:rgba(15,23,42,.72);color:#fff;font-size:11px;font-weight:650;line-height:1}
 .location-card-coordinates{margin:0;color:var(--fg-536471);font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
-.location-card-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.location-card-open,.location-card-copy,.location-card-stop{display:grid;min-height:38px;place-items:center;padding:0 8px;border-radius:10px;font:inherit;font-size:13px;font-weight:650;text-decoration:none}
-.location-card-open{border:0;background:#1687e8;color:#fff}
+.location-card-actions{display:grid;grid-template-columns:1fr;gap:8px}
+.location-card-copy,.location-card-stop{display:grid;min-height:38px;place-items:center;padding:0 8px;border-radius:10px;font:inherit;font-size:13px;font-weight:650;text-decoration:none}
 .location-card-copy{border:1px solid var(--bd-d8e0e8);background:var(--bg-fff);color:var(--fg-334155)}
 .location-card-stop{border:0;background:var(--bg-fee2e2);color:var(--fg-b91c1c)}
 </style>
