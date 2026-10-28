@@ -33,6 +33,16 @@ describe("private cards in the owner's feed", () => {
     expect(tasks[0]).toEqual({ recordId: "pinned", taskId: "交房租", text: "交房租", listTitle: "生活", pinned: true });
   });
 
+  it("marks tasks from a list shared with friends", () => {
+    const share = { owner: OWNER, members: [OWNER, "b".repeat(64)], key: "k", version: 1, syncedRevision: 1, base: { title: "", tasks: [] } };
+    const tasks = openTodoTasks([
+      record("shared", { kind: "todo", title: "家务", tasks: [task("洗碗")], share }),
+      record("mine", { kind: "todo", tasks: [task("看书")] }),
+    ]);
+    expect(tasks.find(item => item.text === "洗碗")?.shared).toBe(true);
+    expect(tasks.find(item => item.text === "看书")).not.toHaveProperty("shared");
+  });
+
   it("leaves out empty, archived, deleted and finished items", () => {
     expect(privateFeedItems([
       record("blank"),
