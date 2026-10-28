@@ -128,12 +128,12 @@ onUnmounted(() => {
 .search{display:grid;gap:10px}
 .search>label{font-size:16px;font-weight:650}
 .search-row{display:flex;gap:8px}
-.search-row input{min-width:0;flex:1;min-height:44px;border:1px solid var(--bd-e2e8f0);border-radius:10px;padding:0 12px;background:var(--bg-fff);color:inherit;font-size:15px}
+.search-row input{min-width:0;flex:1;min-height:44px;border:1px solid var(--bd-e2e8f0);border-radius:10px;padding:0 12px;background:var(--bg-fff);color:inherit;font-size:16px}
 .search-row button,.primary{background:#2563eb!important;color:#fff!important;border-color:#2563eb!important}
 .search-row button{min-width:70px;border:0;border-radius:10px}
 button:disabled{opacity:.55}
 .filters{display:flex;align-items:center;gap:8px;color:var(--fg-64748b);font-size:12px}
-.filters select{border:1px solid var(--bd-e2e8f0);padding:7px;border-radius:8px;background:var(--bg-fff);color:inherit}.filters span{margin-left:auto}
+.filters select{border:1px solid var(--bd-e2e8f0);padding:7px;border-radius:8px;background:var(--bg-fff);color:inherit;font-size:16px}.filters span{margin-left:auto}
 .note{font-size:12px;line-height:1.6;color:var(--fg-64748b);margin:14px 0}
 .offline-message button{margin:0 4px;padding:2px 0;border:0;border-bottom:1px solid currentColor;background:transparent;color:inherit;font:inherit;font-weight:600;cursor:pointer}
 .error{color:#b91c1c;background:#fef2f2;border-radius:10px;padding:12px;font-size:13px}
