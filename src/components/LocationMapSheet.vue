@@ -1,7 +1,10 @@
 <template>
   <Teleport to="body">
     <div class="location-map-sheet" role="dialog" aria-modal="true" :aria-label="title">
-      <div ref="mapElement" class="location-map" :class="{ unavailable: mapUnavailable }">
+      <div ref="mapElement" class="location-map" :class="{ unavailable: mapUnavailable }"
+        @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd"
+        @pointercancel="onPointerEnd" @wheel.prevent="onWheel">
+        <div class="location-map-layer" :style="layerStyle">
         <img
           v-for="tile in tiles"
           :key="tile.key"
@@ -20,6 +23,7 @@
         <svg v-if="trailLines.length" class="location-map-trail" :width="width" :height="height" aria-hidden="true">
           <polyline v-for="line in trailLines" :key="line.key" :class="line.kind" :points="line.points" />
         </svg>
+        </div>
         <span
           v-for="marker in markers"
           :key="marker.key"
@@ -42,7 +46,7 @@
       <div class="location-map-zoom">
         <button type="button" class="location-map-round" aria-label="放大" :disabled="zoom >= MAX_MAP_ZOOM" @click="setZoom(zoom + 1)">+</button>
         <button type="button" class="location-map-round" aria-label="缩小" :disabled="zoom <= MIN_MAP_ZOOM" @click="setZoom(zoom - 1)">−</button>
-        <button type="button" class="location-map-round" aria-label="显示全部位置" @click="manualZoom = null">⌖</button>
+        <button type="button" class="location-map-round" aria-label="显示全部位置" @click="resetView">⌖</button>
       </div>
 
       <section class="location-map-panel" aria-label="位置详情">
@@ -60,7 +64,11 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { formatCoordinates, mapsUrl, type LocationShare } from "@/nostr/messaging/locationShare";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
-import { centerOf, fitZoom, LIVE_MAP_ZOOM, MAX_MAP_ZOOM, MIN_MAP_ZOOM, tilesFor, tileUrl, toScreen, trailPath, trailPoints } from "@/utils/mapTiles";
+import {
+  applyGesture, centerOf, fitZoom, LIVE_MAP_ZOOM, MAX_MAP_ZOOM, MIN_MAP_ZOOM, project,
+  tilesFor, tileUrl, toScreen, trailPath, trailPoints, type MapPoint,
+} from "@/utils/mapTiles";
+import { useMapGestures } from "@/composables/useMapGestures";
 
 /**
  * Full-screen map of a shared location, drawn from OpenStreetMap tiles via
@@ -90,6 +98,8 @@ const mapElement = ref<HTMLElement | null>(null);
 const width = ref(typeof window === "undefined" ? 390 : window.innerWidth);
 const height = ref(typeof window === "undefined" ? 600 : window.innerHeight);
 const manualZoom = ref<number | null>(null);
+/** Set once the user drags or pinches; until ⌖, the map stops framing everyone. */
+const manualFocus = ref<MapPoint | null>(null);
 // The whole walk stays in view, so the marker moves instead of the map.
 const points = computed(() => [props.location, ...(props.myLocation ? [props.myLocation] : []),
   ...(props.trail ?? []), ...(props.myTrail ?? [])]);
@@ -97,10 +107,16 @@ const isLive = computed(() => !!props.trail?.length || !!props.myTrail?.length);
 // Leave room for the header above and the details panel below.
 const zoom = computed(() => manualZoom.value
   ?? fitZoom(points.value, width.value, Math.max(200, height.value - 260), 56, isLive.value ? LIVE_MAP_ZOOM : 16));
-const center = computed(() => centerOf(points.value, zoom.value));
+const center = computed(() => manualFocus.value ? project(manualFocus.value, zoom.value) : centerOf(points.value, zoom.value));
+const { gesture, onPointerDown, onPointerMove, onPointerEnd, onWheel } = useMapGestures({
+  element: mapElement,
+  view: () => ({ center: center.value, zoom: zoom.value, width: width.value, height: height.value }),
+  settle: (nextZoom, focus) => { manualFocus.value = focus; manualZoom.value = nextZoom; },
+});
 const tiles = computed(() => tilesFor(center.value, zoom.value, width.value, height.value));
 const markers = computed(() => {
-  const place = (location: LocationShare) => toScreen(location, center.value, zoom.value, width.value, height.value);
+  // Markers follow the gesture without scaling (the tiles and trail scale in a layer).
+  const place = (location: LocationShare) => applyGesture(toScreen(location, center.value, zoom.value, width.value, height.value), gesture.value);
   if (props.locationIsMine) return [
     { key: "me", kind: "me" as const, label: "我的位置", pubkey: undefined, ...place(props.location) },
     ...(props.myLocation ? [{ key: "peer", kind: "peer" as const, label: `${props.peerName}的位置`, pubkey: props.peerPubkey, ...place(props.myLocation) }] : []),
@@ -127,6 +143,16 @@ const trailLines = computed(() => {
 function setZoom(value: number) {
   manualZoom.value = Math.max(MIN_MAP_ZOOM, Math.min(MAX_MAP_ZOOM, value));
 }
+function resetView() {
+  manualZoom.value = null;
+  manualFocus.value = null;
+}
+
+const layerStyle = computed(() => {
+  const g = gesture.value;
+  if (!g) return undefined;
+  return { transform: `translate(${g.dx + g.originX}px, ${g.dy + g.originY}px) scale(${g.scale}) translate(${-g.originX}px, ${-g.originY}px)` };
+});
 
 // Tile failures (offline, Worker without the tile route yet) leave the
 // coordinates and the system-maps link usable.
@@ -156,12 +182,13 @@ onBeforeUnmount(() => observer?.disconnect());
 <style scoped>
 .location-map-sheet{position:fixed;inset:0;z-index:40;background:var(--bg-e2e8f0)}
 .location-map{position:absolute;inset:0;overflow:hidden;background:#e9eef2;touch-action:none}
+.location-map-layer{position:absolute;inset:0;transform-origin:0 0;will-change:transform}
 .location-map-tile{position:absolute;width:256px;height:256px;user-select:none;-webkit-user-drag:none;pointer-events:none}
 .location-map-trail{position:absolute;inset:0;pointer-events:none;overflow:visible}
 .location-map-trail polyline{fill:none;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;opacity:.75}
 .location-map-trail polyline.peer{stroke:#ef4444}
 .location-map-trail polyline.me{stroke:#1687e8}
-.location-map-marker{position:absolute;display:grid;place-items:center;transform:translate(-50%,-50%)}
+.location-map-marker{position:absolute;display:grid;place-items:center;transform:translate(-50%,-50%);pointer-events:none}
 .location-map-marker.peer{padding:3px;border-radius:50%;background:#fff;box-shadow:0 3px 10px rgba(15,23,42,.3)}
 .location-map-marker.me{width:20px;height:20px;box-sizing:border-box;border:4px solid #fff;border-radius:50%;background:#1687e8;box-shadow:0 0 0 10px rgba(22,135,232,.18),0 2px 6px rgba(15,23,42,.3)}
 .location-map-fallback{position:absolute;top:42%;left:24px;right:24px;margin:0;padding:12px;border-radius:12px;background:rgba(255,255,255,.92);color:#475569;font-size:14px;text-align:center}
