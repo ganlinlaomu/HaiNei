@@ -1,7 +1,7 @@
 /**
  * Map tiles for the in-app location map, proxied so OpenStreetMap sees this
  * Worker instead of each user's IP. Only HaiNei pages may use it (Referer
- * origin; the app sends just its origin for tile images), zoom and tile
+ * origin; CORS image requests send Origin, with Referer kept as a fallback), zoom and tile
  * numbers are validated, and tiles are cached at the edge for 7 days in
  * line with the OSM tile usage policy. Coordinates are never logged.
  */
@@ -31,6 +31,8 @@ export function parseTilePath(path: string): { z: number; x: number; y: number }
 }
 
 export function tileRequestAllowed(request: Request) {
+  const origin = request.headers.get("Origin");
+  if (origin) return ALLOWED_ORIGIN.test(origin);
   const referer = request.headers.get("Referer");
   if (!referer) return false;
   try {

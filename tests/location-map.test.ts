@@ -51,7 +51,12 @@ describe("tile math", () => {
 });
 
 describe("Worker tile proxy", () => {
-  const request = (referer?: string) => new Request("https://worker.test/tiles/16/54882/26791.png", { headers: referer ? { Referer: referer } : {} });
+  const request = (referer?: string, origin?: string) => new Request("https://worker.test/tiles/16/54882/26791.png", {
+    headers: {
+      ...(referer ? { Referer: referer } : {}),
+      ...(origin ? { Origin: origin } : {}),
+    },
+  });
   const png = () => new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "Content-Type": "image/png" } });
 
   it("accepts only valid tiles from HaiNei pages", () => {
@@ -61,9 +66,13 @@ describe("Worker tile proxy", () => {
     }
     expect(tileRequestAllowed(request("https://hainei-9iv.pages.dev/"))).toBe(true);
     expect(tileRequestAllowed(request("https://abc123.hainei-9iv.pages.dev/"))).toBe(true);
+    expect(tileRequestAllowed(request(undefined, "https://hainei-9iv.pages.dev"))).toBe(true);
+    expect(tileRequestAllowed(request(undefined, "https://abc123.hainei-9iv.pages.dev"))).toBe(true);
     expect(tileRequestAllowed(request("https://localhost/"))).toBe(true);
     expect(tileRequestAllowed(request("https://evil.example/"))).toBe(false);
     expect(tileRequestAllowed(request("https://hainei-9iv.pages.dev.evil.example/"))).toBe(false);
+    // If CORS supplied Origin, do not fall back to a conflicting Referer.
+    expect(tileRequestAllowed(request("https://hainei-9iv.pages.dev/", "https://evil.example"))).toBe(false);
     expect(tileRequestAllowed(request())).toBe(false);
   });
 
@@ -111,6 +120,7 @@ describe("map UI", () => {
     });
     expect(html).toContain("妈妈的位置");
     expect(html).toMatch(/src="[^"]*\/tiles\/\d+\/\d+\/\d+\.png"/);
+    expect(html).toContain('crossorigin="anonymous"');
     expect(html).toContain('referrerpolicy="origin"');
     expect(html).toContain("© OpenStreetMap");
     expect(html).toContain('aria-label="我的位置"');
