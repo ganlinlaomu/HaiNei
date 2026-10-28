@@ -13,7 +13,7 @@
         <label>背景 <select v-model="theme" @change="refreshChapter"><option value="light">白色</option><option value="sepia">米色</option><option value="dark">夜间</option></select></label>
         <label>目录 <select :value="chapterIndex" @change="selectChapter"><option v-for="(item,i) in epub.chapters" :key="item.path" :value="i">{{ item.title }}</option></select></label>
       </section>
-      <iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" />
+      <div ref="scroller" class="chapter-scroller" @scroll.passive="onScroll"><iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" /></div>
       <footer class="reader-footer">
         <button type="button" :disabled="chapterIndex === 0" @click="loadChapter(chapterIndex-1,0)">上一章</button>
         <span>{{ chapterIndex + 1 }} / {{ epub.chapters.length }} · {{ Math.round(chapterPercent*100) }}%</span>
@@ -36,6 +36,7 @@ const chapterIndex = ref(0), chapterPercent = ref(0), chapterHtml = ref("");
 const fontSize = ref(18), theme = ref<"light"|"sepia"|"dark">("light");
 const loading = ref(true), error = ref(""), settingsOpen = ref(false);
 const frame = ref<HTMLIFrameElement|null>(null);
+const scroller = ref<HTMLDivElement|null>(null);
 const account = computed(() => keys.pkHex);
 const id = computed(() => String(route.params.id || ""));
 let loadedAccount = "";
@@ -71,16 +72,22 @@ async function loadChapter(index:number, percent:number) {
 }
 function frameLoaded() {
   const doc = frame.value?.contentDocument;
-  if (!doc || !epub.value) return;
-  const scroller = doc.scrollingElement || doc.documentElement;
-  const max = Math.max(0,scroller.scrollHeight - scroller.clientHeight);
-  scroller.scrollTop = Math.round(max * restorePercent);
-  const scroll = () => {
-    const available = Math.max(0,scroller.scrollHeight - scroller.clientHeight);
-    chapterPercent.value = available ? Math.max(0,Math.min(1,scroller.scrollTop / available)) : 1;
-    saveSoon();
-  };
-  doc.addEventListener("scroll",scroll,{passive:true});
+  const container = scroller.value;
+  if (!doc || !container || !frame.value || !epub.value) return;
+  // WebKit blocks parent-installed listeners inside script-sandboxed srcdoc.
+  // Scroll in our own page instead, keeping the EPUB iframe script-disabled.
+  frame.value.style.height = "1px";
+  const contentHeight = Math.max(1,doc.documentElement.scrollHeight,doc.body.scrollHeight);
+  frame.value.style.height = contentHeight + "px";
+  const max = Math.max(0,container.scrollHeight - container.clientHeight);
+  container.scrollTop = Math.round(max * restorePercent);
+}
+function onScroll() {
+  const container = scroller.value;
+  if (!container || !epub.value) return;
+  const available = Math.max(0,container.scrollHeight - container.clientHeight);
+  chapterPercent.value = available ? Math.max(0,Math.min(1,container.scrollTop / available)) : 1;
+  saveSoon();
 }
 function refreshChapter() { void loadChapter(chapterIndex.value,chapterPercent.value); }
 function changeFont(delta:number) { fontSize.value = Math.max(14,Math.min(28,fontSize.value+delta)); refreshChapter(); }
@@ -119,7 +126,8 @@ onUnmounted(() => {
 .reader-header>div{display:grid;min-width:0;gap:3px;text-align:center}
 .reader-header strong{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:14px}
 .reader-header small{color:inherit;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
-.chapter-frame{flex:1;min-height:0;width:100%;border:0;background:transparent}
+.chapter-scroller{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.chapter-frame{display:block;width:100%;height:1px;border:0;background:transparent}
 .reader-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:54px;padding:4px 14px;border-top:1px solid #8884}
 .reader-footer button{border:0;color:inherit;background:transparent;min-height:40px;padding:0 12px;font-size:14px}
 .reader-footer button:disabled{opacity:.3}
