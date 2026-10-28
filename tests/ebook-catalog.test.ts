@@ -32,6 +32,18 @@ describe("Gutenberg search adapter", () => {
     vi.stubGlobal("fetch", mock);
     await expect(searchGutenberg("Austen", 1, "", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   });
+  it("reuses a previously retrieved search without a second network call", async () => {
+    const mock = vi.fn(async () => new Response(JSON.stringify({ next:null,results:[
+      {id:1342,title:"Pride and Prejudice",copyright:false,formats:{"application/epub+zip":epub},authors:[],languages:["en"]},
+    ]}), {status:200}));
+    vi.stubGlobal("fetch", mock);
+    const first = await searchGutenberg("Unique cached Austen test", 1, "en");
+    const second = await searchGutenberg("Unique cached Austen test", 1, "en");
+    expect(first.books).toHaveLength(1);
+    expect(second.books).toEqual(first.books);
+    expect(mock).toHaveBeenCalledTimes(1);
+    expect(String(mock.mock.calls[0][0])).toMatch(/^\/api\/books\/search\?/);
+  });
   it("queries Gutendex without credentials and maps results", async () => {
     const mock = vi.fn(async () => new Response(JSON.stringify({ next:null,results:[
       {id:1342,title:"Pride and Prejudice",copyright:false,formats:{"application/epub+zip":epub},authors:[],languages:["en"]},

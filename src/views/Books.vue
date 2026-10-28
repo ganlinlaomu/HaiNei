@@ -14,8 +14,8 @@
       <p v-if="!online" class="note offline-message" role="status">当前已离线，无法搜索或下载新书。<button type="button" @click="openLibrary">前往我的书架</button>，已下载的 EPUB 仍可正常阅读。联网后可继续搜索。</p>
       <p class="note">无需注册书源账号。仅展示 Gutenberg 标记为无版权限制并提供 EPUB 的作品；具体使用仍以所在地法律与原书页面说明为准。</p>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
-      <p v-if="searching" class="hint" role="status">正在查询书库…</p>
-      <template v-else>
+      <p v-if="searching && !results.length" class="hint" role="status">正在查询书库…</p>
+      <template v-if="!searching || results.length">
         <div v-for="book in results" :key="book.id" class="book-row">
           <img v-if="book.coverUrl" :src="book.coverUrl" alt="" loading="lazy" class="cover"/>
           <div v-else class="cover placeholder" aria-hidden="true">📖</div>
@@ -26,8 +26,8 @@
             </div>
           </div>
         </div>
-        <p v-if="!results.length && !error" class="hint">没有找到符合条件的 EPUB。可以试试作者原文名。</p>
-        <button v-if="hasNext" type="button" class="more" :disabled="!online" @click="nextPage">加载更多</button>
+        <p v-if="!searching && !results.length && !error" class="hint">没有找到符合条件的 EPUB。可以试试作者原文名。</p>
+        <button v-if="hasNext" type="button" class="more" :disabled="!online || searching" @click="nextPage">{{ searching ? "正在加载…" : "加载更多" }}</button>
       </template>
     </section>
     <section v-else class="content">
@@ -50,7 +50,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useKeyStore } from "@/stores/keys";
-import { searchGutenberg, type CatalogBook } from "@/services/ebookCatalog";
+import { getCachedGutenbergSearch, searchGutenberg, type CatalogBook } from "@/services/ebookCatalog";
 import { downloadGutenbergBook } from "@/services/ebookDownload";
 import { deleteLibraryBook, exportLibraryBook, listLibraryBooks, type LibraryBook } from "@/services/ebookLibrary";
 
@@ -72,6 +72,15 @@ function openBook(id:string) { void router.push({ name:"EbookReader",params:{id}
 async function search(append:boolean) {
   if (!online.value) { searching.value = false; error.value = ""; return; }
   searchController?.abort();
+  const cached = getCachedGutenbergSearch(query.value, page.value, language.value);
+  if (cached) {
+    results.value = append ? [...results.value, ...cached.books] : cached.books;
+    hasNext.value = cached.hasNext;
+    searching.value = false;
+    error.value = "";
+    return;
+  }
+  if (!append) { results.value = []; hasNext.value = false; }
   const controller = new AbortController(); searchController = controller; searching.value = true; error.value = "";
   try {
     const data = await searchGutenberg(query.value, page.value, language.value, controller.signal);
