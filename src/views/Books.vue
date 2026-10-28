@@ -26,7 +26,7 @@
           </div>
         </div>
         <p v-if="!results.length && !error" class="hint">没有找到符合条件的 EPUB。可以试试作者原文名。</p>
-        <button v-if="hasNext && results.length" type="button" class="more" @click="nextPage">加载更多</button>
+        <button v-if="hasNext" type="button" class="more" @click="nextPage">加载更多</button>
       </template>
     </section>
     <section v-else class="content">
