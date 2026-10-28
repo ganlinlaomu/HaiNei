@@ -8,9 +8,10 @@
     <section v-if="tab === 'discover'" class="content">
       <form class="search" @submit.prevent="startSearch">
         <label for="ebook-query">搜索公版经典文学</label>
-        <div class="search-row"><input id="ebook-query" v-model="query" type="search" placeholder="书名、作者（建议英文原名）" autocomplete="off" /><button type="submit" :disabled="searching">搜索</button></div>
+        <div class="search-row"><input id="ebook-query" v-model="query" type="search" placeholder="书名、作者（建议英文原名）" autocomplete="off" /><button type="submit" :disabled="searching || !online">搜索</button></div>
         <div class="filters"><label for="ebook-language">语言</label><select id="ebook-language" v-model="language" @change="startSearch"><option value="">全部</option><option value="en">英文</option><option value="zh">中文</option><option value="ja">日文</option><option value="fr">法文</option></select><span>Project Gutenberg</span></div>
       </form>
+      <p v-if="!online" class="note offline-message" role="status">当前已离线，无法搜索或下载新书。<button type="button" @click="openLibrary">前往我的书架</button>，已下载的 EPUB 仍可正常阅读。联网后可继续搜索。</p>
       <p class="note">无需注册书源账号。仅展示 Gutenberg 标记为无版权限制并提供 EPUB 的作品；具体使用仍以所在地法律与原书页面说明为准。</p>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
       <p v-if="searching" class="hint" role="status">正在查询书库…</p>
@@ -26,7 +27,7 @@
           </div>
         </div>
         <p v-if="!results.length && !error" class="hint">没有找到符合条件的 EPUB。可以试试作者原文名。</p>
-        <button v-if="hasNext" type="button" class="more" @click="nextPage">加载更多</button>
+        <button v-if="hasNext" type="button" class="more" :disabled="!online" @click="nextPage">加载更多</button>
       </template>
     </section>
     <section v-else class="content">
@@ -57,6 +58,7 @@ const router = useRouter(), keys = useKeyStore();
 const account = computed(() => keys.pkHex);
 const tab = ref<"discover"|"library">("discover"), query = ref(""), language = ref("");
 const searching = ref(false), results = ref<CatalogBook[]>([]), library = ref<LibraryBook[]>([]);
+const online = ref(typeof navigator === "undefined" ? true : navigator.onLine !== false);
 const hasNext = ref(false), page = ref(1), error = ref(""), libraryError = ref("");
 const downloadingId = ref(""), progress = ref<number|null>(null);
 let searchController: AbortController|null = null, downloadController: AbortController|null = null;
@@ -68,6 +70,7 @@ async function refreshLibrary() { if (!account.value) return; try { library.valu
 function openLibrary() { tab.value = "library"; void refreshLibrary(); }
 function openBook(id:string) { void router.push({ name:"EbookReader",params:{id} }); }
 async function search(append:boolean) {
+  if (!online.value) { searching.value = false; error.value = ""; return; }
   searchController?.abort();
   const controller = new AbortController(); searchController = controller; searching.value = true; error.value = "";
   try {
@@ -77,7 +80,7 @@ async function search(append:boolean) {
   finally { if (searchController === controller) { searching.value = false; searchController = null; } }
 }
 function startSearch() { page.value = 1; void search(false); }
-function nextPage() { page.value++; void search(true); }
+function nextPage() { if (!online.value || searching.value) return; page.value++; void search(true); }
 async function download(book:CatalogBook) {
   if (downloadingId.value || !account.value) return;
   downloadingId.value = book.id; progress.value = null; error.value = "";
@@ -92,8 +95,29 @@ async function remove(id:string) {
   if (!account.value || !window.confirm("确定从本设备删除这本电子书吗？")) return;
   try { await deleteLibraryBook(account.value,id); await refreshLibrary(); } catch(e) { libraryError.value = message(e); }
 }
-onMounted(() => { void refreshLibrary(); startSearch(); });
-onUnmounted(() => { searchController?.abort(); downloadController?.abort(); });
+function handleOnline() {
+  online.value = true;
+  if (tab.value === "discover" && (error.value || !results.value.length)) startSearch();
+}
+function handleOffline() {
+  online.value = false;
+  searchController?.abort();
+  searchController = null;
+  searching.value = false;
+  error.value = "";
+}
+onMounted(() => {
+  window.addEventListener("online", handleOnline);
+  window.addEventListener("offline", handleOffline);
+  void refreshLibrary();
+  if (online.value) startSearch();
+});
+onUnmounted(() => {
+  window.removeEventListener("online", handleOnline);
+  window.removeEventListener("offline", handleOffline);
+  searchController?.abort();
+  downloadController?.abort();
+});
 </script>
 <style scoped>
 .books-page{min-height:100vh;padding-bottom:calc(var(--bottom-nav-height,75px) + env(safe-area-inset-bottom) + 24px);background:var(--bg-fff);color:var(--fg-172033)}
@@ -111,6 +135,7 @@ button:disabled{opacity:.55}
 .filters{display:flex;align-items:center;gap:8px;color:var(--fg-64748b);font-size:12px}
 .filters select{border:1px solid var(--bd-e2e8f0);padding:7px;border-radius:8px;background:var(--bg-fff);color:inherit}.filters span{margin-left:auto}
 .note{font-size:12px;line-height:1.6;color:var(--fg-64748b);margin:14px 0}
+.offline-message button{margin:0 4px;padding:2px 0;border:0;border-bottom:1px solid currentColor;background:transparent;color:inherit;font:inherit;font-weight:600;cursor:pointer}
 .error{color:#b91c1c;background:#fef2f2;border-radius:10px;padding:12px;font-size:13px}
 .hint{padding:24px 8px;color:var(--fg-64748b);text-align:center;font-size:14px;line-height:1.7}
 .book-row{display:flex;gap:14px;padding:15px 0;border-bottom:1px solid var(--bd-eff1f3)}

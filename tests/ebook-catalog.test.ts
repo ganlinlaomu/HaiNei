@@ -18,6 +18,20 @@ describe("Gutenberg search adapter", () => {
     expect(mapGutenbergBook({...source,copyright:undefined})).toBeNull();
     expect(mapGutenbergBook({...source,formats:{"application/epub+zip":"https://evil.test/1342.epub"}})).toBeNull();
   });
+  it("shows a readable offline error instead of Safari Load failed", async () => {
+    const mock = vi.fn(async () => { throw new TypeError("Load failed"); });
+    vi.stubGlobal("fetch", mock);
+    await expect(searchGutenberg("Austen")).rejects.toThrow("无法连接在线书库");
+  });
+  it("preserves AbortError when an in-flight search is cancelled", async () => {
+    const controller = new AbortController();
+    const mock = vi.fn(async () => {
+      controller.abort();
+      throw new DOMException("The operation was aborted", "AbortError");
+    });
+    vi.stubGlobal("fetch", mock);
+    await expect(searchGutenberg("Austen", 1, "", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  });
   it("queries Gutendex without credentials and maps results", async () => {
     const mock = vi.fn(async () => new Response(JSON.stringify({ next:null,results:[
       {id:1342,title:"Pride and Prejudice",copyright:false,formats:{"application/epub+zip":epub},authors:[],languages:["en"]},
