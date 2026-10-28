@@ -1,10 +1,9 @@
 import "fake-indexeddb/auto";
-import Dexie from "dexie";
 import { reactive, isProxy } from "vue";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CatalogBook } from "@/services/ebookCatalog";
 import {
-  saveLibraryBook, getLibraryBook, listLibraryBooks, updateReadingState,
+  saveLibraryBook, getLibraryBook, listLibraryBooks, updateReadingState, deleteLibraryBook,
 } from "@/services/ebookLibrary";
 
 const ACCOUNT_A = "a".repeat(64);
@@ -18,10 +17,12 @@ const BOOK: CatalogBook = {
   sourceUrl: "https://www.gutenberg.org/ebooks/1342",
   downloads: 42,
 };
-const DATABASE = "hainei_ebooks_v1";
-
 afterEach(async () => {
-  await Dexie.delete(DATABASE);
+  // Delete records, not the singleton database: Dexie closes its connection
+  // when indexedDB.deleteDatabase() triggers versionchange, and this module
+  // intentionally keeps one EbookDatabase instance throughout the app session.
+  await deleteLibraryBook(ACCOUNT_A, BOOK.id);
+  await deleteLibraryBook(ACCOUNT_B, BOOK.id);
 });
 
 describe("ebooks IndexedDB clone boundaries", () => {
