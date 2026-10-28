@@ -15,7 +15,7 @@
           :location="shown"
           :my-location="myLocation"
           :peer-pubkey="own ? keys.pkHex : peer"
-          :label="`${own ? '我' : peerName}的位置`"
+          :label="`${displayName}的位置`"
         />
         <span class="location-card-map-expand">查看大图</span>
       </button>
@@ -27,7 +27,7 @@
     </template>
     <LocationMapSheet
       v-if="mapOpen"
-      :peer-name="own ? '我' : peerName"
+      :peer-name="displayName"
       :peer-pubkey="own ? keys.pkHex : peer"
       :location="shown"
       :my-location="myLocation"
@@ -55,6 +55,7 @@ const liveStore = useLiveLocationStore();
 const keys = useKeyStore();
 const mapOpen = ref(false);
 const live = computed(() => props.location.live);
+const displayName = computed(() => props.own ? "我" : props.peerName || "对方");
 // A live card that has not ended yet needs the clock for its countdown and
 // staleness, including before the first update has arrived.
 let releaseClock: (() => void) | null = null;
