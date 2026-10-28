@@ -18,19 +18,23 @@
       />
     </template>
     <span
-      v-if="myLocation"
-      class="location-map-preview-marker me"
-      :style="{ left: `${myMarker.left}px`, top: `${myMarker.top}px` }"
-      aria-label="我的位置"
-      role="img"
-    />
-    <span
-      class="location-map-preview-marker peer"
+      class="location-map-preview-marker"
+      :class="{ me: locationIsMine, peer: !locationIsMine }"
       :style="{ left: `${peerMarker.left}px`, top: `${peerMarker.top}px` }"
-      :aria-label="label"
+      :aria-label="locationIsMine ? '我的位置' : label"
       role="img"
     >
-      <ProfileAvatar v-if="peerPubkey" :pubkey="peerPubkey" :size="30" />
+      <ProfileAvatar v-if="!locationIsMine && peerPubkey" :pubkey="peerPubkey" :size="30" />
+    </span>
+    <span
+      v-if="myLocation"
+      class="location-map-preview-marker"
+      :class="locationIsMine ? 'peer' : 'me'"
+      :style="{ left: `${myMarker.left}px`, top: `${myMarker.top}px` }"
+      :aria-label="locationIsMine ? label : '我的位置'"
+      role="img"
+    >
+      <ProfileAvatar v-if="locationIsMine && peerPubkey" :pubkey="peerPubkey" :size="30" />
     </span>
     <span v-if="!tilesReady" class="location-map-preview-loading">地图加载中…</span>
     <span v-else-if="mapUnavailable" class="location-map-preview-loading">地图暂时无法加载</span>
@@ -50,6 +54,8 @@ const props = defineProps<{
   myLocation?: LocationShare;
   peerPubkey?: string;
   label: string;
+  /** The primary card belongs to us; the optional second point is the peer. */
+  locationIsMine?: boolean;
 }>();
 
 const workerBase = haineiWorkerBaseUrl();
