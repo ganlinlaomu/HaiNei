@@ -31,7 +31,7 @@ import {
 import { classifyPrivateMessage } from "@/nostr/messaging/messageRouting";
 import { createHomeMessageHandler } from "@/nostr/messaging/homeDelivery";
 import { decodeMessageEvent, encryptDirectMessage, decryptDirectMessage, nip17Adapter } from "@/nostr/messaging/protocol";
-import { distanceMetres, LIVE_STALE_SECONDS, useLiveLocationStore } from "@/stores/liveLocation";
+import { distanceMetres, LIVE_HEARTBEAT_MS, LIVE_MOVE_METRES, LIVE_STALE_SECONDS, useLiveLocationStore } from "@/stores/liveLocation";
 import DmLocationCard from "@/components/DmLocationCard.vue";
 import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import LocationShareSheet from "@/components/LocationShareSheet.vue";
@@ -136,6 +136,16 @@ describe("receiving a live share", () => {
     expect(store.incomingStatus(ID, PEER, opening).state).toBe("ended");
   });
 
+  it("remembers an opening card so the sender's card can show both positions immediately", () => {
+    const store = useLiveLocationStore();
+    const opening = { lat: 31.2, lng: 121.4, at: now(), live: { id: ID, expiresAt: now() + 900 } };
+    store.receiveOpening(PEER, opening);
+    expect(store.incomingFor(PEER)?.location).toMatchObject({ lat: 31.2, lng: 121.4 });
+    store.receiveControl(stop());
+    store.receiveOpening(PEER, opening);
+    expect(store.incomingFor(PEER)).toBeUndefined();
+  });
+
   it("keeps the clock running for a visible card even with no update yet", () => {
     const store = useLiveLocationStore();
     // The clock is module state: clear one an earlier test left on real timers.
@@ -162,6 +172,14 @@ describe("receiving a live share", () => {
     expect(store.incomingStatus(ID, "d".repeat(64))).toEqual({ state: "ended" });
   });
 
+  it("finds the newest active position a friend is sharing for a two-person map", () => {
+    const store = useLiveLocationStore();
+    store.receiveControl(update(1, 31.2));
+    expect(store.incomingFor(PEER)?.location?.lat).toBe(31.2);
+    store.receiveControl(stop());
+    expect(store.incomingFor(PEER)).toBeUndefined();
+  });
+
   it("goes stale without updates, ends at expiry, and stays ended after a stop", () => {
     vi.useFakeTimers();
     const store = useLiveLocationStore();
@@ -185,7 +203,7 @@ describe("receiving a live share", () => {
 describe("sharing our location", () => {
   const fix = (lat: number) => ({ coords: { latitude: lat, longitude: 121.4, accuracy: 10 } }) as GeolocationPosition;
 
-  it("opens with a stored card, then sends expiring updates only after 20 m or 30 s", async () => {
+  it("opens with a stored card, then sends expiring updates after about 10 m or 15 s", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("navigator", { geolocation: { watchPosition: vi.fn(() => 7), clearWatch: vi.fn() } });
     const store = useLiveLocationStore();
@@ -195,9 +213,9 @@ describe("sharing our location", () => {
     expect(card?.live?.expiresAt).toBe(now() + 900);
     expect(mocks.dmSend.mock.calls[0][5]).toEqual({ preserveDraft: true });
 
-    store.onPosition(fix(31.20005));
+    store.onPosition(fix(31.20004));
     expect(mocks.sendFastControl).not.toHaveBeenCalled();
-    store.onPosition(fix(31.2003));
+    store.onPosition(fix(31.20012));
     expect(mocks.sendFastControl).toHaveBeenCalledOnce();
     const sent = mocks.sendFastControl.mock.calls[0][0];
     expect(sent.wrapTtlSeconds).toBe(600);
@@ -206,25 +224,25 @@ describe("sharing our location", () => {
     expect(sent.tags).toEqual(liveLocationControlTags());
     expect(decodeLiveLocationControl({ tags: sent.tags, plaintext: sent.content })).toMatchObject({ kind: "update", seq: 1 });
 
-    vi.advanceTimersByTime(31_000);
+    vi.advanceTimersByTime(LIVE_HEARTBEAT_MS + 1_000);
     store.tick();
     expect(mocks.sendFastControl).toHaveBeenCalledTimes(2);
-    expect(distanceMetres({ lat: 31.2, lng: 121.4 }, { lat: 31.2003, lng: 121.4 })).toBeGreaterThan(30);
+    expect(distanceMetres({ lat: 31.2, lng: 121.4 }, { lat: 31.20012, lng: 121.4 })).toBeGreaterThan(LIVE_MOVE_METRES);
   });
 
-  it("heartbeats the newest fix, so small moves under 20 m still reach the friend", async () => {
+  it("heartbeats the newest fix, so small moves under 10 m still reach the friend", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("navigator", { geolocation: { watchPosition: vi.fn(() => 7), clearWatch: vi.fn() } });
     const store = useLiveLocationStore();
     await store.startSharing(PEER, 900, { lat: 31.2, lng: 121.4, accuracy: 10, at: now() });
-    store.onPosition(fix(31.20009)); // about 10 m: below the threshold
+    store.onPosition(fix(31.20004)); // about 4 m: below the threshold
     expect(mocks.sendFastControl).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(31_000);
+    vi.advanceTimersByTime(LIVE_HEARTBEAT_MS + 1_000);
     store.tick();
     const sent = mocks.sendFastControl.mock.calls[0][0];
     const control = decodeLiveLocationControl({ tags: sent.tags, plaintext: sent.content });
     // It used to resend the opening position here.
-    expect(control?.kind === "update" && control.location.lat).toBe(31.20009);
+    expect(control?.kind === "update" && control.location.lat).toBe(31.20004);
     await store.stopSharing(PEER, false);
   });
 
@@ -312,6 +330,25 @@ describe("live location UI", () => {
     const html = await renderToString(app);
     // It used to stay on the opening card's position.
     expect(html).toContain("31.21000, 121.41000");
+    await store.stopSharing(PEER, false);
+  });
+
+  it("shows both positions on our own card when the friend is sharing too", async () => {
+    vi.stubGlobal("navigator", { geolocation: { watchPosition: vi.fn(() => 7), clearWatch: vi.fn() } });
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useLiveLocationStore();
+    await store.startSharing(PEER, 900, { lat: 31.2, lng: 121.4, at: now() });
+    store.receiveControl(update(1, 31.25));
+    const id = store.outgoingFor(PEER)!.id;
+    const app = createSSRApp({ render: () => h(DmLocationCard, {
+      location: { lat: 31.2, lng: 121.4, at: now(), live: { id, expiresAt: now() + 900 } },
+      own: true, peer: PEER, peerName: "妈妈",
+    }) });
+    app.use(pinia);
+    const html = await renderToString(app);
+    expect(html).toContain('aria-label="我的位置"');
+    expect(html).toContain('aria-label="妈妈的位置"');
     await store.stopSharing(PEER, false);
   });
 

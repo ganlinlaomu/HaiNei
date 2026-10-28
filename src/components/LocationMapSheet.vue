@@ -71,11 +71,13 @@ const props = defineProps<{
   location: LocationShare;
   /** Our position when we are also sharing with this friend. */
   myLocation?: LocationShare;
+  /** The primary card belongs to us; the optional second point is the peer. */
+  locationIsMine?: boolean;
   status: string;
 }>();
 const emit = defineEmits<{ close: [] }>();
 const workerBase = haineiWorkerBaseUrl();
-const title = computed(() => `${props.peerName}的位置`);
+const title = computed(() => props.locationIsMine ? "我的位置" : `${props.peerName}的位置`);
 const focus = computed(() => props.location);
 
 const mapElement = ref<HTMLElement | null>(null);
@@ -89,6 +91,10 @@ const center = computed(() => centerOf(points.value, zoom.value));
 const tiles = computed(() => tilesFor(center.value, zoom.value, width.value, height.value));
 const markers = computed(() => {
   const place = (location: LocationShare) => toScreen(location, center.value, zoom.value, width.value, height.value);
+  if (props.locationIsMine) return [
+    { key: "me", kind: "me" as const, label: "我的位置", pubkey: undefined, ...place(props.location) },
+    ...(props.myLocation ? [{ key: "peer", kind: "peer" as const, label: `${props.peerName}的位置`, pubkey: props.peerPubkey, ...place(props.myLocation) }] : []),
+  ];
   return [
     ...(props.myLocation ? [{ key: "me", kind: "me" as const, label: "我的位置", pubkey: undefined, ...place(props.myLocation) }] : []),
     { key: "peer", kind: "peer" as const, label: title.value, pubkey: props.peerPubkey, ...place(props.location) },

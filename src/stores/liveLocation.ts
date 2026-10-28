@@ -17,13 +17,13 @@ import { useKeyStore } from "@/stores/keys";
 import { debugLog } from "@/utils/debugLog";
 
 /** Send an update after this much movement, or this long without one. */
-export const LIVE_MOVE_METRES = 20;
-export const LIVE_HEARTBEAT_MS = 30_000;
+export const LIVE_MOVE_METRES = 10;
+export const LIVE_HEARTBEAT_MS = 15_000;
 /** A receiver calls a share stale when the last update is older than this. */
 export const LIVE_STALE_SECONDS = 120;
 // Relays may drop an update after this; the receiver only needs the latest.
 const UPDATE_WRAP_TTL_SECONDS = 10 * 60;
-const CLOCK_MS = 15_000;
+const CLOCK_MS = 5_000;
 const STOP_ON_LOCK_TIMEOUT_MS = 1_500;
 
 export type OutgoingLiveShare = {
@@ -88,10 +88,17 @@ export const useLiveLocationStore = defineStore("liveLocation", {
     outgoingFor(peer: string) {
       return this.outgoing[peer.toLowerCase()];
     },
+    /** Newest active position this friend is sharing with us, if any. */
+    incomingFor(peerPubkey: string) {
+      const peer = peerPubkey.toLowerCase();
+      const now = Math.floor(this.now / 1000);
+      return Object.values(this.incoming)
+        .filter(share => share.peer === peer && !share.stopped && share.expiresAt > now && !!share.location)
+        .sort((left, right) => right.receivedAt - left.receivedAt)[0];
+    },
     /**
      * What a card for share `id` from `peer` should show right now. Until the
-     * first update arrives, the opening card itself is the latest position
-     * (the sender's first update can be up to 30 s later).
+     * first update arrives, the opening card itself is the latest position.
      */
     incomingStatus(id: string, peer: string, opening?: LocationShare): LiveShareStatus {
       const share = this.incoming[id];
@@ -107,6 +114,21 @@ export const useLiveLocationStore = defineStore("liveLocation", {
         remainingSeconds: expiresAt - now,
         ageSeconds,
       };
+    },
+
+    /** Remember the durable opening card so the other map can show both people immediately. */
+    receiveOpening(peerPubkey: string, opening: LocationShare) {
+      const live = opening.live;
+      const peer = peerPubkey.toLowerCase();
+      if (!live || live.expiresAt <= nowSeconds() || peer === useKeyStore().pkHex.toLowerCase()) return;
+      const existing = this.incoming[live.id];
+      if (existing) return; // Never revive a stopped share or replace a newer control update.
+      installLiveLocationLockHook();
+      this.incoming[live.id] = {
+        peer, id: live.id, expiresAt: live.expiresAt, seq: 0,
+        location: opening, receivedAt: Date.now(), stopped: false,
+      };
+      this.startClock();
     },
 
     async startSharing(peerPubkey: string, durationSeconds: number, first: LocationShare) {
@@ -261,7 +283,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
         watchId = navigator.geolocation.watchPosition(
           position => this.onPosition(position),
           () => undefined,
-          { enableHighAccuracy: true, maximumAge: 10_000 },
+          { enableHighAccuracy: true, maximumAge: 3_000 },
         );
       }
       if (!visibilityListener && typeof document !== "undefined") {

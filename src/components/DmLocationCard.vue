@@ -14,8 +14,9 @@
         <LocationMapPreview
           :location="shown"
           :my-location="myLocation"
-          :peer-pubkey="own ? keys.pkHex : peer"
-          :label="`${displayName}的位置`"
+          :peer-pubkey="peer"
+          :label="`${peerName || '对方'}的位置`"
+          :location-is-mine="own"
         />
         <span class="location-card-map-expand">查看大图</span>
       </button>
@@ -27,10 +28,11 @@
     </template>
     <LocationMapSheet
       v-if="mapOpen"
-      :peer-name="displayName"
-      :peer-pubkey="own ? keys.pkHex : peer"
+      :peer-name="peerName || '对方'"
+      :peer-pubkey="peer"
       :location="shown"
       :my-location="myLocation"
+      :location-is-mine="own"
       :status="detail"
       @close="mapOpen = false"
     />
@@ -42,7 +44,6 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import LocationMapPreview from "@/components/LocationMapPreview.vue";
 import LocationMapSheet from "@/components/LocationMapSheet.vue";
 import { formatCoordinates, type LocationShare } from "@/nostr/messaging/locationShare";
-import { useKeyStore } from "@/stores/keys";
 import { useLiveLocationStore } from "@/stores/liveLocation";
 
 /**
@@ -52,7 +53,6 @@ import { useLiveLocationStore } from "@/stores/liveLocation";
  */
 const props = defineProps<{ location: LocationShare; own: boolean; peer: string; peerName: string }>();
 const liveStore = useLiveLocationStore();
-const keys = useKeyStore();
 const mapOpen = ref(false);
 const live = computed(() => props.location.live);
 const displayName = computed(() => props.own ? "我" : props.peerName || "对方");
@@ -60,6 +60,7 @@ const displayName = computed(() => props.own ? "我" : props.peerName || "对方
 // staleness, including before the first update has arrived.
 let releaseClock: (() => void) | null = null;
 onMounted(() => {
+  if (!props.own && live.value) liveStore.receiveOpening(props.peer, props.location);
   if (live.value && live.value.expiresAt > Math.floor(Date.now() / 1000)) releaseClock = liveStore.holdClock();
 });
 onBeforeUnmount(() => releaseClock?.());
@@ -105,9 +106,12 @@ const detail = computed(() => {
   return `更新于 ${info.ageSeconds < 60 ? "刚刚" : `${Math.floor(info.ageSeconds / 60)} 分钟前`} · ${remaining}`;
 });
 const coordinates = computed(() => formatCoordinates(shown.value));
-/** On a friend's location, also mark ours if we are sharing with them now. */
+/**
+ * The second point on the map. On a friend's card it is our active outgoing
+ * share; on our own card it is the friend's newest active incoming share.
+ */
 const myLocation = computed(() => {
-  if (props.own) return undefined;
+  if (props.own) return liveStore.incomingFor(props.peer)?.location;
   const share = liveStore.outgoingFor(props.peer);
   return share && share.expiresAt > Math.floor(liveStore.now / 1000) ? share.last : undefined;
 });
