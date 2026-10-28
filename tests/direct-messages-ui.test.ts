@@ -509,7 +509,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(mountIndex).toBeGreaterThan(routerIndex);
     expect(worker).toContain("url.origin === self.location.origin");
     expect(worker).toContain("stale-while-revalidate");
-    expect(worker).toContain("event.respondWith(fetch(request))");
+    expect(worker).toContain("Leave third-party requests to the browser\'s native fetch path");
+    expect(worker).not.toContain("  event.respondWith(fetch(request));");
   });
 
   it("uses revisions and a safe insert-only fast path for Home reconciliation", () => {
