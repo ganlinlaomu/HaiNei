@@ -542,7 +542,7 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain('v-if="voiceCaptureOwnsAudioSession"');
     expect(messages).toContain('class="composer-actions"');
     expect(messages).toContain('class="composer-icon-button microphone-button persistent-microphone"');
-    expect(messages).toContain('v-show="voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImage)"');
+    expect(messages).toContain('v-show="voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImages.length)"');
     expect(messages).toContain(":aria-pressed=\"voiceCaptureOwnsAudioSession\"");
     expect((messages.match(/aria-label="按住录音"/g) || []).length).toBe(1);
     expect(messages).not.toContain(':disabled="!accepted || !keys.pkHex || startingRecording"');
@@ -557,6 +557,10 @@ describe("encrypted private audio messages", () => {
     expect(messages).not.toContain('@click="chooseImage"');
     expect(messages).toContain("imageInput.value?.click()");
     expect(messages).toContain('accept="image/*"');
+    expect(messages).toContain('accept="image/*" multiple');
+    expect(messages).toContain('v-for="(image, index) in selectedImages"');
+    expect(messages).toContain("files.slice(0, MAX_SELECTED_IMAGES)");
+    expect(messages).toContain("images.forEach((image, index) => directMessages.send(");
     expect(messages).toContain(".attachment-file-input{position:absolute;inset:0;width:100%;height:100%");
     expect(messages).not.toContain('capture="');
     expect(messages).toContain("attachmentMenuOpen");

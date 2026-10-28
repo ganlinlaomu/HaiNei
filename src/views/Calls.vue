@@ -70,7 +70,7 @@
 import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { liveQuery } from "dexie";
-import { cachedCallHistoryPage, clearCallHistoryPageCache, readVisibleCallHistoryPage, rememberCallHistoryPage, uniqueCallHistory, type CallHistoryItem } from "@/services/callHistory";
+import { cachedCallHistoryPage, clearCallHistoryPageCache, readVisibleCallHistoryPage, rememberCallHistoryPage, storedCallHistoryPage, uniqueCallHistory, type CallHistoryItem } from "@/services/callHistory";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useFriendsStore } from "@/stores/friends";
@@ -127,12 +127,22 @@ function subscribe() {
   const cached = cachedCallHistoryPage(session, account, count, missed);
   if (cached) { records.value = cached.items; hasMore.value = cached.hasMore; }
   loading.value = !cached;
-  subscription = liveQuery(() => readVisibleCallHistoryPage(account, count, missed))
-    .subscribe({ next: page => {
+  void (async () => {
+    if (!cached) {
+      try {
+        const stored = await storedCallHistoryPage(session, account, count, missed);
+        if (token !== generation) return;
+        if (stored) { records.value = stored.items; hasMore.value = stored.hasMore; loading.value = false; }
+      } catch { /* A damaged snapshot must never block the authoritative query. */ }
+    }
     if (token !== generation) return;
-    records.value = page.items; hasMore.value = page.hasMore; loading.value = false;
-    rememberCallHistoryPage(session, account, missed, page);
-  }, error: () => { if (token === generation) { loading.value = false; error.value = "读取通话记录失败，请重试"; } } });
+    subscription = liveQuery(() => readVisibleCallHistoryPage(account, count, missed))
+      .subscribe({ next: page => {
+        if (token !== generation) return;
+        records.value = page.items; hasMore.value = page.hasMore; loading.value = false;
+        void rememberCallHistoryPage(session, account, missed, page);
+      }, error: () => { if (token === generation) { loading.value = false; error.value = "读取通话记录失败，请重试"; } } });
+  })();
 }
 watch(() => [keys.pkHex, keys.isUnlocked, limit.value, missedOnly.value], subscribe, { immediate: true, flush: "sync" });
 // Viewing the Calls tab acknowledges the badge. Do not mark unread before
