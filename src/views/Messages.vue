@@ -217,9 +217,11 @@
         </div>
         <button type="button" aria-label="取消引用回复" @click="cancelReply">×</button>
       </div>
-      <div v-if="selectedImage" class="selected-image">
-        <img :src="selectedImage.preview" alt="待发送图片" />
-        <button type="button" aria-label="移除图片" @click="removeSelectedImage">×</button>
+      <div v-if="selectedImages.length" class="selected-images" aria-label="待发送图片">
+        <div v-for="(image, index) in selectedImages" :key="image.preview" class="selected-image">
+          <img :src="image.preview" :alt="`待发送图片 ${index + 1}`" />
+          <button type="button" :aria-label="`移除第 ${index + 1} 张图片`" @click="removeSelectedImage(index)">×</button>
+        </div>
       </div>
       <p v-if="voiceError" class="voice-error" role="alert">{{ voiceError }}</p>
       <div v-if="attachmentMenuOpen" class="dm-attachment-menu" role="menu" aria-label="添加消息内容">
@@ -315,7 +317,7 @@
               </button>
               <span class="composer-actions-spacer" aria-hidden="true"></span>
               <button
-                v-if="draft.trim() || selectedImage"
+                v-if="draft.trim() || selectedImages.length"
                 class="composer-icon-button send-button"
                 type="submit"
                 aria-label="发送"
@@ -328,7 +330,7 @@
             </div>
           </template>
           <button
-            v-show="voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImage)"
+            v-show="voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImages.length)"
             class="composer-icon-button microphone-button persistent-microphone"
             data-live-audio-action
             :class="{ active: voiceCaptureOwnsAudioSession }"
@@ -346,7 +348,7 @@
           </button>
         </div>
       </form>
-      <input ref="imageInput" class="attachment-file-input sr-file-input" type="file" accept="image/*" :disabled="!accepted || !keys.pkHex" @change="selectImage" />
+      <input ref="imageInput" class="attachment-file-input sr-file-input" type="file" accept="image/*" multiple :disabled="!accepted || !keys.pkHex" @change="selectImages" />
     </div>
     <LocationShareSheet
       v-if="locationSheetOpen"
@@ -526,7 +528,7 @@ const {
   search: (peer, query, options) => directMessages.searchPeerMessages(peer, query, options),
 });
 const searchInput = ref<HTMLInputElement | null>(null);
-const selectedImage = ref<{ file: File; preview: string } | null>(null);
+const selectedImages = ref<Array<{ file: File; preview: string }>>([]);
 const attachmentMenuOpen = ref(false);
 const {
   recommendationPickerOpen, recommendationQuery, selectedRecommendation, recommendableFriends,
@@ -562,7 +564,7 @@ const {
   peer: () => peerPubkey.value,
   accepted: () => accepted.value,
   isDisposed: () => disposed,
-  hasPendingImage: () => !!selectedImage.value,
+  hasPendingImage: () => selectedImages.value.length > 0,
   send: (result, account, peer) => sendVoiceRecordingResult(result, account, peer),
 });
 const imageInput = ref<HTMLInputElement | null>(null);
@@ -637,13 +639,14 @@ const actionMenuImportable = computed(() => {
     message, keys.pkHex, peerPubkey.value, isDisappearing(message) || isBurned(message),
   );
 });
-const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || !!selectedImage.value || !!recordedAudio.value));
+const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || selectedImages.value.length > 0 || !!recordedAudio.value));
 const INITIAL_MESSAGE_COUNT = 60;
 const OLDER_MESSAGE_BATCH = 40;
 const MAX_RENDERED_MESSAGES = 100;
 const TOP_LOAD_THRESHOLD = 120;
 const BOTTOM_FOLLOW_THRESHOLD = 120;
 const MIN_VOICE_DURATION_SECONDS = 1;
+const MAX_SELECTED_IMAGES = 9;
 let replyHighlightTimer: number | null = null;
 let prependingOlder = false;
 let windowMutationInProgress = false;
@@ -1300,7 +1303,7 @@ function enableDisappearing() {
     ui.addToast("当前账号无法发送加密临时消息", 2000, "info");
     return;
   }
-  if (selectedImage.value || recordedAudio.value || voiceCaptureOwnsAudioSession.value) {
+  if (selectedImages.value.length || recordedAudio.value || voiceCaptureOwnsAudioSession.value) {
     ui.addToast("请先移除图片或语音，阅后即焚仅支持文字", 2200, "info");
     return;
   }
@@ -1311,16 +1314,24 @@ function enableDisappearing() {
 function disableDisappearing() {
   disappearingSeconds.value = null;
 }
-function removeSelectedImage() {
-  if (selectedImage.value) URL.revokeObjectURL(selectedImage.value.preview);
-  selectedImage.value = null;
+function clearSelectedImages() {
+  for (const image of selectedImages.value) URL.revokeObjectURL(image.preview);
+  selectedImages.value = [];
   if (imageInput.value) imageInput.value.value = "";
 }
-function selectImage(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0];
-  if (!file?.type.startsWith("image/")) return;
-  removeSelectedImage();
-  selectedImage.value = { file, preview: URL.createObjectURL(file) };
+function removeSelectedImage(index: number) {
+  const [removed] = selectedImages.value.splice(index, 1);
+  if (removed) URL.revokeObjectURL(removed.preview);
+  if (!selectedImages.value.length && imageInput.value) imageInput.value.value = "";
+}
+function selectImages(event: Event) {
+  const files = [...((event.target as HTMLInputElement).files || [])]
+    .filter(file => file.type.startsWith("image/"));
+  if (!files.length) return;
+  clearSelectedImages();
+  selectedImages.value = files.slice(0, MAX_SELECTED_IMAGES)
+    .map(file => ({ file, preview: URL.createObjectURL(file) }));
+  if (files.length > MAX_SELECTED_IMAGES) ui.addToast(`一次最多选择 ${MAX_SELECTED_IMAGES} 张图片`, 2200, "info");
 }
 function sendVoiceRecordingResult(result: VoiceRecordingResult, account: string, peer: string) {
   if (disposed || keys.pkHex !== account || peerPubkey.value !== peer) return;
@@ -1338,7 +1349,7 @@ function sendVoiceRecordingResult(result: VoiceRecordingResult, account: string,
 }
 function submitMessage() {
   if (!canSend.value) return;
-  if (disappearingSeconds.value !== null && (recordedAudio.value || selectedImage.value || replyingToId.value)) {
+  if (disappearingSeconds.value !== null && (recordedAudio.value || selectedImages.value.length || replyingToId.value)) {
     ui.addToast("阅后即焚仅支持纯文字消息", 2200, "info");
     return;
   }
@@ -1359,15 +1370,24 @@ function submitMessage() {
     return;
   }
   const text = draft.value;
-  const image = selectedImage.value?.file;
+  const images = selectedImages.value.map(image => image.file);
   const replyTo = replyingToMessage.value?.id;
   try {
-    directMessages.send(peerPubkey.value, text, image, replyTo, disappearingSeconds.value ?? undefined);
+    if (images.length) {
+      images.forEach((image, index) => directMessages.send(
+        peerPubkey.value,
+        index === 0 ? text : "",
+        image,
+        index === 0 ? replyTo : undefined,
+      ));
+    } else {
+      directMessages.send(peerPubkey.value, text, undefined, replyTo, disappearingSeconds.value ?? undefined);
+    }
     disappearingSeconds.value = null;
     attachmentMenuOpen.value = false;
     clearAfterSend(() => {
       draft.value = "";
-      removeSelectedImage();
+      clearSelectedImages();
       cancelReply();
     });
   } catch (error) {
@@ -1454,6 +1474,7 @@ watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
   attachmentMenuOpen.value = false;
   closeRecommendationPicker();
   locationSheetOpen.value = false;
+  clearSelectedImages();
   openingMessageId.value = "";
   if (previous?.[0] && previous?.[1]) flushDraft(previous[0], previous[1]);
   pauseDraftPersistence();
@@ -1578,7 +1599,7 @@ onBeforeUnmount(() => {
   closeMessageActionMenu();
   resetMessageGesture();
   messageList.value?.style.removeProperty("overflow-anchor");
-  removeSelectedImage();
+  clearSelectedImages();
   cancelVoiceRecording();
   clearRecordedAudio();
 });
@@ -1596,7 +1617,7 @@ onBeforeUnmount(() => {
 .jump-to-latest{position:absolute;right:18px;bottom:calc(94px + env(safe-area-inset-bottom));z-index:4;display:flex;min-width:42px;height:42px;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid var(--bd-d8dee5);border-radius:999px;background:var(--bg-fff);color:var(--fg-0f1419);box-shadow:0 5px 18px rgba(15,23,42,.16);font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent}.jump-to-latest:active{background:var(--bg-f7f9f9);transform:scale(.97)}.jump-to-latest>span{font-size:20px;line-height:1}.jump-to-latest strong{font-size:12px;font-weight:650;white-space:nowrap}
 .composer-region{position:relative;z-index:3;width:min(100%,720px);margin:0 auto;padding:4px 0 calc(28px + env(safe-area-inset-bottom));background:linear-gradient(180deg,var(--bg-rgba-255-255-255-0),var(--bg-fff) 22%);transition:padding-bottom 180ms ease}.composer-region:has(.chat-composer:focus-within){padding-bottom:calc(8px + env(safe-area-inset-bottom))}
 .replying-preview{display:flex;min-width:0;align-items:center;gap:10px;margin:0 16px 6px;padding:7px 10px 7px 12px;border-left:3px solid #1687e8;border-radius:10px;background:var(--bg-f7f9f9)}.replying-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}.replying-copy strong,.replying-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.replying-copy strong{color:var(--fg-0f1419);font-size:12px}.replying-copy span{color:var(--fg-536471);font-size:12px}.replying-preview>button{width:30px;height:30px;flex:0 0 30px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--fg-536471);font-size:22px}.replying-preview>button:active{background:var(--bg-e8ecef)}
-.selected-image{position:relative;width:64px;height:64px;margin:0 0 8px 24px}.selected-image img{width:100%;height:100%;object-fit:cover;border:1px solid var(--bd-e2e8f0);border-radius:12px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}.voice-error{margin:0 24px 6px;color:var(--fg-dc2626);font-size:12px}
+.selected-images{display:flex;gap:9px;margin:0 16px 8px;padding:6px 8px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity}.selected-image{position:relative;width:64px;height:64px;flex:0 0 64px;scroll-snap-align:start}.selected-image img{width:100%;height:100%;object-fit:cover;border:1px solid var(--bd-e2e8f0);border-radius:12px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}.voice-error{margin:0 24px 6px;color:var(--fg-dc2626);font-size:12px}
 .chat-composer{position:relative;width:calc(100% - 48px);min-width:0;margin:0 auto;border:1px solid var(--bd-d8dee5);border-radius:24px;background:var(--bg-fff);box-shadow:0 4px 18px rgba(15,23,42,.11);transition:width 180ms ease,border-color 180ms ease,box-shadow 180ms ease}.chat-composer:focus-within{width:calc(100% - 32px);border-color:var(--bd-c8d0d9);box-shadow:0 5px 20px rgba(15,23,42,.13)}.composer-normal{display:grid;box-sizing:border-box;min-width:0;min-height:48px;grid-template-columns:44px minmax(0,1fr) 44px;align-items:center;padding:2px 8px;transition:min-height 180ms ease}.composer-normal textarea{grid-column:2;grid-row:1;min-width:0;min-height:36px;max-height:108px;box-sizing:border-box;padding:7px 6px 6px;border:0;outline:0;resize:none;overflow-y:hidden;background:transparent;color:var(--fg-0f1419);font:inherit;font-size:16px;line-height:22px}.composer-actions{display:contents}.composer-actions-spacer{display:none}.composer-actions .attachment-button{grid-column:1;grid-row:1}.composer-actions .send-button{grid-column:3;grid-row:1}.persistent-microphone{grid-column:3;grid-row:1;align-self:center;justify-self:end;z-index:1}.composer-normal:focus-within{min-height:76px;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 34px;align-items:stretch;padding:6px 8px 4px}.composer-normal:focus-within textarea{grid-column:1;grid-row:1;width:100%;padding:4px 6px 3px}.composer-normal:focus-within .composer-actions{display:flex;grid-column:1;grid-row:2;min-width:0;min-height:34px;align-items:center;justify-content:space-between}.composer-normal:focus-within .composer-actions-spacer{display:block;flex:1}.composer-normal:focus-within .persistent-microphone{grid-column:1;grid-row:2;justify-self:end;align-self:center}.composer-normal.voice-active{display:flex;min-height:48px;align-items:center;gap:4px;padding:2px 8px}.composer-normal.voice-active .persistent-microphone{margin-left:auto}.composer-preview{display:flex;box-sizing:border-box;min-width:0;min-height:48px;align-items:center;gap:4px;padding:2px 8px}.image-input{display:none}.attachment-file-input{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;opacity:0;cursor:pointer}.attachment-button.disabled{opacity:.36;pointer-events:none}.composer-icon-button{display:grid;position:relative;width:44px;height:44px;flex:0 0 44px;margin:-5px;padding:5px;place-items:center;border:0;border-radius:50%;background:transparent;color:var(--fg-0f1419);-webkit-tap-highlight-color:transparent}.composer-icon-visual{display:grid;width:34px;height:34px;place-items:center;border-radius:50%;background:transparent}.composer-icon-visual svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.attachment-button .composer-icon-visual svg{width:20px;height:20px;stroke-width:1.8}.microphone-button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}.microphone-button.active .composer-icon-visual{background:var(--bg-f1f5f9)}.send-button{color:#fff}.send-button .send-visual{background:var(--bg-0f1419)}.send-button .send-visual svg{width:18px;height:18px}.chat-composer button:disabled{opacity:.36}
 .composer-recording{display:flex;min-width:0;flex:1;height:46px;align-items:center;gap:8px;padding:0 8px;touch-action:none}.recording-dot{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#ef4444;animation:recording-pulse 1.2s ease-in-out infinite}.composer-recording.cancelling .recording-dot{animation:none}.composer-recording strong{font-size:14px;font-variant-numeric:tabular-nums}.voice-waveform{display:flex;height:22px;align-items:center;gap:2px}.voice-waveform i{display:block;width:2px;height:8px;border-radius:2px;background:#8b98a5;animation:voice-wave .72s ease-in-out infinite alternate}.voice-waveform i:nth-child(2){animation-delay:-.18s}.voice-waveform i:nth-child(3){animation-delay:-.36s}.voice-waveform i:nth-child(4){animation-delay:-.54s}.voice-waveform i:nth-child(5){animation-delay:-.27s}.voice-gesture-hint{margin-left:auto;color:var(--fg-657786);font-size:12px;white-space:nowrap}.composer-recording.cancelling .voice-gesture-hint{color:var(--fg-dc2626)}.voice-lock-label{margin-left:auto;color:var(--fg-657786);font-size:12px}.composer-recording button{min-width:50px;height:38px;border:0;background:transparent;color:var(--fg-536471);font-weight:600}.composer-recording .finish-recording{color:var(--fg-1687e8)}.finishing-label{margin-left:auto;color:var(--fg-536471);font-size:14px}.composer-preview{padding-left:10px}.composer-voice-preview{min-width:0;flex:1}.composer-preview :deep(.voice-message){min-width:0;grid-template-columns:34px minmax(70px,1fr) 36px}.remove-audio{font-size:25px;color:var(--fg-64748b)}
 @keyframes recording-pulse{50%{opacity:.35}}@keyframes voice-wave{from{height:5px}to{height:19px}}

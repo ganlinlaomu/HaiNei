@@ -98,26 +98,62 @@ export async function readVisibleCallHistoryPage(account: string, requested: num
   return { items: items.slice(0, count), hasMore: items.length > count };
 }
 
-// The page scan above walks every DM record, so reopening Calls (not kept
-// alive) used to flash "正在读取通话记录…". Keep the last visible page per
-// session in memory and paint it first; liveQuery then replaces it.
+// The page scan above can walk every DM record. Keep the last visible page in
+// memory for tab switches and in account-scoped IndexedDB for cold app starts;
+// liveQuery remains authoritative and replaces the snapshot after hydration.
 type CachedCallPage = { items: CallHistoryItem[]; hasMore: boolean };
+const CALL_HISTORY_PAGE_CACHE_PREFIX = "call-history:page:";
 const pageCache = new Map<string, CachedCallPage>();
 let pageCacheSession = "";
 const pageKey = (account: string, missedOnly: boolean) => `${account}:${missedOnly ? "missed" : "all"}`;
+const storedPageKey = (missedOnly: boolean) => `${CALL_HISTORY_PAGE_CACHE_PREFIX}${missedOnly ? "missed" : "all"}`;
 function usePageCacheSession(session: string) {
   if (session !== pageCacheSession) { pageCache.clear(); pageCacheSession = session; }
+}
+function validCachedPage(value: unknown): value is CachedCallPage {
+  if (!value || typeof value !== "object") return false;
+  const page = value as Partial<CachedCallPage>;
+  return typeof page.hasMore === "boolean" && Array.isArray(page.items)
+    && page.items.every(item => !!item && typeof item.id === "string" && typeof item.peer === "string"
+      && typeof item.createdAt === "number" && typeof item.text === "string" && typeof item.missed === "boolean"
+      && ["incoming", "outgoing", "unknown"].includes(item.direction || ""));
+}
+function trimCachedPage(page: CachedCallPage, requested: number): CachedCallPage {
+  const count = Math.max(1, Math.floor(requested));
+  return { items: page.items.slice(0, count), hasMore: page.hasMore || page.items.length > count };
 }
 export function cachedCallHistoryPage(session: string, account: string, requested: number, missedOnly: boolean): CachedCallPage | null {
   usePageCacheSession(session);
   const cached = pageCache.get(pageKey(account, missedOnly));
-  if (!cached) return null;
-  const count = Math.max(1, Math.floor(requested));
-  return { items: cached.items.slice(0, count), hasMore: cached.hasMore || cached.items.length > count };
+  return cached ? trimCachedPage(cached, requested) : null;
 }
-export function rememberCallHistoryPage(session: string, account: string, missedOnly: boolean, page: CachedCallPage) {
+/** Restore the tiny page snapshot before starting the more expensive call-log scan. */
+export async function storedCallHistoryPage(session: string, account: string, requested: number, missedOnly: boolean): Promise<CachedCallPage | null> {
+  const memory = cachedCallHistoryPage(session, account, requested, missedOnly);
+  if (memory) return memory;
+  const [stored, deleted] = await Promise.all([
+    metaRepository.get(account, storedPageKey(missedOnly)),
+    loadDeletedCallIds(account),
+  ]);
+  if (!validCachedPage(stored?.value)) return null;
+  const page = { ...stored.value, items: stored.value.items.filter(item => !deleted.has(item.id)) };
   usePageCacheSession(session);
-  pageCache.set(pageKey(account, missedOnly), { items: page.items, hasMore: page.hasMore });
+  pageCache.set(pageKey(account, missedOnly), page);
+  return trimCachedPage(page, requested);
+}
+export async function rememberCallHistoryPage(session: string, account: string, missedOnly: boolean, page: CachedCallPage) {
+  usePageCacheSession(session);
+  const snapshot = { items: page.items, hasMore: page.hasMore };
+  const previous = pageCache.get(pageKey(account, missedOnly));
+  pageCache.set(pageKey(account, missedOnly), snapshot);
+  if (previous?.hasMore === snapshot.hasMore && previous.items.length === snapshot.items.length
+    && previous.items.every((item, index) => {
+      const next = snapshot.items[index];
+      return item.id === next?.id && item.peer === next.peer && item.createdAt === next.createdAt
+        && item.text === next.text && item.missed === next.missed && item.direction === next.direction;
+    })) return;
+  await metaRepository.put(account, storedPageKey(missedOnly), snapshot)
+    .catch(error => console.warn("[calls] page cache persistence failed", error instanceof Error ? error.message : "unknown error"));
 }
 export function clearCallHistoryPageCache() { pageCache.clear(); pageCacheSession = ""; }
 const stopPageCacheLockClear = onBeforeAccountLock(() => { clearCallHistoryPageCache(); });
