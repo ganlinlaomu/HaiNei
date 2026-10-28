@@ -13,6 +13,9 @@ describe("fixed ebook recommendations", () => {
       expect(featuredNote(book.id)).not.toBe("");
       expect(validGutenbergEpubUrl(book.epubUrl)).toBe(true);
       expect(book.sourceUrl).toBe("https://www.gutenberg.org/ebooks/" + book.id.split(":")[1]);
+      const gutenbergId = book.id.split(":")[1];
+      expect(book.coverUrl).toBe("https://www.gutenberg.org/cache/epub/" +
+        gutenbergId + "/pg" + gutenbergId + ".cover.medium.jpg");
     }
   });
   it("does not automatically search on component mount or on reconnect in featured mode", () => {
