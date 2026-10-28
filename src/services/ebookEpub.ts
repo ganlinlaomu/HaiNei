@@ -136,7 +136,7 @@ export class OfflineEpub {
     const chapter = this.chapters[index];
     if (!chapter) throw new Error("章节不存在");
     const parsed = new DOMParser().parseFromString(await this.zip.text(chapter.path), "text/html");
-    for (const blocked of parsed.body.querySelectorAll("script,style,link,iframe,object,embed,form,svg,math,video,audio,base,meta,template")) blocked.remove();
+    for (const blocked of Array.from(parsed.body.querySelectorAll("script,style,link,iframe,object,embed,form,svg,math,video,audio,base,meta,template"))) blocked.remove();
     const heading = parsed.body.querySelector("h1,h2,h3");
     if (heading?.textContent?.trim()) chapter.title = heading.textContent.trim().slice(0, 90);
     const allowed = new Set(["P","DIV","SPAN","H1","H2","H3","H4","H5","H6","B","I","EM","STRONG","U","S","BR","HR","BLOCKQUOTE","PRE","CODE","OL","UL","LI","IMG","TABLE","THEAD","TBODY","TR","TD","TH","SUP","SUB","SECTION","ARTICLE"]);
@@ -154,7 +154,7 @@ export class OfflineEpub {
           if (match) {
             const mime = match[1] === "png" ? "image/png" : match[1] === "gif" ? "image/gif" : match[1] === "webp" ? "image/webp" : "image/jpeg";
             const bytes = await this.zip.read(imagePath);
-            const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+            const url = URL.createObjectURL(new Blob([bytes.slice().buffer as ArrayBuffer], { type: mime }));
             this.objectUrls.push(url);
             element.setAttribute("src", url);
           }
