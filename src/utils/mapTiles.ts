@@ -17,6 +17,46 @@ export function project(point: MapPoint, zoom: number): PixelPoint {
   };
 }
 
+/** Inverse of project: the point at world pixel coordinates at `zoom`. */
+export function unproject(pixel: PixelPoint, zoom: number): MapPoint {
+  const scale = TILE_SIZE * 2 ** zoom;
+  const lng = pixel.x / scale * 360 - 180;
+  const n = Math.PI - 2 * Math.PI * pixel.y / scale;
+  return { lat: Math.atan(Math.sinh(n)) * 180 / Math.PI, lng };
+}
+
+/**
+ * An in-progress pinch/drag, applied to screen points as
+ * p' = origin + scale * (p - origin) + (dx, dy).
+ */
+export type MapGesture = { scale: number; originX: number; originY: number; dx: number; dy: number };
+
+export function applyGesture(point: { left: number; top: number }, gesture: MapGesture | null) {
+  if (!gesture) return point;
+  return {
+    left: gesture.originX + gesture.scale * (point.left - gesture.originX) + gesture.dx,
+    top: gesture.originY + gesture.scale * (point.top - gesture.originY) + gesture.dy,
+  };
+}
+
+/**
+ * Where a finished gesture leaves the map: the geographic point now at the
+ * viewport centre, and the zoom snapped to whole tile levels.
+ */
+export function settleGesture(
+  view: { center: PixelPoint; zoom: number; width: number; height: number }, gesture: MapGesture,
+) {
+  const zoom = Math.max(MIN_MAP_ZOOM, Math.min(MAX_MAP_ZOOM, Math.round(view.zoom + Math.log2(gesture.scale))));
+  // The original screen point that the gesture moved to the viewport centre.
+  const screenX = gesture.originX + (view.width / 2 - gesture.dx - gesture.originX) / gesture.scale;
+  const screenY = gesture.originY + (view.height / 2 - gesture.dy - gesture.originY) / gesture.scale;
+  const focus = unproject({
+    x: view.center.x + screenX - view.width / 2,
+    y: view.center.y + screenY - view.height / 2,
+  }, view.zoom);
+  return { zoom, focus };
+}
+
 /** The largest zoom (up to the default) that shows every point with padding. */
 export function fitZoom(points: MapPoint[], width: number, height: number, padding = 56, preferred = 16) {
   if (points.length < 2) return preferred;
