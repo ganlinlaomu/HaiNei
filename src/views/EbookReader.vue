@@ -12,8 +12,35 @@
         <label>字号 <button type="button" @click="changeFont(-2)">A−</button> {{ fontSize }} <button type="button" @click="changeFont(2)">A＋</button></label>
         <label>背景 <select v-model="theme" @change="refreshChapter"><option value="light">白色</option><option value="sepia">米色</option><option value="dark">夜间</option></select></label>
         <label>目录 <select :value="chapterIndex" @change="selectChapter"><option v-for="(item,i) in epub.chapters" :key="item.path" :value="i">{{ item.title }}</option></select></label>
+        <div class="dictionary-settings">
+          <span>离线英汉词典 · 5 万词</span>
+          <span v-if="dictionaryStatus === 'installed'" class="dictionary-ready">已安装</span>
+          <button v-else type="button" :disabled="dictionaryStatus === 'downloading'" @click="downloadDictionary">
+            {{ dictionaryStatus === "downloading" ? "正在下载 " + dictionaryProgress + "%" : "下载词典" }}
+          </button>
+        </div>
+        <p v-if="dictionaryError" class="dictionary-error" role="alert">{{ dictionaryError }}</p>
       </section>
       <div ref="scroller" class="chapter-scroller" @scroll.passive="onScroll"><iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" /></div>
+      <aside v-if="selectedWord" class="dictionary-card" aria-label="英汉单词释义" role="dialog">
+        <div class="dictionary-card-header">
+          <strong>{{ dictionaryEntry?.word || selectedWord }}</strong>
+          <button type="button" aria-label="发音" title="英文发音" @click="speakWord">🔊</button>
+          <button type="button" aria-label="关闭查词" @click="dismissLookup">×</button>
+        </div>
+        <small v-if="dictionaryEntry?.phonetic" class="dictionary-phonetic">{{ dictionaryEntry.phonetic }}</small>
+        <p v-if="dictionaryLookingUp" class="dictionary-message">正在查词…</p>
+        <p v-else-if="dictionaryEntry" class="dictionary-meaning">{{ dictionaryEntry.translation }}</p>
+        <p v-else-if="dictionaryStatus === 'installed'" class="dictionary-message">本地词库暂未收录此词。</p>
+        <div v-else class="dictionary-uninstalled">
+          <p>首次使用需下载英汉词库；安装后可断网查词。</p>
+          <button type="button" :disabled="dictionaryStatus === 'downloading'" @click="downloadDictionary">
+            {{ dictionaryStatus === "downloading" ? "下载中 " + dictionaryProgress + "%" : "下载离线词典（约 5 万词）" }}
+          </button>
+        </div>
+        <p v-if="dictionaryError" class="dictionary-error" role="alert">{{ dictionaryError }}</p>
+        <small class="dictionary-credit">{{ DICTIONARY_ATTRIBUTION }}</small>
+      </aside>
       <footer class="reader-footer">
         <button type="button" :disabled="chapterIndex === 0" @click="loadChapter(chapterIndex-1,0)">上一章</button>
         <span>{{ chapterIndex + 1 }} / {{ epub.chapters.length }} · {{ Math.round(chapterPercent*100) }}%</span>
@@ -29,6 +56,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { getLibraryBook, updateReadingState, type LibraryBook } from "@/services/ebookLibrary";
 import { OfflineEpub } from "@/services/ebookEpub";
+import { DICTIONARY_ATTRIBUTION, installDictionary, isDictionaryInstalled, lookupDictionary, normalizeSelection, type DictionaryEntry } from "@/services/ebookDictionary";
 
 const keys = useKeyStore(), route = useRoute(), router = useRouter();
 const book = ref<LibraryBook|null>(null), epub = ref<OfflineEpub|null>(null);
@@ -36,6 +64,11 @@ const chapterIndex = ref(0), chapterPercent = ref(0), chapterHtml = ref("");
 const fontSize = ref(18), theme = ref<"light"|"sepia"|"dark">("light");
 const loading = ref(true), error = ref(""), settingsOpen = ref(false);
 const frame = ref<HTMLIFrameElement|null>(null);
+const selectedWord = ref(""), dictionaryEntry = ref<DictionaryEntry|null>(null);
+const dictionaryStatus = ref<"checking"|"not-installed"|"downloading"|"installed">("checking");
+const dictionaryProgress = ref(0), dictionaryError = ref(""), dictionaryLookingUp = ref(false);
+let selectionDocument: Document|null = null, selectionTimer: ReturnType<typeof setTimeout>|null = null;
+let lookupRevision = 0, readerAlive = true;
 const scroller = ref<HTMLDivElement|null>(null);
 const account = computed(() => keys.pkHex);
 const id = computed(() => String(route.params.id || ""));
@@ -58,6 +91,7 @@ async function saveNow() {
 }
 async function loadChapter(index:number, percent:number) {
   if (!epub.value || index < 0 || index >= epub.value.chapters.length) return;
+  dismissLookup();
   const request = ++chapterRequest;
   error.value = "";
   try {
@@ -81,6 +115,84 @@ function frameLoaded() {
   frame.value.style.height = contentHeight + "px";
   const max = Math.max(0,container.scrollHeight - container.clientHeight);
   container.scrollTop = Math.round(max * restorePercent);
+  // Our own listener runs in the parent origin; publisher scripts remain
+  // disabled inside the sandboxed srcdoc iframe.
+  if (selectionDocument) selectionDocument.removeEventListener("selectionchange", queueSelectedWord);
+  selectionDocument = doc;
+  doc.addEventListener("selectionchange", queueSelectedWord);
+}
+function dismissLookup() {
+  lookupRevision++;
+  selectedWord.value = "";
+  dictionaryEntry.value = null;
+  dictionaryLookingUp.value = false;
+}
+function queueSelectedWord() {
+  if (selectionTimer) clearTimeout(selectionTimer);
+  selectionTimer = setTimeout(() => {
+    selectionTimer = null;
+    const selected = frame.value?.contentWindow?.getSelection()?.toString() || "";
+    const word = normalizeSelection(selected);
+    if (!word || word === selectedWord.value) return;
+    selectedWord.value = word;
+    dictionaryEntry.value = null;
+    dictionaryError.value = "";
+    const revision = ++lookupRevision;
+    if (dictionaryStatus.value !== "installed") return;
+    dictionaryLookingUp.value = true;
+    void lookupDictionary(word).then(entry => {
+      if (readerAlive && revision === lookupRevision) dictionaryEntry.value = entry;
+    }).catch(() => {
+      if (readerAlive && revision === lookupRevision) dictionaryError.value = "词库读取失败，请重新下载词典";
+    }).finally(() => {
+      if (readerAlive && revision === lookupRevision) dictionaryLookingUp.value = false;
+    });
+  }, 240);
+}
+async function refreshDictionaryLookup() {
+  if (!selectedWord.value || dictionaryStatus.value !== "installed") return;
+  const revision = ++lookupRevision;
+  dictionaryLookingUp.value = true;
+  try {
+    const entry = await lookupDictionary(selectedWord.value);
+    if (readerAlive && revision === lookupRevision) dictionaryEntry.value = entry;
+  } catch {
+    if (readerAlive && revision === lookupRevision) dictionaryError.value = "词库读取失败";
+  } finally {
+    if (readerAlive && revision === lookupRevision) dictionaryLookingUp.value = false;
+  }
+}
+async function downloadDictionary() {
+  if (dictionaryStatus.value === "downloading" || dictionaryStatus.value === "installed") return;
+  dictionaryStatus.value = "downloading";
+  dictionaryError.value = "";
+  dictionaryProgress.value = 0;
+  try {
+    await installDictionary((done, total) => {
+      if (readerAlive) dictionaryProgress.value = Math.round(done / total * 100);
+    });
+    if (!readerAlive) return;
+    dictionaryStatus.value = "installed";
+    await refreshDictionaryLookup();
+  } catch (error) {
+    if (!readerAlive) return;
+    dictionaryStatus.value = "not-installed";
+    dictionaryError.value = error instanceof Error ? error.message : "词典安装失败，请稍后重试";
+  }
+}
+function speakWord() {
+  if (!selectedWord.value) return;
+  if (typeof window.speechSynthesis === "undefined" || typeof SpeechSynthesisUtterance === "undefined") {
+    dictionaryError.value = "此设备暂不支持语音朗读";
+    return;
+  }
+  try {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(dictionaryEntry.value?.word || selectedWord.value);
+    utterance.lang = "en-US";
+    utterance.rate = 0.88;
+    window.speechSynthesis.speak(utterance);
+  } catch { dictionaryError.value = "发音失败，请检查系统语音设置"; }
 }
 function onScroll() {
   const container = scroller.value;
@@ -109,8 +221,19 @@ async function init() {
   finally { loading.value = false; }
 }
 watch(account,(next) => { if (loadedAccount && next !== loadedAccount) void router.replace("/settings"); });
-onMounted(() => { void init(); });
+onMounted(() => {
+  void init();
+  void isDictionaryInstalled().then(installed => {
+    if (readerAlive && dictionaryStatus.value === "checking") {
+      dictionaryStatus.value = installed ? "installed" : "not-installed";
+    }
+  });
+});
 onUnmounted(() => {
+  readerAlive = false;
+  lookupRevision++;
+  if (selectionDocument) selectionDocument.removeEventListener("selectionchange", queueSelectedWord);
+  if (selectionTimer) clearTimeout(selectionTimer);
   chapterRequest++;
   if (saveTimer) clearTimeout(saveTimer);
   void saveNow();
@@ -136,5 +259,21 @@ onUnmounted(() => {
 .settings{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #8884;font-size:13px}
 .settings label{display:flex;align-items:center;gap:6px}
 .settings button,.settings select{min-height:34px;border:1px solid #8885;border-radius:8px;background:transparent;color:inherit;padding:4px 7px}
-.settings select{max-width:180px}
+.settings select{max-width:180px;font-size:16px}
+.dictionary-settings{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dictionary-ready{color:#16803d;font-weight:600}
+.dictionary-error{color:#b91c1c;font-size:12px;line-height:1.5}
+.dictionary-card{position:fixed;z-index:55;left:12px;right:12px;bottom:calc(62px + env(safe-area-inset-bottom));max-width:520px;margin:0 auto;padding:14px 16px;border-radius:14px;border:1px solid #8b8b8b35;box-shadow:0 8px 30px #0003;background:var(--bg-fff,#fff);color:var(--fg-172033,#242830)}
+.reader-page.theme-sepia .dictionary-card{background:#fff9ed;color:#433c31}
+.reader-page.theme-dark .dictionary-card{background:#2e343d;color:#f3f4f6}
+.dictionary-card-header{display:flex;align-items:center;gap:8px}
+.dictionary-card-header strong{font-size:20px;min-width:0;overflow-wrap:anywhere;flex:1}
+.dictionary-card-header button{font-size:21px;min-height:44px;min-width:42px;border:0;background:transparent;color:inherit;cursor:pointer}
+.dictionary-phonetic{font-size:13px;opacity:.8}
+.dictionary-meaning{font-size:15px;line-height:1.6;margin:8px 0;white-space:pre-wrap;max-height:32vh;overflow:auto}
+.dictionary-message,.dictionary-uninstalled p{font-size:13px;line-height:1.5}
+.dictionary-uninstalled button{border:0;border-radius:9px;color:#fff;background:#2563eb;min-height:42px;padding:8px 12px}
+.dictionary-uninstalled button:disabled{opacity:.6}
+.dictionary-credit{font-size:10px;opacity:.55}
+
 </style>

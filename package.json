@@ -6,12 +6,13 @@
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
     "dev": "vite",
-    "build": "node scripts/update-app-version.js && node scripts/update-sw-version.js && vite build",
+    "build": "node scripts/update-app-version.js && node scripts/update-sw-version.js && node scripts/generate-ebook-dictionary.mjs && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p worker/tsconfig.json",
     "deploy:cf:pages": "npm run build && node scripts/deploy-cloudflare-pages.js",
-    "build:verify": "vite build"
+    "build:verify": "node scripts/generate-ebook-dictionary.mjs && vite build",
+    "dictionary:generate": "node scripts/generate-ebook-dictionary.mjs"
   },
   "dependencies": {
     "@noble/ciphers": "0.5.3",
