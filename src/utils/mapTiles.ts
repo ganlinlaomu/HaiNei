@@ -62,6 +62,25 @@ export function toScreen(point: MapPoint, center: PixelPoint, zoom: number, widt
   return { left: pixel.x - center.x + width / 2, top: pixel.y - center.y + height / 2 };
 }
 
+/** The walk ending at the current position (not repeated if already last). */
+export function trailPath<T extends MapPoint>(trail: T[] | undefined, current?: T): T[] {
+  const path = [...(trail ?? [])];
+  const last = path[path.length - 1];
+  if (current && (!last || last.lat !== current.lat || last.lng !== current.lng)) path.push(current);
+  return path;
+}
+
+/** SVG polyline points for a trail of positions in the same viewport. */
+export function trailPoints(trail: MapPoint[], center: PixelPoint, zoom: number, width: number, height: number) {
+  return trail.map(point => {
+    const { left, top } = toScreen(point, center, zoom, width, height);
+    return `${left.toFixed(1)},${top.toFixed(1)}`;
+  }).join(" ");
+}
+
+/** Close zoom for a live share, so a walk of tens of metres visibly moves. */
+export const LIVE_MAP_ZOOM = MAX_MAP_ZOOM;
+
 export function tileUrl(base: string, tile: Pick<MapTile, "z" | "x" | "y">) {
   return `${base}/tiles/${tile.z}/${tile.x}/${tile.y}.png`;
 }

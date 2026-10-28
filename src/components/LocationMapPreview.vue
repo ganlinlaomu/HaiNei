@@ -17,6 +17,10 @@
         @error="tileFailed"
       />
     </template>
+    <svg v-if="trailLine || myTrailLine" class="location-map-preview-trail" :width="width" :height="height" aria-hidden="true">
+      <polyline v-if="myTrailLine" :class="locationIsMine ? 'peer' : 'me'" :points="myTrailLine" />
+      <polyline v-if="trailLine" :class="locationIsMine ? 'me' : 'peer'" :points="trailLine" />
+    </svg>
     <span
       class="location-map-preview-marker"
       :class="{ me: locationIsMine, peer: !locationIsMine }"
@@ -47,11 +51,14 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import type { LocationShare } from "@/nostr/messaging/locationShare";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
-import { centerOf, fitZoom, tilesFor, tileUrl, toScreen } from "@/utils/mapTiles";
+import { centerOf, fitZoom, LIVE_MAP_ZOOM, tilesFor, tileUrl, toScreen, trailPath, trailPoints } from "@/utils/mapTiles";
 
 const props = defineProps<{
   location: LocationShare;
   myLocation?: LocationShare;
+  /** A live share's walk so far (location's, then myLocation's), oldest first. */
+  trail?: LocationShare[];
+  myTrail?: LocationShare[];
   peerPubkey?: string;
   label: string;
   /** The primary card belongs to us; the optional second point is the peer. */
@@ -63,11 +70,21 @@ const mapElement = ref<HTMLElement | null>(null);
 const width = ref(280);
 const height = ref(164);
 const tilesReady = ref(false);
-const points = computed(() => [props.location, ...(props.myLocation ? [props.myLocation] : [])]);
-const zoom = computed(() => fitZoom(points.value, width.value, height.value, 34, 15));
+// Frame the whole walk, not just the newest point: re-centring on the person
+// at every update kept the marker fixed mid-map, so moving looked like nothing.
+const points = computed(() => [props.location, ...(props.myLocation ? [props.myLocation] : []),
+  ...(props.trail ?? []), ...(props.myTrail ?? [])]);
+const isLive = computed(() => !!props.trail?.length || !!props.myTrail?.length);
+const zoom = computed(() => fitZoom(points.value, width.value, height.value, 34, isLive.value ? LIVE_MAP_ZOOM : 15));
 const center = computed(() => centerOf(points.value, zoom.value));
 const tiles = computed(() => tilesFor(center.value, zoom.value, width.value, height.value));
 const peerMarker = computed(() => toScreen(props.location, center.value, zoom.value, width.value, height.value));
+const line = (trail: LocationShare[] | undefined, current?: LocationShare) => {
+  const path = trailPath(trail, current);
+  return path.length > 1 ? trailPoints(path, center.value, zoom.value, width.value, height.value) : "";
+};
+const trailLine = computed(() => props.trail?.length ? line(props.trail, props.location) : "");
+const myTrailLine = computed(() => props.myTrail?.length && props.myLocation ? line(props.myTrail, props.myLocation) : "");
 const myMarker = computed(() => toScreen(props.myLocation ?? props.location, center.value, zoom.value, width.value, height.value));
 
 const loaded = ref(0);
@@ -118,6 +135,10 @@ onBeforeUnmount(() => {
 .location-map-preview-marker.peer{min-width:30px;min-height:30px;padding:2px;border-radius:50%;background:#fff;box-shadow:0 2px 8px rgba(15,23,42,.32)}
 .location-map-preview-marker.peer:empty{width:16px;height:16px;min-width:0;min-height:0;border:3px solid #fff;background:#ef4444}
 .location-map-preview-marker.me{width:16px;height:16px;box-sizing:border-box;border:3px solid #fff;border-radius:50%;background:#1687e8;box-shadow:0 0 0 7px rgba(22,135,232,.18)}
+.location-map-preview-trail{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:visible}
+.location-map-preview-trail polyline{fill:none;stroke-width:4;stroke-linecap:round;stroke-linejoin:round;opacity:.75}
+.location-map-preview-trail polyline.peer{stroke:#ef4444}
+.location-map-preview-trail polyline.me{stroke:#1687e8}
 .location-map-preview-loading{position:absolute;z-index:1;inset:0;display:grid;place-items:center;color:#64748b;font-size:12px}
 .location-map-preview-attribution{position:absolute;right:4px;bottom:4px;z-index:3;padding:1px 4px;border-radius:3px;background:rgba(255,255,255,.82);color:#475569;font-size:9px}
 </style>

@@ -17,6 +17,9 @@
           @load="tileLoaded"
           @error="tileFailed"
         />
+        <svg v-if="trailLines.length" class="location-map-trail" :width="width" :height="height" aria-hidden="true">
+          <polyline v-for="line in trailLines" :key="line.key" :class="line.kind" :points="line.points" />
+        </svg>
         <span
           v-for="marker in markers"
           :key="marker.key"
@@ -57,7 +60,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import { formatCoordinates, mapsUrl, type LocationShare } from "@/nostr/messaging/locationShare";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
-import { centerOf, fitZoom, MAX_MAP_ZOOM, MIN_MAP_ZOOM, tilesFor, tileUrl, toScreen } from "@/utils/mapTiles";
+import { centerOf, fitZoom, LIVE_MAP_ZOOM, MAX_MAP_ZOOM, MIN_MAP_ZOOM, tilesFor, tileUrl, toScreen, trailPath, trailPoints } from "@/utils/mapTiles";
 
 /**
  * Full-screen map of a shared location, drawn from OpenStreetMap tiles via
@@ -71,6 +74,9 @@ const props = defineProps<{
   location: LocationShare;
   /** Our position when we are also sharing with this friend. */
   myLocation?: LocationShare;
+  /** A live share's walk so far (location's, then myLocation's), oldest first. */
+  trail?: LocationShare[];
+  myTrail?: LocationShare[];
   /** The primary card belongs to us; the optional second point is the peer. */
   locationIsMine?: boolean;
   status: string;
@@ -84,9 +90,13 @@ const mapElement = ref<HTMLElement | null>(null);
 const width = ref(typeof window === "undefined" ? 390 : window.innerWidth);
 const height = ref(typeof window === "undefined" ? 600 : window.innerHeight);
 const manualZoom = ref<number | null>(null);
-const points = computed(() => [props.location, ...(props.myLocation ? [props.myLocation] : [])]);
+// The whole walk stays in view, so the marker moves instead of the map.
+const points = computed(() => [props.location, ...(props.myLocation ? [props.myLocation] : []),
+  ...(props.trail ?? []), ...(props.myTrail ?? [])]);
+const isLive = computed(() => !!props.trail?.length || !!props.myTrail?.length);
 // Leave room for the header above and the details panel below.
-const zoom = computed(() => manualZoom.value ?? fitZoom(points.value, width.value, Math.max(200, height.value - 260)));
+const zoom = computed(() => manualZoom.value
+  ?? fitZoom(points.value, width.value, Math.max(200, height.value - 260), 56, isLive.value ? LIVE_MAP_ZOOM : 16));
 const center = computed(() => centerOf(points.value, zoom.value));
 const tiles = computed(() => tilesFor(center.value, zoom.value, width.value, height.value));
 const markers = computed(() => {
@@ -98,6 +108,19 @@ const markers = computed(() => {
   return [
     ...(props.myLocation ? [{ key: "me", kind: "me" as const, label: "我的位置", pubkey: undefined, ...place(props.myLocation) }] : []),
     { key: "peer", kind: "peer" as const, label: title.value, pubkey: props.peerPubkey, ...place(props.location) },
+  ];
+});
+
+/** The primary person's line is red (as their marker), ours blue. */
+const trailLines = computed(() => {
+  const line = (key: string, kind: "me" | "peer", trail: LocationShare[] | undefined, current?: LocationShare) => {
+    const path = trailPath(trail, current);
+    return trail?.length && path.length > 1
+      ? [{ key, kind, points: trailPoints(path, center.value, zoom.value, width.value, height.value) }] : [];
+  };
+  return [
+    ...line("primary", props.locationIsMine ? "me" : "peer", props.trail, props.location),
+    ...line("other", props.locationIsMine ? "peer" : "me", props.myTrail, props.myLocation),
   ];
 });
 
@@ -134,6 +157,10 @@ onBeforeUnmount(() => observer?.disconnect());
 .location-map-sheet{position:fixed;inset:0;z-index:40;background:var(--bg-e2e8f0)}
 .location-map{position:absolute;inset:0;overflow:hidden;background:#e9eef2;touch-action:none}
 .location-map-tile{position:absolute;width:256px;height:256px;user-select:none;-webkit-user-drag:none;pointer-events:none}
+.location-map-trail{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.location-map-trail polyline{fill:none;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;opacity:.75}
+.location-map-trail polyline.peer{stroke:#ef4444}
+.location-map-trail polyline.me{stroke:#1687e8}
 .location-map-marker{position:absolute;display:grid;place-items:center;transform:translate(-50%,-50%)}
 .location-map-marker.peer{padding:3px;border-radius:50%;background:#fff;box-shadow:0 3px 10px rgba(15,23,42,.3)}
 .location-map-marker.me{width:20px;height:20px;box-sizing:border-box;border:4px solid #fff;border-radius:50%;background:#1687e8;box-shadow:0 0 0 10px rgba(22,135,232,.18),0 2px 6px rgba(15,23,42,.3)}
