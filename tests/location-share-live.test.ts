@@ -212,6 +212,22 @@ describe("sharing our location", () => {
     expect(distanceMetres({ lat: 31.2, lng: 121.4 }, { lat: 31.2003, lng: 121.4 })).toBeGreaterThan(30);
   });
 
+  it("heartbeats the newest fix, so small moves under 20 m still reach the friend", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { geolocation: { watchPosition: vi.fn(() => 7), clearWatch: vi.fn() } });
+    const store = useLiveLocationStore();
+    await store.startSharing(PEER, 900, { lat: 31.2, lng: 121.4, accuracy: 10, at: now() });
+    store.onPosition(fix(31.20009)); // about 10 m: below the threshold
+    expect(mocks.sendFastControl).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(31_000);
+    store.tick();
+    const sent = mocks.sendFastControl.mock.calls[0][0];
+    const control = decodeLiveLocationControl({ tags: sent.tags, plaintext: sent.content });
+    // It used to resend the opening position here.
+    expect(control?.kind === "update" && control.location.lat).toBe(31.20009);
+    await store.stopSharing(PEER, false);
+  });
+
   it("stops by itself at expiry and tells the peer when stopped early or on lock", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("navigator", { geolocation: { watchPosition: vi.fn(() => 7), clearWatch: vi.fn() } });
@@ -280,6 +296,22 @@ describe("live location UI", () => {
     expect(html).toContain("我的实时位置");
     expect(html).toContain("共享中 · 剩余 15 分钟");
     expect(html).toContain("停止共享");
+    await store.stopSharing(PEER, false);
+  });
+
+  it("moves our own card (and its map) with the position we last sent", async () => {
+    vi.stubGlobal("navigator", { geolocation: { watchPosition: vi.fn(() => 7), clearWatch: vi.fn() } });
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useLiveLocationStore();
+    await store.startSharing(PEER, 900, { lat: 31.2, lng: 121.4, at: now() });
+    store.onPosition({ coords: { latitude: 31.21, longitude: 121.41, accuracy: 10 } } as GeolocationPosition);
+    const id = store.outgoingFor(PEER)!.id;
+    const app = createSSRApp({ render: () => h(DmLocationCard, { location: { lat: 31.2, lng: 121.4, at: now(), live: { id, expiresAt: now() + 900 } }, own: true, peer: PEER, peerName: "妈妈" }) });
+    app.use(pinia);
+    const html = await renderToString(app);
+    // It used to stay on the opening card's position.
+    expect(html).toContain("31.21000, 121.41000");
     await store.stopSharing(PEER, false);
   });
 
