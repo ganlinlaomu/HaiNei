@@ -11,6 +11,8 @@ export const loadFriendsView = () => import("@/views/Friends.vue");
 export const loadMyProfileView = () => import("@/views/MyProfile.vue");
 export const loadSavedView = () => import("@/views/Saved.vue");
 export const loadPrivateSpaceView = () => import("@/views/PrivateSpace.vue");
+export const loadBooksView = () => import("@/views/Books.vue");
+export const loadEbookReaderView = () => import("@/views/EbookReader.vue");
 
 let bottomTabPreload: Promise<PromiseSettledResult<unknown>[]> | null = null;
 
