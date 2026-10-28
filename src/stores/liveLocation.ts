@@ -81,6 +81,8 @@ let visibilityListener: (() => void) | null = null;
 let clockHolds = 0;
 /** Newest GPS fix while sharing; a heartbeat sends this, not the last sent one. */
 let latestFix: LocationShare | null = null;
+/** Cards showing our own position next to a friend's share (never sent). */
+let localHolds = 0;
 
 /**
  * Live location sharing for the signed-in account. Not tied to a page, so a
@@ -95,6 +97,12 @@ export const useLiveLocationStore = defineStore("liveLocation", {
     incoming: {} as Record<string, IncomingLiveShare>,
     /** Wall clock for "剩余 N 分钟", ticking only while a share exists. */
     now: Date.now(),
+    /**
+     * Our own newest position while a friend's live share is on screen, so
+     * both people appear on the map. Shown locally only; it is sent only if
+     * we start a share ourselves.
+     */
+    localFix: null as LocationShare | null,
   }),
   getters: {
     activeOutgoing: state => Object.values(state.outgoing),
@@ -253,6 +261,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
         at: nowSeconds(),
       };
       latestFix = location;
+      this.localFix = location;
       for (const share of Object.values(this.outgoing)) {
         if (distanceMetres(share.last, location) >= LIVE_MOVE_METRES || Date.now() - share.lastSentAt >= LIVE_HEARTBEAT_MS) {
           void this.sendUpdate(share, location);
@@ -295,8 +304,8 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       this.now = Date.now();
       clock = setInterval(() => this.tick(), CLOCK_MS);
     },
-    startRuntime() {
-      this.startClock();
+    /** One GPS watch serves our shares and the local "where am I" dot. */
+    ensureWatch() {
       if (watchId === null && typeof navigator !== "undefined" && navigator.geolocation) {
         watchId = navigator.geolocation.watchPosition(
           position => this.onPosition(position),
@@ -304,6 +313,22 @@ export const useLiveLocationStore = defineStore("liveLocation", {
           { enableHighAccuracy: true, maximumAge: 3_000 },
         );
       }
+    },
+    /** Show our own position on screen (not sent) while a card needs it. Returns the release. */
+    holdLocalFix() {
+      localHolds += 1;
+      this.ensureWatch();
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        localHolds = Math.max(0, localHolds - 1);
+        this.stopRuntimeIfIdle();
+      };
+    },
+    startRuntime() {
+      this.startClock();
+      this.ensureWatch();
       if (!visibilityListener && typeof document !== "undefined") {
         // iOS suspends a backgrounded web app: send a fresh fix on return.
         visibilityListener = () => { if (!document.hidden) this.tick(true); };
@@ -312,9 +337,12 @@ export const useLiveLocationStore = defineStore("liveLocation", {
     },
     stopRuntimeIfIdle() {
       if (Object.keys(this.outgoing).length) return;
-      if (watchId !== null && typeof navigator !== "undefined") navigator.geolocation?.clearWatch(watchId);
-      watchId = null;
-      latestFix = null;
+      if (!localHolds) {
+        if (watchId !== null && typeof navigator !== "undefined") navigator.geolocation?.clearWatch(watchId);
+        watchId = null;
+        latestFix = null;
+        this.localFix = null;
+      }
       if (visibilityListener && typeof document !== "undefined") document.removeEventListener("visibilitychange", visibilityListener);
       visibilityListener = null;
       if (!Object.keys(this.incoming).length && !clockHolds && clock) {
@@ -332,6 +360,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       ]);
       this.outgoing = {};
       this.incoming = {};
+      this.localFix = null;
       this.stopRuntimeIfIdle();
     },
   },

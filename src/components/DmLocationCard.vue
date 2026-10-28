@@ -25,8 +25,11 @@
       <p class="location-card-coordinates">{{ coordinates }}</p>
       <div class="location-card-actions">
         <button v-if="ownActive" type="button" class="location-card-stop" @click.stop="stop">停止共享</button>
+        <button v-else-if="canShareBack" type="button" class="location-card-share-back" :disabled="sharingBackBusy"
+          @click.stop="shareBack">{{ sharingBackBusy ? "正在获取位置…" : "也共享我的位置" }}</button>
         <button v-else type="button" class="location-card-copy" @click.stop="copy">{{ copied ? "已复制" : "复制坐标" }}</button>
       </div>
+      <p v-if="showsLocalFix" class="location-card-hint">蓝点是你的位置，只有你自己能看到</p>
     </template>
     <LocationMapSheet
       v-if="mapOpen"
@@ -44,10 +47,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import LocationMapPreview from "@/components/LocationMapPreview.vue";
 import LocationMapSheet from "@/components/LocationMapSheet.vue";
-import { formatCoordinates, type LocationShare } from "@/nostr/messaging/locationShare";
+import { formatCoordinates, parseLocationShare, serializeLocationShare, type LocationShare } from "@/nostr/messaging/locationShare";
+import { getCurrentLocation, LocationUnavailableError } from "@/utils/currentLocation";
+import { useUIStore } from "@/stores/ui";
 import { useLiveLocationStore } from "@/stores/liveLocation";
 
 /**
@@ -116,11 +121,44 @@ const coordinates = computed(() => formatCoordinates(shown.value));
  * The second point on the map. On a friend's card it is our active outgoing
  * share; on our own card it is the friend's newest active incoming share.
  */
+const sharingBack = computed(() => {
+  const share = liveStore.outgoingFor(props.peer);
+  return !!share && share.expiresAt > Math.floor(liveStore.now / 1000);
+});
+/** A friend is sharing with us right now. */
+const incomingActive = computed(() => !!incoming.value && incoming.value.state !== "ended");
+/** Watching a friend's share without sharing back: our own dot, local only. */
+const showsLocalFix = computed(() => incomingActive.value && !sharingBack.value && !!liveStore.localFix);
 const myLocation = computed(() => {
   if (props.own) return liveStore.incomingFor(props.peer)?.location;
-  const share = liveStore.outgoingFor(props.peer);
-  return share && share.expiresAt > Math.floor(liveStore.now / 1000) ? share.last : undefined;
+  if (sharingBack.value) return liveStore.outgoingFor(props.peer)!.last;
+  return incomingActive.value ? liveStore.localFix ?? undefined : undefined;
 });
+let releaseLocalFix: (() => void) | null = null;
+watch(() => incomingActive.value && !sharingBack.value, needed => {
+  if (needed && !releaseLocalFix) releaseLocalFix = liveStore.holdLocalFix();
+  else if (!needed && releaseLocalFix) { releaseLocalFix(); releaseLocalFix = null; }
+}, { immediate: typeof window !== "undefined" });
+onBeforeUnmount(() => { releaseLocalFix?.(); releaseLocalFix = null; });
+
+/** Share back for the rest of the friend's share, so they see us too. */
+const remainingSeconds = computed(() => live.value ? live.value.expiresAt - Math.floor(liveStore.now / 1000) : 0);
+const canShareBack = computed(() => !props.own && incomingActive.value && !sharingBack.value && remainingSeconds.value >= 60);
+const sharingBackBusy = ref(false);
+const ui = useUIStore();
+async function shareBack() {
+  if (sharingBackBusy.value || !canShareBack.value) return;
+  sharingBackBusy.value = true;
+  try {
+    const location = parseLocationShare(serializeLocationShare(await getCurrentLocation()));
+    if (!location) throw new Error("暂时无法获取位置，请稍后重试");
+    await liveStore.startSharing(props.peer, remainingSeconds.value, location);
+  } catch (error) {
+    ui.addToast(error instanceof LocationUnavailableError || error instanceof Error ? error.message : "位置共享失败", 2_400, "error");
+  } finally {
+    sharingBackBusy.value = false;
+  }
+}
 /** Where the shown person has walked during this share. */
 const trail = computed(() => {
   if (incoming.value && incoming.value.state !== "ended" && live.value) return liveStore.incoming[live.value.id]?.trail ?? [];
@@ -163,7 +201,10 @@ function stop() {
 .location-card-map-expand{position:absolute;right:8px;top:8px;z-index:4;padding:5px 8px;border-radius:12px;background:rgba(15,23,42,.72);color:#fff;font-size:11px;font-weight:650;line-height:1}
 .location-card-coordinates{margin:0;color:var(--fg-536471);font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
 .location-card-actions{display:grid;grid-template-columns:1fr;gap:8px}
-.location-card-copy,.location-card-stop{display:grid;min-height:38px;place-items:center;padding:0 8px;border-radius:10px;font:inherit;font-size:13px;font-weight:650;text-decoration:none}
+.location-card-share-back{border:0;background:var(--fg-2563eb);color:#fff}
+.location-card-share-back:disabled{opacity:.6}
+.location-card-hint{margin:0;color:var(--fg-94a3b8);font-size:11px;text-align:center}
+.location-card-copy,.location-card-stop,.location-card-share-back{display:grid;min-height:38px;place-items:center;padding:0 8px;border-radius:10px;font:inherit;font-size:13px;font-weight:650;text-decoration:none}
 .location-card-copy{border:1px solid var(--bd-d8e0e8);background:var(--bg-fff);color:var(--fg-334155)}
 .location-card-stop{border:0;background:var(--bg-fee2e2);color:var(--fg-b91c1c)}
 </style>
