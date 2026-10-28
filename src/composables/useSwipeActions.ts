@@ -2,13 +2,16 @@ import { reactive, ref } from "vue";
 
 export interface SwipeActionsOptions {
   actionWidth?: number;
+  /** Per-row width when rows show different numbers of actions. */
+  actionWidthFor?: (id: string) => number;
   openThreshold?: number;
   intentThreshold?: number;
 }
 
 export function useSwipeActions(options: SwipeActionsOptions = {}) {
-  const actionWidth = options.actionWidth ?? 120;
-  const openThreshold = options.openThreshold ?? actionWidth / 2;
+  const defaultWidth = options.actionWidth ?? 120;
+  const widthOf = (id: string) => options.actionWidthFor?.(id) ?? defaultWidth;
+  const thresholdOf = (id: string) => options.openThreshold ?? widthOf(id) / 2;
   const intentThreshold = options.intentThreshold ?? 6;
   const offsets = reactive<Record<string, number>>({});
   const startX = reactive<Record<string, number>>({});
@@ -23,7 +26,7 @@ export function useSwipeActions(options: SwipeActionsOptions = {}) {
   /** Open actions from an accessible button as well as a swipe gesture. */
   function open(id: string) {
     closeOthers(id);
-    offsets[id] = -actionWidth;
+    offsets[id] = -widthOf(id);
   }
 
   function closeOthers(id = "") {
@@ -56,7 +59,7 @@ export function useSwipeActions(options: SwipeActionsOptions = {}) {
     }
 
     if (event.cancelable) event.preventDefault();
-    offsets[id] = Math.min(0, Math.max(dx, -actionWidth));
+    offsets[id] = Math.min(0, Math.max(dx, -widthOf(id)));
   }
 
   function resetGesture() {
@@ -66,7 +69,7 @@ export function useSwipeActions(options: SwipeActionsOptions = {}) {
 
   function onTouchEnd(id: string) {
     if (activeId.value !== id) return;
-    offsets[id] = offsets[id] < -openThreshold ? -actionWidth : 0;
+    offsets[id] = offsets[id] < -thresholdOf(id) ? -widthOf(id) : 0;
     resetGesture();
   }
 

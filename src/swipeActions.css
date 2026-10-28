@@ -6,6 +6,7 @@
 .hainei-swipe-actions .hainei-swipe-button[data-action="pin"]{background:#1d9bf0}
 .hainei-swipe-actions .hainei-swipe-button[data-action="mute"]{background:#f59e0b}
 .hainei-swipe-actions .hainei-swipe-button[data-action="delete"]{background:#f4212e}
+.hainei-swipe-actions .hainei-swipe-button[data-action="share"]{background:#00ba7c}
 .hainei-swipe-actions .hainei-swipe-button[data-action="read"]{background:#1d9bf0}
 .hainei-swipe-actions .hainei-swipe-button:disabled{opacity:.5;cursor:not-allowed}
 .hainei-swipe-actions .hainei-swipe-button:focus-visible{outline:2px solid #1687e8;outline-offset:2px}
