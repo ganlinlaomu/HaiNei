@@ -72,6 +72,22 @@
             <button type="button" class="composer-todo-add" :disabled="!draftReady || sending || todoTasks.length >= 1000"
               @click="addTodoTask(undefined, true)">＋ 添加待办事项</button>
             <p class="composer-todo-hint">时间可选；设置时间后，可加入系统日历提醒。保存的待办会同步到私人空间。</p>
+            <div v-if="keys.supportsNip44 && acceptedFriends.length" class="composer-todo-share">
+              <button type="button" class="composer-todo-share-toggle" :aria-expanded="todoShareOpen"
+                :disabled="!draftReady || sending" @click="todoShareOpen = !todoShareOpen">
+                👥 {{ todoShareWith.length ? '共享给 ' + todoShareWith.length + ' 位好友' : '共享给好友（可选）' }}
+                <span aria-hidden="true">{{ todoShareOpen ? '▴' : '▾' }}</span>
+              </button>
+              <template v-if="todoShareOpen">
+                <p class="composer-todo-hint">好友可以看到并编辑这个清单，内容端到端加密。</p>
+                <div class="composer-todo-share-list" role="group" aria-label="选择共享的好友">
+                  <button v-for="friend in acceptedFriends" :key="friend.pubkey" type="button"
+                    class="composer-todo-share-friend" :class="{ selected: todoShareWith.includes(friend.pubkey) }"
+                    :aria-pressed="todoShareWith.includes(friend.pubkey)" :disabled="!draftReady || sending"
+                    @click="toggleTodoShare(friend.pubkey)">{{ friend.name }}</button>
+                </div>
+              </template>
+            </div>
           </section>
           <div v-else class="editor-textarea-wrap">
             <textarea v-model="content" ref="textarea" class="editor-textarea"
@@ -337,6 +353,13 @@ export default defineComponent({
     const todoTitle = ref("");
     const todoTasks = ref<ComposerTodoTask[]>([]);
     const todoList = ref<HTMLElement | null>(null);
+    /** Friends to share a new to-do list with, chosen in the composer. */
+    const todoShareWith = ref<string[]>([]);
+    const todoShareOpen = ref(false);
+    function toggleTodoShare(pubkey: string) {
+      todoShareWith.value = todoShareWith.value.includes(pubkey)
+        ? todoShareWith.value.filter(item => item !== pubkey) : [...todoShareWith.value, pubkey];
+    }
     function addTodoTask(afterIndex?: number, focus = false) {
       if (todoTasks.value.length >= 1000) {
         error.value = "最多只能添加 1000 项待办";
@@ -957,6 +980,8 @@ export default defineComponent({
       content.value = "";
       todoTitle.value = "";
       todoTasks.value = [];
+      todoShareWith.value = [];
+      todoShareOpen.value = false;
       requestedComposerType = null;
       error.value = null;
       pendingPostRetry.value = null;
@@ -1318,12 +1343,30 @@ export default defineComponent({
           import("@/repositories/privateSpaceRepository"), import("@/services/privateSpaceSync"),
         ]);
         if (keys.pkHex !== account) return;
-        await privateSpaceRepository.createWithContent(account, crypto.randomUUID(), draft);
+        const record = await privateSpaceRepository.createWithContent(account, crypto.randomUUID(), draft);
         notePrivateSpaceMutation(keys);
         clearPersistentDraft(account);
-        ui.addToast(kind === "todo" ? "已保存待办" : "已保存笔记", 2_400, "success", {
-          label: "查看", run: () => { void router.push({ path: "/settings/private-space", query: { tab: kind } }); },
-        });
+        const shareWith = kind === "todo" && keys.supportsNip44 ? [...todoShareWith.value] : [];
+        let shared = false;
+        if (shareWith.length) {
+          // The list is already saved; a failed share only leaves it private.
+          try {
+            const { shareTodoList } = await import("@/services/sharedTodoSync");
+            if (keys.pkHex === account) {
+              await shareTodoList(keys, record.id, shareWith);
+              shared = true;
+            }
+          } catch (shareError) {
+            console.warn("shared todo create failed", shareError);
+          }
+        }
+        const view = { label: "查看", run: () => { void router.push({ path: "/settings/private-space", query: { tab: kind } }); } };
+        if (shareWith.length && !shared) {
+          ui.addToast("已保存待办，但共享失败，可在私人空间里再共享", 3_500, "error", view);
+        } else {
+          ui.addToast(shared ? "已保存并共享给 " + shareWith.length + " 位好友" : kind === "todo" ? "已保存待办" : "已保存笔记",
+            2_400, "success", view);
+        }
         onClose();
       } catch (e: any) {
         console.error("private space save error", e);
@@ -1464,7 +1507,7 @@ export default defineComponent({
     }
 
     return {
-      visible, content, todoTitle, todoTasks, todoList, addTodoTask, onTodoTaskEnter, removeTodoTask, todoDueInputValue, setTodoTaskDue,
+      visible, content, todoTitle, todoTasks, todoList, todoShareWith, todoShareOpen, toggleTodoShare, addTodoTask, onTodoTaskEnter, removeTodoTask, todoDueInputValue, setTodoTaskDue,
       addTodoToCalendar, describeDue, sending, pendingPostRetry, allFriends, selectedGroups, audienceChosen, visibilityError,
       visibilityRow, confirmAllFriends, cancelAllFriendsConfirmation, chooseGroups,
       postType, composerTypes, editorTitle, sendLabel, composerPlaceholder, selectComposerType, recipients, groups, countByGroup,
@@ -1504,6 +1547,11 @@ export default defineComponent({
 .composer-todo-option,.composer-todo-calendar { min-height:34px; padding:6px 9px; border:0; border-radius:9px; background:var(--bg-eff3f4); color:var(--fg-2563eb); font:inherit; font-size:12px; }
 .composer-todo-add { align-self:flex-start; min-height:40px; padding:8px 12px; border:1px dashed var(--bd-e2e8f0); border-radius:10px; background:transparent; color:var(--fg-2563eb); font:inherit; }
 .composer-todo-hint { margin:0; color:var(--fg-64748b); font-size:12px; line-height:1.5; }
+.composer-todo-share { display:flex; flex-direction:column; gap:8px; }
+.composer-todo-share-toggle { align-self:flex-start; min-height:40px; padding:8px 12px; border:1px solid var(--bd-e2e8f0); border-radius:10px; background:transparent; color:var(--fg-334155); font:inherit; }
+.composer-todo-share-list { display:flex; flex-wrap:wrap; gap:8px; }
+.composer-todo-share-friend { min-height:36px; padding:6px 12px; border:1px solid var(--bd-e2e8f0); border-radius:999px; background:var(--bg-fff); color:var(--fg-334155); font:inherit; font-size:13px; }
+.composer-todo-share-friend.selected { border-color:#2563eb; background:#2563eb; color:#fff; }
 .composer-todo button:disabled { opacity:.5; }
 .composer-todo :focus-visible { outline:2px solid var(--fg-2563eb); outline-offset:2px; }
 /* Global box-sizing for all elements to prevent width issues */

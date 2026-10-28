@@ -81,11 +81,14 @@
           @touchmove="canSwipeNote(note) && onNoteTouchMove($event, note.id)"
           @touchend="canSwipeNote(note) && onNoteTouchEnd($event, note.id)"
           @touchcancel="canSwipeNote(note) && onNoteTouchCancel(note.id)">
-          <div v-if="canSwipeNote(note)" class="swipe-actions hainei-swipe-actions" style="--swipe-action-count:2" role="group"
+          <div v-if="canSwipeNote(note)" class="swipe-actions hainei-swipe-actions" :style="{ '--swipe-action-count': swipeActionCount(note) }" role="group"
             :aria-label="'操作：' + label(note)" :aria-hidden="!isSwipeOpen(note.id)">
             <button type="button" class="swipe-action edit hainei-swipe-button" data-action="edit"
               :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
               aria-label="编辑笔记或待办" @click.stop="editFromSwipe(note)"><SwipeLucideIcon name="pencil" /></button>
+            <button v-if="note.kind === 'todo'" type="button" class="swipe-action share hainei-swipe-button" data-action="share"
+              :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
+              :aria-label="(note.share ? '管理共享：' : '共享：') + label(note)" @click.stop="shareFromSwipe(note)"><SwipeLucideIcon name="users" /></button>
             <button type="button" class="swipe-action delete hainei-swipe-button" data-action="delete"
               :tabindex="isSwipeOpen(note.id) ? 0 : -1" :disabled="!!rowActionBusyId"
               :aria-label="'删除' + label(note)" @click.stop="deleteFromSwipe(note)"><SwipeLucideIcon name="trash-2" /></button>
@@ -405,7 +408,14 @@ const rowActionBusyId = ref("");
 const blockedSwipeClickId = ref("");
 let unblockSwipeClickTimer: ReturnType<typeof setTimeout> | undefined;
 const { close: closeSwipe, closeOthers: closeOtherSwipes, isOpen: isSwipeOpen, open: openSwipe,
-  onTouchStart, onTouchMove, onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({ actionWidth: 128, openThreshold: 64 });
+  onTouchStart, onTouchMove, onTouchEnd, onTouchCancel, swipeStyle } = useSwipeActions({
+  actionWidth: 128, openThreshold: 64,
+  // To-do rows add a share action: 64px per action.
+  actionWidthFor: id => notes.value.find(note => note.id === id)?.kind === "todo" ? 192 : 128,
+});
+function swipeActionCount(note: PrivateSpaceRecord) {
+  return note.kind === "todo" ? 3 : 2;
+}
 let swipeStart: { id: string; x: number; y: number } | null = null;
 let handlingQuickCreate = false;
 const query = ref("");
@@ -436,7 +446,11 @@ async function retryCloudSync() {
 }
 const newTaskText = ref("");
 const shareOpen = ref(false);
-watch(() => editor.value?.id, () => { shareOpen.value = false; });
+let openShareWithEditor = false;
+watch(() => editor.value?.id, () => {
+  shareOpen.value = openShareWithEditor && editor.value?.kind === "todo";
+  openShareWithEditor = false;
+});
 /** After sharing, membership changes, leaving or stopping a share. */
 function onShareUpdated(record: PrivateSpaceRecord) {
   if (!keys.isUnlocked || keys.pkHex !== record.accountPubkey) return;
@@ -609,6 +623,14 @@ async function editFromSwipe(note: PrivateSpaceRecord) {
   if (backupBusy.value || editorTransitionBusy.value || rowActionBusyId.value) return;
   closeAllNoteSwipes();
   await open(note);
+}
+/** Swipe → 共享 opens the list with its share panel. */
+async function shareFromSwipe(note: PrivateSpaceRecord) {
+  if (backupBusy.value || editorTransitionBusy.value || rowActionBusyId.value || note.kind !== "todo") return;
+  closeAllNoteSwipes();
+  openShareWithEditor = true;
+  await open(note);
+  if (editor.value?.id !== note.id) openShareWithEditor = false;
 }
 
 /** Each toast captures its own item/revision; a later deletion does not replace it. */
