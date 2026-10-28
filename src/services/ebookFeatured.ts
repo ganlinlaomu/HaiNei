@@ -21,6 +21,7 @@ export const FEATURED_BOOKS: CatalogBook[] = titles.map(([id, title, author]) =>
   title,
   authors: [author],
   language: "en",
+  coverUrl: "https://www.gutenberg.org/cache/epub/" + id + "/pg" + id + ".cover.medium.jpg",
   epubUrl: "https://www.gutenberg.org/ebooks/" + id + ".epub3.images",
   sourceUrl: "https://www.gutenberg.org/ebooks/" + id,
   downloads: 0,

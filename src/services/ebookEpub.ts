@@ -101,7 +101,7 @@ function elements(parent: ParentNode, localName: string): Element[] {
 
 export class OfflineEpub {
   private objectUrls: string[] = [];
-  private constructor(private zip: ZipArchive, public chapters: SpineEntry[]) {}
+  private constructor(private zip: ZipArchive, public chapters: SpineEntry[], private coverPath: string | null) {}
 
   static async open(file: Blob): Promise<OfflineEpub> {
     const zip = new ZipArchive(await file.arrayBuffer());
@@ -110,11 +110,23 @@ export class OfflineEpub {
     if (!containerFile) throw new Error("EPUB 缺少书籍描述文件");
     const opf = xml(await zip.text(containerFile));
     const manifest = new Map<string, string>();
+    let epub3Cover: string | null = null;
     for (const item of elements(opf, "item")) {
       const id = item.getAttribute("id");
       const href = item.getAttribute("href");
-      if (id && href) manifest.set(id, pathFrom(containerFile, href.split(/[?#]/)[0]));
+      if (!id || !href) continue;
+      const path = pathFrom(containerFile, href.split(/[?#]/)[0]);
+      manifest.set(id, path);
+      if (item.getAttribute("properties")?.split(/\s+/).includes("cover-image")) epub3Cover = path;
     }
+    const legacyCoverId = elements(opf, "meta").find(item =>
+      item.getAttribute("name")?.toLowerCase() === "cover")?.getAttribute("content");
+    const imagePath = /\.(?:jpe?g|png|webp)$/i;
+    const markedCover = epub3Cover || (legacyCoverId ? manifest.get(legacyCoverId) : undefined);
+    const fallbackCover = [...manifest.values()].find(path =>
+      imagePath.test(path) && /(?:^|\/)cover[^/]*\.(?:jpe?g|png|webp)$/i.test(path));
+    const coverPath = markedCover && imagePath.test(markedCover) ? markedCover :
+      fallbackCover || null;
     const chapters: SpineEntry[] = [];
     for (const item of elements(opf, "itemref")) {
       if (item.getAttribute("linear") === "no") continue;
@@ -123,7 +135,29 @@ export class OfflineEpub {
     }
     if (!chapters.length) throw new Error("未找到 EPUB 可阅读章节");
     if (chapters.length > MAX_ENTRIES) throw new Error("EPUB 章节过多");
-    return new OfflineEpub(zip, chapters);
+    return new OfflineEpub(zip, chapters, coverPath);
+  }
+
+  /** Extract only a declared cover image from the already-downloaded EPUB. */
+  async coverImage(): Promise<Blob | null> {
+    if (!this.coverPath) return null;
+    const extension = this.coverPath.toLowerCase().match(/\.(jpe?g|png|webp)$/)?.[1];
+    const mime = extension === "png" ? "image/png" : extension === "webp" ? "image/webp" : "image/jpeg";
+    try {
+      const bytes = await this.zip.read(this.coverPath);
+      if (bytes.length < 50 || bytes.length > 2 * 1024 * 1024) return null;
+      const signature = mime === "image/png"
+        ? bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+        : mime === "image/webp"
+          ? new TextDecoder().decode(bytes.subarray(0, 4)) === "RIFF" &&
+            new TextDecoder().decode(bytes.subarray(8, 12)) === "WEBP"
+          : bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+      if (!signature) return null;
+      return new Blob([bytes.slice().buffer as ArrayBuffer], { type: mime });
+    } catch {
+      // A missing or malformed cover must not prevent EPUB reading/downloading.
+      return null;
+    }
   }
 
   private clearUrls() {

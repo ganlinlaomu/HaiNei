@@ -54,7 +54,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
-import { getLibraryBook, updateReadingState, type LibraryBook } from "@/services/ebookLibrary";
+import { getLibraryBook, saveLibraryCover, updateReadingState, type LibraryBook } from "@/services/ebookLibrary";
 import { OfflineEpub } from "@/services/ebookEpub";
 import { DICTIONARY_ATTRIBUTION, installDictionary, isDictionaryInstalled, lookupDictionary, normalizeSelection, type DictionaryEntry } from "@/services/ebookDictionary";
 
@@ -213,6 +213,12 @@ async function init() {
     const parsed = await OfflineEpub.open(stored.file);
     if (owner !== account.value) { parsed.destroy(); return; }
     loadedAccount = owner; book.value = stored; epub.value = parsed;
+    // Upgrade existing downloads lazily, without re-downloading the EPUB.
+    if (!stored.coverBlob) {
+      void parsed.coverImage().then(cover => {
+        if (cover && readerAlive && loadedAccount === owner) return saveLibraryCover(owner, stored.id, cover);
+      }).catch(() => {});
+    }
     fontSize.value = stored.fontSize || 18;
     theme.value = stored.theme || "light";
     await nextTick();
