@@ -15,6 +15,8 @@ import {
   loadFriendsView,
   loadMyProfileView,
   loadPrivateSpaceView,
+  loadBooksView,
+  loadEbookReaderView,
 } from "@/router/lazyViews";
 // Lazy load less frequently accessed views
 const Debug = () => import("@/views/Debug.vue");
@@ -83,6 +85,18 @@ const routes: Array<RouteRecordRaw> = [
     path: "/messages/:pubkey",
     name: "Messages",
     component: loadMessagesView,
+    meta: { requiresAuth: true, hideBottomNav: true }
+  },
+  {
+    path: "/books",
+    name: "Books",
+    component: loadBooksView,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/books/read/:id",
+    name: "EbookReader",
+    component: loadEbookReaderView,
     meta: { requiresAuth: true, hideBottomNav: true }
   },
   {
