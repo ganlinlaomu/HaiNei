@@ -127,11 +127,16 @@ describe("map UI", () => {
     expect(html).toContain("在「地图」中打开");
   });
 
-  it("opens the map from the card instead of loading one inside it", async () => {
+  it("embeds a viewport-lazy map preview that opens the full-screen map", async () => {
     const html = await render(DmLocationCard, { location: { ...SHANGHAI, at: 1 }, own: false, peer: "b".repeat(64), peerName: "妈妈" });
-    expect(html).toContain("查看地图");
+    expect(html).toContain("查看大图");
+    expect(html).toContain("地图加载中…");
+    // SSR and off-screen cards do not download tiles before becoming visible.
     expect(html).not.toMatch(/<img/);
-    const source = readFileSync(join(process.cwd(), "src/components/LocationMapSheet.vue"), "utf8");
-    expect(source).toContain('<Teleport to="body">');
+    const cardSource = readFileSync(join(process.cwd(), "src/components/DmLocationCard.vue"), "utf8");
+    const previewSource = readFileSync(join(process.cwd(), "src/components/LocationMapPreview.vue"), "utf8");
+    expect(cardSource).toContain("<LocationMapPreview");
+    expect(previewSource).toContain("new IntersectionObserver");
+    expect(previewSource).toContain('crossorigin="anonymous"');
   });
 });
