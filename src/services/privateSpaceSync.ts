@@ -6,6 +6,7 @@ import { validatePrivateSpaceSource, validatePrivateSpaceAttachments } from "@/s
 import { signedWorkerPost } from "@/services/workerAuth";
 import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 import { timedJsonFetch } from "@/utils/timedFetch";
+import { synchronizeSharedTodos } from "@/services/sharedTodoSync";
 
 type Keys = {
   pkHex: string;
@@ -28,6 +29,21 @@ export function setPrivateSpaceEditing(account: string, editing: boolean) {
   const owner = account.toLowerCase();
   if (editing) activeEditors.add(owner);
   else activeEditors.delete(owner);
+}
+/** Unsent private edits; shared lists are tracked by their own share revision. */
+function privatePending(note: PrivateSpaceRecord) {
+  return !note.share && note.revision !== Number(note.syncedRevision || 0);
+}
+/** Lists shared by accepted friends; null until this account's friendships are loaded. */
+async function sharedTodoTrust(account: string): Promise<((pubkey: string) => boolean) | null> {
+  try {
+    const { useFriendshipsStore } = await import("@/stores/friendships");
+    const friendships = useFriendshipsStore();
+    if (friendships.loadedFor !== account) return null;
+    return pubkey => friendships.isAccepted(pubkey);
+  } catch {
+    return null;
+  }
 }
 const jobs = new Map<string, Promise<void>>();
 const controllers = new Map<string, AbortController>();
@@ -182,6 +198,8 @@ async function synchronize(keys: Keys, isCurrent: () => boolean, signal?: AbortS
   const current = await privateSpaceRepository.list(account);
   for (const note of current) {
     ensureCurrent(isCurrent);
+    // Shared lists sync through the shared-todo store.
+    if (note.share) continue;
     if (note.revision === Number(note.syncedRevision || 0) &&
         remoteVersions.get(note.id) === Number(note.cloudVersion || 0)) continue;
     if (remoteVersions.has(note.id) &&
@@ -228,9 +246,25 @@ export async function syncPrivateSpace(keys: Keys): Promise<void> {
     try {
       const { conflicts, oversized } = await synchronize(keys, isCurrent, controller.signal);
       if (!isCurrent()) return;
+      const trust = await sharedTodoTrust(account);
+      let sharedPending = false;
+      if (trust) {
+        try {
+          sharedPending = (await synchronizeSharedTodos(keys, {
+            isCurrent, signal: controller.signal, isTrustedOwner: trust,
+            isEditing: () => activeEditors.has(account),
+          })).pending;
+        } catch (error) {
+          // Shared lists must never hold back private notes; retry them later.
+          if (!isCurrent()) return;
+          const message = error instanceof Error ? error.message : "";
+          // A Worker without the shared-todo routes yet answers not_found.
+          if (message !== "private_space_editing" && message !== "not_found") sharedPending = true;
+        }
+      }
+      if (!isCurrent()) return;
       retries.delete(account);
-      const pending = (await privateSpaceRepository.list(account))
-        .some(note => note.revision !== Number(note.syncedRevision || 0));
+      const pending = (await privateSpaceRepository.list(account)).some(privatePending);
       if (!isCurrent()) return;
       if (oversized) {
         // Do not retry forever when a note is permanently above the limit.
@@ -239,6 +273,7 @@ export async function syncPrivateSpace(keys: Keys): Promise<void> {
       } else {
         publish(account, pending ? "local" : "synced", undefined, conflicts);
         if (pending) schedulePrivateSpaceSync(keys, 1_000);
+        else if (sharedPending) planRetry(keys, account, generation);
       }
       // Other mounted views may refresh, but must not overwrite an open editor.
       if (typeof window !== "undefined" && typeof CustomEvent !== "undefined")

@@ -17,6 +17,9 @@ import { cleanupExpiredRecords } from "./cleanup";
 import { enforceChallengeRateLimit, readJsonBody } from "./requestGuards";
 import { AccountStateConflict, getAccountState, putAccountState } from "./accountState";
 import { PrivateSpaceConflict, listPrivateSpace, getPrivateSpace, putPrivateSpace } from "./privateSpace";
+import {
+  SharedTodoConflict, getSharedTodos, leaveSharedTodo, listSharedTodos, putSharedTodo, updateSharedTodoMembers,
+} from "./sharedTodo";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -125,6 +128,19 @@ export async function handleRequest(request: Request, env: Env) {
       if (path.endsWith("/get")) return json(await getPrivateSpace(env, pubkey, payload.ids));
       return json(await putPrivateSpace(env, pubkey, payload));
     }
+    if (path.startsWith("/api/shared-todo/")) {
+      const route = path.slice("/api/shared-todo/".length);
+      if (!["list", "get", "put", "members", "leave"].includes(route)) return json({ error: "not_found" }, 404);
+      const payload = await body(request, env, route === "put" ? 384 * 1024 : 48 * 1024);
+      const pubkey = await verifyAndConsumeChallenge(
+        env, payload.challenge, payload.event, undefined, "hainei_shared_todo", authBinding(request, payload),
+      );
+      if (route === "list") return json(await listSharedTodos(env, pubkey));
+      if (route === "get") return json(await getSharedTodos(env, pubkey, payload.ids));
+      if (route === "put") return json(await putSharedTodo(env, pubkey, payload));
+      if (route === "members") return json(await updateSharedTodoMembers(env, pubkey, payload));
+      return json(await leaveSharedTodo(env, pubkey, payload.id));
+    }
     if (path === "/api/push/public-key") return json(getPushPublicKey(env));
     if (path === "/api/push/subscribe") {
       const payload = await body(request, env, 16 * 1024);
@@ -181,6 +197,9 @@ export async function handleRequest(request: Request, env: Env) {
     return json({ error: "not_found" }, 404);
   } catch (error) {
     if (error instanceof PrivateSpaceConflict) {
+      return json({ error: error.message, currentVersion: error.currentVersion }, 409);
+    }
+    if (error instanceof SharedTodoConflict) {
       return json({ error: error.message, currentVersion: error.currentVersion }, 409);
     }
     if (error instanceof AccountStateConflict) {

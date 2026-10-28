@@ -1,8 +1,11 @@
-import { db, type HaiNeiDatabase, type PrivateSpaceRecord, type PrivateSpaceTask } from "@/db/dexie";
+import {
+  db, type HaiNeiDatabase, type PrivateSpaceRecord, type PrivateSpaceShare, type PrivateSpaceTask, type SharedTodoContent,
+} from "@/db/dexie";
 import { normalizeAccountPubkey } from "@/repositories/accountScope";
 import { isLocalVaultUnlocked } from "@/services/localVault";
 import { validatePrivateSpaceAttachments, validatePrivateSpaceSource } from "@/services/privateSpaceContent";
 import { validTaskDue } from "@/utils/todoPlanning";
+import { mergeSharedTodo, sameSharedTodoContent } from "@/utils/sharedTodoMerge";
 
 export type PrivateSpaceDraft = Pick<PrivateSpaceRecord, "kind" | "title" | "body" | "tasks" | "pinned"> &
   Partial<Pick<PrivateSpaceRecord, "source" | "attachments">>;
@@ -89,6 +92,12 @@ export class PrivateSpaceRepository {
     await this.database.transaction("rw", this.database.accountNotes, async () => {
       const existing = await this.database.accountNotes.get([owner, remote.id]);
       if (existing && Number(existing.cloudVersion || 0) >= version) return;
+      if (existing?.share) {
+        // A shared list syncs through the shared store; the private copy from
+        // before it was shared is stale. Record the version so it is not refetched.
+        await this.database.accountNotes.put({ ...existing, cloudVersion: version });
+        return;
+      }
       if (existing && existing.revision !== Number(existing.syncedRevision || 0)
           && !samePrivateSpaceContents(existing, remote)) {
         // Preserve genuine divergent edits, including tombstones. Identical
@@ -286,6 +295,120 @@ export class PrivateSpaceRepository {
   async moveToTrash(account: string, id: string) {
     return this.update(account, id, { deletedAt: Date.now() });
   }
+
+  /** Mark a to-do list as shared once the Worker has created it at `share.version`. */
+  async attachShare(account: string, id: string, share: PrivateSpaceShare) {
+    const owner = requireUnlocked(account);
+    let updated: PrivateSpaceRecord | undefined;
+    await this.database.transaction("rw", this.database.accountNotes, async () => {
+      const current = await this.database.accountNotes.get([owner, id]);
+      if (!current || current.kind !== "todo" || current.share) throw new Error("private_space_share_unavailable");
+      updated = { ...current, share: cloneShare(share) };
+      await this.database.accountNotes.put(updated);
+    });
+    return updated!;
+  }
+
+  /**
+   * Apply a shared list's remote content at `version`. A clean row takes it as
+   * is; a row with unsent edits gets a three-way merge and stays dirty so the
+   * merge is published. A local note that only shares the ID is never touched,
+   * except the owner's own former private copy of the list.
+   */
+  async applyShared(
+    account: string, id: string, content: SharedTodoContent,
+    meta: Pick<PrivateSpaceShare, "owner" | "members" | "key" | "version">,
+  ): Promise<{ changed: boolean }> {
+    const owner = requireUnlocked(account);
+    const remote = sharedContent(content);
+    let changed = false;
+    await this.database.transaction("rw", this.database.accountNotes, async () => {
+      const existing = await this.database.accountNotes.get([owner, id]);
+      const now = Date.now();
+      if (!existing) {
+        await this.database.accountNotes.add({
+          accountPubkey: owner, id, kind: "todo", title: remote.title, body: "", tasks: remote.tasks,
+          pinned: false, createdAt: now, updatedAt: now, revision: 1,
+          share: { ...meta, members: [...meta.members], syncedRevision: 1, base: sharedContent(remote) },
+        });
+        changed = true;
+        return;
+      }
+      if (existing.kind !== "todo") return;
+      if (existing.share ? existing.share.owner !== meta.owner : meta.owner !== owner) return;
+      if (existing.share && existing.share.version >= meta.version) return;
+      const mine = sharedContent(existing);
+      const dirty = existing.share ? existing.revision !== existing.share.syncedRevision : true;
+      const next = dirty && existing.share ? mergeSharedTodo(existing.share.base, mine, remote) : remote;
+      const contentChanged = !sameSharedTodoContent(mine, next);
+      const revision = contentChanged ? existing.revision + 1 : existing.revision;
+      await this.database.accountNotes.put({
+        ...existing, title: next.title, tasks: next.tasks,
+        ...(contentChanged ? { updatedAt: Math.max(now, existing.updatedAt + 1), revision } : {}),
+        share: {
+          ...meta, members: [...meta.members], base: sharedContent(remote),
+          // Still dirty only if the merge differs from what the server holds.
+          syncedRevision: sameSharedTodoContent(next, remote) ? revision : existing.share?.syncedRevision ?? 0,
+        },
+      });
+      changed = true;
+    });
+    return { changed };
+  }
+
+  /** Confirm a shared upload without losing edits made while it was in flight. */
+  async markSharedSynced(account: string, id: string, sentRevision: number, version: number, sent: SharedTodoContent) {
+    const owner = requireUnlocked(account);
+    await this.database.transaction("rw", this.database.accountNotes, async () => {
+      const current = await this.database.accountNotes.get([owner, id]);
+      if (!current?.share || current.share.syncedRevision > sentRevision || current.share.version > version) return;
+      await this.database.accountNotes.put({
+        ...current, share: { ...current.share, version, syncedRevision: sentRevision, base: sharedContent(sent) },
+      });
+    });
+  }
+
+  async updateShareMembers(account: string, id: string, members: string[]) {
+    const owner = requireUnlocked(account);
+    let updated: PrivateSpaceRecord | undefined;
+    await this.database.transaction("rw", this.database.accountNotes, async () => {
+      const current = await this.database.accountNotes.get([owner, id]);
+      if (!current?.share) return;
+      updated = { ...current, share: { ...current.share, members: [...members] } };
+      await this.database.accountNotes.put(updated);
+    });
+    return updated;
+  }
+
+  /**
+   * Turn a shared list back into an ordinary private to-do (after leaving,
+   * removal, or the owner stopping the share). It is dirty so private sync
+   * uploads it; `trash` also moves it to 最近删除.
+   */
+  async detachShare(account: string, id: string, options: { trash?: boolean } = {}) {
+    const owner = requireUnlocked(account);
+    let updated: PrivateSpaceRecord | undefined;
+    await this.database.transaction("rw", this.database.accountNotes, async () => {
+      const current = await this.database.accountNotes.get([owner, id]);
+      if (!current?.share) return;
+      const { share: _share, ...rest } = current;
+      updated = {
+        ...rest,
+        ...(options.trash && !current.deletedAt ? { deletedAt: Date.now() } : {}),
+        updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+        revision: current.revision + 1,
+      };
+      await this.database.accountNotes.put(updated);
+    });
+    return updated;
+  }
+}
+
+function sharedContent(record: SharedTodoContent): SharedTodoContent {
+  return { title: record.title, tasks: record.tasks.map(task => ({ ...task })) };
+}
+function cloneShare(share: PrivateSpaceShare): PrivateSpaceShare {
+  return { ...share, members: [...share.members], base: sharedContent(share.base) };
 }
 
 export const privateSpaceRepository = new PrivateSpaceRepository();

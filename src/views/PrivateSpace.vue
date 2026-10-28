@@ -94,9 +94,9 @@
             <button type="button" class="item"
               :disabled="backupBusy || editorTransitionBusy || !!rowActionBusyId || !!note.archivedAt || !!note.deletedAt"
               @click="openFromList(note)">
-              <span class="item-top"><strong :class="{ 'todo-title': note.kind === 'todo' }">{{ label(note) }}</strong><span v-if="note.pinned">📌</span></span>
+              <span class="item-top"><strong :class="{ 'todo-title': note.kind === 'todo' }">{{ label(note) }}</strong><span class="item-badges"><span v-if="note.share" :aria-label="'共享给 ' + (note.share.members.length - 1) + ' 位好友'">👥</span><span v-if="note.pinned">📌</span></span></span>
               <span class="preview">{{ note.kind === 'todo' ? progress(note) : privateSpaceDisplay(note).text || (privateSpaceDisplay(note).attachments.length ? '媒体摘录' : '空白笔记') }}</span>
-              <span class="date">{{ note.kind === 'todo' ? '待办' : '笔记' }} · {{ formatted(note.updatedAt) }}</span>
+              <span class="date">{{ note.share ? '共享待办' : note.kind === 'todo' ? '待办' : '笔记' }} · {{ formatted(note.updatedAt) }}</span>
             </button>
             <button v-if="canSwipeNote(note)" type="button" class="row-actions-toggle"
               :disabled="backupBusy || editorTransitionBusy || !!rowActionBusyId"
@@ -111,8 +111,14 @@
       <div class="editor-actions">
         <button type="button" @click="closeEditor">‹ 返回列表</button>
         <span class="save-state" aria-live="polite">{{ saveStatus }}</span>
-        <button type="button" @click="togglePin">{{ editor.pinned ? '取消置顶' : '置顶' }}</button>
+        <span class="editor-action-group">
+          <button v-if="editor.kind === 'todo' && !isUnsavedDraft" type="button" :aria-expanded="shareOpen"
+            @click="shareOpen = !shareOpen">{{ editor.share ? '共享 · ' + editor.share.members.length + ' 人' : '共享' }}</button>
+          <button type="button" @click="togglePin">{{ editor.pinned ? '取消置顶' : '置顶' }}</button>
+        </span>
       </div>
+      <TodoSharePanel v-if="shareOpen && editor.kind === 'todo' && !isUnsavedDraft" :record="editor" :prepare="flush"
+        @close="shareOpen = false" @updated="onShareUpdated" />
       <div v-if="keys.isUnlocked" class="cloud-sync-status" role="status" aria-live="polite">
         <span>{{ cloudSyncInfo.label }}</span>
         <button v-if="cloudSyncInfo.retryable" type="button" :disabled="retryingCloudSync" @click="retryCloudSync">
@@ -201,6 +207,7 @@ import { privateSyncFeedback } from "@/utils/networkOperationFeedback";
 const PostImagePreview = defineAsyncComponent(() => import("@/components/PostImagePreview.vue"));
 const SavedPosts = defineAsyncComponent(() => import("@/components/SavedPosts.vue"));
 const TodoPlanner = defineAsyncComponent(() => import("@/components/TodoPlanner.vue"));
+const TodoSharePanel = defineAsyncComponent(() => import("@/components/TodoSharePanel.vue"));
 const keys = useKeyStore();
 const ui = useUIStore();
 const route = useRoute();
@@ -428,6 +435,29 @@ async function retryCloudSync() {
   }
 }
 const newTaskText = ref("");
+const shareOpen = ref(false);
+watch(() => editor.value?.id, () => { shareOpen.value = false; });
+/** After sharing, membership changes, leaving or stopping a share. */
+function onShareUpdated(record: PrivateSpaceRecord) {
+  if (!keys.isUnlocked || keys.pkHex !== record.accountPubkey) return;
+  updateInList(record);
+  notePrivateSpaceMutation(keys);
+  if (editor.value?.id !== record.id) return;
+  if (record.deletedAt) {
+    // Left the list: it is in 最近删除 now; nothing left to save here.
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    shareOpen.value = false;
+    editor.value = null;
+    isUnsavedDraft.value = false;
+    newTaskText.value = "";
+    ui.addToast("已退出共享，清单已移到最近删除", 2_600, "info");
+    return;
+  }
+  if (record.share) editor.value.share = record.share;
+  else delete editor.value.share;
+  if (!record.share) shareOpen.value = false;
+}
 const tabs = [
   { value: "saved", label: "收藏" }, { value: "note", label: "笔记" }, { value: "todo", label: "待办" },
 ] as const;
@@ -622,6 +652,12 @@ function offerDispositionUndo(
   });
 }
 
+function sharedDeleteConfirmed(note: PrivateSpaceRecord) {
+  if (!note.share) return true;
+  return window.confirm(note.share.owner === keys.pkHex.toLowerCase()
+    ? "这是共享待办。删除后所有成员都将看不到它，确定删除？"
+    : "这是好友共享给你的待办。删除后你将退出共享，确定删除？");
+}
 async function deleteFromSwipe(note: PrivateSpaceRecord) {
   if (backupBusy.value || loading.value || editorTransitionBusy.value || rowActionBusyId.value || !canSwipeNote(note)) return;
   rowActionBusyId.value = note.id;
@@ -630,12 +666,14 @@ async function deleteFromSwipe(note: PrivateSpaceRecord) {
     if (account !== note.accountPubkey || !isCurrent()) return;
     const current = await privateSpaceRepository.get(account, note.id);
     if (!isCurrent() || !current || !canSwipeNote(current)) return;
+    if (!sharedDeleteConfirmed(current)) return;
     const deleted = await privateSpaceRepository.moveToTrash(account, note.id);
     if (!isCurrent()) return;
     updateInList(deleted);
     closeSwipe(note.id);
     notePrivateSpaceMutation(keys);
-    offerDispositionUndo(deleted, "deletedAt", current.deletedAt || 0);
+    // Leaving a shared list is not undoable once synced.
+    if (!current.share) offerDispositionUndo(deleted, "deletedAt", current.deletedAt || 0);
     error.value = "";
   } catch (cause) {
     if (keys.isUnlocked && keys.pkHex === note.accountPubkey) handleError(cause);
@@ -902,14 +940,15 @@ async function restoreNote(note: PrivateSpaceRecord) {
 }
 async function deleteNote() {
   if (!editor.value) return;
-  if (!window.confirm("移到最近删除？可以从最近删除中恢复。")) return;
+  if (editor.value.share ? !sharedDeleteConfirmed(editor.value)
+    : !window.confirm("移到最近删除？可以从最近删除中恢复。")) return;
   try {
     await flush();
     const note = editor.value;
     const deleted = await privateSpaceRepository.moveToTrash(note.accountPubkey, note.id);
     updateInList(deleted);
     notePrivateSpaceMutation(keys);
-    offerDispositionUndo(deleted, "deletedAt", note.deletedAt || 0);
+    if (!note.share) offerDispositionUndo(deleted, "deletedAt", note.deletedAt || 0);
     editor.value = null;
   } catch (cause) { handleError(cause); }
 }
@@ -925,6 +964,14 @@ async function refreshAfterSync() {
 function onCloudUpdate(event: Event) {
   const detail = (event as CustomEvent<{ account: string }>).detail;
   if (detail?.account === keys.pkHex.toLowerCase()) void refreshAfterSync();
+}
+// Collaborators' edits arrive by polling while the to-do list is on screen.
+const SHARED_POLL_MS = 30_000;
+let sharedPollTimer: ReturnType<typeof setInterval> | undefined;
+function pollSharedTodos() {
+  if (document.visibilityState !== "visible" || editor.value || timer || loading.value
+      || filter.value !== "todo" || !keys.isUnlocked || !keys.supportsNip44) return;
+  void syncPrivateSpace(keys);
 }
 function onVisibilityChange() {
   if (document.visibilityState === "hidden" && (timer || (editor.value?.kind === "todo" && newTaskText.value.trim())))
@@ -943,6 +990,7 @@ onMounted(() => {
     if (editor.value?.accountPubkey === account) await flush();
   });
   document.addEventListener("visibilitychange", onVisibilityChange);
+  sharedPollTimer = setInterval(pollSharedTodos, SHARED_POLL_MS);
 });
 onBeforeRouteLeave(async () => {
   try { await flush(); } catch (cause) {
@@ -958,6 +1006,7 @@ onBeforeUnmount(() => {
   if (editor.value) setPrivateSpaceEditing(editor.value.accountPubkey, false);
   unsubscribeLock?.();
   stopCloudStatus?.();
+  if (sharedPollTimer) clearInterval(sharedPollTimer);
   tabPillObserver.disconnect();
   cancelTabPillFrame();
   window.removeEventListener("resize", refreshTabPill);
@@ -1017,6 +1066,8 @@ button{font:inherit;cursor:pointer}
 .empty-state{text-align:center;padding:65px 20px;color:var(--fg-94a3b8);font-size:13px}
 .editor{padding:14px}
 .editor-actions{display:flex;align-items:center;justify-content:space-between;gap:4px}
+.editor-action-group{display:flex;align-items:center;gap:10px}
+.item-badges{display:flex;gap:4px;flex-shrink:0}
 .editor-actions button,.editor-footer button{border:0;background:transparent;color:var(--fg-475569);padding:10px 3px;font-size:13px}
 .save-state{font-size:11px;color:var(--fg-64748b);white-space:nowrap}
 .title-input{width:100%;margin-top:20px;padding:8px 2px;font-weight:650;font-size:21px;border:0;outline:none}
