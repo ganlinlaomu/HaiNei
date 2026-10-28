@@ -11,6 +11,8 @@ export interface NotificationItem {
   from: string;
   messageId?: string;
   commentId?: string;
+  /** The post or comment id that a like actually targets. */
+  likeTargetId?: string;
   replyId?: string;
   created_at: number;
   read: boolean;
@@ -142,8 +144,8 @@ export const useNotificationsStore = defineStore("notifications", {
           ? stored.filter((item: NotificationItem & { type?: string }) =>
               item?.type === "like" || item?.type === "comment" || item?.type === "friend_request"
               || item?.type === "mention_post" || item?.type === "mention_comment")
-            .map((item: NotificationItem) => item.type === "like" && item.messageId
-              ? { ...item, id: likeNotificationId(item.messageId, item.from) }
+            .map((item: NotificationItem) => item.type === "like" && (item.likeTargetId || item.messageId)
+              ? { ...item, id: likeNotificationId(item.likeTargetId || item.messageId!, item.from) }
               : item)
             .filter((item: NotificationItem) => {
               if (seen.has(item.id)) return false;
@@ -260,7 +262,9 @@ export const useNotificationsStore = defineStore("notifications", {
     addNotification(n: NotificationItem) {
       if (n.type !== "like" && n.type !== "comment" && n.type !== "friend_request"
         && n.type !== "mention_post" && n.type !== "mention_comment") return;
-      if (n.type === "like" && n.messageId) n.id = likeNotificationId(n.messageId, n.from);
+      if (n.type === "like" && (n.likeTargetId || n.messageId)) {
+        n.id = likeNotificationId(n.likeTargetId || n.messageId!, n.from);
+      }
       // 这里的逻辑修复最重要：
       // 1. 检查是否重复
       if (this.list.some(x => x.id === n.id)) return;
