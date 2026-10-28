@@ -47,6 +47,19 @@ describe("ebooks IndexedDB clone boundaries", () => {
     expect((await stored!.file.arrayBuffer()).byteLength).toBe(bytes.byteLength);
   });
 
+  it("stores EPUB cover Blob locally and preserves it across subsequent book saves", async () => {
+    const epub = new Blob([new Uint8Array(128)], { type: "application/epub+zip" });
+    const cover = new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" });
+    await saveLibraryBook(ACCOUNT_A, BOOK, epub, cover);
+    const stored = await getLibraryBook(ACCOUNT_A, BOOK.id);
+    expect(stored?.coverBlob).toBeInstanceOf(Blob);
+    expect(stored?.coverBlob?.type).toBe("image/jpeg");
+    expect(stored?.coverBlob?.size).toBe(4);
+    await saveLibraryBook(ACCOUNT_A, BOOK, epub);
+    const resaved = await getLibraryBook(ACCOUNT_A, BOOK.id);
+    expect(resaved?.coverBlob?.size).toBe(4);
+  });
+
   it("keeps shelves account-scoped and preserves reader progress on repeat saves", async () => {
     const epub = new Blob([new Uint8Array(128)], { type: "application/epub+zip" });
     await saveLibraryBook(ACCOUNT_A, reactive({ ...BOOK, authors: [...BOOK.authors] }), epub);

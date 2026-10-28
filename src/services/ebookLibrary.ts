@@ -6,6 +6,8 @@ export const MAX_EPUB_SIZE = 25 * 1024 * 1024;
 export type LibraryBook = Omit<CatalogBook, "epubUrl" | "downloads"> & {
   accountPubkey: string;
   file: Blob;
+  /** EPUB cover extracted locally. Stored with the book for offline shelves. */
+  coverBlob?: Blob;
   bytes: number;
   downloadedAt: number;
   chapterIndex: number;
@@ -39,7 +41,7 @@ export async function getLibraryBook(account: string, id: string): Promise<Libra
   return database.books.get([account, id]);
 }
 
-export async function saveLibraryBook(account: string, book: CatalogBook, file: Blob): Promise<void> {
+export async function saveLibraryBook(account: string, book: CatalogBook, file: Blob, coverBlob?: Blob | null): Promise<void> {
   ensureAccount(account);
   if (file.size < 100 || file.size > MAX_EPUB_SIZE) throw new Error("EPUB 文件大小不受支持（最大 25MB）");
   const existing = await getLibraryBook(account, book.id);
@@ -52,9 +54,10 @@ export async function saveLibraryBook(account: string, book: CatalogBook, file: 
     // only primitive author names into a fresh ordinary array.
     authors: Array.from(book.authors, author => String(author)),
     language: book.language,
-    coverUrl: book.coverUrl,
+    coverUrl: book.coverUrl || existing?.coverUrl,
     sourceUrl: book.sourceUrl,
     file,
+    coverBlob: coverBlob || existing?.coverBlob,
     bytes: file.size,
     downloadedAt: Date.now(),
     chapterIndex: existing?.chapterIndex ?? 0,
@@ -62,6 +65,12 @@ export async function saveLibraryBook(account: string, book: CatalogBook, file: 
     fontSize: existing?.fontSize ?? 18,
     theme: existing?.theme ?? "light",
   });
+}
+
+export async function saveLibraryCover(account: string, id: string, cover: Blob): Promise<void> {
+  ensureAccount(account);
+  if (!cover.type.startsWith("image/") || cover.size < 50 || cover.size > 2 * 1024 * 1024) return;
+  await database.books.update([account, id], { coverBlob: cover });
 }
 
 export async function updateReadingState(account: string, id: string, patch: Partial<Pick<LibraryBook, "chapterIndex" | "chapterPercent" | "fontSize" | "theme">>): Promise<void> {

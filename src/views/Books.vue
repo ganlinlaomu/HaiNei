@@ -23,8 +23,8 @@
       <p v-if="searching && !results.length" class="hint" role="status">正在查询书库…</p>
       <template v-if="!searching || results.length">
         <div v-for="book in displayedBooks" :key="book.id" class="book-row">
-          <div v-if="featuredMode" class="cover featured-cover" aria-hidden="true"><span>{{ book.title.charAt(0) }}</span></div>
-          <img v-else-if="book.coverUrl" :src="book.coverUrl" alt="" loading="lazy" class="cover"/>
+          <img v-if="book.coverUrl && !brokenCovers.has(book.id)" :src="book.coverUrl" alt="" loading="lazy" class="cover" @error="brokenCovers.add(book.id)"/>
+          <div v-else-if="featuredMode" class="cover featured-cover" aria-hidden="true"><span>{{ book.title.charAt(0) }}</span></div>
           <div v-else class="cover placeholder" aria-hidden="true">📖</div>
           <div class="info"><strong>{{ book.title }}</strong><small>{{ book.authors.join("、") || "作者未知" }}</small><small>{{ languageLabel(book.language) }} · EPUB</small><small v-if="featuredMode" class="featured-description">{{ featuredNote(book.id) }}</small>
             <div class="actions"><button v-if="downloaded.has(book.id)" type="button" class="primary" @click="openBook(book.id)">阅读</button>
@@ -42,7 +42,7 @@
       <p class="note">断网也可阅读。iOS 可能清除 PWA 网站数据，建议将重要 EPUB 导出到「文件」App 备份。</p>
       <p v-if="libraryError" class="error" role="alert">{{ libraryError }}</p>
       <div v-for="book in library" :key="book.id" class="book-row">
-        <img v-if="book.coverUrl" :src="book.coverUrl" alt="" loading="lazy" class="cover"/>
+        <img v-if="localCoverUrls[book.id] || (online && book.coverUrl && !brokenCovers.has(book.id))" :src="localCoverUrls[book.id] || book.coverUrl" alt="" loading="lazy" class="cover" @error="brokenCovers.add(book.id)"/>
         <div v-else class="cover placeholder" aria-hidden="true">📖</div>
         <div class="info"><strong>{{ book.title }}</strong><small>{{ book.authors.join("、") || "作者未知" }}</small><small>{{ formatBytes(book.bytes) }} · 已保存</small>
           <div class="actions"><button type="button" class="primary" @click="openBook(book.id)">继续阅读</button><button type="button" @click="exportLibraryBook(book)">导出</button><button type="button" class="danger" @click="remove(book.id)">删除</button></div>
@@ -70,13 +70,43 @@ const featuredMode = ref(true);
 const displayedBooks = computed(() => featuredMode.value ? FEATURED_BOOKS : results.value);
 const online = ref(typeof navigator === "undefined" ? true : navigator.onLine !== false);
 const hasNext = ref(false), page = ref(1), error = ref(""), libraryError = ref("");
+const localCoverUrls = ref<Record<string, string>>({});
+const brokenCovers = ref(new Set<string>());
+let libraryRefresh = 0;
+function revokeLocalCovers() {
+  for (const url of Object.values(localCoverUrls.value)) URL.revokeObjectURL(url);
+  localCoverUrls.value = {};
+}
 const downloadingId = ref(""), progress = ref<number|null>(null);
 let searchController: AbortController|null = null, downloadController: AbortController|null = null;
 const downloaded = computed(() => new Set(library.value.map(b => b.id)));
 function languageLabel(code: string) { return ({en:"英文",ja:"日文",zh:"中文",fr:"法文"} as Record<string,string>)[code] || code || "其他语言"; }
 function formatBytes(bytes:number) { return bytes >= 1048576 ? (bytes/1048576).toFixed(1)+" MB" : Math.ceil(bytes/1024)+" KB"; }
 function message(e:unknown) { return e instanceof Error ? e.message : "操作失败"; }
-async function refreshLibrary() { if (!account.value) return; try { library.value = await listLibraryBooks(account.value); libraryError.value = ""; } catch(e) { libraryError.value = message(e); } }
+async function refreshLibrary() {
+  const owner = account.value;
+  if (!owner) return;
+  const revision = ++libraryRefresh;
+  try {
+    const books = await listLibraryBooks(owner);
+    if (revision !== libraryRefresh || account.value !== owner) return;
+    const urls: Record<string, string> = {};
+    try {
+      for (const book of books) {
+        if (book.coverBlob instanceof Blob) urls[book.id] = URL.createObjectURL(book.coverBlob);
+      }
+    } catch(e) {
+      for (const url of Object.values(urls)) URL.revokeObjectURL(url);
+      throw e;
+    }
+    revokeLocalCovers();
+    localCoverUrls.value = urls;
+    library.value = books;
+    libraryError.value = "";
+  } catch(e) {
+    if (revision === libraryRefresh) libraryError.value = message(e);
+  }
+}
 function openLibrary() { tab.value = "library"; void refreshLibrary(); }
 function openBook(id:string) { void router.push({ name:"EbookReader",params:{id} }); }
 async function search(append:boolean) {
@@ -150,6 +180,8 @@ onMounted(() => {
   void refreshLibrary();
 });
 onUnmounted(() => {
+  libraryRefresh++;
+  revokeLocalCovers();
   window.removeEventListener("online", handleOnline);
   window.removeEventListener("offline", handleOffline);
   searchController?.abort();

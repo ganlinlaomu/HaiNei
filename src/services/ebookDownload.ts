@@ -43,8 +43,13 @@ export async function downloadGutenbergBook(
   if (buffer[0] !== 0x50 || buffer[1] !== 0x4b) throw new Error("下载内容不是 EPUB 文件");
   const file = new Blob([buffer], { type: "application/epub+zip" });
   const verified = await OfflineEpub.open(file);
-  verified.destroy();
-  await checkBookStorageSpace(received);
-  await saveLibraryBook(account, book, file);
+  let cover: Blob | null = null;
+  try {
+    cover = await verified.coverImage();
+  } finally {
+    verified.destroy();
+  }
+  await checkBookStorageSpace(received + (cover?.size || 0));
+  await saveLibraryBook(account, book, file, cover);
   onProgress(100);
 }
