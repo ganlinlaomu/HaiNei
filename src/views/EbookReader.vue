@@ -19,6 +19,11 @@
             {{ dictionaryStatus === "downloading" ? "正在下载 " + dictionaryProgress + "%" : "下载词典" }}
           </button>
         </div>
+        <form class="dictionary-manual" @submit.prevent="lookupManualWord">
+          <label for="ebook-lookup-word">手动查词</label>
+          <input id="ebook-lookup-word" v-model="manualWord" type="search" placeholder="输入英文单词" autocomplete="off"/>
+          <button type="submit">查询</button>
+        </form>
         <p v-if="dictionaryError" class="dictionary-error" role="alert">{{ dictionaryError }}</p>
       </section>
       <p class="reader-lookup-hint">{{ dictionaryStatus === "installed" ? "轻点英文单词，离线查看中文释义" : "轻点英文单词查词 · 首次请在 Aa 下载词典" }}</p>
@@ -66,11 +71,12 @@ const chapterIndex = ref(0), chapterPercent = ref(0), chapterHtml = ref("");
 const fontSize = ref(18), theme = ref<"light"|"sepia"|"dark">("light");
 const loading = ref(true), error = ref(""), settingsOpen = ref(false);
 const frame = ref<HTMLIFrameElement|null>(null);
-const selectedWord = ref(""), dictionaryEntry = ref<DictionaryEntry|null>(null);
+const selectedWord = ref(""), manualWord = ref(""), dictionaryEntry = ref<DictionaryEntry|null>(null);
 const dictionaryStatus = ref<"checking"|"not-installed"|"downloading"|"installed">("checking");
 const dictionaryProgress = ref(0), dictionaryError = ref(""), dictionaryLookingUp = ref(false);
 let selectionDocument: Document|null = null, selectionTimer: ReturnType<typeof setTimeout>|null = null;
 let tapLookupTimer: ReturnType<typeof setTimeout>|null = null;
+let lastTouchEnd = 0;
 let touchStart: { x: number; y: number; at: number } | null = null;
 let lookupRevision = 0, readerAlive = true;
 const scroller = ref<HTMLDivElement|null>(null);
@@ -174,6 +180,7 @@ function recordFrameTouchStart(event: TouchEvent) {
 }
 function cancelFrameTouch() { touchStart = null; }
 function completeFrameTouch(event: TouchEvent) {
+  lastTouchEnd = Date.now();
   const start = touchStart;
   touchStart = null;
   if (!start || event.changedTouches.length !== 1 || event.touches.length !== 0) return;
@@ -184,7 +191,9 @@ function completeFrameTouch(event: TouchEvent) {
   scheduleFrameWord(point.clientX, point.clientY, Date.now() - start.at >= 450);
 }
 function completeFrameMouse(event: MouseEvent) {
-  if (event.button !== 0) return;
+  // Mobile Safari may synthesize a mouseup after touchend; do not override
+  // the user's tapped word with an older native selection.
+  if (event.button !== 0 || Date.now() - lastTouchEnd < 850) return;
   scheduleFrameWord(event.clientX, event.clientY, true);
 }
 function scheduleFrameWord(x: number, y: number, preferSelection: boolean) {
@@ -199,6 +208,15 @@ function scheduleFrameWord(x: number, y: number, preferSelection: boolean) {
     const word = preferSelection ? (selected || tapped) : (tapped || selected);
     if (word) openDictionaryWord(word);
   }, 180);
+}
+function lookupManualWord() {
+  const word = normalizeSelection(manualWord.value);
+  if (!word) {
+    dictionaryError.value = "请输入一个英文单词";
+    return;
+  }
+  openDictionaryWord(word);
+  settingsOpen.value = false;
 }
 function queueSelectedWord() {
   if (selectionTimer) clearTimeout(selectionTimer);
@@ -331,6 +349,9 @@ onUnmounted(() => {
 .settings button,.settings select{min-height:34px;border:1px solid #8885;border-radius:8px;background:transparent;color:inherit;padding:4px 7px}
 .settings select{max-width:180px;font-size:16px}
 .dictionary-settings{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dictionary-manual{display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%}
+.dictionary-manual input{flex:1;min-width:120px;min-height:40px;border:1px solid #8885;border-radius:8px;background:transparent;color:inherit;padding:4px 10px;font-size:16px}
+.dictionary-manual button{min-height:40px}
 .dictionary-ready{color:#16803d;font-weight:600}
 .dictionary-error{color:#b91c1c;font-size:12px;line-height:1.5}
 .dictionary-card{position:fixed;z-index:55;left:12px;right:12px;bottom:calc(62px + env(safe-area-inset-bottom));max-width:520px;margin:0 auto;padding:14px 16px;border-radius:14px;border:1px solid #8b8b8b35;box-shadow:0 8px 30px #0003;background:var(--bg-fff,#fff);color:var(--fg-172033,#242830)}
