@@ -14,6 +14,8 @@
         <LocationMapPreview
           :location="shown"
           :my-location="myLocation"
+          :trail="trail"
+          :my-trail="myTrail"
           :peer-pubkey="peer"
           :label="`${peerName || '对方'}的位置`"
           :location-is-mine="own"
@@ -32,6 +34,8 @@
       :peer-pubkey="peer"
       :location="shown"
       :my-location="myLocation"
+      :trail="trail"
+      :my-trail="myTrail"
       :location-is-mine="own"
       :status="detail"
       @close="mapOpen = false"
@@ -103,7 +107,9 @@ const detail = computed(() => {
   const info = incoming.value;
   if (!info || info.state === "ended") return remaining;
   if (info.state === "stale") return `位置停在 ${Math.floor(info.ageSeconds / 60)} 分钟前 · 对方可能不在前台`;
-  return `更新于 ${info.ageSeconds < 60 ? "刚刚" : `${Math.floor(info.ageSeconds / 60)} 分钟前`} · ${remaining}`;
+  // Seconds under a minute, so each arriving update is visible.
+  const age = info.ageSeconds < 5 ? "刚刚" : info.ageSeconds < 60 ? `${info.ageSeconds} 秒前` : `${Math.floor(info.ageSeconds / 60)} 分钟前`;
+  return `更新于 ${age} · ${remaining}`;
 });
 const coordinates = computed(() => formatCoordinates(shown.value));
 /**
@@ -114,6 +120,18 @@ const myLocation = computed(() => {
   if (props.own) return liveStore.incomingFor(props.peer)?.location;
   const share = liveStore.outgoingFor(props.peer);
   return share && share.expiresAt > Math.floor(liveStore.now / 1000) ? share.last : undefined;
+});
+/** Where the shown person has walked during this share. */
+const trail = computed(() => {
+  if (incoming.value && incoming.value.state !== "ended" && live.value) return liveStore.incoming[live.value.id]?.trail ?? [];
+  if (ownActive.value) return liveStore.outgoingFor(props.peer)?.trail ?? [];
+  return [];
+});
+/** The other person's walk, when both of us are sharing. */
+const myTrail = computed(() => {
+  if (!myLocation.value) return [];
+  if (props.own) return liveStore.incomingFor(props.peer)?.trail ?? [];
+  return liveStore.outgoingFor(props.peer)?.trail ?? [];
 });
 
 const copied = ref(false);

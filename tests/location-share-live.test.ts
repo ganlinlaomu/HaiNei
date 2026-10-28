@@ -31,6 +31,8 @@ import {
 import { classifyPrivateMessage } from "@/nostr/messaging/messageRouting";
 import { createHomeMessageHandler } from "@/nostr/messaging/homeDelivery";
 import { decodeMessageEvent, encryptDirectMessage, decryptDirectMessage, nip17Adapter } from "@/nostr/messaging/protocol";
+import { extendTrail, LIVE_TRAIL_POINTS } from "@/stores/liveLocation";
+import LocationMapPreview from "@/components/LocationMapPreview.vue";
 import { distanceMetres, LIVE_HEARTBEAT_MS, LIVE_MOVE_METRES, LIVE_STALE_SECONDS, useLiveLocationStore } from "@/stores/liveLocation";
 import DmLocationCard from "@/components/DmLocationCard.vue";
 import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
@@ -270,6 +272,40 @@ describe("sharing our location", () => {
   });
 });
 
+describe("live location trail", () => {
+  it("records each received position, skipping heartbeats at the same spot, bounded", () => {
+    const store = useLiveLocationStore();
+    store.receiveOpening(PEER, { lat: 31.2, lng: 121.4, at: now(), live: { id: ID, expiresAt: now() + 900 } });
+    store.receiveControl(update(1, 31.2));       // heartbeat, same place
+    store.receiveControl(update(2, 31.2005));    // ~55 m north
+    expect(store.incoming[ID].trail?.map(point => point.lat)).toEqual([31.2, 31.2005]);
+    let trail = [] as any[];
+    for (let i = 0; i < LIVE_TRAIL_POINTS + 10; i++) trail = extendTrail(trail, { lat: 31 + i * 0.001, lng: 121, at: i + 1 });
+    expect(trail).toHaveLength(LIVE_TRAIL_POINTS);
+    expect(trail.at(-1).lat).toBeCloseTo(31 + (LIVE_TRAIL_POINTS + 9) * 0.001);
+  });
+
+  it("keeps the walk of our own share as we send updates", async () => {
+    const store = useLiveLocationStore();
+    vi.stubGlobal("navigator", { geolocation: { watchPosition: vi.fn(() => 1), clearWatch: vi.fn() } });
+    await store.startSharing(PEER, 900, { lat: 31.2, lng: 121.4, at: now() });
+    await store.sendUpdate(store.outgoing[PEER], { lat: 31.2005, lng: 121.4, at: now() });
+    expect(store.outgoing[PEER].trail.map(point => point.lat)).toEqual([31.2, 31.2005]);
+    await store.stopSharing(PEER, false);
+  });
+
+  it("a live map zooms close and frames the whole walk instead of re-centring on the person", async () => {
+    const start = { lat: 31.2, lng: 121.4, at: 1 };
+    const here = { lat: 31.2006, lng: 121.4, at: 2 };
+    const app = createSSRApp({ render: () => h(LocationMapPreview, { location: here, trail: [start, here], label: "x", peerPubkey: PEER }) });
+    app.use(createPinia());
+    const html = await renderToString(app);
+    const top = Number(html.match(/class="peer location-map-preview-marker"[^>]*top:([\d.-]+)px/)![1]);
+    // Not stuck at the centre (164 / 2). ~67 m at zoom 17 is ~65 px (zoom 15 would be ~16 px).
+    expect(82 - top).toBeGreaterThan(25);
+  });
+});
+
 describe("live location UI", () => {
   const render = (component: any, props: Record<string, unknown>, setup?: (store: ReturnType<typeof useLiveLocationStore>) => void) => {
     const pinia = createPinia();
@@ -291,6 +327,32 @@ describe("live location UI", () => {
     expect(ended).not.toContain("31.20000");
     const stopped = await render(DmLocationCard, { location: card(), own: false, peer: PEER }, store => store.receiveControl(stop()));
     expect(stopped).toContain("位置共享已结束");
+  });
+
+  it("shows seconds since the last update, so arriving updates are visible", async () => {
+    const html = await render(DmLocationCard, { location: card(), own: false, peer: PEER }, store => {
+      const message = update(1, 31.25);
+      message.plaintext = serializeLiveLocationControl({ kind: "update", id: ID, expiresAt: now() + 900, seq: 1,
+        location: { lat: 31.25, lng: 121.4, at: now() - 20 } });
+      store.receiveControl(message);
+    });
+    expect(html).toMatch(/更新于 2\d 秒前 · 剩余 15 分钟/);
+  });
+
+  it("draws the friend's walk, and the marker moves away from where they started", async () => {
+    const html = await render(DmLocationCard, { location: card(), own: false, peer: PEER }, store => {
+      store.receiveOpening(PEER, card());
+      store.receiveControl(update(1, 31.2003));
+      store.receiveControl(update(2, 31.2006));
+    });
+    const line = html.match(/<polyline[^>]*points="([^"]+)"/);
+    expect(line).not.toBeNull();
+    const ys = line![1].split(" ").map(point => Number(point.split(",")[1]));
+    expect(ys).toHaveLength(3);
+    // Northward walk: each point is higher on screen, ~67 m spans many pixels.
+    expect(ys[0] - ys[2]).toBeGreaterThan(40);
+    const marker = html.match(/class="peer location-map-preview-marker"[^>]*top:([\d.-]+)px/);
+    expect(Number(marker![1])).toBeCloseTo(ys[2], 0);
   });
 
   it("shows the opening card as live before the first update arrives (it used to say ended)", async () => {

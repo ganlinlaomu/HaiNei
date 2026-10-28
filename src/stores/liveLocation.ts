@@ -25,6 +25,10 @@ export const LIVE_STALE_SECONDS = 120;
 const UPDATE_WRAP_TTL_SECONDS = 10 * 60;
 const CLOCK_MS = 5_000;
 const STOP_ON_LOCK_TIMEOUT_MS = 1_500;
+/** Positions kept per share (memory only) to draw where someone has walked. */
+export const LIVE_TRAIL_POINTS = 120;
+/** A new trail point needs this much movement; heartbeats repeat the last one. */
+const TRAIL_STEP_METRES = 3;
 
 export type OutgoingLiveShare = {
   account: string;
@@ -34,6 +38,8 @@ export type OutgoingLiveShare = {
   seq: number;
   last: LocationShare;
   lastSentAt: number;
+  /** Positions sent so far, oldest first. */
+  trail: LocationShare[];
 };
 
 export type IncomingLiveShare = {
@@ -42,6 +48,8 @@ export type IncomingLiveShare = {
   expiresAt: number;
   seq: number;
   location?: LocationShare;
+  /** Positions received so far, oldest first. */
+  trail?: LocationShare[];
   receivedAt: number;
   stopped: boolean;
 };
@@ -59,6 +67,13 @@ export function distanceMetres(a: Pick<LocationShare, "lat" | "lng">, b: Pick<Lo
 }
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
+/** Append a position unless it is a heartbeat at (almost) the same place. */
+export function extendTrail(trail: LocationShare[] | undefined, location: LocationShare) {
+  const points = trail ?? [];
+  const last = points[points.length - 1];
+  if (last && distanceMetres(last, location) < TRAIL_STEP_METRES) return points;
+  return [...points, location].slice(-LIVE_TRAIL_POINTS);
+}
 let watchId: number | null = null;
 let clock: ReturnType<typeof setInterval> | null = null;
 let visibilityListener: (() => void) | null = null;
@@ -126,7 +141,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       installLiveLocationLockHook();
       this.incoming[live.id] = {
         peer, id: live.id, expiresAt: live.expiresAt, seq: 0,
-        location: opening, receivedAt: Date.now(), stopped: false,
+        location: opening, trail: [opening], receivedAt: Date.now(), stopped: false,
       };
       this.startClock();
     },
@@ -144,7 +159,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       const opening = { ...first, at, live: { id, expiresAt } };
       // The opening card is an ordinary durable DM (queued, retried, pushed).
       useDirectMessagesStore().send(peer, serializeLocationShare(opening), undefined, undefined, undefined, { preserveDraft: true });
-      this.outgoing[peer] = { account, peer, id, expiresAt, seq: 0, last: opening, lastSentAt: Date.now() };
+      this.outgoing[peer] = { account, peer, id, expiresAt, seq: 0, last: opening, lastSentAt: Date.now(), trail: [opening] };
       this.startRuntime();
       debugLog("system", "live_location_started", { durationSeconds }, "info");
     },
@@ -183,6 +198,7 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       this.incoming[control.id] = {
         peer, id: control.id, expiresAt: control.expiresAt, seq: control.seq,
         location: control.location, receivedAt: Date.now(), stopped: false,
+        trail: extendTrail(existing?.trail ?? (existing?.location ? [existing.location] : []), control.location),
       };
       debugLog("system", "live_location_received", { seq: control.seq, ageSeconds: Math.max(0, nowSeconds() - control.location.at) }, "info");
       this.startClock();
@@ -219,7 +235,9 @@ export const useLiveLocationStore = defineStore("liveLocation", {
       if (!current || current.id !== share.id) return;
       const seq = current.seq + 1;
       const moved = Math.round(distanceMetres(current.last, location));
-      this.outgoing[share.peer] = { ...current, seq, last: location, lastSentAt: Date.now() };
+      this.outgoing[share.peer] = {
+        ...current, seq, last: location, lastSentAt: Date.now(), trail: extendTrail(current.trail, location),
+      };
       if (await this.sendControl(current, serializeLiveLocationControl({ kind: "update", id: current.id, expiresAt: current.expiresAt, seq, location }), UPDATE_WRAP_TTL_SECONDS)) {
         // Sequence and distance only: never coordinates in diagnostics.
         debugLog("system", "live_location_sent", { seq, moved }, "info");
