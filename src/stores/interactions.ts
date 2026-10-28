@@ -22,6 +22,8 @@ export interface Like {
   author: string;
   timestamp: number;
   type: "like";
+  /** Root post id when this reaction targets a comment. */
+  parentMessageId?: string;
   liked?: boolean;
   pending?: boolean;
   failed?: boolean;
@@ -135,6 +137,8 @@ function decodeInteractionMessage(message: CanonicalMessage): Interaction | null
     if (!interaction?.id || !interaction.messageId || !["like", "comment"].includes(interaction.type)) return null;
     if (interaction.author?.toLowerCase() !== message.senderPubkey.toLowerCase()) return null;
     if (typeof interaction.timestamp !== "number") return null;
+    if (interaction.type === "like" && interaction.parentMessageId !== undefined
+      && typeof interaction.parentMessageId !== "string") return null;
     if (interaction.type === "comment") {
       if (typeof interaction.text !== "string") return null;
       if (interaction.media !== undefined) {
@@ -182,9 +186,9 @@ export const useInteractionsStore = defineStore("interactions", {
   },
 
   actions: {
-    async sendLike(messageId: string, messageAuthor: string) {
+    async sendLike(messageId: string, messageAuthor: string, parentMessageId?: string) {
       if (this.isLikedByUser(messageId, useKeyStore().pkHex)) return;
-      await this._sendLikeState(messageId, messageAuthor, true);
+      await this._sendLikeState(messageId, messageAuthor, true, parentMessageId);
     },
 
     async sendComment(
@@ -220,14 +224,14 @@ export const useInteractionsStore = defineStore("interactions", {
       }
     },
 
-    async removeLike(messageId: string, messageAuthor: string) {
+    async removeLike(messageId: string, messageAuthor: string, parentMessageId?: string) {
       const key = useKeyStore();
       if (!key.isLoggedIn) return;
       if (!this.isLikedByUser(messageId, key.pkHex)) return;
-      await this._sendLikeState(messageId, messageAuthor, false);
+      await this._sendLikeState(messageId, messageAuthor, false, parentMessageId);
     },
 
-    async _sendLikeState(messageId: string, messageAuthor: string, liked: boolean) {
+    async _sendLikeState(messageId: string, messageAuthor: string, liked: boolean, parentMessageId?: string) {
       const key = useKeyStore();
       if (!key.isLoggedIn) throw new Error("未登录");
       const transitionKey = `${key.pkHex.toLowerCase()}:${messageId}`;
@@ -240,6 +244,7 @@ export const useInteractionsStore = defineStore("interactions", {
         messageId,
         author: key.pkHex,
         liked,
+        ...(parentMessageId ? { parentMessageId } : {}),
         timestamp: Math.max(Math.floor(Date.now() / 1000), (previous?.timestamp || 0) + 1),
         type: "like"
       };
@@ -307,8 +312,11 @@ export const useInteractionsStore = defineStore("interactions", {
             : isMention ? `mention-comment:${interaction.id}` : `interaction:${message.id}`,
           type: isMention ? "mention_comment" : interaction.type,
           from: interaction.author,
-          messageId: interaction.messageId,
-          commentId: interaction.type === "comment" ? interaction.id : undefined,
+          messageId: interaction.type === "like" && interaction.parentMessageId
+            ? interaction.parentMessageId : interaction.messageId,
+          commentId: interaction.type === "comment" ? interaction.id
+            : interaction.type === "like" && interaction.parentMessageId ? interaction.messageId : undefined,
+          likeTargetId: interaction.type === "like" ? interaction.messageId : undefined,
           replyId: interaction.type === "comment" ? interaction.parentCommentId : undefined,
           created_at: interaction.timestamp,
           read: false

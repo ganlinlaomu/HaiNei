@@ -163,6 +163,17 @@ describe("comment bottom sheet", () => {
     expect(sheet).toContain("openProfile(router, keys.pkHex, pubkey, event)");
   });
 
+  it("places an Instagram-style like control and count at the right of every comment", () => {
+    const sheet = readThemedSource(join(process.cwd(), "src/components/CommentSheet.vue"), "utf8");
+    expect(sheet).toContain('class: ["comment-like", { liked }]');
+    expect(sheet).toContain('h(SwipeLucideIcon, { name: "heart" })');
+    expect(sheet).toContain('interactions.getLikeCount(rowProps.comment.id)');
+    expect(sheet).toContain('interactions.sendLike(comment.id, comment.author, props.message.id)');
+    expect(sheet).toContain('interactions.removeLike(comment.id, comment.author, props.message.id)');
+    expect(sheet).toContain(':deep(.comment-like.liked){color:#ed4956}');
+    expect(sheet).toContain(':deep(.comment-like-count)');
+  });
+
   it("counts replies and restores the unchanged feed scroll position on close", () => {
     expect(commentCountIncludingReplies([ROOT, REPLY, NESTED])).toBe(3);
     expect(feedScrollAfterSheetClose(428)).toBe(428);

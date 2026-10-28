@@ -7,6 +7,7 @@ const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
 const OTHER = "c".repeat(64);
 const POST = "post-id";
+const COMMENT = "comment-id";
 const NOW = Math.floor(Date.now() / 1000);
 
 const mocks = vi.hoisted(() => ({
@@ -42,8 +43,12 @@ function storage(): Storage {
   };
 }
 
-function likeMessage(eventId: string, author: string, liked: boolean | undefined, timestamp: number): CanonicalMessage {
+function likeMessage(eventId: string, author: string, liked: boolean | undefined, timestamp: number, parentMessageId?: string): CanonicalMessage {
   const like: Like = { id: `logical-${author}`, messageId: POST, author, timestamp, type: "like" };
+  if (parentMessageId) {
+    like.messageId = COMMENT;
+    like.parentMessageId = parentMessageId;
+  }
   if (liked !== undefined) like.liked = liked;
   return {
     id: eventId,
@@ -147,5 +152,30 @@ describe("stateful likes", () => {
     expect(mocks.send).toHaveBeenCalledTimes(1);
     expect(interactions.isLikedByUser(POST, ACCOUNT)).toBe(false);
     expect(interactions.getLikeCount(POST)).toBe(0);
+  });
+
+  it("keeps a comment like keyed to the comment and routes its notification through the root post", async () => {
+    const interactions = useInteractionsStore();
+    await interactions.processCanonicalInteraction(likeMessage("comment-like", PEER, true, NOW, POST), ACCOUNT);
+    expect(interactions.getLikeCount(COMMENT)).toBe(1);
+    expect(useNotificationsStore().list).toContainEqual(expect.objectContaining({
+      id: likeNotificationId(COMMENT, PEER),
+      type: "like",
+      messageId: POST,
+      commentId: COMMENT,
+      likeTargetId: COMMENT,
+    }));
+  });
+
+  it("includes the root post when sending and removing a comment like", async () => {
+    const interactions = useInteractionsStore();
+    await interactions.sendLike(COMMENT, PEER, POST);
+    expect(JSON.parse(mocks.send.mock.calls[0][0].content)).toMatchObject({
+      type: "like", messageId: COMMENT, parentMessageId: POST, liked: true,
+    });
+    await interactions.removeLike(COMMENT, PEER, POST);
+    expect(JSON.parse(mocks.send.mock.calls[1][0].content)).toMatchObject({
+      type: "like", messageId: COMMENT, parentMessageId: POST, liked: false,
+    });
   });
 });

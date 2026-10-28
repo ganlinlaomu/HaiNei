@@ -44,9 +44,12 @@
       <path d="M3 6h18" />
       <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
     </template>
+    <template v-else-if="name === 'heart'">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z" />
+    </template>
     <template v-else-if="name === 'check'"><path d="M20 6 9 17l-5-5" /></template>
   </svg>
 </template>
 <script setup lang="ts">
-defineProps<{ name: "pin" | "pin-off" | "bell" | "bell-off" | "eye-off" | "pencil" | "undo-2" | "trash-2" | "check" }>();
+defineProps<{ name: "pin" | "pin-off" | "bell" | "bell-off" | "eye-off" | "pencil" | "undo-2" | "trash-2" | "heart" | "check" }>();
 </script>

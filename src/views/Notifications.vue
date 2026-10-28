@@ -298,7 +298,7 @@ function notificationIconType(n: any): "like" | "comment" | "reply" | "friend" |
   return n.replyId ? "reply" : "comment";
 }
 function notificationAction(n: any) {
-  if (n.type === "like") return "点赞了你";
+  if (n.type === "like") return n.commentId ? "点赞了你的评论" : "点赞了你";
   if (n.type === "friend_request") return "请求添加你为好友";
   if (n.type === "mention_post") return "在帖子中提到了你";
   if (n.type === "mention_comment") return "在评论中提到了你";
