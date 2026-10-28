@@ -60,7 +60,15 @@ export async function searchGutenberg(query: string, page = 1, language = "", si
 }> {
   const params = new URLSearchParams({ search: query.trim(), copyright: "false", page: String(Math.max(1, Math.floor(page))) });
   if (language) params.set("languages", language);
-  const response = await fetch(CATALOG_ORIGIN + "/books/?" + params.toString(), { signal, cache: "no-store" });
+  let response: Response;
+  try {
+    response = await fetch(CATALOG_ORIGIN + "/books/?" + params.toString(), { signal, cache: "no-store" });
+  } catch (error) {
+    // Preserve AbortError for callers cancelling a search, but do not expose
+    // Safari's low-level "Load failed" to readers when the network disappears.
+    if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
+    throw new Error("无法连接在线书库。请检查网络；已下载的书籍仍可离线阅读。");
+  }
   if (!response.ok) throw new Error("书库暂时无法访问（HTTP " + response.status + "）");
   const data = await response.json() as GutenbergPage;
   if (!Array.isArray(data.results)) throw new Error("书库数据格式异常");

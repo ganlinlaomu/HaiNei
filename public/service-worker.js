@@ -415,8 +415,11 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Do not persist third-party/media responses in the app-shell cache.
-  event.respondWith(fetch(request));
+  // Leave third-party requests to the browser's native fetch path. In
+  // Safari, respondWith(fetch(request)) rejects when offline and produces
+  // "FetchEvent.respondWith received an error: TypeError: Load failed".
+  // No third-party response should enter our app-shell cache.
+  return;
 });
 
 self.addEventListener('push', (event) => {
