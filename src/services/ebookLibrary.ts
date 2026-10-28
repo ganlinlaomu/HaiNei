@@ -47,7 +47,10 @@ export async function saveLibraryBook(account: string, book: CatalogBook, file: 
     accountPubkey: account,
     id: book.id,
     title: book.title,
-    authors: book.authors,
+    // Vue ref() turns catalogue result arrays into reactive Proxy objects.
+    // IndexedDB structured clone rejects Proxies (DataCloneError), so copy
+    // only primitive author names into a fresh ordinary array.
+    authors: Array.from(book.authors, author => String(author)),
     language: book.language,
     coverUrl: book.coverUrl,
     sourceUrl: book.sourceUrl,

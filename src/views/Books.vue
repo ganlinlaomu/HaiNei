@@ -85,7 +85,7 @@ async function download(book:CatalogBook) {
   try {
     await downloadGutenbergBook(account.value, book, value => { progress.value = value; }, controller.signal);
     await refreshLibrary(); tab.value = "library";
-  } catch(e) { if (!controller.signal.aborted) error.value = message(e) + "。可打开原书页查看下载方式。"; }
+  } catch(e) { if (!controller.signal.aborted) error.value = message(e); }
   finally { downloadingId.value = ""; downloadController = null; }
 }
 async function remove(id:string) {
