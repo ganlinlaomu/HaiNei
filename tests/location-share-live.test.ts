@@ -306,6 +306,38 @@ describe("live location trail", () => {
   });
 });
 
+describe("local position next to a friend's share", () => {
+  it("watches GPS only while held or sharing, and never sends the local fix", () => {
+    const watchPosition = vi.fn((_ok: (position: any) => void) => 9);
+    const clearWatch = vi.fn();
+    vi.stubGlobal("navigator", { geolocation: { watchPosition, clearWatch } });
+    const store = useLiveLocationStore();
+    const release = store.holdLocalFix();
+    expect(watchPosition).toHaveBeenCalledTimes(1);
+    watchPosition.mock.calls[0][0]({ coords: { latitude: 31.21, longitude: 121.41, accuracy: 8 } });
+    expect(store.localFix).toMatchObject({ lat: 31.21, lng: 121.41 });
+    expect(mocks.sendFastControl).not.toHaveBeenCalled();
+    release();
+    release();
+    expect(clearWatch).toHaveBeenCalledWith(9);
+    expect(store.localFix).toBeNull();
+  });
+
+  it("sharing keeps the one GPS watch running after the local hold ends", async () => {
+    const watchPosition = vi.fn(() => 9);
+    const clearWatch = vi.fn();
+    vi.stubGlobal("navigator", { geolocation: { watchPosition, clearWatch } });
+    const store = useLiveLocationStore();
+    const release = store.holdLocalFix();
+    await store.startSharing(PEER, 600, { lat: 31.2, lng: 121.4, at: now() });
+    expect(watchPosition).toHaveBeenCalledTimes(1);
+    release();
+    expect(clearWatch).not.toHaveBeenCalled();
+    await store.stopSharing(PEER, false);
+    expect(clearWatch).toHaveBeenCalledWith(9);
+  });
+});
+
 describe("live location UI", () => {
   const render = (component: any, props: Record<string, unknown>, setup?: (store: ReturnType<typeof useLiveLocationStore>) => void) => {
     const pinia = createPinia();
@@ -393,6 +425,34 @@ describe("live location UI", () => {
     // It used to stay on the opening card's position.
     expect(html).toContain("31.21000, 121.41000");
     await store.stopSharing(PEER, false);
+  });
+
+  it("while a friend shares, shows our own position locally and offers to share back", async () => {
+    const html = await render(DmLocationCard, { location: card(), own: false, peer: PEER, peerName: "妈妈" }, store => {
+      store.receiveControl(update(1, 31.25));
+      store.localFix = { lat: 31.21, lng: 121.41, at: now() };
+    });
+    expect(html).toContain("也共享我的位置");
+    expect(html).not.toContain("复制坐标");
+    expect(html).toContain('aria-label="我的位置"');
+    expect(html).toContain("蓝点是你的位置，只有你自己能看到");
+    // Ended shares offer neither.
+    const ended = await render(DmLocationCard, { location: card(now() - 1), own: false, peer: PEER }, store => {
+      store.localFix = { lat: 31.21, lng: 121.41, at: now() };
+    });
+    expect(ended).not.toContain("也共享我的位置");
+    expect(ended).not.toContain('aria-label="我的位置"');
+  });
+
+  it("after sharing back, the friend's card shows our sent position, not the local-only one", async () => {
+    vi.stubGlobal("navigator", { geolocation: { watchPosition: vi.fn(() => 7), clearWatch: vi.fn() } });
+    const html = await render(DmLocationCard, { location: card(), own: false, peer: PEER, peerName: "妈妈" }, store => {
+      store.receiveControl(update(1, 31.25));
+      void store.startSharing(PEER, 600, { lat: 31.22, lng: 121.42, at: now() });
+    });
+    expect(html).not.toContain("也共享我的位置");
+    expect(html).not.toContain("只有你自己能看到");
+    expect(html).toContain('aria-label="我的位置"');
   });
 
   it("shows both positions on our own card when the friend is sharing too", async () => {
