@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.177",
-  "releaseSummary": "实时位置一方共享时双方都能显示在地图上",
+  "version": "0.1.178",
+  "releaseSummary": "电子书：Gutenberg 免账号读书，iPhone 轻点英文单词即可离线查中文释义",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
