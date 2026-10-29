@@ -2,3 +2,6 @@ node_modules
 dist
 .env
 public/ebook-dictionary/v1/
+
+# Generated Aozora metadata, built at deployment time
+public/ebook-catalog/aozora-index-v1.json

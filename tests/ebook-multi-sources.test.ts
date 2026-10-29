@@ -5,7 +5,9 @@ import { onRequestGet as aozoraText } from "../functions/api/books/aozora/text";
 import { parseAozoraCsv } from "../functions/api/books/aozora/search";
 import { searchOtherLibrary,sourceForBook } from "@/services/ebookSources";
 import { zipEpub } from "@/services/ebookAozora";
-afterEach(()=>vi.unstubAllGlobals());
+import { clearAozoraCatalogMemoryCache } from "@/services/ebookAozoraCatalog";
+import { rowsFromAozoraCsv } from "../scripts/generate-aozora-catalog.mjs";
+afterEach(()=>{vi.unstubAllGlobals();clearAozoraCatalogMemoryCache();});
 const request=(url:string)=>({request:new Request(url)});
 describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
   it("only searches Chinese Wikisource article namespace, preserving exact page titles",async()=>{
@@ -49,6 +51,37 @@ describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({id:773,title:"こころ",author:"夏目漱石"});
   });
+
+  it("identifies Wiki search as HaiNei, as required by Wikimedia API policy",async()=>{
+    const fetcher=vi.fn(async()=>new Response(JSON.stringify({query:{search:[]}})));
+    vi.stubGlobal("fetch",fetcher);
+    const response=await wikiSearch(request("https://pwa.lostr.space/api/books/wikisource/search?q="+encodeURIComponent("唐詩")+"&page=1"));
+    expect(response.status).toBe(200);
+    const options=fetcher.mock.calls[0][1] as RequestInit;
+    expect((options.headers as Record<string,string>)["User-Agent"]).toContain("HaiNei-BookReader");
+    expect((options.headers as Record<string,string>)["Api-User-Agent"]).toContain("github.com/ganlinlaomu/HaiNei");
+  });
+  it("falls back to Wikimedia CORS when the Cloudflare search returns a 502",async()=>{
+    const fetcher=vi.fn(async (url:string) => url.startsWith("/api/")
+      ? new Response(JSON.stringify({error:"Unavailable"}),{status:502})
+      : new Response(JSON.stringify({query:{search:[{ns:0,pageid:39,title:"論語"}]}})));
+    vi.stubGlobal("fetch",fetcher);
+    const data=await searchOtherLibrary("wikisource","論語",1);
+    expect(data.books.map(b=>b.id)).toEqual(["wikisource:39"]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(String(fetcher.mock.calls[1][0])).toContain("origin=*");
+  });
+  it("uses the same official Aozora catalogue filters for the prebuilt index",()=>{
+    const names=["作品ID","作品名","作品著作権フラグ","人物著作権フラグ","役割フラグ","姓名","XHTML/HTMLファイルURL","図書カードURL"];
+    const raw=[names.join(","),[
+      "000773","こころ","なし","なし","著者","夏目漱石",
+      "https://www.aozora.gr.jp/cards/000148/files/773_14560.html",
+      "https://www.aozora.gr.jp/cards/000148/card773.html"
+    ].join(",")].join("\r\n");
+    expect(rowsFromAozoraCsv(raw)).toMatchObject([{
+      id:"aozora:773",title:"こころ",authors:["夏目漱石"],language:"ja"
+    }]);
+  });
   it("generates a valid ZIP with an uncompressed first mimetype entry",async()=>{
     const epub=zipEpub([["mimetype","application/epub+zip"],["META-INF/container.xml","<container/>"],["OEBPS/chapter1.xhtml","<html/>"]]);
     const bytes=new Uint8Array(await epub.arrayBuffer());
@@ -60,14 +93,16 @@ describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
     expect(sourceForBook({id:"aozora:773"})).toBe("aozora");
     expect(sourceForBook({id:"wikisource:120"})).toBe("wikisource");
     expect(sourceForBook({id:"gutenberg:1342"})).toBe("gutenberg");
-    const fetcher=vi.fn(async()=>new Response(JSON.stringify({books:[{
-      id:"aozora:773",title:"こころ",authors:["夏目漱石"],language:"ja",
+    const books=Array.from({length:1000},(_,i)=>({
+      id:"aozora:"+(773+i),title:i===0?"こころ":"別の作品"+i,
+      authors:[i===0?"夏目漱石":"無名"],language:"ja",
       sourceUrl:"https://www.aozora.gr.jp/cards/000148/card773.html",
       epubUrl:"https://www.aozora.gr.jp/cards/000148/files/773_14560.html",downloads:0
-    }],hasNext:false})));
+    }));
+    const fetcher=vi.fn(async()=>new Response(JSON.stringify({version:1,books})));
     vi.stubGlobal("fetch",fetcher);
     const results=await searchOtherLibrary("aozora","こころ",1);
     expect(results.books).toHaveLength(1);
-    expect(fetcher.mock.calls[0][0]).toContain("/api/books/aozora/search");
+    expect(fetcher.mock.calls[0][0]).toContain("/ebook-catalog/aozora-index-v1.json");
   });
 });
