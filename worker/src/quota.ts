@@ -8,7 +8,15 @@ export function quotaPolicy(env: Env) {
   };
 }
 
-export async function assertUserAndQuota(env: Env, pubkey: string, requestedBytes?: unknown, now = Math.floor(Date.now() / 1000)) {
+export async function assertUserAndQuota(
+  env: Env,
+  pubkey: string,
+  requestedBytes?: unknown,
+  now = Math.floor(Date.now() / 1000),
+  // A batch checks its largest file against the per-file limit and the sum
+  // of all files against the daily byte quota.
+  batch?: { count: number; totalBytes: number },
+) {
   const user = await env.DB.prepare(
     "SELECT revoked_at FROM hainei_users WHERE pubkey = ?"
   ).bind(pubkey).first<{ revoked_at: number | null }>();
@@ -30,8 +38,8 @@ export async function assertUserAndQuota(env: Env, pubkey: string, requestedByte
     SELECT upload_count, upload_bytes FROM hainei_media_usage
     WHERE pubkey = ? AND usage_date = ?
   `).bind(pubkey, usageDate).first<{ upload_count: number; upload_bytes: number }>();
-  if (Number(usage?.upload_count || 0) >= policy.dailyUploadCount) throw new HttpError(429, "daily_upload_count_exceeded");
-  if (Number(usage?.upload_bytes || 0) + size > policy.dailyUploadBytes) throw new HttpError(429, "daily_upload_bytes_exceeded");
+  if (Number(usage?.upload_count || 0) + (batch?.count ?? 1) > policy.dailyUploadCount) throw new HttpError(429, "daily_upload_count_exceeded");
+  if (Number(usage?.upload_bytes || 0) + (batch?.totalBytes ?? size) > policy.dailyUploadBytes) throw new HttpError(429, "daily_upload_bytes_exceeded");
   return policy;
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
 import { createChallenge, verifyAndConsumeChallenge } from "../worker/src/auth";
-import { createMediaSession } from "../worker/src/media";
+import { createMediaSession, createMediaSessions } from "../worker/src/media";
 import { createRelaySession, relayPublicConfig } from "../worker/src/relay";
 import { assertUserAndQuota } from "../worker/src/quota";
 import type { Env } from "../worker/src/types";
@@ -312,6 +312,36 @@ describe("HaiNei Worker authentication and quota", () => {
     const result = await createMediaSession({ ...baseEnv(db), BLOSSOM: { fetch } }, pubkey, 10, "c".repeat(64));
     expect(result).toEqual({ token: "imgbed_upload_user", pubkey, scope: "upload", expiresAt: 9999 });
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("issues one bound token per item for a batched media session", async () => {
+    const db = new MemoryD1();
+    const pubkey = "b".repeat(64);
+    const fetch = vi.fn(async (request: Request) => {
+      const body = await request.json() as any;
+      return new Response(JSON.stringify({
+        bindingVersion: 1, singleUse: true, contentHash: body.contentHash, maxBytes: body.maxBytes,
+        token: `imgbed_${body.contentHash[0]}`, subject: pubkey, scope: "upload", expiresAt: 9999,
+      }), { status: 201 });
+    });
+    const env = { ...baseEnv(db), BLOSSOM: { fetch } };
+    const result = await createMediaSessions(env, pubkey, [
+      { fileSize: 300, contentHash: "c".repeat(64) },
+      { fileSize: 80, contentHash: "d".repeat(64) },
+    ]);
+    expect(result.sessions.map(session => session.token)).toEqual(["imgbed_c", "imgbed_d"]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    await expect(createMediaSessions(env, pubkey, [])).rejects.toMatchObject({ status: 400 });
+    await expect(createMediaSessions(env, pubkey, Array.from({ length: 5 }, () => ({ fileSize: 1, contentHash: "c".repeat(64) }))))
+      .rejects.toMatchObject({ status: 400 });
+    await expect(createMediaSessions(env, pubkey, [{ fileSize: 1, contentHash: "bad" }])).rejects.toMatchObject({ status: 400 });
+    // The whole batch counts against the daily quota.
+    db.usage.set(`${pubkey}|${new Date().toISOString().slice(0, 10)}`, { upload_count: 499, upload_bytes: 0 });
+    await expect(createMediaSessions(env, pubkey, [
+      { fileSize: 1, contentHash: "c".repeat(64) },
+      { fileSize: 1, contentHash: "d".repeat(64) },
+    ])).rejects.toMatchObject({ status: 429 });
   });
 });
 

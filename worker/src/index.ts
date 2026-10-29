@@ -1,6 +1,6 @@
 import { createChallenge, verifyAndConsumeChallenge } from "./auth";
 import { createDevicePair, pollDevicePair, offerDevicePair, deliverDevicePair, finishDevicePair } from "./devicePair";
-import { createMediaSession } from "./media";
+import { createMediaSession, createMediaSessions } from "./media";
 import { createRelaySession, relayPublicConfig } from "./relay";
 import { createTurnCredentials } from "./turn";
 import { handleTileRequest, isTilePath } from "./tiles";
@@ -89,6 +89,7 @@ export async function handleRequest(request: Request, env: Env) {
       const pubkey = await verifyAndConsumeChallenge(
         env, payload.challenge, payload.event, undefined, "hainei_media_session", authBinding(request, payload),
       );
+      if (payload.items !== undefined) return json(await createMediaSessions(env, pubkey, payload.items), 201);
       return json(await createMediaSession(env, pubkey, payload.fileSize, payload.contentHash), 201);
     }
     if (path === "/api/turn/credentials") {

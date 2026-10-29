@@ -39,7 +39,7 @@ import { useMessagesStore, type InboxItem } from "@/stores/messages";
 import { syncedMessageRecordToInboxItem } from "@/nostr/messaging/messageViewModel";
 import { useSettingsStore } from "@/stores/settings";
 import { deviceStorage } from "@/services/deviceStorage";
-import { uploadEncryptedCommentImage } from "@/utils/commentImage";
+import { takeWarmedCommentImage, uploadEncryptedCommentImage } from "@/utils/commentImage";
 import { prepareEncryptedDmAudio, uploadPreparedEncryptedDmAudio } from "@/utils/encryptedDmAudio";
 import { serializePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
@@ -47,7 +47,8 @@ import { useNotificationsStore } from "@/stores/notifications";
 import { useFriendsStore } from "@/stores/friends";
 import { accountBadgeCount, syncAppBadge } from "@/utils/appBadge";
 import { registerDirectMessageStateOwner } from "@/services/directMessageStateEvents";
-import { onAppResume } from "@/services/appResumeCoordinator";
+import { appHiddenEpoch, onAppResume } from "@/services/appResumeCoordinator";
+import { debugLog } from "@/utils/debugLog";
 import { isOfflineSendError } from "@/services/networkStatus";
 import { scanMessageSearchPages } from "@/utils/messageSearch";
 
@@ -126,6 +127,10 @@ const PEER_HISTORY_WARM_TTL_MS = 30_000;
 const MAX_UNREAD_RECONCILE_ATTEMPTS = 4;
 const peerHistoryWarmups = new Map<string, { createdAt: number; promise: Promise<PeerHistoryPage> }>();
 const activeOutgoingTasks = new Map<string, Promise<void>>();
+// Uploads cut off by the app going to the background are retried this often
+// before they are reported as failed.
+const MAX_INTERRUPTED_UPLOAD_RETRIES = 3;
+const interruptedUploadRetries = new Map<string, number>();
 const activeBurnRequests = new Set<string>();
 const scheduledBurnTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const taskPreviewUrls = new Map<string, string>();
@@ -1617,7 +1622,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         if (image) {
           try {
             const imageBytes = await image.arrayBuffer();
-            durableTask = { ...task, imageBytes, updatedAt: Date.now() };
+            const preparedImage = await takeWarmedCommentImage(image);
+            durableTask = { ...task, imageBytes, ...(preparedImage ? { preparedImage } : {}), updatedAt: Date.now() };
             const index = this.outgoingTasks.findIndex(item => item.localId === task.localId && item.accountPubkey === account);
             if (index >= 0) this.outgoingTasks.splice(index, 1, durableTask);
           } catch (error) {
@@ -1786,6 +1792,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           await this.failTask(localId, "send_failed", new Error("好友关系已变更"));
           return;
         }
+        let uploadHiddenEpoch: number | undefined;
         try {
           let persisted: OutgoingDmTaskRecord | undefined;
           try {
@@ -1795,6 +1802,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
             throw persistenceError(error);
           }
           if (task.imageBytes && !task.uploadedRef) {
+            uploadHiddenEpoch = appHiddenEpoch();
             task = (await this.patchTask(localId, { state: "uploading", lastError: undefined })) || task;
             const imageBytes = task.imageBytes;
             if (!imageBytes) throw new Error("待上传图片不存在");
@@ -1843,9 +1851,29 @@ export const useDirectMessagesStore = defineStore("directMessages", {
               onQueued: async outgoingId => { await this.patchTask(localId, { outgoingId }); },
             });
           await this.finishTask(task, result);
+          interruptedUploadRetries.delete(key);
         } catch (error) {
           const current = this.outgoingTasks.find(item => item.accountPubkey === account && item.localId === localId) || task;
           const phase = typeof error === "object" && error && "phase" in error ? String(error.phase) : "";
+          const uploadInterrupted = uploadHiddenEpoch !== undefined
+            && appHiddenEpoch() !== uploadHiddenEpoch
+            && current.state === "uploading" && !current.uploadedRef && !current.outgoingId
+            && phase !== "persist_failed" && phase !== "aborted";
+          const retries = (interruptedUploadRetries.get(key) || 0) + 1;
+          if (uploadInterrupted && retries <= MAX_INTERRUPTED_UPLOAD_RETRIES) {
+            // The PWA was suspended mid-upload: iOS drops the request or the
+            // timeout budget runs out in the background. That is not the
+            // user's network failing, so retry instead of showing a failure.
+            interruptedUploadRetries.set(key, retries);
+            debugLog("media", "media_upload_interrupted", { retries, phase }, "info");
+            await this.patchTask(localId, { state: "uploading", lastError: WAITING_NETWORK_ERROR }).catch(() => undefined);
+            if (typeof document === "undefined" || document.visibilityState === "visible") {
+              // Already back in the foreground; otherwise the resume listener re-runs it.
+              setTimeout(() => { void this.runTask(localId); }, 300);
+            }
+            return;
+          }
+          interruptedUploadRetries.delete(key);
           if (phase !== "persist_failed" && isOfflineSendError(error)) {
             // Offline is not a failure: keep the task pending. The online
             // resume (resumePending) re-runs uploading/sending tasks.

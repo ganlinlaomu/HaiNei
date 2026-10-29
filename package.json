@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.178",
-  "releaseSummary": "电子书：Gutenberg 免账号读书，iPhone 轻点英文单词即可离线查中文释义",
+  "version": "0.1.179",
+  "releaseSummary": "图片上传更快：发帖图片先缩小再压缩，私信选图即开始处理，切后台中断的上传会自动重传",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

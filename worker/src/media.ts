@@ -1,9 +1,35 @@
 import { assertUserAndQuota } from "./quota";
 import { HttpError, integerSetting, type Env } from "./types";
 
+export const MAX_MEDIA_SESSION_BATCH = 4;
+
 export async function createMediaSession(env: Env, pubkey: string, requestedBytes?: unknown, contentHash?: unknown) {
   await assertUserAndQuota(env, pubkey, requestedBytes);
   if (typeof contentHash !== "string" || !/^[0-9a-f]{64}$/.test(contentHash)) throw new HttpError(400,"invalid_content_hash");
+  return issueUploadToken(env, pubkey, requestedBytes, contentHash);
+}
+
+/** One signed request for several uploads, e.g. a post's original and preview. */
+export async function createMediaSessions(env: Env, pubkey: string, items: unknown) {
+  if (!Array.isArray(items) || items.length < 1 || items.length > MAX_MEDIA_SESSION_BATCH) {
+    throw new HttpError(400, "invalid_media_session_items");
+  }
+  const parsed = items.map(item => {
+    const fileSize = Number(item?.fileSize);
+    const contentHash = item?.contentHash;
+    if (!Number.isSafeInteger(fileSize) || fileSize <= 0) throw new HttpError(400, "invalid_file_size");
+    if (typeof contentHash !== "string" || !/^[0-9a-f]{64}$/.test(contentHash)) throw new HttpError(400, "invalid_content_hash");
+    return { fileSize, contentHash };
+  });
+  await assertUserAndQuota(env, pubkey, Math.max(...parsed.map(item => item.fileSize)), undefined, {
+    count: parsed.length,
+    totalBytes: parsed.reduce((sum, item) => sum + item.fileSize, 0),
+  });
+  const sessions = await Promise.all(parsed.map(item => issueUploadToken(env, pubkey, item.fileSize, item.contentHash)));
+  return { sessions };
+}
+
+async function issueUploadToken(env: Env, pubkey: string, requestedBytes: unknown, contentHash: string) {
   if (!env.BLOSSOM_SERVICE_TOKEN) throw new HttpError(503, "service_token_not_configured");
   if (!env.BLOSSOM || typeof env.BLOSSOM.fetch !== "function") throw new HttpError(503, "blossom_service_not_configured");
 
