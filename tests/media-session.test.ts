@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMediaSession, resetMediaSessionCacheForTests } from "@/services/mediaSession";
-import { setMediaHealthReporter, uploadImageToBlossom, uploadImageToBlossomWithFallback } from "@/utils/blossom";
+import { primeManagedUploadSessions, setMediaHealthReporter, uploadImageToBlossom, uploadImageToBlossomWithFallback } from "@/utils/blossom";
 
 class MockXMLHttpRequest {
   static responses: Array<{ status?: number; body?: string; pending?: boolean }> = [];
@@ -96,9 +96,7 @@ describe("HaiNei Worker media sessions", () => {
 
   it("clears a rejected token and retries an upload only once", async () => {
     queueSession(A, "imgbed_upload_old");
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
     queueSession(A, "imgbed_upload_new");
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
     MockXMLHttpRequest.responses.push(
       { status: 401, body: JSON.stringify({ error: "expired_upload_token" }) },
       { status: 200, body: JSON.stringify({ url: "https://media.example/file" }) },
@@ -111,6 +109,67 @@ describe("HaiNei Worker media sessions", () => {
     expect(MockXMLHttpRequest.headers.map(headers => headers.Authorization)).toEqual([
       "Bearer imgbed_upload_old", "Bearer imgbed_upload_new",
     ]);
+    // Worker-bound tokens go straight to PUT: no HEAD preflight.
+    expect(fetchMock.mock.calls.every(call => String(call[0]).endsWith("/api/media/session"))).toBe(true);
+  });
+
+  it("primes several upload tokens with one signed request and uses each once", async () => {
+    const original = new File(["original-bytes"], "original.enc", { type: "application/octet-stream" });
+    const preview = new File(["preview"], "preview.enc", { type: "application/octet-stream" });
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ sessions: [
+      { token: "imgbed_primed_original", pubkey: A, scope: "upload", expiresAt: 1_893_459_600 },
+      { token: "imgbed_primed_preview", pubkey: A, scope: "upload", expiresAt: 1_893_459_600 },
+    ] }), { status: 201 }));
+    const sign = signer(A);
+    const servers = [{
+      id: "default:blossom-imgbed.noster.workers.dev",
+      type: "blossom" as const,
+      url: "https://blossom-imgbed.noster.workers.dev",
+      source: "default" as const,
+    }];
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key === "blossom_servers" ? JSON.stringify(servers) : null });
+    expect(await primeManagedUploadSessions([original, preview], { accountPubkey: A, signEvent: sign })).toBe(2);
+    expect(sign).toHaveBeenCalledOnce();
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.items).toHaveLength(2);
+    expect(body.items[0]).toMatchObject({ fileSize: original.size });
+
+    MockXMLHttpRequest.responses.push(
+      { status: 200, body: JSON.stringify({ url: "https://default.example/original" }) },
+      { status: 200, body: JSON.stringify({ url: "https://default.example/preview" }) },
+    );
+    await uploadImageToBlossomWithFallback(original, { accountPubkey: A, signEvent: sign, servers });
+    await uploadImageToBlossomWithFallback(preview, { accountPubkey: A, signEvent: sign, servers });
+    expect(MockXMLHttpRequest.headers.map(headers => headers.Authorization)).toEqual([
+      "Bearer imgbed_primed_original", "Bearer imgbed_primed_preview",
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    // A primed token is single-use: the same file again needs a new session.
+    queueSession(A, "imgbed_fresh");
+    MockXMLHttpRequest.responses.push({ status: 200, body: JSON.stringify({ url: "https://default.example/again" }) });
+    await uploadImageToBlossomWithFallback(original, { accountPubkey: A, signEvent: sign, servers });
+    expect(MockXMLHttpRequest.headers[2].Authorization).toBe("Bearer imgbed_fresh");
+  });
+
+  it("falls back to per-upload sessions when the Worker predates batches", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "invalid_file_size" }), { status: 400 }));
+    const servers = [{ id: "d", type: "blossom", url: "https://blossom-imgbed.noster.workers.dev", source: "default" }];
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key === "blossom_servers" ? JSON.stringify(servers) : null });
+    expect(await primeManagedUploadSessions(
+      [new File(["a"], "a"), new File(["b"], "b")],
+      { accountPubkey: A, signEvent: signer(A) },
+    )).toBe(0);
+  });
+
+  it("does not prime sessions for a custom first server", async () => {
+    const servers = [{ id: "c", type: "blossom", url: "https://custom.example", source: "user" }];
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key === "blossom_servers" ? JSON.stringify(servers) : null });
+    expect(await primeManagedUploadSessions(
+      [new File(["a"], "a"), new File(["b"], "b")],
+      { accountPubkey: A, signEvent: signer(A) },
+    )).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("keeps custom servers on BUD-11 and never calls the Worker session routes", async () => {
@@ -129,7 +188,6 @@ describe("HaiNei Worker media sessions", () => {
 
   it("automatically uses the Worker-issued token for the managed default server", async () => {
     queueSession(A, "imgbed_upload_default");
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
     MockXMLHttpRequest.responses.push({ status: 200, body: JSON.stringify({ url: "https://default.example/file" }) });
     await uploadImageToBlossomWithFallback(new File(["data"], "file.txt", { type: "text/plain" }), {
       accountPubkey: A,

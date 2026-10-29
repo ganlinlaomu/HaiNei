@@ -22,8 +22,10 @@ import {
   type MediaServer,
   type MediaServerType
 } from "@/services/connectionSettings";
-import { clearMediaSession, getMediaSession } from "@/services/mediaSession";
+import { clearMediaSession, getMediaSession, primeMediaSessions } from "@/services/mediaSession";
 import { deviceStorage } from "@/services/deviceStorage";
+import { appHiddenEpoch } from "@/services/appResumeCoordinator";
+import { debugLog } from "@/utils/debugLog";
 
 export const DEFAULT_BLOSSOM_SERVERS = [
   { url: DEFAULT_MEDIA_SERVERS[0].url }
@@ -144,10 +146,16 @@ function buf2hex(buffer: ArrayBuffer) {
   return Array.prototype.map.call(new Uint8Array(buffer), (x: number) => ("00" + x.toString(16)).slice(-2)).join("");
 }
 
+const fileHashes = new WeakMap<File, Promise<string>>();
+
 async function sha256HexFromFile(file: File): Promise<string> {
-  const ab = await file.arrayBuffer();
-  const digest = await crypto.subtle.digest("SHA-256", ab);
-  return buf2hex(digest);
+  let pending = fileHashes.get(file);
+  if (!pending) {
+    pending = file.arrayBuffer().then(ab => crypto.subtle.digest("SHA-256", ab)).then(buf2hex);
+    fileHashes.set(file, pending);
+    pending.catch(() => fileHashes.delete(file));
+  }
+  return pending;
 }
 
 function makeDetailedError(message: string, details?: any) {
@@ -374,31 +382,13 @@ export async function uploadImageToBlossom(
       baseHeaders["Authorization"] = bearerAuthorizationHeaderValue;
     }
 
-    let head = await headProbe(uploadUrl, baseHeaders, budget.signal, Math.min(8_000, remaining()));
+    // A Worker-issued token is already bound to this hash, size and quota, and
+    // PUT re-checks all of it, so the HEAD preflight would only add a round trip.
+    let head: Awaited<ReturnType<typeof headProbe>> = bearerAuthorizationHeaderValue
+      ? { ok: true, status: 200, details: { status: 200, reason: undefined, responseHeaders: {} } }
+      : await headProbe(uploadUrl, baseHeaders, budget.signal, Math.min(8_000, remaining()));
 
     let authorizationHeaderValue: string | undefined;
-    if (head.status === 401 && !uploadToken && typeof options?.signEvent === "function") {
-      if (options.managedHaiNeiServer && bearerAuthorizationHeaderValue && serverBaseUrl && options.accountPubkey) {
-        clearMediaSession(serverBaseUrl, options.accountPubkey);
-        const refreshed = await getMediaSession(
-          serverBaseUrl,
-          options.accountPubkey,
-          options.signEvent,
-          true,
-          size,
-          shaHex,
-          budget.signal
-        );
-        bearerAuthorizationHeaderValue = `Bearer ${refreshed.token}`;
-        head = await headProbe(
-          uploadUrl,
-          { ...baseHeaders, Authorization: bearerAuthorizationHeaderValue },
-          budget.signal,
-          Math.min(8_000, remaining())
-        );
-      }
-    }
-
     if ((head.status === 401 || head.status === 403)
       && !uploadToken
       && !bearerAuthorizationHeaderValue
@@ -591,19 +581,6 @@ export async function uploadImageToBlossom(
           budget.signal
         );
         effectiveAuthorizationHeaderValue = `Bearer ${refreshed.token}`;
-        const retryHead = await headProbe(
-          uploadUrl,
-          { ...baseHeaders, Authorization: effectiveAuthorizationHeaderValue },
-          budget.signal,
-          Math.min(8_000, remaining())
-        );
-        if (!retryHead.ok) {
-          throw makePhaseError(
-            "head_failed",
-            `HEAD /upload 被拒绝，HTTP ${retryHead.status}${retryHead.details?.reason ? `: ${retryHead.details.reason}` : ""}`,
-            retryHead.details
-          );
-        }
         putResult = await sendPut(effectiveAuthorizationHeaderValue);
       } else {
         throw error;
@@ -614,6 +591,29 @@ export async function uploadImageToBlossom(
   } finally {
     budget.cleanup();
   }
+}
+
+function isManagedHaiNeiServer(server: Pick<MediaServer, "source" | "url">) {
+  const normalized = normalizeMediaUrl(server.url);
+  return server.source === "default"
+    && DEFAULT_MEDIA_SERVERS.some(defaultServer => normalizeMediaUrl(defaultServer.url) === normalized);
+}
+
+/**
+ * Before uploading several files (a post's original and preview), fetch all
+ * their upload tokens from the HaiNei Worker in one signed request. Only the
+ * managed default server uses those tokens; for anything else this is a no-op.
+ */
+export async function primeManagedUploadSessions(
+  files: File[],
+  options: { accountPubkey?: string; signEvent?: (evt: any) => Promise<any> | any; signal?: AbortSignal },
+) {
+  if (files.length < 2 || !options.accountPubkey || typeof options.signEvent !== "function") return 0;
+  const cfg = await getBlossomConfig();
+  const first = cfg.servers.find(server => server.enabled !== false && !server.deleted);
+  if (!first || !isManagedHaiNeiServer(first)) return 0;
+  const items = await Promise.all(files.map(async file => ({ fileSize: file.size, contentHash: await sha256HexFromFile(file) })));
+  return primeMediaSessions(normalizeMediaUrl(first.url), options.accountPubkey, options.signEvent, items, options.signal);
 }
 
 /**
@@ -659,9 +659,10 @@ export async function uploadImageToBlossomWithFallback(
   const { result, server } = await runMediaFailover(
     serverList,
     current => {
-      const normalizedCurrent = normalizeMediaUrl(current.url);
-      const managedHaiNeiServer = current.source === "default"
-        && DEFAULT_MEDIA_SERVERS.some(defaultServer => normalizeMediaUrl(defaultServer.url) === normalizedCurrent);
+      const managedHaiNeiServer = isManagedHaiNeiServer(current);
+      const startedAt = Date.now();
+      const hiddenAtStart = appHiddenEpoch();
+      const host = (() => { try { return new URL(normalizeBlossomUploadUrl(current.url)).host; } catch { return "invalid"; } })();
       return uploadImageToBlossom(file, {
       accountPubkey: options?.accountPubkey,
       signEvent: options?.signEvent,
@@ -672,6 +673,25 @@ export async function uploadImageToBlossomWithFallback(
       uploadToken: managedHaiNeiServer ? "" : current.token || "",
       serverBaseUrl: current.url,
       managedHaiNeiServer,
+    }).then(result => {
+      debugLog("media", "media_upload_ok", {
+        host, size: file.size, durationMs: Date.now() - startedAt, managed: managedHaiNeiServer,
+      }, "info");
+      return result;
+    }, error => {
+      debugLog("media", "media_upload_failed", {
+        host,
+        size: file.size,
+        durationMs: Date.now() - startedAt,
+        managed: managedHaiNeiServer,
+        phase: (error as any)?.phase,
+        name: (error as any)?.name,
+        message: error instanceof Error ? error.message : String(error),
+        status: (error as any)?.details?.status,
+        backgrounded: appHiddenEpoch() !== hiddenAtStart,
+        online: typeof navigator === "undefined" ? undefined : navigator.onLine,
+      }, "warn");
+      throw error;
     });
     },
     (current, ok) => reportHealth?.(current.id, ok, Date.now()),

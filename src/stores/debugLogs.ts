@@ -12,6 +12,7 @@ export type DebugLogCategory =
   | "storage"
   | "ui"
   | "account"
+  | "media"
   | "system";
 
 export interface DebugLogEntry {

@@ -41,6 +41,34 @@ export async function prepareEncryptedCommentImage(file: File): Promise<Prepared
   };
 }
 
+const warmed = new WeakMap<File, Promise<PreparedEncryptedImage>>();
+// Warm one image at a time: decoding several full-size photos at once can
+// exhaust memory on iOS.
+let warmQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Start compressing and encrypting an image as soon as it is picked, so the
+ * work is usually done by the time the user taps send.
+ */
+export function warmEncryptedCommentImage(file: File) {
+  let pending = warmed.get(file);
+  if (!pending) {
+    pending = warmQueue.then(() => prepareEncryptedCommentImage(file));
+    warmQueue = pending.catch(() => undefined);
+    warmed.set(file, pending);
+    pending.catch(() => warmed.delete(file));
+  }
+  return pending;
+}
+
+/** The warmed result for `file`, if it was warmed and succeeded. */
+export async function takeWarmedCommentImage(file: File): Promise<PreparedEncryptedImage | undefined> {
+  const pending = warmed.get(file);
+  if (!pending) return undefined;
+  warmed.delete(file);
+  return pending.catch(() => undefined);
+}
+
 export async function uploadPreparedEncryptedCommentImage(
   prepared: PreparedEncryptedImage,
   options: {

@@ -8,6 +8,15 @@ let installed = false;
 let lastDispatchAt = 0;
 let lastDispatchReason: AppResumeReason | null = null;
 let hiddenSinceLastDispatch = false;
+let hiddenEpoch = 0;
+
+/**
+ * Counts how often the page went to the background. Compare two readings to
+ * learn whether long-running work (an upload) was interrupted by a suspend.
+ */
+export function appHiddenEpoch() {
+  return hiddenEpoch;
+}
 
 function canDispatch() {
   return typeof document === "undefined" || document.visibilityState !== "hidden";
@@ -40,6 +49,7 @@ function dispatch(reason: AppResumeReason) {
 function visibilityHandler() {
   if (document.visibilityState === "hidden") {
     hiddenSinceLastDispatch = true;
+    hiddenEpoch += 1;
     // Background interrupts catch-up; show it in the launch timeline.
     startupMark("app_hidden");
   }

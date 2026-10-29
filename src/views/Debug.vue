@@ -90,7 +90,7 @@
         <select v-model="categoryFilter" aria-label="日志分类">
           <option value="all">All</option><option value="relay">Relay</option><option value="publish">Publish</option>
           <option value="subscription">Subscription</option><option value="nip17">NIP17</option><option value="sync">Sync</option>
-          <option value="storage">Storage</option><option value="ui">UI</option><option value="account">Account</option>
+          <option value="storage">Storage</option><option value="ui">UI</option><option value="account">Account</option><option value="media">Media</option>
         </select>
         <select v-model="levelFilter" aria-label="日志级别">
           <option value="all">All levels</option><option value="debug">Debug</option><option value="info">Info</option>

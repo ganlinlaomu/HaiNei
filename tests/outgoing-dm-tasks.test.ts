@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   send: vi.fn(),
   publish: vi.fn(),
   upload: vi.fn(),
+  takeWarmed: vi.fn(async (_file: File) => undefined as any),
+  hiddenEpoch: 0,
   prepareAudio: vi.fn(),
   uploadAudio: vi.fn(),
   queueGet: vi.fn(),
@@ -23,13 +25,17 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/stores/keys", () => ({ useKeyStore: () => mocks.key }));
+vi.mock("@/services/appResumeCoordinator", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/services/appResumeCoordinator")>()),
+  appHiddenEpoch: () => mocks.hiddenEpoch,
+}));
 vi.mock("@/nostr/relays", () => ({ getRelaysFromStorage: () => ["wss://relay.test"] }));
 vi.mock("@/nostr/messaging/service", () => ({
   sendDirectMessage: mocks.send,
   publishQueuedOutgoing: mocks.publish,
   registerOutgoingPushSigner: vi.fn(),
 }));
-vi.mock("@/utils/commentImage", () => ({ uploadEncryptedCommentImage: mocks.upload }));
+vi.mock("@/utils/commentImage", () => ({ uploadEncryptedCommentImage: mocks.upload, takeWarmedCommentImage: mocks.takeWarmed }));
 vi.mock("@/utils/encryptedDmAudio", () => ({
   prepareEncryptedDmAudio: mocks.prepareAudio,
   uploadPreparedEncryptedDmAudio: mocks.uploadAudio,
@@ -324,6 +330,46 @@ describe("optimistic outgoing DM tasks", () => {
     expect(mocks.upload).toHaveBeenCalledTimes(2);
     expect(direct.peerMessages(PEER)).toHaveLength(1);
     expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent");
+  });
+
+  it("uses the image prepared at selection time instead of preparing it again", async () => {
+    const prepared = {
+      encryptedBytes: bytes("encrypted"), encryptedName: "photo.encrypted",
+      previewBytes: bytes("preview"), mime: "image/jpeg",
+      iv: "iv", key: "warm", width: 10, height: 10,
+    };
+    mocks.takeWarmed.mockResolvedValueOnce(prepared);
+    mocks.upload.mockImplementationOnce(async (_file: File, options: any) => {
+      expect(options.prepared).toMatchObject({ key: "warm" });
+      return { ref: "blossom+aesgcm:warm" };
+    });
+    mocks.send.mockImplementation(async (options: any) => canonical("canonical-warm", options.content));
+    const { direct } = seed();
+    direct.send(PEER, "", new File(["image"], "photo.jpg", { type: "image/jpeg" }));
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
+    expect(mocks.upload).toHaveBeenCalledOnce();
+  });
+
+  it("retries an upload cut off by the app going to the background instead of failing it", async () => {
+    mocks.upload
+      .mockImplementationOnce(async () => {
+        mocks.hiddenEpoch += 1;
+        throw Object.assign(new Error("上传超时"), { phase: "put_timeout", name: "TimeoutError" });
+      })
+      .mockResolvedValueOnce({ ref: "blossom+aesgcm:after-resume" });
+    mocks.send.mockImplementation(async (options: any) => canonical("canonical-resumed", options.content));
+    const { direct } = seed();
+    direct.send(PEER, "", new File(["image"], "photo.jpg", { type: "image/jpeg" }));
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"), { timeout: 3000 });
+    expect(mocks.upload).toHaveBeenCalledTimes(2);
+  });
+
+  it("still reports upload_failed when the app stayed in the foreground", async () => {
+    mocks.upload.mockRejectedValueOnce(Object.assign(new Error("HTTP 500"), { phase: "put_network_error" }));
+    const { direct } = seed();
+    direct.send(PEER, "", new File(["image"], "photo.jpg", { type: "image/jpeg" }));
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("upload_failed"));
+    expect(mocks.upload).toHaveBeenCalledOnce();
   });
 
   it("does not re-upload after Relay failure and repeated retry stays idempotent", async () => {

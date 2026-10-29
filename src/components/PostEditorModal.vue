@@ -276,7 +276,7 @@ import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import { mentionTags, type MentionCandidate } from "@/utils/mentions";
 import { HAINEI_BOT_NAME, HAINEI_BOT_PUBKEY, isHaiNeiBot } from "@/utils/haineiBot";
-import { uploadImageToBlossomWithFallback, getBlossomConfig } from "@/utils/blossom";
+import { uploadImageToBlossomWithFallback, getBlossomConfig, primeManagedUploadSessions } from "@/utils/blossom";
 import { resizeImageFile } from "@/utils/imageResize";
 import { compressImageToTargetSize } from "@/utils/imageCompression";
 import {
@@ -774,14 +774,13 @@ export default defineComponent({
       updateUploadItem(item.id, { status: "uploading", progress: 0, errorShort: undefined, errorDetails: undefined });
 
       try {
-        // 👇 关键：上传前使用智能压缩，目标大小 200-300KB
-        console.log(`开始压缩图片: ${file.name}`);
+        // 先把长边限制到 2048px，再压到 200-300KB
         const compressionResult = await compressImageToTargetSize(file, {
-          minTargetSize: 200 * 1024, // 200KB
-          maxTargetSize: 300 * 1024, // 300KB
-          maxIterations: 10
+          minTargetSize: 200 * 1024,
+          maxTargetSize: 300 * 1024,
+          maxEdge: 2048,
         });
-        
+
         console.log(
           `压缩结果: ${(compressionResult.originalSize / 1024).toFixed(1)}KB -> ` +
           `${(compressionResult.compressedSize / 1024).toFixed(1)}KB, ` +
@@ -798,6 +797,13 @@ export default defineComponent({
           prepareEncryptedImage(compressedFile),
           prepareEncryptedImage(previewFile),
         ]);
+        // One signed Worker request for both upload tokens instead of two.
+        await primeManagedUploadSessions([preparedOriginal.encryptedFile, preparedPreview.encryptedFile], {
+          accountPubkey: accountAtStart,
+          signEvent: signEventWrapper,
+          signal: uploadController.signal,
+        }).catch(() => 0);
+        if (uploadController.signal.aborted) return;
         let originalProgress = 0;
         let previewProgress = 0;
         const reportProgress = () => updateUploadItem(item.id, {

@@ -426,6 +426,7 @@ import { SWIPE_INTENT_THRESHOLD, SWIPE_REPLY_THRESHOLD, useMessageGestures } fro
 import { resizeComposerTextarea } from "@/utils/composerTextarea";
 import { dmDeliveryLabel } from "@/utils/networkOperationFeedback";
 import { quotedMessageExcerpt } from "@/utils/quotedMessageExcerpt";
+import { warmEncryptedCommentImage } from "@/utils/commentImage";
 import { canMarkConversationTailRead } from "@/utils/messageReadVisibility";
 import type { MentionCandidate } from "@/utils/mentions";
 import { loadAccountStoresOnce, waitForFirstPaint } from "@/utils/bottomTabActivation";
@@ -1331,6 +1332,7 @@ function selectImages(event: Event) {
   clearSelectedImages();
   selectedImages.value = files.slice(0, MAX_SELECTED_IMAGES)
     .map(file => ({ file, preview: URL.createObjectURL(file) }));
+  for (const image of selectedImages.value) void warmEncryptedCommentImage(image.file).catch(() => undefined);
   if (files.length > MAX_SELECTED_IMAGES) ui.addToast(`一次最多选择 ${MAX_SELECTED_IMAGES} 张图片`, 2200, "info");
 }
 function sendVoiceRecordingResult(result: VoiceRecordingResult, account: string, peer: string) {
