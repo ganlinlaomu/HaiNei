@@ -185,7 +185,7 @@ export function chapterStyles(theme: "light" | "sepia" | "dark", fontSize: numbe
     "table{max-width:100%;display:block;overflow:auto;border-collapse:collapse;font-size:.9em;margin:1em 0}td,th{padding:.2em .6em;vertical-align:top}" +
     "::selection{background:" + c.accent + "55}" +
     (readingMode === "paged"
-      ? "html{height:100%;overflow-x:auto;overflow-y:hidden;scroll-behavior:auto}" +
+      ? "html{height:100%;overflow-x:auto;overflow-y:hidden;scroll-behavior:auto;scrollbar-width:none;overscroll-behavior-x:contain}html::-webkit-scrollbar{display:none}" +
         "body{box-sizing:border-box;width:100%;max-width:none;height:100%;margin:0;padding:24px;column-width:calc(100vw - 48px);column-gap:48px;column-fill:auto;overflow:visible}" +
         "p,li,blockquote{orphans:2;widows:2}h1,h2,h3,h4{break-after:avoid-column}" +
         "img{max-height:calc(100vh - 60px);width:auto;object-fit:contain;break-inside:avoid-column}" +
@@ -308,6 +308,7 @@ export class OfflineEpub {
     // Strictly no publisher scripts, styles, network calls or navigation.
     const lang = script === "latin" ? "en" : script === "japanese" ? "ja" : "zh";
     return "<!doctype html><html lang=\"" + lang + "\"><head><meta charset=\"utf-8\">" +
+      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
       "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src blob: data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'\">" +
       "<style>" + chapterStyles(theme, fontSize, script, indented, readerFont, readingMode) + "</style></head><body>" +
       parsed.body.innerHTML + "</body></html>";
