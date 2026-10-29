@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.181",
-  "releaseSummary": "修复维基文库、青空文库只下载到几 KB：现在下载的是全文",
+  "version": "0.1.182",
+  "releaseSummary": "电子书排版更精致：去掉维基文库导航和版本提示，中文首行缩进、日文明朝体、英文自动断词",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

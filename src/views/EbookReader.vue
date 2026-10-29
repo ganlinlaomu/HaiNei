@@ -25,8 +25,8 @@
           <button type="submit">查询</button>
         </form>
         <p v-if="dictionaryError" class="dictionary-error" role="alert">{{ dictionaryError }}</p>
+        <p class="settings-tip">轻点英文单词查词 · 长按选句摘录</p>
       </section>
-      <p class="reader-lookup-hint">{{ dictionaryStatus === "installed" ? "轻点英文单词查词 · 长按选句摘录" : "轻点英文单词查词（首次请在 Aa 下载词典）· 长按选句摘录" }}</p>
       <div ref="scroller" class="chapter-scroller" @scroll.passive="onScroll"><div class="chapter-stage"><iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" />
         <div v-if="excerptRects.length" class="excerpt-highlights" aria-hidden="true"><span v-for="(box, i) in excerptRects" :key="i" :style="{ left: box.left + 'px', top: box.top + 'px', width: box.width + 'px', height: box.height + 'px' }" /></div>
         <div class="chapter-tap-layer" aria-hidden="true" @click="lookupTappedWord"
@@ -426,14 +426,14 @@ onUnmounted(() => {
 </script>
 <style scoped>
 .reader-page{position:fixed;inset:0;display:flex;flex-direction:column;z-index:50;background:#fff;color:#242830;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
-.reader-page.theme-sepia{background:#f5edda;color:#433c31}
+.reader-page.theme-sepia{background:#f5edda;color:#3d3528}
 .reader-page.theme-dark{background:#20252b;color:#e5e7eb}
-.reader-header{display:flex;align-items:center;justify-content:space-between;min-height:52px;border-bottom:1px solid #8884;gap:8px}
+.reader-header{display:flex;align-items:center;justify-content:space-between;min-height:50px;border-bottom:1px solid #8882;gap:8px}
 .reader-header>button{width:50px;min-height:44px;border:0;background:transparent;color:inherit;font-size:26px;cursor:pointer}
 .reader-header>div{display:grid;min-width:0;gap:3px;text-align:center}
 .reader-header strong{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:14px}
 .reader-header small{color:inherit;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
-.reader-lookup-hint{margin:0;padding:5px 14px;text-align:center;font-size:11px;line-height:1.5;opacity:.65}
+.settings-tip{width:100%;margin:0;font-size:12px;opacity:.6}
 .chapter-scroller{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .chapter-stage{position:relative}
 .chapter-frame{display:block;width:100%;height:1px;border:0;background:transparent}
@@ -449,10 +449,10 @@ onUnmounted(() => {
 .excerpt-bar-actions{display:flex;flex-wrap:wrap;gap:6px}
 .excerpt-bar-actions button{flex:1 1 auto;min-height:40px;padding:0 10px;border:1px solid #8885;border-radius:9px;background:transparent;color:inherit;font-size:14px;white-space:nowrap}
 .excerpt-bar-actions .excerpt-primary{border-color:#2563eb;background:#2563eb;color:#fff;font-weight:600}
-.reader-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:54px;padding:4px 14px;border-top:1px solid #8884}
+.reader-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:50px;padding:2px 10px;border-top:1px solid #8882}
 .reader-footer button{border:0;color:inherit;background:transparent;min-height:40px;padding:0 12px;font-size:14px}
 .reader-footer button:disabled{opacity:.3}
-.reader-footer span{font-size:12px;opacity:.7}
+.reader-footer span{font-size:12px;opacity:.55;font-variant-numeric:tabular-nums}
 .reader-message{margin:auto;padding:24px;font-size:14px;line-height:1.6}
 .settings{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #8884;font-size:13px}
 .settings label{display:flex;align-items:center;gap:6px}
