@@ -3,6 +3,12 @@ main = "src/index.ts"
 compatibility_date = "2026-09-15"
 compatibility_flags = ["nodejs_compat"]
 
+# D1 runs in WNAM while users are in Japan. Auth, quota and push make several
+# sequential D1 queries per request; run the Worker next to the database so a
+# request pays one trans-Pacific round trip instead of one per query.
+[placement]
+mode = "smart"
+
 [vars]
 AUTH_CHALLENGE_TTL_SECONDS = "300"
 AUTH_CHALLENGE_PER_MINUTE_PER_SOURCE = "120"

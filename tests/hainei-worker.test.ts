@@ -383,6 +383,11 @@ describe("HaiNei Worker authentication and quota", () => {
 });
 
 describe("Worker deployment configuration", () => {
+  it("runs the Worker next to its single-region D1 database", () => {
+    const config = readFileSync("worker/wrangler.toml", "utf8");
+    expect(config).toMatch(/^\[placement\]\nmode = "smart"$/m);
+  });
+
   it("keeps the managed relay URL in wrangler.toml so deploys cannot drop it", () => {
     const config = readFileSync("worker/wrangler.toml", "utf8");
     const vars = config.slice(config.indexOf("[vars]"), config.indexOf("[triggers]"));
