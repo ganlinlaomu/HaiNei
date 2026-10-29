@@ -12,8 +12,12 @@ export async function onRequestGet(context:Context):Promise<Response>{
   const key=new Request(input.origin+input.pathname+"?"+new URLSearchParams({q,page:p}));
   if(cache){try{const hit=await cache.match(key);if(hit)return hit;}catch{}}
   try{
-    const response=await fetch("https://zh.wikisource.org/w/api.php?"+params,{headers:{Accept:"application/json"},signal:AbortSignal.timeout(12000)});
-    if(!response.ok)return json({error:"Wikisource unavailable"},502);
+    const agent="HaiNei-BookReader/1.0 (https://github.com/ganlinlaomu/HaiNei)";
+    const response=await fetch("https://zh.wikisource.org/w/api.php?"+params,{
+      headers:{Accept:"application/json","User-Agent":agent,"Api-User-Agent":agent},
+      signal:AbortSignal.timeout(12000)
+    });
+    if(!response.ok)return json({error:"Wikisource upstream HTTP "+response.status},response.status===429?429:503);
     const data=await response.json() as {query?:{search?:WikiHit[]};continue?:{sroffset?:number}};
     if(!Array.isArray(data.query?.search))return json({error:"Invalid Wikisource data"},502);
     const results=data.query!.search!.filter(x=>x.ns===0&&typeof x.title==="string"&&typeof x.pageid==="number"&&
@@ -24,5 +28,5 @@ export async function onRequestGet(context:Context):Promise<Response>{
     const output=json({books:results,hasNext:Number.isInteger(data.continue?.sroffset)});
     if(cache){const saved=cache.put(key,output.clone()).catch(()=>{});if(context.waitUntil)context.waitUntil(saved);}
     return output;
-  }catch{return json({error:"Wikisource search timed out or unavailable"},502);}
+  }catch{return json({error:"Wikisource search timed out or unavailable"},503);}
 }
