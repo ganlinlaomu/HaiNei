@@ -27,7 +27,7 @@ describe("responsive ebook pagination", () => {
     expect(source).not.toContain('sandbox="allow-scripts');
     expect(source).toContain('class="chapter-tap-layer" aria-hidden="true" @click="lookupTappedWord"');
     expect(source).toContain('wordAtPoint(doc, event.clientX - rect.left, event.clientY - rect.top)');
-    expect(source).toContain('"prefers-reduced-motion: reduce"');
+    expect(source).toContain('(prefers-reduced-motion: reduce)');
     expect(source).toContain('pageSwipe');
     expect(source).toContain('readingMode: readingMode.value');
   });
