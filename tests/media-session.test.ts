@@ -202,6 +202,63 @@ describe("HaiNei Worker media sessions", () => {
     expect(MockXMLHttpRequest.headers[0].Authorization).toBe("Bearer imgbed_upload_default");
   });
 
+  const managedServers = [{
+    id: "default:blossom-imgbed.noster.workers.dev",
+    type: "blossom" as const,
+    url: "https://blossom-imgbed.noster.workers.dev",
+    source: "default" as const,
+  }];
+
+  it("retries a transient upload refusal with a fresh single-use token", async () => {
+    queueSession(A, "imgbed_upload_first");
+    queueSession(A, "imgbed_upload_second");
+    queueSession(A, "imgbed_upload_third");
+    MockXMLHttpRequest.responses.push(
+      { status: 429, body: "upload_concurrency_limit" },
+      { status: 409, body: "blob_operation_in_progress" },
+      { status: 200, body: JSON.stringify({ url: "https://default.example/file" }) },
+    );
+    const upload = uploadImageToBlossomWithFallback(new File(["data"], "file.txt", { type: "text/plain" }), {
+      accountPubkey: A, signEvent: signer(A), servers: managedServers,
+    });
+    await vi.waitFor(() => expect(MockXMLHttpRequest.headers).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(MockXMLHttpRequest.headers).toHaveLength(2));
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(upload).resolves.toMatchObject({ url: "https://default.example/file" });
+    expect(MockXMLHttpRequest.headers.map(headers => headers.Authorization)).toEqual([
+      "Bearer imgbed_upload_first",
+      "Bearer imgbed_upload_second",
+      "Bearer imgbed_upload_third",
+    ]);
+  });
+
+  it("does not retry a permanent upload refusal", async () => {
+    queueSession(A, "imgbed_upload_only");
+    MockXMLHttpRequest.responses.push({ status: 413, body: "file_too_large" });
+    await expect(uploadImageToBlossomWithFallback(new File(["data"], "file.txt", { type: "text/plain" }), {
+      accountPubkey: A, signEvent: signer(A), servers: managedServers,
+    })).rejects.toMatchObject({ details: { status: 413 } });
+    expect(MockXMLHttpRequest.headers).toHaveLength(1);
+  });
+
+  it("gives up after two retries", async () => {
+    for (const token of ["one", "two", "three"]) queueSession(A, token);
+    MockXMLHttpRequest.responses.push(
+      { status: 503, body: "busy" }, { status: 503, body: "busy" }, { status: 503, body: "busy" },
+    );
+    const upload = uploadImageToBlossomWithFallback(new File(["data"], "file.txt", { type: "text/plain" }), {
+      accountPubkey: A, signEvent: signer(A), servers: managedServers,
+    });
+    const rejected = expect(upload).rejects.toMatchObject({ details: { status: 503 } });
+    await vi.waitFor(() => expect(MockXMLHttpRequest.headers).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(MockXMLHttpRequest.headers).toHaveLength(2));
+    await vi.advanceTimersByTimeAsync(3_000);
+    await rejected;
+    expect(MockXMLHttpRequest.headers).toHaveLength(3);
+  });
+
   it("settles a valid HTTP 2xx descriptor once without aborting", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
     MockXMLHttpRequest.responses.push({ status: 200, body: JSON.stringify({ url: "https://media.example/file" }) });
