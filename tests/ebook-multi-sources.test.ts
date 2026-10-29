@@ -39,10 +39,11 @@ describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
     expect(bad.status).toBe(400);
     expect(fetcher).not.toHaveBeenCalled();
     const valid=await aozoraText(request("https://pwa.lostr.space/api/books/aozora/text?url="+encodeURIComponent("https://www.aozora.gr.jp/cards/000148/files/773_14560.html")));
-    expect(valid.status).toBe(502);
+    expect(valid.status).toBe(503);
     // An unavailable original must also try the official renewal site.
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
     expect(String(fetcher.mock.calls[1][0])).toContain("www.aozora-renewal.cloud");
+    expect(String(fetcher.mock.calls[2][0])).toContain("soranoha.org");
   });
   it("recovers from Aozora origin errors using the official renewal site",async()=>{
     const page='<html><body><div class="main_text"><p>Japanese text is available.</p></div></body></html>';
@@ -89,6 +90,39 @@ describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
     expect(response.status).toBe(413);
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+  it("falls back to Soranoha Markdown when the official Aozora fetch fails",async()=>{
+    const fetcher=vi.fn(async(url:string)=>{
+      if(url.startsWith("https://www.aozora.gr.jp/"))return new Response("unavailable",{status:503});
+      if(url==="https://soranoha.org/works/000773_000148/markdown")
+        return new Response("# こころ\n\n" + "先生と私。".repeat(20));
+      return new Response("not found",{status:404});
+    });
+    vi.stubGlobal("fetch",fetcher);
+    const response=await aozoraText(request("https://pwa.lostr.space/api/books/aozora/text?url="+encodeURIComponent("https://www.aozora.gr.jp/cards/000148/files/773_14560.html")));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toContain("text/markdown");
+    expect(response.headers.get("X-Aozora-Source")).toBe("soranoha");
+    expect((await response.text())).toContain("先生と私");
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+  it("uses only a matching Aozorahack path when the primary and Soranoha are offline",async()=>{
+    const mirror="https://raw.githubusercontent.com/aozorahack/aozorabunko_text/master/cards/000148/files/773_ruby_5968/773_ruby_5968.txt";
+    const official="https://www.aozora.gr.jp/cards/000148/files/773_14560.html";
+    const fetcher=vi.fn(async(url:string)=>url===mirror
+      ? new Response("Aozora story text. ".repeat(10))
+      : new Response("not found",{status:404}));
+    vi.stubGlobal("fetch",fetcher);
+    const url="https://pwa.lostr.space/api/books/aozora/text?url="+encodeURIComponent(official)+"&text="+encodeURIComponent(mirror);
+    const result=await aozoraText(request(url));
+    expect(result.status).toBe(200);
+    expect(result.headers.get("Content-Type")).toContain("text/plain");
+    expect(result.headers.get("X-Aozora-Source")).toBe("aozorahack");
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    fetcher.mockClear();
+    const invalid=await aozoraText(request(url.replace(encodeURIComponent(mirror),encodeURIComponent("https://raw.githubusercontent.com/aozorahack/aozorabunko_text/master/cards/999999/files/773_ruby_5968/773_ruby_5968.txt"))));
+    expect(invalid.status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it("filters copyrighted works and role duplicates from official Aozora metadata",()=>{
     const names=["作品ID","作品名","作品著作権フラグ","人物著作権フラグ","役割フラグ","姓名","XHTML/HTMLファイルURL","図書カードURL"];
     const row=(id:number,rights:string,role:string)=>[id===773?"000773":String(id),"こころ",rights,"なし",role,"夏目漱石",
@@ -119,14 +153,16 @@ describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
     expect(String(fetcher.mock.calls[1][0])).toContain("origin=*");
   });
   it("uses the same official Aozora catalogue filters for the prebuilt index",()=>{
-    const names=["作品ID","作品名","作品著作権フラグ","人物著作権フラグ","役割フラグ","姓名","XHTML/HTMLファイルURL","図書カードURL"];
+    const names=["作品ID","作品名","作品著作権フラグ","人物著作権フラグ","役割フラグ","姓名","XHTML/HTMLファイルURL","図書カードURL","テキストファイルURL"];
     const raw=[names.join(","),[
       "000773","こころ","なし","なし","著者","夏目漱石",
       "https://www.aozora.gr.jp/cards/000148/files/773_14560.html",
-      "https://www.aozora.gr.jp/cards/000148/card773.html"
+      "https://www.aozora.gr.jp/cards/000148/card773.html",
+      "https://www.aozora.gr.jp/cards/000148/files/773_ruby_5968.zip"
     ].join(",")].join("\r\n");
     expect(rowsFromAozoraCsv(raw)).toMatchObject([{
-      id:"aozora:773",title:"こころ",authors:["夏目漱石"],language:"ja"
+      id:"aozora:773",title:"こころ",authors:["夏目漱石"],language:"ja",
+      textUrl:"https://raw.githubusercontent.com/aozorahack/aozorabunko_text/master/cards/000148/files/773_ruby_5968/773_ruby_5968.txt"
     }]);
   });
   it("generates a valid ZIP with an uncompressed first mimetype entry",async()=>{
