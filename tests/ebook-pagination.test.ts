@@ -21,6 +21,22 @@ describe("responsive ebook pagination", () => {
     expect(percentForPage(0, 1)).toBe(1);
   });
 
+  it("flips a real page over its fully rendered destination like nostr-book", () => {
+    const source = readFileSync("src/views/EbookReader.vue", "utf8");
+    expect(source).toContain('class="chapter-sheet chapter-preview"');
+    expect(source).toContain('class="sheet-sheen"');
+    expect(source).toContain("perspective:1800px");
+    expect(source).toContain("transform-origin:left center");
+    expect(source).toContain("rotateY(-104deg)");
+    expect(source).toContain("@animationend=\"turnAnimationEnd\"");
+    expect(source).toContain('sandbox="allow-same-origin"');
+    expect(source).not.toContain('sandbox="allow-scripts');
+    expect(source).toContain("preview.page * width");
+    expect(source).toContain("moveToPage(preview.page)");
+    expect(source).toContain("if (readingMode.value !== \"paged\"");
+    expect(source).toContain('window.matchMedia?.("(prefers-reduced-motion: reduce)")');
+  });
+
   it("preserves sandboxed iframe, offline selection, and reduced-motion support", () => {
     const source = readFileSync("src/views/EbookReader.vue", "utf8");
     expect(source).toContain('sandbox="allow-same-origin"');
