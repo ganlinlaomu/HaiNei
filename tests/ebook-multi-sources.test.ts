@@ -40,6 +40,53 @@ describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
     expect(fetcher).not.toHaveBeenCalled();
     const valid=await aozoraText(request("https://pwa.lostr.space/api/books/aozora/text?url="+encodeURIComponent("https://www.aozora.gr.jp/cards/000148/files/773_14560.html")));
     expect(valid.status).toBe(502);
+    // An unavailable original must also try the official renewal site.
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(String(fetcher.mock.calls[1][0])).toContain("www.aozora-renewal.cloud");
+  });
+  it("recovers from Aozora origin errors using the official renewal site",async()=>{
+    const page='<html><body><div class="main_text"><p>Japanese text is available.</p></div></body></html>';
+    const fetcher=vi.fn(async (url:string)=>url.startsWith("https://www.aozora.gr.jp/")
+      ? new Response("Origin unavailable",{status:503})
+      : new Response(page,{headers:{"Content-Type":"text/html"}}));
+    vi.stubGlobal("fetch",fetcher);
+    const response=await aozoraText(request("https://pwa.lostr.space/api/books/aozora/text?url="+
+      encodeURIComponent("https://www.aozora.gr.jp/cards/000148/files/773_14560.html")));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Japanese text is available.");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(String(fetcher.mock.calls[1][0])).toBe("https://www.aozora-renewal.cloud/cards/000148/files/773_14560.html");
+  });
+  it("decodes official Shift-JIS instead of forwarding garbled Japanese",async()=>{
+    const prefix=new TextEncoder().encode('<html><body><div class="main_text"><p>');
+    const suffix=new TextEncoder().encode('</p></div></body></html>');
+    const bytes=new Uint8Array([...prefix,0x82,0xa0,...suffix]); // Shift-JIS あ
+    vi.stubGlobal("fetch",vi.fn(async()=>new Response(bytes,{headers:{"Content-Type":"text/html; charset=Shift_JIS"}})));
+    const response=await aozoraText(request("https://pwa.lostr.space/api/books/aozora/text?url="+
+      encodeURIComponent("https://www.aozora.gr.jp/cards/000148/files/773_14560.html")));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toContain("charset=utf-8");
+    expect(await response.text()).toContain("<p>あ</p>");
+  });
+  it("never follows an off-site redirect before trying renewal",async()=>{
+    const page='<html><body><div class="main_text"><p>Trusted backup.</p></div></body></html>';
+    const fetcher=vi.fn(async (url:string)=>url.startsWith("https://www.aozora.gr.jp/")
+      ? new Response(null,{status:302,headers:{Location:"https://evil.test/redirect.html"}})
+      : new Response(page,{headers:{"Content-Type":"text/html"}}));
+    vi.stubGlobal("fetch",fetcher);
+    const response=await aozoraText(request("https://pwa.lostr.space/api/books/aozora/text?url="+
+      encodeURIComponent("https://www.aozora.gr.jp/cards/000148/files/773_14560.html")));
+    expect(response.status).toBe(200);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls.every(([url])=>!url.includes("evil.test"))).toBe(true);
+  });
+  it("enforces the upstream size limit without fetching the backup",async()=>{
+    const fetcher=vi.fn(async()=>new Response("oversized",{
+      headers:{"Content-Type":"text/html","Content-Length":String(6*1024*1024)}}));
+    vi.stubGlobal("fetch",fetcher);
+    const response=await aozoraText(request("https://pwa.lostr.space/api/books/aozora/text?url="+
+      encodeURIComponent("https://www.aozora.gr.jp/cards/000148/files/773_14560.html")));
+    expect(response.status).toBe(413);
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
   it("filters copyrighted works and role duplicates from official Aozora metadata",()=>{
