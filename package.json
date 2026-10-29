@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.182",
-  "releaseSummary": "电子书排版更精致：去掉维基文库导航和版本提示，中文首行缩进、日文明朝体、英文自动断词",
+  "version": "0.1.183",
+  "releaseSummary": "电子书阅读新增轻柔左右翻页、书籍字体选择与阅读模式记忆，保留离线查词和摘录",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

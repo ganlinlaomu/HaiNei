@@ -14,6 +14,13 @@ describe("ebook chapter typography", () => {
     expect(zh).toContain("p{text-indent:2em}");
     expect(zh).toContain("text-align:justify");
     expect(zh).toContain("PingFang SC");
+    expect(zh).toContain("Songti SC");
+    const book = chapterStyles("sepia", 18, "cjk", true, "serif", "paged");
+    expect(book).toContain("column-fill:auto");
+    expect(book).toContain("column-gap:48px");
+    const sans = chapterStyles("light", 18, "cjk", false, "sans");
+    expect(sans).toContain("PingFang SC");
+    expect(sans).not.toContain("Songti SC");
     const ja = chapterStyles("dark", 18, "japanese", false);
     expect(ja).not.toContain("text-indent:2em");
     expect(ja).toContain("Hiragino Mincho ProN");

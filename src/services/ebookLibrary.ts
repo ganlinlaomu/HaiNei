@@ -14,6 +14,8 @@ export type LibraryBook = Omit<CatalogBook, "epubUrl" | "downloads"> & {
   chapterPercent: number;
   fontSize: number;
   theme: "light" | "sepia" | "dark";
+  readingMode?: "paged" | "scroll";
+  readerFont?: "serif" | "sans";
 };
 
 class EbookDatabase extends Dexie {
@@ -64,6 +66,8 @@ export async function saveLibraryBook(account: string, book: CatalogBook, file: 
     chapterPercent: existing?.chapterPercent ?? 0,
     fontSize: existing?.fontSize ?? 18,
     theme: existing?.theme ?? "light",
+    readingMode: existing?.readingMode ?? "paged",
+    readerFont: existing?.readerFont ?? "serif",
   });
 }
 
@@ -73,7 +77,7 @@ export async function saveLibraryCover(account: string, id: string, cover: Blob)
   await database.books.update([account, id], { coverBlob: cover });
 }
 
-export async function updateReadingState(account: string, id: string, patch: Partial<Pick<LibraryBook, "chapterIndex" | "chapterPercent" | "fontSize" | "theme">>): Promise<void> {
+export async function updateReadingState(account: string, id: string, patch: Partial<Pick<LibraryBook, "chapterIndex" | "chapterPercent" | "fontSize" | "theme" | "readingMode" | "readerFont">>): Promise<void> {
   ensureAccount(account);
   await database.books.update([account, id], patch);
 }

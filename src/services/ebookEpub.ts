@@ -147,13 +147,21 @@ const THEMES = {
 } as const;
 
 /** Reading CSS for a chapter: comfortable measure, CJK indents, quiet notes. */
-export function chapterStyles(theme: "light" | "sepia" | "dark", fontSize: number, script: ChapterScript, indented: boolean): string {
+export function chapterStyles(theme: "light" | "sepia" | "dark", fontSize: number, script: ChapterScript, indented: boolean, readerFont: "serif" | "sans" = "serif", readingMode: "scroll" | "paged" = "scroll"): string {
   const c = THEMES[theme] || THEMES.light;
-  const font = script === "latin"
-    ? '"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Noto Serif",serif'
-    : script === "japanese"
-      ? '"Hiragino Mincho ProN","Yu Mincho","Noto Serif CJK JP","Source Han Serif JP",serif'
-      : '-apple-system,"PingFang SC","PingFang TC","Hiragino Sans GB","Noto Sans CJK SC","Microsoft YaHei",system-ui,sans-serif';
+  // Prefer book-style local serif fonts; avoid network fonts so saved books stay offline.
+  // Keep PingFang as a fallback for iOS devices without a Chinese serif family.
+  const font = readerFont === "sans"
+    ? script === "latin"
+      ? '-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif'
+      : script === "japanese"
+        ? '"Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans CJK JP",system-ui,sans-serif'
+        : '-apple-system,"PingFang SC","PingFang TC","Hiragino Sans GB","Noto Sans CJK SC",system-ui,sans-serif'
+    : script === "latin"
+      ? '"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Noto Serif",serif'
+      : script === "japanese"
+        ? '"Hiragino Mincho ProN","Yu Mincho","Noto Serif CJK JP","Source Han Serif JP",serif'
+        : '"Songti SC","Songti TC","STSong","Noto Serif CJK SC","Source Han Serif SC","SimSun","PingFang SC",serif';
   const size = Math.max(14, Math.min(28, fontSize));
   const cjk = script !== "latin";
   return "html{background:" + c.bg + ";color:" + c.fg + ";font-family:" + font + ";font-size:" + size + "px;" +
@@ -175,7 +183,14 @@ export function chapterStyles(theme: "light" | "sepia" | "dark", fontSize: numbe
     "a{color:inherit;text-decoration:none}sup{font-size:.7em;color:" + c.muted + "}" +
     "pre{white-space:pre-wrap;font-size:.9em}ol,ul{padding-left:1.6em}li{margin:.3em 0}" +
     "table{max-width:100%;display:block;overflow:auto;border-collapse:collapse;font-size:.9em;margin:1em 0}td,th{padding:.2em .6em;vertical-align:top}" +
-    "::selection{background:" + c.accent + "55}";
+    "::selection{background:" + c.accent + "55}" +
+    (readingMode === "paged"
+      ? "html{height:100%;overflow-x:auto;overflow-y:hidden;scroll-behavior:auto;scrollbar-width:none;overscroll-behavior-x:contain}html::-webkit-scrollbar{display:none}" +
+        "body{box-sizing:border-box;width:100%;max-width:none;height:100%;margin:0;padding:24px;column-width:calc(100vw - 48px);column-gap:48px;column-fill:auto;overflow:visible}" +
+        "p,li,blockquote{orphans:2;widows:2}h1,h2,h3,h4{break-after:avoid-column}" +
+        "img{max-height:calc(100vh - 60px);width:auto;object-fit:contain;break-inside:avoid-column}" +
+        "table{break-inside:avoid-column}"
+      : "");
 }
 
 export class OfflineEpub {
@@ -248,7 +263,7 @@ export class OfflineEpub {
     this.objectUrls = [];
   }
 
-  async renderChapter(index: number, fontSize: number, theme: "light" | "sepia" | "dark"): Promise<string> {
+  async renderChapter(index: number, fontSize: number, theme: "light" | "sepia" | "dark", readerFont: "serif" | "sans" = "serif", readingMode: "scroll" | "paged" = "scroll"): Promise<string> {
     this.clearUrls();
     const chapter = this.chapters[index];
     if (!chapter) throw new Error("章节不存在");
@@ -293,8 +308,9 @@ export class OfflineEpub {
     // Strictly no publisher scripts, styles, network calls or navigation.
     const lang = script === "latin" ? "en" : script === "japanese" ? "ja" : "zh";
     return "<!doctype html><html lang=\"" + lang + "\"><head><meta charset=\"utf-8\">" +
+      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
       "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src blob: data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'\">" +
-      "<style>" + chapterStyles(theme, fontSize, script, indented) + "</style></head><body>" +
+      "<style>" + chapterStyles(theme, fontSize, script, indented, readerFont, readingMode) + "</style></head><body>" +
       parsed.body.innerHTML + "</body></html>";
   }
 
