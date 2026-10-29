@@ -1,5 +1,5 @@
 <template>
-  <main class="reader-page" :class="'theme-' + theme">
+  <main class="reader-page" :class="['theme-' + theme, 'mode-' + readingMode]">
     <header class="reader-header">
       <button type="button" aria-label="返回书架" @click="router.push('/books')">‹</button>
       <div><strong>{{ book?.title || "电子书" }}</strong><small>{{ epub ? (epub.chapters[chapterIndex]?.title || "") : "" }}</small></div>
@@ -10,6 +10,8 @@
     <template v-else-if="epub">
       <section v-if="settingsOpen" class="settings" aria-label="阅读设置">
         <label>字号 <button type="button" @click="changeFont(-2)">A−</button> {{ fontSize }} <button type="button" @click="changeFont(2)">A＋</button></label>
+        <label>阅读 <select v-model="readingMode" aria-label="阅读模式" @change="refreshChapter"><option value="paged">左右翻页</option><option value="scroll">上下滚动</option></select></label>
+        <label>字体 <select v-model="readerFont" aria-label="阅读字体" @change="refreshChapter"><option value="serif">书籍（宋体／明朝）</option><option value="sans">清晰（黑体）</option></select></label>
         <label>背景 <select v-model="theme" @change="refreshChapter"><option value="light">白色</option><option value="sepia">米色</option><option value="dark">夜间</option></select></label>
         <label>目录 <select :value="chapterIndex" @change="selectChapter"><option v-for="(item,i) in epub.chapters" :key="item.path" :value="i">{{ item.title }}</option></select></label>
         <div class="dictionary-settings">
@@ -65,9 +67,16 @@
         <small class="dictionary-credit">{{ DICTIONARY_ATTRIBUTION }}</small>
       </aside>
       <footer class="reader-footer">
-        <button type="button" :disabled="chapterIndex === 0" @click="loadChapter(chapterIndex-1,0)">上一章</button>
-        <span>{{ chapterIndex + 1 }} / {{ epub.chapters.length }} · {{ Math.round(chapterPercent*100) }}%</span>
-        <button type="button" :disabled="chapterIndex === epub.chapters.length-1" @click="loadChapter(chapterIndex+1,0)">下一章</button>
+        <template v-if="readingMode === 'paged'">
+          <button type="button" aria-label="上一页" :disabled="chapterIndex === 0 && pageIndex === 0" @click="turnPage(-1)">‹ 上一页</button>
+          <span>第 {{ pageIndex + 1 }} / {{ pageCount }} 页 · {{ chapterIndex + 1 }}/{{ epub.chapters.length }} 章</span>
+          <button type="button" aria-label="下一页" :disabled="chapterIndex === epub.chapters.length - 1 && pageIndex === pageCount - 1" @click="turnPage(1)">下一页 ›</button>
+        </template>
+        <template v-else>
+          <button type="button" :disabled="chapterIndex === 0" @click="loadChapter(chapterIndex-1,0)">上一章</button>
+          <span>{{ chapterIndex + 1 }} / {{ epub.chapters.length }} · {{ Math.round(chapterPercent*100) }}%</span>
+          <button type="button" :disabled="chapterIndex === epub.chapters.length-1" @click="loadChapter(chapterIndex+1,0)">下一章</button>
+        </template>
       </footer>
     </template>
   </main>
@@ -79,6 +88,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useKeyStore } from "@/stores/keys";
 import { getLibraryBook, saveLibraryCover, updateReadingState, type LibraryBook } from "@/services/ebookLibrary";
 import { OfflineEpub } from "@/services/ebookEpub";
+import { pageCountForWidth, pageForPercent, percentForPage } from "@/services/ebookPagination";
 import { DICTIONARY_ATTRIBUTION, installDictionary, isDictionaryInstalled, lookupDictionary, normalizeSelection, type DictionaryEntry } from "@/services/ebookDictionary";
 import { wordAtPoint } from "@/services/ebookWordSelection";
 import {
@@ -91,6 +101,8 @@ const keys = useKeyStore(), ui = useUIStore(), route = useRoute(), router = useR
 const book = ref<LibraryBook|null>(null), epub = ref<OfflineEpub|null>(null);
 const chapterIndex = ref(0), chapterPercent = ref(0), chapterHtml = ref("");
 const fontSize = ref(18), theme = ref<"light"|"sepia"|"dark">("light");
+const readingMode = ref<"paged"|"scroll">("paged"), readerFont = ref<"serif"|"sans">("serif");
+const pageIndex = ref(0), pageCount = ref(1);
 const loading = ref(true), error = ref(""), settingsOpen = ref(false);
 const frame = ref<HTMLIFrameElement|null>(null);
 const selectedWord = ref(""), manualWord = ref(""), dictionaryEntry = ref<DictionaryEntry|null>(null);
@@ -102,6 +114,7 @@ const account = computed(() => keys.pkHex);
 const id = computed(() => String(route.params.id || ""));
 let loadedAccount = "";
 let restorePercent = 0, saveTimer: ReturnType<typeof setTimeout>|null = null, chapterRequest = 0;
+let readerResizeObserver: ResizeObserver | null = null;
 function explanation(e:unknown) { return e instanceof Error ? e.message : "无法打开这本电子书"; }
 function saveSoon() {
   if (!loadedAccount || !book.value) return;
@@ -114,6 +127,7 @@ async function saveNow() {
     await updateReadingState(loadedAccount, book.value.id, {
       chapterIndex: chapterIndex.value, chapterPercent: chapterPercent.value,
       fontSize: fontSize.value, theme: theme.value,
+      readingMode: readingMode.value, readerFont: readerFont.value,
     });
   } catch { /* Storage errors must not stop a reading session. */ }
 }
@@ -124,7 +138,7 @@ async function loadChapter(index:number, percent:number) {
   const request = ++chapterRequest;
   error.value = "";
   try {
-    const html = await epub.value.renderChapter(index,fontSize.value,theme.value);
+    const html = await epub.value.renderChapter(index,fontSize.value,theme.value,readerFont.value,readingMode.value);
     if (request !== chapterRequest) return;
     chapterIndex.value = index;
     chapterPercent.value = percent;
@@ -136,16 +150,64 @@ async function loadChapter(index:number, percent:number) {
 function frameLoaded() {
   const doc = frame.value?.contentDocument;
   const container = scroller.value;
-  if (!doc || !container || !frame.value || !epub.value) return;
-  // WebKit blocks parent-installed listeners inside script-sandboxed srcdoc.
-  // Scroll in our own page instead, keeping the EPUB iframe script-disabled.
-  frame.value.style.height = "1px";
-  const contentHeight = Math.max(1,doc.documentElement.scrollHeight,doc.body.scrollHeight);
-  frame.value.style.height = contentHeight + "px";
+  const iframe = frame.value;
+  if (!doc || !container || !iframe || !epub.value) return;
+  // EPUB scripts remain disabled: all measuring/turning happens in our parent.
   textIndex = null;
   clearExcerpt();
-  const max = Math.max(0,container.scrollHeight - container.clientHeight);
-  container.scrollTop = Math.round(max * restorePercent);
+  if (readingMode.value === "paged") {
+    // CSS columns flow off-screen horizontally, one viewport-width column per page.
+    // The iframe remains viewport-sized so selection/caret coordinates stay correct.
+    iframe.style.height = Math.max(1, container.clientHeight) + "px";
+    const scrollRoot = doc.scrollingElement || doc.documentElement;
+    const width = Math.max(1, iframe.clientWidth);
+    pageCount.value = pageCountForWidth(scrollRoot.scrollWidth, width);
+    pageIndex.value = pageForPercent(restorePercent, pageCount.value);
+    const maxLeft = Math.max(0, scrollRoot.scrollWidth - width);
+    scrollRoot.scrollLeft = Math.min(maxLeft, pageIndex.value * width);
+    chapterPercent.value = percentForPage(pageIndex.value, pageCount.value);
+  } else {
+    iframe.style.height = "1px";
+    const height = Math.max(1, doc.documentElement.scrollHeight, doc.body.scrollHeight);
+    iframe.style.height = height + "px";
+    pageIndex.value = 0;
+    pageCount.value = 1;
+    const max = Math.max(0, container.scrollHeight - container.clientHeight);
+    container.scrollTop = Math.round(max * restorePercent);
+  }
+}
+
+function turnPage(delta: -1 | 1) {
+  if (readingMode.value !== "paged" || !epub.value) return;
+  if (excerptSpan.value) clearExcerpt();
+  dismissLookup();
+  const next = pageIndex.value + delta;
+  if (next < 0) {
+    if (chapterIndex.value > 0) void loadChapter(chapterIndex.value - 1, 1);
+    return;
+  }
+  if (next >= pageCount.value) {
+    if (chapterIndex.value < epub.value.chapters.length - 1) void loadChapter(chapterIndex.value + 1, 0);
+    return;
+  }
+  const iframe = frame.value;
+  const doc = iframe?.contentDocument;
+  if (!iframe || !doc) return;
+  const root = doc.scrollingElement || doc.documentElement;
+  const max = Math.max(0, root.scrollWidth - iframe.clientWidth);
+  const left = Math.min(max, next * iframe.clientWidth);
+  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  if (typeof root.scrollTo === "function") root.scrollTo({ left, behavior: reduceMotion ? "instant" : "smooth" });
+  else root.scrollLeft = left;
+  pageIndex.value = next;
+  chapterPercent.value = percentForPage(next, pageCount.value);
+  saveSoon();
+}
+
+function resizeReader() {
+  if (readingMode.value !== "paged") { relayoutExcerpt(); return; }
+  restorePercent = chapterPercent.value;
+  frameLoaded();
 }
 
 function dismissLookup() {
@@ -175,8 +237,17 @@ function openDictionaryWord(word: string) {
 // fires for a tap (not a scroll); the caret lookup itself is a plain DOM call.
 function lookupTappedWord(event: MouseEvent) {
   // The click a long press's own release may synthesise is not a tap.
-  if (event.timeStamp - excerptGestureEndedAt < 120) return;
+  if (event.timeStamp - excerptGestureEndedAt < 200) return;
   if (excerptSpan.value) { clearExcerpt(); return; }
+  // Page-edge taps are reserved for turning; central taps keep offline word lookup.
+  if (readingMode.value === "paged") {
+    const bounds = scroller.value?.getBoundingClientRect();
+    if (bounds) {
+      const edge = Math.min(48, bounds.width * 0.14);
+      if (event.clientX - bounds.left < edge) { turnPage(-1); return; }
+      if (bounds.right - event.clientX < edge) { turnPage(1); return; }
+    }
+  }
   const doc = frame.value?.contentDocument;
   const rect = frame.value?.getBoundingClientRect();
   if (!doc || !rect) return;
@@ -193,6 +264,7 @@ const excerptSpan = ref<TextSpan|null>(null), excerptRects = ref<HighlightBox[]>
 let textIndex: ChapterTextIndex | null = null, excerptAnchor: TextSpan | null = null;
 let press: { id: number; x: number; y: number; target: Element | null; timer: ReturnType<typeof setTimeout> | null } | null = null;
 let excerptGestureEndedAt = -Infinity;
+let pageSwipe: { id: number; x: number; y: number } | null = null;
 const excerptValue = computed(() => excerptSpan.value && textIndex ? excerptText(textIndex.text, excerptSpan.value) : "");
 const excerptLength = computed(() => Array.from(excerptValue.value).length);
 const excerptWord = computed(() => /^[A-Za-z'’-]+[.,;:!?"”’)]*$/.test(excerptValue.value) ? normalizeSelection(excerptValue.value) : null);
@@ -226,6 +298,7 @@ function cancelPress() {
 function excerptPointerDown(event: PointerEvent) {
   if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
   cancelPress();
+  pageSwipe = readingMode.value === "paged" ? { id: event.pointerId, x: event.clientX, y: event.clientY } : null;
   const current = { id: event.pointerId, x: event.clientX, y: event.clientY, target: event.currentTarget as Element | null, timer: null as ReturnType<typeof setTimeout> | null };
   current.timer = setTimeout(() => startExcerpt(current), LONG_PRESS_MS);
   press = current;
@@ -266,17 +339,29 @@ function excerptTouchMove(event: TouchEvent) {
   if (excerptDragging.value && event.cancelable) event.preventDefault();
 }
 function excerptPointerUp(event: PointerEvent) {
-  if (!press || event.pointerId !== press.id) return;
+  const swipe = pageSwipe?.id === event.pointerId ? pageSwipe : null;
+  pageSwipe = null;
   const selecting = excerptDragging.value;
-  cancelPress();
-  excerptDragging.value = false;
-  if (selecting) excerptGestureEndedAt = event.timeStamp;
+  if (press?.id === event.pointerId) {
+    cancelPress();
+    excerptDragging.value = false;
+    if (selecting) excerptGestureEndedAt = event.timeStamp;
+  }
+  if (!selecting && swipe) {
+    const dx = event.clientX - swipe.x, dy = event.clientY - swipe.y;
+    if (Math.abs(dx) >= 54 && Math.abs(dx) > Math.abs(dy) * 1.35) {
+      excerptGestureEndedAt = event.timeStamp; // suppress the synthetic click
+      turnPage(dx < 0 ? 1 : -1);
+    }
+  }
 }
 function excerptPointerCancel(event: PointerEvent) {
+  if (pageSwipe?.id === event.pointerId) pageSwipe = null;
   if (!press || event.pointerId !== press.id) return;
   cancelPress();
   excerptDragging.value = false;
 }
+
 function growExcerpt(direction: "before" | "after") {
   if (!excerptSpan.value || !textIndex) return;
   const span = growBySentence(textIndex.text, excerptSpan.value, direction);
@@ -370,7 +455,7 @@ function speakWord() {
 }
 function onScroll() {
   const container = scroller.value;
-  if (!container || !epub.value) return;
+  if (!container || !epub.value || readingMode.value === "paged") return;
   const available = Math.max(0,container.scrollHeight - container.clientHeight);
   chapterPercent.value = available ? Math.max(0,Math.min(1,container.scrollTop / available)) : 1;
   saveSoon();
@@ -395,14 +480,24 @@ async function init() {
     }
     fontSize.value = stored.fontSize || 18;
     theme.value = stored.theme || "light";
+    readingMode.value = stored.readingMode === "scroll" ? "scroll" : "paged";
+    readerFont.value = stored.readerFont === "sans" ? "sans" : "serif";
     await nextTick();
     await loadChapter(Math.min(stored.chapterIndex||0,parsed.chapters.length-1),stored.chapterPercent||0);
   } catch(e) { error.value = explanation(e); }
   finally { loading.value = false; }
 }
 watch(account,(next) => { if (loadedAccount && next !== loadedAccount) void router.replace("/settings"); });
+watch(scroller, (element) => {
+  readerResizeObserver?.disconnect();
+  if (element && typeof ResizeObserver !== "undefined") {
+    readerResizeObserver = new ResizeObserver(resizeReader);
+    readerResizeObserver.observe(element);
+  }
+});
+watch(settingsOpen, async () => { await nextTick(); resizeReader(); });
 onMounted(() => {
-  window.addEventListener("resize", relayoutExcerpt);
+  window.addEventListener("resize", resizeReader);
   void init();
   void isDictionaryInstalled().then(installed => {
     if (readerAlive && dictionaryStatus.value === "checking") {
@@ -414,8 +509,10 @@ onMounted(() => {
   });
 });
 onUnmounted(() => {
-  window.removeEventListener("resize", relayoutExcerpt);
+  window.removeEventListener("resize", resizeReader);
+  readerResizeObserver?.disconnect();
   clearExcerpt();
+  pageSwipe = null;
   readerAlive = false;
   lookupRevision++;
   chapterRequest++;
@@ -435,6 +532,8 @@ onUnmounted(() => {
 .reader-header small{color:inherit;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 .settings-tip{width:100%;margin:0;font-size:12px;opacity:.6}
 .chapter-scroller{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.mode-paged .chapter-scroller{overflow:hidden}
+.mode-paged .chapter-tap-layer{touch-action:none}
 .chapter-stage{position:relative}
 .chapter-frame{display:block;width:100%;height:1px;border:0;background:transparent}
 .chapter-tap-layer{position:absolute;inset:0;cursor:pointer;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
@@ -452,7 +551,7 @@ onUnmounted(() => {
 .reader-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:50px;padding:2px 10px;border-top:1px solid #8882}
 .reader-footer button{border:0;color:inherit;background:transparent;min-height:40px;padding:0 12px;font-size:14px}
 .reader-footer button:disabled{opacity:.3}
-.reader-footer span{font-size:12px;opacity:.55;font-variant-numeric:tabular-nums}
+.reader-footer span{font-size:12px;opacity:.65;font-variant-numeric:tabular-nums;text-align:center}
 .reader-message{margin:auto;padding:24px;font-size:14px;line-height:1.6}
 .settings{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #8884;font-size:13px}
 .settings label{display:flex;align-items:center;gap:6px}
