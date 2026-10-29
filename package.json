@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.183",
-  "releaseSummary": "电子书阅读新增轻柔左右翻页、书籍字体选择与阅读模式记忆，保留离线查词和摘录",
+  "version": "0.1.184",
+  "releaseSummary": "电子书新增驿书式 3D 书页翻转、纸张阴影和平滑过渡，保留离线查词和摘录",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
