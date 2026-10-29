@@ -29,11 +29,22 @@
         <p v-if="dictionaryError" class="dictionary-error" role="alert">{{ dictionaryError }}</p>
         <p class="settings-tip">轻点英文单词查词 · 长按选句摘录</p>
       </section>
-      <div ref="scroller" class="chapter-scroller" @scroll.passive="onScroll"><div class="chapter-stage"><iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" />
-        <div v-if="excerptRects.length" class="excerpt-highlights" aria-hidden="true"><span v-for="(box, i) in excerptRects" :key="i" :style="{ left: box.left + 'px', top: box.top + 'px', width: box.width + 'px', height: box.height + 'px' }" /></div>
-        <div class="chapter-tap-layer" aria-hidden="true" @click="lookupTappedWord"
-          @pointerdown="excerptPointerDown" @pointermove="excerptPointerMove" @pointerup="excerptPointerUp"
-          @pointercancel="excerptPointerCancel" @touchmove="excerptTouchMove" @contextmenu.prevent /></div></div>
+      <div ref="scroller" class="chapter-scroller" @scroll.passive="onScroll">
+        <div class="chapter-stage" :class="{ 'is-turning': !!turnPreview }">
+          <div class="chapter-sheet" :class="{ 'turn-out': turnPreview?.ready && turnPreview.direction === 1, 'under-back': turnPreview?.ready && turnPreview.direction === -1 }" @animationend="turnAnimationEnd">
+            <iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" />
+            <div class="sheet-sheen" aria-hidden="true" />
+          </div>
+          <div v-if="turnPreview" class="chapter-sheet chapter-preview" :class="{ 'under': turnPreview.ready && turnPreview.direction === 1, 'turn-in': turnPreview.ready && turnPreview.direction === -1 }" @animationend="turnAnimationEnd" aria-hidden="true">
+            <iframe ref="previewFrame" class="chapter-frame" title="翻页预览" tabindex="-1" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="previewLoaded" />
+            <div class="sheet-sheen" aria-hidden="true" />
+          </div>
+          <div v-if="excerptRects.length" class="excerpt-highlights" aria-hidden="true"><span v-for="(box, i) in excerptRects" :key="i" :style="{ left: box.left + 'px', top: box.top + 'px', width: box.width + 'px', height: box.height + 'px' }" /></div>
+          <div class="chapter-tap-layer" aria-hidden="true" @click="lookupTappedWord"
+            @pointerdown="excerptPointerDown" @pointermove="excerptPointerMove" @pointerup="excerptPointerUp"
+            @pointercancel="excerptPointerCancel" @touchmove="excerptTouchMove" @contextmenu.prevent />
+        </div>
+      </div>
       <aside v-if="excerptSpan && !excerptDragging" class="excerpt-bar" role="toolbar" aria-label="摘录选中的文字">
         <div class="excerpt-bar-info">
           <span>已选 {{ excerptLength }} 字<template v-if="excerptLength > MAX_EXCERPT_CHARS">（摘录时保留前 {{ MAX_EXCERPT_CHARS }} 字）</template></span>
@@ -68,9 +79,9 @@
       </aside>
       <footer class="reader-footer">
         <template v-if="readingMode === 'paged'">
-          <button type="button" aria-label="上一页" :disabled="chapterIndex === 0 && pageIndex === 0" @click="turnPage(-1)">‹ 上一页</button>
+          <button type="button" aria-label="上一页" :disabled="!!turnPreview || (chapterIndex === 0 && pageIndex === 0)" @click="turnPage(-1)">‹ 上一页</button>
           <span>第 {{ pageIndex + 1 }} / {{ pageCount }} 页 · {{ chapterIndex + 1 }}/{{ epub.chapters.length }} 章</span>
-          <button type="button" aria-label="下一页" :disabled="chapterIndex === epub.chapters.length - 1 && pageIndex === pageCount - 1" @click="turnPage(1)">下一页 ›</button>
+          <button type="button" aria-label="下一页" :disabled="!!turnPreview || (chapterIndex === epub.chapters.length - 1 && pageIndex === pageCount - 1)" @click="turnPage(1)">下一页 ›</button>
         </template>
         <template v-else>
           <button type="button" :disabled="chapterIndex === 0" @click="loadChapter(chapterIndex-1,0)">上一章</button>
@@ -103,6 +114,11 @@ const chapterIndex = ref(0), chapterPercent = ref(0), chapterHtml = ref("");
 const fontSize = ref(18), theme = ref<"light"|"sepia"|"dark">("light");
 const readingMode = ref<"paged"|"scroll">("paged"), readerFont = ref<"serif"|"sans">("serif");
 const pageIndex = ref(0), pageCount = ref(1);
+type PageTurnPreview = { token: number; page: number; direction: -1 | 1; ready: boolean };
+const turnPreview = ref<PageTurnPreview | null>(null);
+const previewFrame = ref<HTMLIFrameElement | null>(null);
+let turnToken = 0;
+let turnTimer: ReturnType<typeof setTimeout> | null = null;
 const loading = ref(true), error = ref(""), settingsOpen = ref(false);
 const frame = ref<HTMLIFrameElement|null>(null);
 const selectedWord = ref(""), manualWord = ref(""), dictionaryEntry = ref<DictionaryEntry|null>(null);
@@ -133,6 +149,7 @@ async function saveNow() {
 }
 async function loadChapter(index:number, percent:number) {
   if (!epub.value || index < 0 || index >= epub.value.chapters.length) return;
+  cancelTurn();
   dismissLookup();
   clearExcerpt();
   const request = ++chapterRequest;
@@ -178,8 +195,70 @@ function frameLoaded() {
   }
 }
 
+/** Abandon any pending preview if the chapter, layout or reader changes. */
+function cancelTurn() {
+  ++turnToken;
+  if (turnTimer) clearTimeout(turnTimer);
+  turnTimer = null;
+  turnPreview.value = null;
+}
+
+function moveToPage(index: number) {
+  const iframe = frame.value;
+  const doc = iframe?.contentDocument;
+  if (!iframe || !doc) return;
+  const root = doc.scrollingElement || doc.documentElement;
+  const width = Math.max(1, iframe.clientWidth);
+  const max = Math.max(0, root.scrollWidth - width);
+  root.scrollLeft = Math.min(max, Math.max(0, index * width));
+  pageIndex.value = index;
+  chapterPercent.value = percentForPage(index, pageCount.value);
+  restorePercent = chapterPercent.value;
+  saveSoon();
+}
+
+/** Commit the target only AFTER the turning page has finished moving. */
+function finishTurn(token: number) {
+  const preview = turnPreview.value;
+  if (!preview || token !== preview.token) return;
+  if (turnTimer) clearTimeout(turnTimer);
+  turnTimer = null;
+  moveToPage(preview.page);
+  // The still-mounted base iframe now shows the same page as the preview.
+  turnPreview.value = null;
+}
+
+function turnAnimationEnd(event: AnimationEvent) {
+  const preview = turnPreview.value;
+  if (!preview?.ready || event.target !== event.currentTarget) return;
+  // Ignore the shadow animations; only the page's 3-D rotation completes a turn.
+  if (event.animationName === "ebook-turn-out" || event.animationName === "ebook-turn-in") finishTurn(preview.token);
+}
+
+/** A second no-script iframe renders the target page under the rotating sheet. */
+function previewLoaded() {
+  const preview = turnPreview.value;
+  const iframe = previewFrame.value;
+  const container = scroller.value;
+  const doc = iframe?.contentDocument;
+  if (!preview || !iframe || !doc || !container) return;
+  const token = preview.token;
+  iframe.style.height = Math.max(1, container.clientHeight) + "px";
+  const root = doc.scrollingElement || doc.documentElement;
+  const width = Math.max(1, iframe.clientWidth);
+  root.scrollLeft = Math.min(Math.max(0, root.scrollWidth - width), preview.page * width);
+  // Let the target page paint before rotating the old sheet.
+  requestAnimationFrame(() => {
+    if (!readerAlive || turnPreview.value?.token !== token) return;
+    turnPreview.value.ready = true;
+    if (turnTimer) clearTimeout(turnTimer);
+    // A timeout fallback protects against missed animationend in backgrounded iOS PWAs.
+    turnTimer = setTimeout(() => finishTurn(token), 850);
+  });
+}
+
 function turnPage(delta: -1 | 1) {
-  if (readingMode.value !== "paged" || !epub.value) return;
+  if (readingMode.value !== "paged" || !epub.value || turnPreview.value) return;
   if (excerptSpan.value) clearExcerpt();
   dismissLookup();
   const next = pageIndex.value + delta;
@@ -191,21 +270,17 @@ function turnPage(delta: -1 | 1) {
     if (chapterIndex.value < epub.value.chapters.length - 1) void loadChapter(chapterIndex.value + 1, 0);
     return;
   }
-  const iframe = frame.value;
-  const doc = iframe?.contentDocument;
-  if (!iframe || !doc) return;
-  const root = doc.scrollingElement || doc.documentElement;
-  const max = Math.max(0, root.scrollWidth - iframe.clientWidth);
-  const left = Math.min(max, next * iframe.clientWidth);
-  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-  if (typeof root.scrollTo === "function") root.scrollTo({ left, behavior: reduceMotion ? "instant" : "smooth" });
-  else root.scrollLeft = left;
-  pageIndex.value = next;
-  chapterPercent.value = percentForPage(next, pageCount.value);
-  saveSoon();
+  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  if (reduced) { moveToPage(next); return; }
+  const token = ++turnToken;
+  turnPreview.value = { token, page: next, direction: delta, ready: false };
+  // Short fallback for blocked/unloaded preview frames; never trap reading.
+  turnTimer = setTimeout(() => finishTurn(token), 1600);
 }
 
 function resizeReader() {
+  // Resizing in the middle of a flip must preserve the pending target page.
+  if (turnPreview.value) finishTurn(turnPreview.value.token);
   if (readingMode.value !== "paged") { relayoutExcerpt(); return; }
   restorePercent = chapterPercent.value;
   frameLoaded();
@@ -512,6 +587,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("resize", resizeReader);
   readerResizeObserver?.disconnect();
+  cancelTurn();
   clearExcerpt();
   pageSwipe = null;
   readerAlive = false;
@@ -536,9 +612,34 @@ onUnmounted(() => {
 .mode-paged .chapter-scroller{overflow:hidden}
 .mode-paged .chapter-tap-layer{touch-action:none}
 .chapter-stage{position:relative}
+.chapter-sheet{position:relative;width:100%}
+.mode-paged .chapter-stage{height:100%;perspective:1800px;isolation:isolate}
+.mode-paged .chapter-sheet{height:100%;transform-origin:left center;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:var(--reader-paper,#fff);will-change:auto}
+.reader-page.theme-sepia{--reader-paper:#f5edda;--reader-ink-shadow:rgba(42,28,9,.2)}
+.reader-page.theme-dark{--reader-paper:#20252b;--reader-ink-shadow:rgba(0,0,0,.5)}
+.reader-page.theme-light{--reader-paper:#fff;--reader-ink-shadow:rgba(40,28,10,.16)}
+.mode-paged .chapter-preview{position:absolute;inset:0;z-index:1;pointer-events:none}
+.mode-paged .chapter-sheet:not(.chapter-preview){z-index:2}
+.mode-paged .chapter-preview.turn-in{z-index:3}
+.mode-paged .chapter-sheet::before{content:"";position:absolute;inset:0 auto 0 0;width:14px;z-index:2;pointer-events:none;background:linear-gradient(to right,var(--reader-ink-shadow),transparent)}
+.mode-paged .chapter-sheet::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:2;background:var(--reader-ink-shadow);opacity:0}
+.mode-paged .chapter-sheet.under::after{animation:ebook-shade-out .58s forwards}
+.mode-paged .chapter-sheet.under-back::after{animation:ebook-shade-in .58s forwards}
+.mode-paged .chapter-sheet.turn-out{animation:ebook-turn-out .58s cubic-bezier(.35,.05,.25,1) both}
+.mode-paged .chapter-sheet.turn-in{animation:ebook-turn-in .58s cubic-bezier(.35,.05,.25,1) both}
+.sheet-sheen{position:absolute;inset:0;pointer-events:none;z-index:2;opacity:0;background:linear-gradient(to left,var(--reader-ink-shadow),transparent 70%)}
+.mode-paged .turn-out>.sheet-sheen{animation:ebook-shade-in .58s forwards}
+.mode-paged .turn-in>.sheet-sheen{opacity:1;animation:ebook-shade-out .58s forwards}
+@keyframes ebook-turn-out{to{transform:rotateY(-104deg)}}
+@keyframes ebook-turn-in{from{transform:rotateY(-104deg)}to{transform:rotateY(0)}}
+@keyframes ebook-shade-in{to{opacity:1}}
+@keyframes ebook-shade-out{from{opacity:1}to{opacity:0}}
+@media (prefers-reduced-motion:reduce){.mode-paged .chapter-sheet{animation:none!important}.mode-paged .sheet-sheen{animation:none!important}}
 .chapter-frame{display:block;width:100%;height:1px;border:0;background:transparent}
-.chapter-tap-layer{position:absolute;inset:0;cursor:pointer;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
-.excerpt-highlights{position:absolute;inset:0;pointer-events:none}
+.mode-paged .chapter-preview .chapter-frame{height:100%}
+.chapter-tap-layer{position:absolute;inset:0;z-index:5;cursor:pointer;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+.excerpt-highlights{position:absolute;inset:0;z-index:4;pointer-events:none}
+.is-turning .chapter-tap-layer{pointer-events:none}
 .excerpt-highlights span{position:absolute;border-radius:2px;background:#3b82f647}
 .reader-page.theme-dark .excerpt-highlights span{background:#60a5fa59}
 .excerpt-bar{position:fixed;z-index:56;left:10px;right:10px;bottom:calc(62px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto;padding:8px 10px 10px;border-radius:14px;border:1px solid #8b8b8b35;box-shadow:0 8px 30px #0003;background:#fff;color:#242830}
