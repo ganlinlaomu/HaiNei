@@ -616,6 +616,38 @@ export async function primeManagedUploadSessions(
   return primeMediaSessions(normalizeMediaUrl(first.url), options.accountPubkey, options.signEvent, items, options.signal);
 }
 
+// Transient refusals worth another try on the same server: rate or
+// concurrency limits, a blob lock held by an interrupted upload, gateway
+// errors and dropped connections. Each try fetches its own single-use token.
+const UPLOAD_RETRY_DELAYS_MS = [1_000, 3_000];
+const RETRYABLE_UPLOAD_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+
+export function isRetryableUploadError(error: unknown) {
+  const err = error as any;
+  if (!err || err.name === "AbortError" || err.name === "TimeoutError") return false;
+  const status = Number(err.details?.status);
+  if (RETRYABLE_UPLOAD_STATUSES.has(status)) return true;
+  if (status === 409) return /blob_operation_in_progress/.test(String(err.message || ""));
+  if (status) return false;
+  if (err.phase === "put_network_error" || err.phase === "head_failed") return true;
+  return err instanceof TypeError;
+}
+
+function waitBeforeRetry(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(signalError(signal));
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signalError(signal!));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
 /**
  * uploadImageToBlossomWithFallback
  * Tries configured media servers in deterministic priority order until one succeeds.
@@ -663,7 +695,7 @@ export async function uploadImageToBlossomWithFallback(
       const startedAt = Date.now();
       const hiddenAtStart = appHiddenEpoch();
       const host = (() => { try { return new URL(normalizeBlossomUploadUrl(current.url)).host; } catch { return "invalid"; } })();
-      return uploadImageToBlossom(file, {
+      const attemptUpload = (retry: number): Promise<Awaited<ReturnType<typeof uploadImageToBlossom>>> => uploadImageToBlossom(file, {
       accountPubkey: options?.accountPubkey,
       signEvent: options?.signEvent,
       onProgress: options?.onProgress,
@@ -690,9 +722,15 @@ export async function uploadImageToBlossomWithFallback(
         status: (error as any)?.details?.status,
         backgrounded: appHiddenEpoch() !== hiddenAtStart,
         online: typeof navigator === "undefined" ? undefined : navigator.onLine,
+        retry,
       }, "warn");
-      throw error;
+      const delay = UPLOAD_RETRY_DELAYS_MS[retry];
+      // Offline and backgrounded uploads are resumed by their caller instead.
+      const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+      if (delay === undefined || offline || appHiddenEpoch() !== hiddenAtStart || !isRetryableUploadError(error)) throw error;
+      return waitBeforeRetry(delay, options?.signal).then(() => attemptUpload(retry + 1));
     });
+      return attemptUpload(0);
     },
     (current, ok) => reportHealth?.(current.id, ok, Date.now()),
     error => !!error && typeof error === "object" && (error as any).phase === "aborted"
