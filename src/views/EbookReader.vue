@@ -158,10 +158,11 @@ function frameLoaded() {
   if (readingMode.value === "paged") {
     // CSS columns flow off-screen horizontally, one viewport-width column per page.
     // The iframe remains viewport-sized so selection/caret coordinates stay correct.
+    container.scrollTop = 0; // clear scroll-mode position on mode switch
     iframe.style.height = Math.max(1, container.clientHeight) + "px";
     const scrollRoot = doc.scrollingElement || doc.documentElement;
     const width = Math.max(1, iframe.clientWidth);
-    pageCount.value = pageCountForWidth(scrollRoot.scrollWidth, width);
+    pageCount.value = pageCountForWidth(Math.max(scrollRoot.scrollWidth, doc.body.scrollWidth), width);
     pageIndex.value = pageForPercent(restorePercent, pageCount.value);
     const maxLeft = Math.max(0, scrollRoot.scrollWidth - width);
     scrollRoot.scrollLeft = Math.min(maxLeft, pageIndex.value * width);
