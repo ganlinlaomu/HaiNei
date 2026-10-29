@@ -78,12 +78,27 @@ export function rowsFromAozoraCsv(csv) {
         !HTML_PATH.test(source.pathname) || source.search || source.hash ||
         card.protocol !== "https:" || card.hostname !== "www.aozora.gr.jp" ||
         !CARD_PATH.test(card.pathname) || card.search || card.hash) return;
+    // Aozorahack expands the official text ZIP using its ZIP stem. Preserve
+    // this optional, validated fallback beside the official XHTML URL.
+    let textUrl;
+    try {
+      const textZip = new URL(get("テキストファイルURL").replace(/^http:/, "https:"));
+      const match = /^\/cards\/(\d{6})\/files\/(\d+_[\w-]+)\.zip$/.exec(textZip.pathname);
+      if (textZip.protocol === "https:" && textZip.hostname === "www.aozora.gr.jp" &&
+          !textZip.port && !textZip.username && !textZip.password &&
+          !textZip.search && !textZip.hash && match &&
+          match[1] === source.pathname.split("/")[2] &&
+          match[2].startsWith(String(id) + "_")) {
+        textUrl = "https://raw.githubusercontent.com/aozorahack/aozorabunko_text/master/cards/" + match[1] +
+          "/files/" + match[2] + "/" + match[2] + ".txt";
+      }
+    } catch { /* Some works do not have a downloadable text ZIP. */ }
     const title = get("作品名").trim(), author = get("姓名").trim() ||
       [get("姓"), get("名")].filter(Boolean).join(" ");
     if (title && author) works.set(id, {
       id: "aozora:" + id, title: title.slice(0, 180), authors: [author.slice(0, 100)],
       language: "ja", epubUrl: source.origin + source.pathname,
-      sourceUrl: card.origin + card.pathname, downloads: 0,
+      sourceUrl: card.origin + card.pathname, ...(textUrl ? { textUrl } : {}), downloads: 0,
     });
   }
   for (let i = 0; i < csv.length; i++) {
