@@ -7,6 +7,8 @@ export type CatalogBook = {
   coverUrl?: string;
   epubUrl: string;
   sourceUrl: string;
+  /** Verified Aozora ZIP-text mirror, generated from public official metadata. */
+  textUrl?: string;
   downloads: number;
 };
 
