@@ -31,7 +31,13 @@ describe("responsive ebook pagination", () => {
     expect(source).toContain("@animationend=\"turnAnimationEnd\"");
     expect(source).toContain('sandbox="allow-same-origin"');
     expect(source).not.toContain('sandbox="allow-scripts');
-    expect(source).toContain("preview.page * width");
+    expect(source).toContain('v-if="readingMode === \'paged\'"');
+    expect(source).toContain("const previewPrepared = ref(false)");
+    expect(source).toContain("root.scrollLeft = left");
+    expect(source).toContain("requestAnimationFrame(() => requestAnimationFrame(");
+    expect(source).toContain("previewPrepared.value = layoutPreviewFrame()");
+    expect(source).not.toContain('v-if="turnPreview" class="chapter-sheet chapter-preview"');
+    expect(source).not.toContain("behavior: reduceMotion ? \"instant\" : \"smooth\"");
     expect(source).toContain("moveToPage(preview.page)");
     expect(source).toContain("if (readingMode.value !== \"paged\"");
     expect(source).toContain('window.matchMedia?.("(prefers-reduced-motion: reduce)")');
