@@ -1,7 +1,7 @@
 import { validGutenbergEpubUrl, type CatalogBook } from "@/services/ebookCatalog";
 import { MAX_EPUB_SIZE, checkBookStorageSpace, saveLibraryBook } from "@/services/ebookLibrary";
 import { OfflineEpub } from "@/services/ebookEpub";
-import { makeAozoraEpub } from "@/services/ebookAozora";
+import { makeAozoraEpub, makeAozoraFallbackEpub } from "@/services/ebookAozora";
 
 /** Downloads only verified Gutenberg EPUBs. Complete before IndexedDB commit. */
 export async function downloadGutenbergBook(
@@ -65,13 +65,23 @@ export async function downloadCatalogBook(
     const target=new URL(book.epubUrl);
     if(target.protocol!=="https:"||target.hostname!=="www.aozora.gr.jp"||
       !/^\/cards\/\d{6}\/files\/\d+_[\w-]+\.html$/.test(target.pathname))throw new Error("不受支持的青空文库作品地址");
-    const response=await fetch("/api/books/aozora/text?url="+encodeURIComponent(target.href),{signal,cache:"no-store"});
-    if(!response.ok)throw new Error("青空文库正文无法下载（HTTP "+response.status+"）");
+    const params=new URLSearchParams({url:target.href});
+    if(book.textUrl)params.set("text",book.textUrl);
+    const response=await fetch("/api/books/aozora/text?"+params.toString(),{signal,cache:"no-store"});
+    if(!response.ok)throw new Error(response.status===503
+      ?"青空文库官网及备用书源暂时无法访问，请稍后重试或打开原书页"
+      :"青空文库正文无法下载（HTTP "+response.status+"）");
     const length=Number(response.headers.get("Content-Length")||0);
     if(length>5*1024*1024)throw new Error("作品正文过大");
-    const html=await response.text();
-    if(html.length>5*1024*1024)throw new Error("作品正文过大");
-    const file=makeAozoraEpub(html,book.title,book.authors.join("、")||"青空文庫");
+    const bytes=await response.arrayBuffer();
+    if(bytes.byteLength>5*1024*1024)throw new Error("作品正文过大");
+    const html=new TextDecoder("utf-8").decode(bytes);
+    const contentType=response.headers.get("Content-Type")||"";
+    const format=contentType.startsWith("text/markdown")?"markdown":
+      contentType.startsWith("text/plain")?"plain":null;
+    const author=book.authors.join("、")||"青空文庫";
+    const file=format?makeAozoraFallbackEpub(html,format,book.title,author):
+      makeAozoraEpub(html,book.title,author);
     onProgress(80);
     const checked=await OfflineEpub.open(file);
     checked.destroy();
