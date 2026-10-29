@@ -20,7 +20,7 @@ export async function requestSourceFingerprint(request: Request) {
   return (await sha256(source)).slice(0, 24);
 }
 
-export async function consumeRateLimit(
+export function rateLimitStatement(
   env: Env,
   key: string,
   limit: number,
@@ -32,7 +32,7 @@ export async function consumeRateLimit(
   const window = Math.floor(now / normalizedWindow);
   const bucket = `${key}:${window}`;
   const expiresAt = (window + 1) * normalizedWindow + normalizedWindow;
-  const result = await env.DB.prepare(`
+  return env.DB.prepare(`
     INSERT INTO hainei_rate_limits (bucket, count, expires_at, updated_at)
     VALUES (?, 1, ?, ?)
     ON CONFLICT(bucket) DO UPDATE SET
@@ -40,8 +40,22 @@ export async function consumeRateLimit(
       expires_at = excluded.expires_at,
       updated_at = excluded.updated_at
     WHERE hainei_rate_limits.count < ?
-  `).bind(bucket, expiresAt, now, normalizedLimit).run();
-  if (Number(result.meta?.changes || 0) !== 1) throw new HttpError(429, "rate_limited");
+  `).bind(bucket, expiresAt, now, normalizedLimit);
+}
+
+export function changedOneRow(result: unknown) {
+  return Number((result as { meta?: { changes?: number } } | undefined)?.meta?.changes || 0) === 1;
+}
+
+export async function consumeRateLimit(
+  env: Env,
+  key: string,
+  limit: number,
+  windowSeconds: number,
+  now = Math.floor(Date.now() / 1000),
+) {
+  const result = await rateLimitStatement(env, key, limit, windowSeconds, now).run();
+  if (!changedOneRow(result)) throw new HttpError(429, "rate_limited");
   // Expired buckets are removed by the daily scheduled cleanup.
 }
 
