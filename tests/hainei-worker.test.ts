@@ -383,9 +383,11 @@ describe("HaiNei Worker authentication and quota", () => {
 });
 
 describe("Worker deployment configuration", () => {
-  it("runs the Worker next to its single-region D1 database", () => {
+  it("binds the APAC D1 database and keeps the Worker at the edge", () => {
     const config = readFileSync("worker/wrangler.toml", "utf8");
-    expect(config).toMatch(/^\[placement\]\nmode = "smart"$/m);
+    expect(config).toMatch(/^database_id = "ac926de3-67a9-44e4-8a9e-5b1ebcf18bfc"$/m);
+    // Users are in Japan and so is the database region; no relocation.
+    expect(config).not.toMatch(/^\[placement\]/m);
   });
 
   it("keeps the managed relay URL in wrangler.toml so deploys cannot drop it", () => {
