@@ -27,7 +27,7 @@
         <p v-if="dictionaryError" class="dictionary-error" role="alert">{{ dictionaryError }}</p>
       </section>
       <p class="reader-lookup-hint">{{ dictionaryStatus === "installed" ? "轻点英文单词，离线查看中文释义" : "轻点英文单词查词 · 首次请在 Aa 下载词典" }}</p>
-      <div ref="scroller" class="chapter-scroller" @scroll.passive="onScroll"><iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" /></div>
+      <div ref="scroller" class="chapter-scroller" @scroll.passive="onScroll"><div class="chapter-stage"><iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" /><div class="chapter-tap-layer" aria-hidden="true" @click="lookupTappedWord" /></div></div>
       <aside v-if="selectedWord" class="dictionary-card" aria-label="英汉单词释义" role="dialog">
         <div class="dictionary-card-header">
           <strong>{{ dictionaryEntry?.word || selectedWord }}</strong>
@@ -74,10 +74,6 @@ const frame = ref<HTMLIFrameElement|null>(null);
 const selectedWord = ref(""), manualWord = ref(""), dictionaryEntry = ref<DictionaryEntry|null>(null);
 const dictionaryStatus = ref<"checking"|"not-installed"|"downloading"|"installed">("checking");
 const dictionaryProgress = ref(0), dictionaryError = ref(""), dictionaryLookingUp = ref(false);
-let selectionDocument: Document|null = null, selectionTimer: ReturnType<typeof setTimeout>|null = null;
-let tapLookupTimer: ReturnType<typeof setTimeout>|null = null;
-let lastTouchEnd = 0;
-let touchStart: { x: number; y: number; at: number } | null = null;
 let lookupRevision = 0, readerAlive = true;
 const scroller = ref<HTMLDivElement|null>(null);
 const account = computed(() => keys.pkHex);
@@ -125,30 +121,6 @@ function frameLoaded() {
   frame.value.style.height = contentHeight + "px";
   const max = Math.max(0,container.scrollHeight - container.clientHeight);
   container.scrollTop = Math.round(max * restorePercent);
-  // Our own listener runs in the parent origin; publisher scripts remain
-  // disabled inside the sandboxed srcdoc iframe.
-  // iOS can delay or omit selectionchange inside a script-disabled iframe.
-  // Also listen for completed taps/long-presses in the same-origin document;
-  // publisher JS remains disabled and no text is transmitted.
-  unbindFrameSelection();
-  selectionDocument = doc;
-  doc.addEventListener("selectionchange", queueSelectedWord);
-  doc.addEventListener("touchstart", recordFrameTouchStart, { passive: true });
-  doc.addEventListener("touchend", completeFrameTouch, { passive: true });
-  doc.addEventListener("touchcancel", cancelFrameTouch, { passive: true });
-  doc.addEventListener("mouseup", completeFrameMouse);
-}
-function unbindFrameSelection() {
-  if (!selectionDocument) return;
-  selectionDocument.removeEventListener("selectionchange", queueSelectedWord);
-  selectionDocument.removeEventListener("touchstart", recordFrameTouchStart);
-  selectionDocument.removeEventListener("touchend", completeFrameTouch);
-  selectionDocument.removeEventListener("touchcancel", cancelFrameTouch);
-  selectionDocument.removeEventListener("mouseup", completeFrameMouse);
-  selectionDocument = null;
-  touchStart = null;
-  if (tapLookupTimer) clearTimeout(tapLookupTimer);
-  tapLookupTimer = null;
 }
 
 function dismissLookup() {
@@ -173,41 +145,16 @@ function openDictionaryWord(word: string) {
     if (readerAlive && revision === lookupRevision) dictionaryLookingUp.value = false;
   });
 }
-function recordFrameTouchStart(event: TouchEvent) {
-  if (event.touches.length !== 1) { touchStart = null; return; }
-  const point = event.touches[0];
-  touchStart = { x: point.clientX, y: point.clientY, at: Date.now() };
-}
-function cancelFrameTouch() { touchStart = null; }
-function completeFrameTouch(event: TouchEvent) {
-  lastTouchEnd = Date.now();
-  const start = touchStart;
-  touchStart = null;
-  if (!start || event.changedTouches.length !== 1 || event.touches.length !== 0) return;
-  const point = event.changedTouches[0];
-  if (Math.hypot(start.x - point.clientX, start.y - point.clientY) > 14) return;
-  // Prefer an actual selection on a long press, but allow a quick single tap
-  // to resolve its word without relying on iOS native selection menus.
-  scheduleFrameWord(point.clientX, point.clientY, Date.now() - start.at >= 450);
-}
-function completeFrameMouse(event: MouseEvent) {
-  // Mobile Safari may synthesize a mouseup after touchend; do not override
-  // the user's tapped word with an older native selection.
-  if (event.button !== 0 || Date.now() - lastTouchEnd < 850) return;
-  scheduleFrameWord(event.clientX, event.clientY, true);
-}
-function scheduleFrameWord(x: number, y: number, preferSelection: boolean) {
-  const doc = selectionDocument;
-  if (!doc) return;
-  if (tapLookupTimer) clearTimeout(tapLookupTimer);
-  tapLookupTimer = setTimeout(() => {
-    tapLookupTimer = null;
-    if (!readerAlive || selectionDocument !== doc) return;
-    const selected = normalizeSelection(doc.getSelection()?.toString() || "");
-    const tapped = wordAtPoint(doc, x, y);
-    const word = preferSelection ? (selected || tapped) : (tapped || selected);
-    if (word) openDictionaryWord(word);
-  }, 180);
+// WebKit never fires parent-installed listeners inside the script-disabled
+// srcdoc iframe, so taps land on a parent-owned layer above it. A click only
+// fires for a tap (not a scroll); the caret lookup itself is a plain DOM call.
+function lookupTappedWord(event: MouseEvent) {
+  const doc = frame.value?.contentDocument;
+  const rect = frame.value?.getBoundingClientRect();
+  if (!doc || !rect) return;
+  const word = wordAtPoint(doc, event.clientX - rect.left, event.clientY - rect.top);
+  if (word) openDictionaryWord(word);
+  else if (selectedWord.value) dismissLookup();
 }
 function lookupManualWord() {
   const word = normalizeSelection(manualWord.value);
@@ -217,15 +164,6 @@ function lookupManualWord() {
   }
   openDictionaryWord(word);
   settingsOpen.value = false;
-}
-function queueSelectedWord() {
-  if (selectionTimer) clearTimeout(selectionTimer);
-  selectionTimer = setTimeout(() => {
-    selectionTimer = null;
-    const selected = selectionDocument?.getSelection()?.toString() || "";
-    const word = normalizeSelection(selected);
-    if (word) openDictionaryWord(word);
-  }, 240);
 }
 async function refreshDictionaryLookup() {
   if (!selectedWord.value || dictionaryStatus.value !== "installed") return;
@@ -319,8 +257,6 @@ onMounted(() => {
 onUnmounted(() => {
   readerAlive = false;
   lookupRevision++;
-  unbindFrameSelection();
-  if (selectionTimer) clearTimeout(selectionTimer);
   chapterRequest++;
   if (saveTimer) clearTimeout(saveTimer);
   void saveNow();
@@ -338,7 +274,9 @@ onUnmounted(() => {
 .reader-header small{color:inherit;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 .reader-lookup-hint{margin:0;padding:5px 14px;text-align:center;font-size:11px;line-height:1.5;opacity:.65}
 .chapter-scroller{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.chapter-stage{position:relative}
 .chapter-frame{display:block;width:100%;height:1px;border:0;background:transparent}
+.chapter-tap-layer{position:absolute;inset:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .reader-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:54px;padding:4px 14px;border-top:1px solid #8884}
 .reader-footer button{border:0;color:inherit;background:transparent;min-height:40px;padding:0 12px;font-size:14px}
 .reader-footer button:disabled{opacity:.3}

@@ -83,7 +83,7 @@ describe("offline ECDICT reader dictionary", () => {
     const view = readFileSync("src/views/EbookReader.vue", "utf8");
     expect(view).toContain('sandbox="allow-same-origin"');
     expect(view).not.toContain('sandbox="allow-scripts');
-    expect(view).toContain('selectionchange');
+    expect(view).toContain('@click="lookupTappedWord"');
     expect(view).toContain("normalizeSelection");
     expect(view).toContain("downloadDictionary");
     expect(view).toContain("SpeechSynthesisUtterance");
