@@ -35,7 +35,7 @@
             <iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" />
             <div class="sheet-sheen" aria-hidden="true" />
           </div>
-          <div v-if="turnPreview" class="chapter-sheet chapter-preview" :class="{ 'under': turnPreview.ready && turnPreview.direction === 1, 'turn-in': turnPreview.ready && turnPreview.direction === -1 }" @animationend="turnAnimationEnd" aria-hidden="true">
+          <div v-if="readingMode === 'paged'" class="chapter-sheet chapter-preview" :class="{ 'preview-active': turnPreview?.ready, 'preview-back': turnPreview?.direction === -1, 'under': turnPreview?.ready && turnPreview.direction === 1, 'turn-in': turnPreview?.ready && turnPreview.direction === -1 }" @animationend="turnAnimationEnd" aria-hidden="true">
             <iframe ref="previewFrame" class="chapter-frame" title="翻页预览" tabindex="-1" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="previewLoaded" />
             <div class="sheet-sheen" aria-hidden="true" />
           </div>
@@ -117,6 +117,9 @@ const pageIndex = ref(0), pageCount = ref(1);
 type PageTurnPreview = { token: number; page: number; direction: -1 | 1; ready: boolean };
 const turnPreview = ref<PageTurnPreview | null>(null);
 const previewFrame = ref<HTMLIFrameElement | null>(null);
+const previewPrepared = ref(false);
+let previewRevision = 0;
+const watchedChapterFonts = new WeakSet<Document>();
 let turnToken = 0;
 let turnTimer: ReturnType<typeof setTimeout> | null = null;
 const loading = ref(true), error = ref(""), settingsOpen = ref(false);
@@ -150,6 +153,8 @@ async function saveNow() {
 async function loadChapter(index:number, percent:number) {
   if (!epub.value || index < 0 || index >= epub.value.chapters.length) return;
   cancelTurn();
+  previewPrepared.value = false;
+  ++previewRevision;
   dismissLookup();
   clearExcerpt();
   const request = ++chapterRequest;
@@ -184,6 +189,7 @@ function frameLoaded() {
     const maxLeft = Math.max(0, scrollRoot.scrollWidth - width);
     scrollRoot.scrollLeft = Math.min(maxLeft, pageIndex.value * width);
     chapterPercent.value = percentForPage(pageIndex.value, pageCount.value);
+    layoutPreviewFrame();
   } else {
     iframe.style.height = "1px";
     const height = Math.max(1, doc.documentElement.scrollHeight, doc.body.scrollHeight);
@@ -192,6 +198,15 @@ function frameLoaded() {
     pageCount.value = 1;
     const max = Math.max(0, container.scrollHeight - container.clientHeight);
     container.scrollTop = Math.round(max * restorePercent);
+  }
+  // Font downloads/reflow must not silently change page count or reader position.
+  if (doc.fonts && !watchedChapterFonts.has(doc)) {
+    watchedChapterFonts.add(doc);
+    void doc.fonts.ready.then(() => {
+      if (!readerAlive || frame.value?.contentDocument !== doc) return;
+      restorePercent = chapterPercent.value;
+      frameLoaded();
+    }).catch(() => {});
   }
 }
 
@@ -235,26 +250,28 @@ function turnAnimationEnd(event: AnimationEvent) {
   if (event.animationName === "ebook-turn-out" || event.animationName === "ebook-turn-in") finishTurn(preview.token);
 }
 
-/** A second no-script iframe renders the target page under the rotating sheet. */
-function previewLoaded() {
-  const preview = turnPreview.value;
+/** The preview is mounted ONCE per chapter, not loaded/reparsed on every swipe. */
+function layoutPreviewFrame(): boolean {
   const iframe = previewFrame.value;
-  const container = scroller.value;
   const doc = iframe?.contentDocument;
-  if (!preview || !iframe || !doc || !container) return;
-  const token = preview.token;
+  const container = scroller.value;
+  if (!iframe || !doc || !container) return false;
   iframe.style.height = Math.max(1, container.clientHeight) + "px";
-  const root = doc.scrollingElement || doc.documentElement;
-  const width = Math.max(1, iframe.clientWidth);
-  root.scrollLeft = Math.min(Math.max(0, root.scrollWidth - width), preview.page * width);
-  // Let the target page paint before rotating the old sheet.
-  requestAnimationFrame(() => {
-    if (!readerAlive || turnPreview.value?.token !== token) return;
-    turnPreview.value.ready = true;
-    if (turnTimer) clearTimeout(turnTimer);
-    // A timeout fallback protects against missed animationend in backgrounded iOS PWAs.
-    turnTimer = setTimeout(() => finishTurn(token), 850);
-  });
+  return iframe.clientWidth > 0;
+}
+
+function previewLoaded() {
+  const doc = previewFrame.value?.contentDocument;
+  if (!doc || readingMode.value !== "paged") return;
+  const revision = ++previewRevision;
+  previewPrepared.value = false;
+  layoutPreviewFrame();
+  // CSS fonts may finish asynchronously; start page flips only after their metrics
+  // have settled. Avoid doing any network/font/layout work during a flip.
+  void (doc.fonts?.ready ?? Promise.resolve()).then(() => {
+    if (!readerAlive || revision !== previewRevision || previewFrame.value?.contentDocument !== doc) return;
+    previewPrepared.value = layoutPreviewFrame();
+  }).catch(() => { previewPrepared.value = false; });
 }
 
 function turnPage(delta: -1 | 1) {
@@ -271,11 +288,28 @@ function turnPage(delta: -1 | 1) {
     return;
   }
   const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-  if (reduced) { moveToPage(next); return; }
+  if (reduced || !previewPrepared.value) { moveToPage(next); return; }
+  const iframe = previewFrame.value, doc = iframe?.contentDocument;
+  if (!iframe || !doc || !layoutPreviewFrame()) { moveToPage(next); return; }
+  const root = doc.scrollingElement || doc.documentElement;
+  const width = Math.max(1, iframe.clientWidth);
+  const left = Math.min(Math.max(0, root.scrollWidth - width), next * width);
+  // Programmatic positioning while the sheet is invisible. Never smoothly scroll
+  // the iframe; only the opaque paper layer is animated.
+  root.scrollLeft = left;
+  if (Math.abs(root.scrollLeft - left) > 2) { moveToPage(next); return; }
   const token = ++turnToken;
   turnPreview.value = { token, page: next, direction: delta, ready: false };
-  // Short fallback for blocked/unloaded preview frames; never trap reading.
-  turnTimer = setTimeout(() => finishTurn(token), 1600);
+  // This fallback also fires if iOS backgrounds the PWA before requestAnimationFrame.
+  turnTimer = setTimeout(() => finishTurn(token), 1800);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!readerAlive || turnPreview.value?.token !== token) return;
+    // In case font/layout changed while waiting, don't animate a wrong page.
+    if (Math.abs(root.scrollLeft - left) > 2) { finishTurn(token); return; }
+    turnPreview.value.ready = true;
+    if (turnTimer) clearTimeout(turnTimer);
+    turnTimer = setTimeout(() => finishTurn(token), 850);
+  }));
 }
 
 function resizeReader() {
@@ -284,6 +318,7 @@ function resizeReader() {
   if (readingMode.value !== "paged") { relayoutExcerpt(); return; }
   restorePercent = chapterPercent.value;
   frameLoaded();
+  layoutPreviewFrame();
 }
 
 function dismissLookup() {
@@ -600,7 +635,7 @@ onUnmounted(() => {
 </script>
 <style scoped>
 .reader-page{position:fixed;inset:0;display:flex;flex-direction:column;z-index:50;background:#fff;color:#242830;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
-.reader-page.theme-sepia{background:#f5edda;color:#3d3528}
+.reader-page.theme-sepia{background:#f3ecdc;color:#2a251e}
 .reader-page.theme-dark{background:#20252b;color:#e5e7eb}
 .reader-header{display:flex;align-items:center;justify-content:space-between;min-height:50px;border-bottom:1px solid #8882;gap:8px}
 .reader-header>button{width:50px;min-height:44px;border:0;background:transparent;color:inherit;font-size:26px;cursor:pointer}
@@ -614,11 +649,13 @@ onUnmounted(() => {
 .chapter-stage{position:relative}
 .chapter-sheet{position:relative;width:100%}
 .mode-paged .chapter-stage{height:100%;perspective:1800px;isolation:isolate}
-.mode-paged .chapter-sheet{height:100%;transform-origin:left center;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:var(--reader-paper,#fff);will-change:auto}
-.reader-page.theme-sepia{--reader-paper:#f5edda;--reader-ink-shadow:rgba(42,28,9,.2)}
+.mode-paged .chapter-sheet{height:100%;transform-origin:left center;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:var(--reader-paper,#fff);will-change:auto;-webkit-transform-style:preserve-3d;transform-style:preserve-3d}
+.reader-page.theme-sepia{--reader-paper:#f3ecdc;--reader-ink-shadow:rgba(42,28,9,.2)}
 .reader-page.theme-dark{--reader-paper:#20252b;--reader-ink-shadow:rgba(0,0,0,.5)}
 .reader-page.theme-light{--reader-paper:#fff;--reader-ink-shadow:rgba(40,28,10,.16)}
 .mode-paged .chapter-preview{position:absolute;inset:0;z-index:1;pointer-events:none}
+.mode-paged .chapter-preview.preview-back{transform:rotateY(-104deg)}
+.mode-paged .is-turning .chapter-sheet{will-change:transform}
 .mode-paged .chapter-sheet:not(.chapter-preview){z-index:2}
 .mode-paged .chapter-preview.turn-in{z-index:3}
 .mode-paged .chapter-sheet::before{content:"";position:absolute;inset:0 auto 0 0;width:14px;z-index:2;pointer-events:none;background:linear-gradient(to right,var(--reader-ink-shadow),transparent)}
@@ -636,7 +673,7 @@ onUnmounted(() => {
 @keyframes ebook-shade-out{from{opacity:1}to{opacity:0}}
 @media (prefers-reduced-motion:reduce){.mode-paged .chapter-sheet{animation:none!important}.mode-paged .sheet-sheen{animation:none!important}}
 .chapter-frame{display:block;width:100%;height:1px;border:0;background:transparent}
-.mode-paged .chapter-preview .chapter-frame{height:100%}
+.mode-paged .chapter-preview .chapter-frame{height:100%;pointer-events:none}
 .chapter-tap-layer{position:absolute;inset:0;z-index:5;cursor:pointer;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .excerpt-highlights{position:absolute;inset:0;z-index:4;pointer-events:none}
 .is-turning .chapter-tap-layer{pointer-events:none}
