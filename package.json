@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.184",
-  "releaseSummary": "电子书新增驿书式 3D 书页翻转、纸张阴影和平滑过渡，保留离线查词和摘录",
+  "version": "0.1.185",
+  "releaseSummary": "电子书修复翻页卡顿和页面横穿，预排版下一页并采用驿书同款 Noto Serif SC 字体",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
