@@ -25,8 +25,23 @@ class MemoryD1 {
     };
   }
 
+  // Like D1: statements run in order; a SELECT yields its rows.
+  async batch(statements: Array<{ sql: string; first: () => Promise<unknown>; run: () => Promise<unknown> }>) {
+    const results: unknown[] = [];
+    for (const statement of statements) {
+      if (statement.sql.startsWith("SELECT")) {
+        const row = await statement.first();
+        results.push({ results: row ? [row] : [], meta: { changes: 0 } });
+      } else {
+        results.push(await statement.run());
+      }
+    }
+    return results;
+  }
+
   private prepareBound(sql: string, values: () => unknown[]) {
     return {
+      sql,
       bind: (...next: unknown[]) => this.prepareBound(sql, () => next),
       first: async () => {
         const bound = values();
@@ -114,6 +129,28 @@ describe("HaiNei Worker authentication and quota", () => {
     expect(pubkey).toBe(getPublicKey(secret));
     await expect(verifyAndConsumeChallenge(env, created.challenge, signed(created.challenge, secret, 1002), 1002))
       .rejects.toMatchObject({ status: 409, message: "challenge_already_used" });
+  });
+
+  it("rate-limits and records a challenge-free request in one D1 batch", async () => {
+    const db = new MemoryD1();
+    const env = { ...baseEnv(db), AUTH_REQUESTS_PER_MINUTE_PER_PUBKEY: "10" };
+    const batch = vi.spyOn(db, "batch");
+    const secret = generateSecretKey();
+    const pubkey = getPublicKey(secret);
+    const now = Math.floor(Date.now() / 1000);
+    const url = "https://worker.test/api/media/session";
+    const payload = { fileSize: 10, contentHash: "c".repeat(64) };
+    const sign = () => signWorkerRequest(async template => finalizeEvent(template, secret), pubkey, {
+      action: "hainei_media_session", url, method: "POST", payload, content: "Authorize test request",
+    });
+    for (let i = 0; i < 10; i++) {
+      await expect(verifyAndConsumeChallenge(env, undefined, await sign(), now, "hainei_media_session", { url, method: "POST", payload }))
+        .resolves.toBe(pubkey);
+    }
+    expect(batch).toHaveBeenCalledTimes(10);
+    await expect(verifyAndConsumeChallenge(env, undefined, await sign(), now, "hainei_media_session", { url, method: "POST", payload }))
+      .rejects.toMatchObject({ status: 429, message: "rate_limited" });
+    expect(batch).toHaveBeenCalledTimes(11);
   });
 
   it("accepts a fresh challenge-free request once, bound to its URL and payload", async () => {

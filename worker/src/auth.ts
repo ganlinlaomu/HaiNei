@@ -1,7 +1,7 @@
 import { verifyEvent } from "nostr-tools";
 import type { Event } from "nostr-tools/core";
 import { HttpError, integerSetting, type Env } from "./types";
-import { consumeRateLimit } from "./requestGuards";
+import { changedOneRow, consumeRateLimit, rateLimitStatement } from "./requestGuards";
 
 const PUBKEY = /^[0-9a-f]{64}$/;
 const CHALLENGE = /^[0-9a-f]{64}$/;
@@ -117,18 +117,25 @@ export async function verifyAndConsumeChallenge(
   }
 
   const authLimit = integerSetting(env.AUTH_REQUESTS_PER_MINUTE_PER_PUBKEY, 480, 10, 2000);
-  await consumeRateLimit(env, `auth:${expectedAction}:${event.pubkey}`, authLimit, 60, now);
+  const rateKey = `auth:${expectedAction}:${event.pubkey}`;
 
   if (timestamped) {
     // Each signed event authorizes one request. The row expires with the
     // event and is removed by the daily cleanup like a used challenge.
-    const replay = await env.DB.prepare(`
-      INSERT OR IGNORE INTO hainei_auth_challenges (challenge_hash, pubkey, created_at, expires_at, used_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(await sha256(`event:${event.id}`), event.pubkey, now, event.created_at + TIMESTAMP_AUTH_MAX_LIFETIME_SECONDS + TIMESTAMP_AUTH_SKEW_SECONDS, now).run();
-    if (Number(replay.meta?.changes || 0) !== 1) throw new HttpError(409, "auth_event_replayed");
+    // The rate limit and the replay record share one D1 round trip.
+    const [limited, replay] = await env.DB.batch([
+      rateLimitStatement(env, rateKey, authLimit, 60, now),
+      env.DB.prepare(`
+        INSERT OR IGNORE INTO hainei_auth_challenges (challenge_hash, pubkey, created_at, expires_at, used_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(await sha256(`event:${event.id}`), event.pubkey, now, event.created_at + TIMESTAMP_AUTH_MAX_LIFETIME_SECONDS + TIMESTAMP_AUTH_SKEW_SECONDS, now),
+    ]);
+    if (!changedOneRow(limited)) throw new HttpError(429, "rate_limited");
+    if (!changedOneRow(replay)) throw new HttpError(409, "auth_event_replayed");
     return event.pubkey;
   }
+
+  await consumeRateLimit(env, rateKey, authLimit, 60, now);
 
   const challengeHash = await sha256(challenge);
   const record = await env.DB.prepare(`
