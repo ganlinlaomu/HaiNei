@@ -653,8 +653,7 @@ onUnmounted(() => {
 .reader-page.theme-sepia{--reader-paper:#f3ecdc;--reader-ink-shadow:rgba(42,28,9,.2)}
 .reader-page.theme-dark{--reader-paper:#20252b;--reader-ink-shadow:rgba(0,0,0,.5)}
 .reader-page.theme-light{--reader-paper:#fff;--reader-ink-shadow:rgba(40,28,10,.16)}
-.mode-paged .chapter-preview{position:absolute;inset:0;z-index:1;pointer-events:none;visibility:hidden;opacity:0}
-.mode-paged .chapter-preview.preview-active{visibility:visible;opacity:1}
+.mode-paged .chapter-preview{position:absolute;inset:0;z-index:1;pointer-events:none}
 .mode-paged .chapter-preview.preview-back{transform:rotateY(-104deg)}
 .mode-paged .is-turning .chapter-sheet{will-change:transform}
 .mode-paged .chapter-sheet:not(.chapter-preview){z-index:2}
