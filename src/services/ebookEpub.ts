@@ -173,7 +173,7 @@ export class OfflineEpub {
     for (const blocked of Array.from(parsed.body.querySelectorAll("script,style,link,iframe,object,embed,form,svg,math,video,audio,base,meta,template"))) blocked.remove();
     const heading = parsed.body.querySelector("h1,h2,h3");
     if (heading?.textContent?.trim()) chapter.title = heading.textContent.trim().slice(0, 90);
-    const allowed = new Set(["P","DIV","SPAN","H1","H2","H3","H4","H5","H6","B","I","EM","STRONG","U","S","BR","HR","BLOCKQUOTE","PRE","CODE","OL","UL","LI","IMG","TABLE","THEAD","TBODY","TR","TD","TH","SUP","SUB","SECTION","ARTICLE"]);
+    const allowed = new Set(["P","DIV","SPAN","H1","H2","H3","H4","H5","H6","B","I","EM","STRONG","U","S","BR","HR","BLOCKQUOTE","PRE","CODE","OL","UL","LI","IMG","TABLE","THEAD","TBODY","TR","TD","TH","SUP","SUB","SECTION","ARTICLE","RUBY","RT","RP"]);
     for (const element of Array.from(parsed.body.querySelectorAll("*"))) {
       if (!allowed.has(element.tagName)) {
         element.replaceWith(...Array.from(element.childNodes));
@@ -201,7 +201,7 @@ export class OfflineEpub {
     return "<!doctype html><html><head><meta charset=\"utf-8\">" +
       "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src blob: data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'\">" +
       "<style>html{background:" + bg + ";color:" + fg + ";font-family:system-ui,-apple-system,serif;font-size:" + Math.max(14,Math.min(28,fontSize)) +
-      "px;line-height:1.85;overflow-wrap:anywhere}body{margin:0 auto;max-width:42rem;padding:24px 22px 72px}img{max-width:100%;height:auto;display:block;margin:1em auto}p{margin:0 0 1em}h1,h2,h3{line-height:1.4}a{color:inherit}pre{white-space:pre-wrap}table{max-width:100%;display:block;overflow:auto}</style></head><body>" +
+      "px;line-height:1.85;overflow-wrap:anywhere}body{margin:0 auto;max-width:42rem;padding:24px 22px 72px}img{max-width:100%;height:auto;display:block;margin:1em auto}p{margin:0 0 1em}ruby rt{font-size:.55em;font-weight:400}h1,h2,h3{line-height:1.4}a{color:inherit}pre{white-space:pre-wrap}table{max-width:100%;display:block;overflow:auto}</style></head><body>" +
       parsed.body.innerHTML + "</body></html>";
   }
 

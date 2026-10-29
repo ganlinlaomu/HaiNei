@@ -31,7 +31,7 @@ describe("fixed ebook recommendations", () => {
   it("preserves explicit searching, downloaded book actions, and offline bookshelf", () => {
     const view = readFileSync("src/views/Books.vue", "utf8");
     expect(view).toContain("void search(false)");
-    expect(view).toContain("downloadGutenbergBook");
+    expect(view).toContain("downloadCatalogBook");
     expect(view).toContain("refreshLibrary");
     expect(view).toContain("exportLibraryBook");
   });

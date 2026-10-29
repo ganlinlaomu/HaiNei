@@ -62,7 +62,13 @@ export function parseAozoraCsv(csv:string):CatalogRow[]{
     try{parsed=new URL(rawUrl.replace(/^http:/,"https:"));}catch{return;}
     if(parsed.protocol!=="https:"||parsed.hostname!=="www.aozora.gr.jp"||parsed.search||parsed.hash||
       !/^\/cards\/\d{6}\/files\/\d+_[\w-]+\.html$/.test(parsed.pathname))return;
-    const card="https://www.aozora.gr.jp"+new URL(get("図書カードURL").replace(/^http:/,"https:")).pathname;
+    let card:string;
+    try {
+      const raw=new URL(get("図書カードURL").replace(/^http:/,"https:"));
+      if(raw.hostname!=="www.aozora.gr.jp"||raw.protocol!=="https:"||
+        !/^\/cards\/\d{6}\/card\d+\.html$/.test(raw.pathname))return;
+      card=raw.origin+raw.pathname;
+    } catch { return; }
     const title=get("作品名").trim(),author=get("姓名").trim()||[get("姓"),get("名")].filter(Boolean).join(" ");
     if(!title||!author||works.has(id))return;
     works.set(id,{id,title:title.slice(0,180),author:author.slice(0,100),url:parsed.href,card});
