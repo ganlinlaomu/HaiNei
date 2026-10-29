@@ -105,14 +105,16 @@ describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
     expect(String(fetcher.mock.calls[1][0])).toContain("origin=*");
   });
   it("uses the same official Aozora catalogue filters for the prebuilt index",()=>{
-    const names=["作品ID","作品名","作品著作権フラグ","人物著作権フラグ","役割フラグ","姓名","XHTML/HTMLファイルURL","図書カードURL"];
+    const names=["作品ID","作品名","作品著作権フラグ","人物著作権フラグ","役割フラグ","姓名","XHTML/HTMLファイルURL","図書カードURL","テキストファイルURL"];
     const raw=[names.join(","),[
       "000773","こころ","なし","なし","著者","夏目漱石",
       "https://www.aozora.gr.jp/cards/000148/files/773_14560.html",
-      "https://www.aozora.gr.jp/cards/000148/card773.html"
+      "https://www.aozora.gr.jp/cards/000148/card773.html",
+      "https://www.aozora.gr.jp/cards/000148/files/773_ruby_5968.zip"
     ].join(",")].join("\r\n");
     expect(rowsFromAozoraCsv(raw)).toMatchObject([{
-      id:"aozora:773",title:"こころ",authors:["夏目漱石"],language:"ja"
+      id:"aozora:773",title:"こころ",authors:["夏目漱石"],language:"ja",
+      textUrl:"https://raw.githubusercontent.com/aozorahack/aozorabunko_text/master/cards/000148/files/773_ruby_5968/773_ruby_5968.txt"
     }]);
   });
   it("generates a valid ZIP with an uncompressed first mimetype entry",async()=>{
