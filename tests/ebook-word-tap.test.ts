@@ -43,14 +43,13 @@ describe("EPUB iPhone tap-to-lookup", () => {
     expect(wordAtPoint(doc, 20, 12)).toBe("walking");
   });
 
-  it("keeps EPUB publisher scripts disabled and removes listeners on unmount", () => {
+  it("keeps EPUB scripts disabled and handles taps on a parent-owned layer", () => {
     const source = readFileSync("src/views/EbookReader.vue", "utf8");
     expect(source).toContain('sandbox="allow-same-origin"');
     expect(source).not.toContain('sandbox="allow-scripts');
-    expect(source).toContain('doc.addEventListener("touchend", completeFrameTouch');
-    expect(source).toContain('doc.addEventListener("mouseup", completeFrameMouse');
-    expect(source).toContain('doc.addEventListener("selectionchange", queueSelectedWord');
-    expect(source).toContain("wordAtPoint(doc, x, y)");
-    expect(source).toContain("unbindFrameSelection();");
+    // WebKit drops parent listeners attached inside the script-disabled iframe.
+    expect(source).not.toMatch(/doc\.addEventListener\(/);
+    expect(source).toContain('class="chapter-tap-layer" aria-hidden="true" @click="lookupTappedWord"');
+    expect(source).toContain("wordAtPoint(doc, event.clientX - rect.left, event.clientY - rect.top)");
   });
 });
