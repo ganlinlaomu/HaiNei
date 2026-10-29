@@ -12,16 +12,62 @@ const request=(url:string)=>({request:new Request(url)});
 describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
   it("only searches Chinese Wikisource article namespace, preserving exact page titles",async()=>{
     const fetcher=vi.fn(async()=>new Response(JSON.stringify({
-      query:{search:[{pageid:120,ns:0,title:"論語"},{pageid:12,ns:1,title:"讨论:論語"},{pageid:3,ns:0,title:"論語/學而第一"}]},
-      continue:{sroffset:20}
+      query:{pages:[{pageid:120,ns:0,title:"論語",index:1},{pageid:12,ns:1,title:"讨论:論語",index:2},{pageid:3,ns:0,title:"論語/學而第一",index:3}]},
+      continue:{gsroffset:20}
     })));
     vi.stubGlobal("fetch",fetcher);
     const data=await (await wikiSearch(request("https://pwa.lostr.space/api/books/wikisource/search?q="+encodeURIComponent("論語")+"&page=1"))).json() as any;
-    expect(data.books.map((b:any)=>b.id)).toEqual(["wikisource:120","wikisource:3"]);
+    // A subpage is one chapter: it collapses into its root work.
+    expect(data.books.map((b:any)=>b.id)).toEqual(["wikisource:120"]);
     expect(data.books[0].sourceUrl).toContain("zh.wikisource.org");
     expect(data.books[0].epubUrl).toContain("ws-export-app.wmcloud.org");
     expect(data.hasNext).toBe(true);
-    expect(String(fetcher.mock.calls[0][0])).toContain("srnamespace=0");
+    expect(String(fetcher.mock.calls[0][0])).toContain("gsrnamespace=0");
+  });
+  it("expands 版本页 into their editions and follows redirects to the real work",async()=>{
+    const fetcher=vi.fn(async(url:string)=>{
+      const params=new URL(url).searchParams;
+      if(params.get("generator")==="search")return new Response(JSON.stringify({query:{pages:[
+        {pageid:1,ns:0,title:"水滸傳",index:1,pageprops:{disambiguation:""}},
+        // redirects=1 already resolves search hits to their targets.
+        {pageid:20,ns:0,title:"聊齋志異",index:2},
+        {pageid:5,ns:0,title:"水滸傳 (70回本)/讀法",index:3},
+      ]}}));
+      if(params.get("prop")==="links")return new Response(JSON.stringify({query:{pages:[{title:"水滸傳",links:[
+        {ns:0,title:"新刻全像水滸傳"},{ns:0,title:"水滸傳 (100回本)"},{ns:0,title:"水滸傳 (70回本)"},{ns:14,title:"Category:x"},
+      ]}]}}));
+      return new Response(JSON.stringify({query:{
+        redirects:[{from:"聊齋誌異",to:"聊齋志異"}],
+        pages:[
+          {pageid:10,ns:0,title:"水滸傳 (100回本)"},{pageid:11,ns:0,title:"水滸傳 (70回本)"},
+          {pageid:12,ns:0,title:"新刻全像水滸傳"},{pageid:20,ns:0,title:"聊齋志異"},
+        ]}}));
+    });
+    vi.stubGlobal("fetch",fetcher);
+    const data=await (await wikiSearch(request("https://pwa.lostr.space/api/books/wikisource/search?q=x&page=1"))).json() as any;
+    // Editions named like the work first; the subpage collapses into an edition already shown.
+    expect(data.books.map((b:any)=>b.title)).toEqual(["水滸傳 (100回本)","水滸傳 (70回本)","新刻全像水滸傳","聊齋志異"]);
+  });
+  it("exports the redirect target and refuses 版本页 with their editions",async()=>{
+    const exports:string[]=[];
+    const fetcher=vi.fn(async(url:string)=>{
+      const target=new URL(url);
+      if(target.hostname==="zh.wikisource.org"){
+        const title=target.searchParams.get("titles");
+        if(title==="水滸傳")return new Response(JSON.stringify({query:{pages:[{pageid:1,ns:0,title:"水滸傳",pageprops:{disambiguation:""},links:[{ns:0,title:"水滸傳 (100回本)"}]}]}}));
+        return new Response(JSON.stringify({query:{redirects:[{from:"聊齋誌異",to:"聊齋志異"}],pages:[{pageid:2,ns:0,title:"聊齋志異"}]}}));
+      }
+      exports.push(target.searchParams.get("page")||"");
+      const epub=new Uint8Array(200);epub[0]=0x50;epub[1]=0x4b;
+      return new Response(epub);
+    });
+    vi.stubGlobal("fetch",fetcher);
+    const versions=await wikiExport(request("https://pwa.lostr.space/api/books/wikisource/epub?page="+encodeURIComponent("水滸傳")));
+    expect(versions.status).toBe(409);
+    expect((await versions.json() as any).editions).toEqual(["水滸傳 (100回本)"]);
+    const redirected=await wikiExport(request("https://pwa.lostr.space/api/books/wikisource/epub?page="+encodeURIComponent("聊齋誌異")));
+    expect(redirected.status).toBe(200);
+    expect(exports).toEqual(["聊齋志異"]);
   });
   it("rejects arbitrary WS export pages and disallows off-site redirects",async()=>{
     const fetcher=vi.fn(async()=>new Response(null,{status:302,headers:{Location:"https://evil.example/steal.epub"}}));
@@ -100,7 +146,7 @@ describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
   });
 
   it("identifies Wiki search as HaiNei, as required by Wikimedia API policy",async()=>{
-    const fetcher=vi.fn(async (_url:string,_options?:RequestInit)=>new Response(JSON.stringify({query:{search:[]}})));
+    const fetcher=vi.fn(async (_url:string,_options?:RequestInit)=>new Response(JSON.stringify({query:{pages:[]}})));
     vi.stubGlobal("fetch",fetcher);
     const response=await wikiSearch(request("https://pwa.lostr.space/api/books/wikisource/search?q="+encodeURIComponent("唐詩")+"&page=1"));
     expect(response.status).toBe(200);
@@ -111,7 +157,7 @@ describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
   it("falls back to Wikimedia CORS when the Cloudflare search returns a 502",async()=>{
     const fetcher=vi.fn(async (url:string) => url.startsWith("/api/")
       ? new Response(JSON.stringify({error:"Unavailable"}),{status:502})
-      : new Response(JSON.stringify({query:{search:[{ns:0,pageid:39,title:"論語"}]}})));
+      : new Response(JSON.stringify({query:{pages:[{ns:0,pageid:39,title:"論語",index:1}]}})));
     vi.stubGlobal("fetch",fetcher);
     const data=await searchOtherLibrary("wikisource","論語",1);
     expect(data.books.map(b=>b.id)).toEqual(["wikisource:39"]);

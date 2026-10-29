@@ -40,30 +40,62 @@ function render(node:Node):string{
   if(tag==="br")return "<br/>";
   return ALLOWED.has(tag)?"<"+tag+">"+inside+"</"+tag+">":inside;
 }
+const DROPPED=new Set(["script","style","iframe","object","embed","form","svg","img","video","audio","noscript"]);
+const BLOCKS=new Set(["div","p","blockquote","section","article","center","table","tbody","tr","td","th","ul","ol","li","dl","dt","dd","hr"]);
+function textLength(markup:string){return markup.replace(/<rt>[\s\S]*?<\/rt>/g,"").replace(/<[^>]+>/g,"").trim().length;}
+/**
+ * Aozora XHTML puts the whole text straight into div.main_text as text nodes
+ * and inline ruby, with <br /> between lines and h3/h4 midashi inside
+ * jisage divs. Walk it in document order: a <br> or block ends a paragraph,
+ * a heading becomes a heading, and everything inline joins the current line.
+ */
+export function aozoraBlocks(main:Element):Array<{heading:boolean;html:string}>{
+  const out:Array<{heading:boolean;html:string}>=[];
+  let line="";
+  const flush=()=>{if(textLength(line))out.push({heading:false,html:"<p>"+line+"</p>"});line="";};
+  const walk=(parent:Node)=>{
+    for(const node of Array.from(parent.childNodes)){
+      if(node.nodeType===3){line+=escapeXml(node.textContent||"");continue;}
+      if(node.nodeType!==1)continue;
+      const el=node as Element,tag=el.tagName.toLowerCase();
+      if(DROPPED.has(tag))continue;
+      if(tag==="br"){flush();continue;}
+      if(/^h[1-6]$/.test(tag)){
+        flush();
+        const inside=Array.from(el.childNodes).map(render).join("");
+        if(textLength(inside))out.push({heading:true,html:"<h"+(tag==="h3"||tag==="h1"||tag==="h2"?2:3)+">"+inside+"</h"+(tag==="h3"||tag==="h1"||tag==="h2"?2:3)+">"});
+        continue;
+      }
+      if(BLOCKS.has(tag)){flush();walk(el);flush();continue;}
+      line+=render(el);
+    }
+  };
+  walk(main);
+  flush();
+  return out;
+}
 /** Turn a sanctioned Aozora main_text into a small offline-readable EPUB. */
 export function makeAozoraEpub(html:string,title:string,author:string):Blob{
   if(html.length>5*1024*1024)throw new Error("青空文库正文过大");
   const document=new DOMParser().parseFromString(html,"text/html");
   const main=document.querySelector(".main_text")||document.querySelector("#main_text")||document.body;
   if(!main)throw new Error("青空文库缺少正文");
-  let paras=Array.from(main.querySelectorAll("p,h1,h2,h3")).filter(el=>!!el.textContent?.trim());
-  if(!paras.length)paras=Array.from(main.children).filter(el=>!!el.textContent?.trim());
-  const list=paras.map(el=>{
-    const tag=/^H[123]$/.test(el.tagName)?el.tagName.toLowerCase():"p";
-    return "<"+tag+">"+Array.from(el.childNodes).map(render).join("")+"</"+tag+">";
-  }).filter(s=>s.length>9);
-  if(!list.length||list.join("").length<50)throw new Error("无法提取青空文库正文，请尝试其他作品");
+  const blocks=aozoraBlocks(main);
+  if(blocks.reduce((sum,block)=>sum+textLength(block.html),0)<50)throw new Error("无法提取青空文库正文，请尝试其他作品");
+  // One reader chapter per Aozora section once it has some length, and never
+  // one huge file: the reader renders a chapter at a time.
   const sections:string[][]=[[]];let count=0;
-  for(const para of list){
-    if(count+para.length>56000&&sections[sections.length-1].length){sections.push([]);count=0;}
-    sections[sections.length-1].push(para);count+=para.length;
+  for(const block of blocks){
+    const current=sections[sections.length-1];
+    if(current.length&&((block.heading&&count>4000)||count+block.html.length>56000)){sections.push([]);count=0;}
+    sections[sections.length-1].push(block.html);count+=block.html.length;
   }
   const t=escapeXml(title.slice(0,180)),a=escapeXml(author.slice(0,100));
   const chapters=sections.map((parts,i)=>{
     const titleText=t+(sections.length===1?"":" · "+(i+1));
     return '<?xml version="1.0" encoding="UTF-8"?>'+
       '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ja"><head><title>'+titleText+'</title></head>'+
-      '<body><h1>'+titleText+'</h1>'+parts.join("")+'</body></html>';
+      '<body>'+(i===0?'<h1>'+t+'</h1>':'')+parts.join("")+'</body></html>';
   });
   const navItems=chapters.map((_,i)=>'<li><a href="chapter'+(i+1)+'.xhtml">'+(i+1)+'</a></li>').join("");
   const nav='<?xml version="1.0" encoding="UTF-8"?>'+

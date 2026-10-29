@@ -1,11 +1,29 @@
 /** Narrow, size-limited WS Export EPUB gateway: user supplies a page title, never a URL. */
+import { resolveWikisourceWork } from "../../../../src/services/wikisourceWorks";
 const MAX_BYTES=25*1024*1024;
+const AGENT="HaiNei-BookReader/1.0 (https://github.com/ganlinlaomu/HaiNei)";
+async function wikiApi(params:Record<string,string>){
+  const response=await fetch("https://zh.wikisource.org/w/api.php?"+new URLSearchParams(params),{
+    headers:{Accept:"application/json","User-Agent":AGENT,"Api-User-Agent":AGENT},signal:AbortSignal.timeout(12000)
+  });
+  if(!response.ok)throw new Error("Wikisource API HTTP "+response.status);
+  return response.json();
+}
 const EXPORT_HOSTS=new Set(["ws-export-app.wmcloud.org","ws-export.wmcloud.org"]);
 export async function onRequestGet(context:{request:Request}):Promise<Response>{
   const input=new URL(context.request.url);
   const title=(input.searchParams.get("page")||"").trim();
   if(!title||title.length>180||/[\x00-\x1f\x7f]/.test(title)||title.includes(":"))return new Response("Invalid page title",{status:400});
-  let target=new URL("https://ws-export-app.wmcloud.org/?"+new URLSearchParams({format:"epub-3",lang:"zh",page:title,credits:"false",images:"false"}));
+  // WS Export finds chapters as subpages of the exact title it is given, so a
+  // redirect must be resolved first; a 版本页 has no text of its own at all.
+  let page=title;
+  try{
+    const work=await resolveWikisourceWork(title,wikiApi);
+    if(work.kind==="missing")return new Response("Wikisource page not found",{status:404});
+    if(work.kind==="versions")return new Response(JSON.stringify({error:"versions_page",editions:work.editions}),{status:409,headers:{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"}});
+    page=work.title;
+  }catch{/* The export itself may still work; the API is only a pre-check. */}
+  let target=new URL("https://ws-export-app.wmcloud.org/?"+new URLSearchParams({format:"epub-3",lang:"zh",page,credits:"false",images:"false"}));
   try{
     for(let i=0;i<5;i++){
       const res=await fetch(target.href,{redirect:"manual",headers:{Accept:"application/epub+zip,application/octet-stream;q=0.9"},signal:AbortSignal.timeout(45000)});

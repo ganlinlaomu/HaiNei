@@ -87,6 +87,12 @@ export async function downloadCatalogBook(
   if(book.id.startsWith("wikisource:")){
     if(!/^wikisource:\d+$/.test(book.id)||!book.title||book.title.length>180)throw new Error("不受支持的维基文库作品");
     const response=await fetch("/api/books/wikisource/epub?page="+encodeURIComponent(book.title),{signal,cache:"no-store"});
+    if(response.status===409){
+      const body=await response.json().catch(()=>null) as {editions?:unknown}|null;
+      const editions=Array.isArray(body?.editions)?body!.editions.filter((x):x is string=>typeof x==="string").slice(0,4):[];
+      throw new Error("「"+book.title+"」是版本页，没有正文。请重新搜索并选择具体版本"+(editions.length?"，例如："+editions.join("、"):""));
+    }
+    if(response.status===404)throw new Error("维基文库找不到这部作品");
     if(!response.ok)throw new Error(response.status===413?"EPUB 超过 25MB":"维基文库无法导出 EPUB（HTTP "+response.status+"），可尝试其他已完成的作品");
     const announced=Number(response.headers.get("Content-Length")||0);
     if(announced>MAX_EPUB_SIZE)throw new Error("EPUB 超过 25MB");
