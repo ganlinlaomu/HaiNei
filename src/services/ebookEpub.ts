@@ -142,15 +142,15 @@ export function chapterScript(text: string): ChapterScript {
 
 const THEMES = {
   light: { bg: "#ffffff", fg: "#2b2f36", muted: "#6b7280", rule: "#e5e7eb", quote: "#f6f7f9", accent: "#c9a96b" },
-  sepia: { bg: "#f5edda", fg: "#3d3528", muted: "#7c6f5b", rule: "#e2d5b8", quote: "#efe4cb", accent: "#b08a4e" },
+  sepia: { bg: "#f3ecdc", fg: "#2a251e", muted: "#94866d", rule: "#cdbf9f", quote: "#e9e0cf", accent: "#8a6a3c" },
   dark: { bg: "#20252b", fg: "#dfe3e8", muted: "#9aa3ad", rule: "#363d46", quote: "#272d34", accent: "#8f7a52" },
 } as const;
 
 /** Reading CSS for a chapter: comfortable measure, CJK indents, quiet notes. */
 export function chapterStyles(theme: "light" | "sepia" | "dark", fontSize: number, script: ChapterScript, indented: boolean, readerFont: "serif" | "sans" = "serif", readingMode: "scroll" | "paged" = "scroll"): string {
   const c = THEMES[theme] || THEMES.light;
-  // Prefer book-style local serif fonts; avoid network fonts so saved books stay offline.
-  // Keep PingFang as a fallback for iOS devices without a Chinese serif family.
+  // Match nostr-book's Noto Serif SC when online; keep iOS Songti and other
+  // local serif fonts as offline fallbacks. No book content is sent to the font provider.
   const font = readerFont === "sans"
     ? script === "latin"
       ? '-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif'
@@ -161,7 +161,7 @@ export function chapterStyles(theme: "light" | "sepia" | "dark", fontSize: numbe
       ? '"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Noto Serif",serif'
       : script === "japanese"
         ? '"Hiragino Mincho ProN","Yu Mincho","Noto Serif CJK JP","Source Han Serif JP",serif'
-        : '"Songti SC","Songti TC","STSong","Noto Serif CJK SC","Source Han Serif SC","SimSun","PingFang SC",serif';
+        : '"Noto Serif SC","Songti SC","Songti TC","STSong","Noto Serif CJK SC","Source Han Serif SC","SimSun","PingFang SC",serif';
   const size = Math.max(14, Math.min(28, fontSize));
   const cjk = script !== "latin";
   return "html{background:" + c.bg + ";color:" + c.fg + ";font-family:" + font + ";font-size:" + size + "px;" +
@@ -169,7 +169,7 @@ export function chapterStyles(theme: "light" | "sepia" | "dark", fontSize: numbe
     "body{margin:0 auto;max-width:" + (cjk ? "34em" : "36em") + ";padding:30px 24px 96px}" +
     // Justify CJK only: without a hyphenation dictionary, justified Latin text
     // on a phone-width column opens wide gaps between words.
-    "p{margin:0 0 " + (cjk ? ".7em" : ".9em") + (cjk ? ";text-align:justify;letter-spacing:.02em" : ";text-align:left;hyphens:auto;-webkit-hyphens:auto") + "}" +
+    "p{margin:0 0 " + (cjk ? ".5em" : ".9em") + (cjk ? ";text-align:justify;letter-spacing:.02em" : ";text-align:left;hyphens:auto;-webkit-hyphens:auto") + "}" +
     (indented ? "p{text-indent:2em}" : "") +
     "h1,h2,h3,h4,h5,h6{text-indent:0;text-align:center;line-height:1.45;font-weight:600;letter-spacing:" + (cjk ? ".08em" : ".01em") + "}" +
     "h1{font-size:1.5em;margin:.6em 0 1.6em}h2{font-size:1.28em;margin:1.8em 0 1.2em}" +
@@ -185,7 +185,7 @@ export function chapterStyles(theme: "light" | "sepia" | "dark", fontSize: numbe
     "table{max-width:100%;display:block;overflow:auto;border-collapse:collapse;font-size:.9em;margin:1em 0}td,th{padding:.2em .6em;vertical-align:top}" +
     "::selection{background:" + c.accent + "55}" +
     (readingMode === "paged"
-      ? "html{height:100%;overflow-x:auto;overflow-y:hidden;scroll-behavior:auto;scrollbar-width:none;overscroll-behavior-x:contain}html::-webkit-scrollbar{display:none}" +
+      ? "html{height:100%;overflow-x:hidden;overflow-y:hidden;scroll-behavior:auto;scrollbar-width:none;overscroll-behavior-x:none}html::-webkit-scrollbar{display:none}" +
         "body{box-sizing:border-box;width:100%;max-width:none;height:100%;margin:0;padding:24px;column-width:calc(100vw - 48px);column-gap:48px;column-fill:auto;overflow:visible}" +
         "p,li,blockquote{orphans:2;widows:2}h1,h2,h3,h4{break-after:avoid-column}" +
         "img{max-height:calc(100vh - 60px);width:auto;object-fit:contain;break-inside:avoid-column}" +
@@ -305,12 +305,16 @@ export class OfflineEpub {
     // space; only indent text that does not carry its own indent.
     const selfIndented = paragraphs.filter(p => /^[\u3000\u00a0]|^ {2}/.test((p.textContent || "").replace(/^[\n\r\t]+/, ""))).length;
     const indented = script !== "latin" && selfIndented < paragraphs.length / 3;
-    // Strictly no publisher scripts, styles, network calls or navigation.
+    // Sanitized publisher markup remains scriptless. Only the controlled Noto
+    // Serif SC stylesheet may be fetched when online; saved books still work offline.
     const lang = script === "latin" ? "en" : script === "japanese" ? "ja" : "zh";
+    const bookFontLink = readerFont === "serif" && script === "cjk"
+      ? '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&amp;display=swap">'
+      : "";
     return "<!doctype html><html lang=\"" + lang + "\"><head><meta charset=\"utf-8\">" +
       "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
-      "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src blob: data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'\">" +
-      "<style>" + chapterStyles(theme, fontSize, script, indented, readerFont, readingMode) + "</style></head><body>" +
+      "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src blob: data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'none'; base-uri 'none'; form-action 'none'\">" +
+      bookFontLink + "<style>" + chapterStyles(theme, fontSize, script, indented, readerFont, readingMode) + "</style></head><body>" +
       parsed.body.innerHTML + "</body></html>";
   }
 
