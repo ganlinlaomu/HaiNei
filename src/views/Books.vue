@@ -8,16 +8,23 @@
     <section v-if="tab === 'discover'" class="content">
       <form class="search" @submit.prevent="startSearch">
         <label for="ebook-query">搜索公版经典文学</label>
-        <div class="search-row"><input id="ebook-query" v-model="query" type="search" placeholder="书名、作者（建议英文原名）" autocomplete="off" /><button type="submit" :disabled="searching || (!online && !!query.trim())">搜索</button></div>
-        <div class="filters"><label for="ebook-language">语言</label><select id="ebook-language" v-model="language" @change="startSearch"><option value="">全部</option><option value="en">英文</option><option value="zh">中文</option><option value="ja">日文</option><option value="fr">法文</option></select><span>Project Gutenberg</span></div>
+        <div class="search-row"><input id="ebook-query" v-model="query" type="search"  :placeholder="source === 'gutenberg' ? '书名、作者（建议英文原名）' : '请输入书名或作者关键词'" autocomplete="off" /><button type="submit" :disabled="searching || (!online && !!query.trim())">搜索</button></div>
+        <div class="filters">
+          <label for="ebook-source">书库</label><select id="ebook-source" v-model="source" @change="onSourceChange">
+            <option value="gutenberg">Gutenberg · 英文</option>
+            <option value="wikisource">中文维基文库</option>
+            <option value="aozora">青空文庫 · 日文</option>
+          </select>
+          <template v-if="source === 'gutenberg'"><label for="ebook-language">语言</label><select id="ebook-language" v-model="language" @change="startSearch"><option value="">全部</option><option value="en">英文</option><option value="zh">中文</option><option value="ja">日文</option><option value="fr">法文</option></select></template>
+        </div>
       </form>
       <p v-if="!online" class="note offline-message" role="status">当前已离线，无法搜索或下载新书。<button type="button" @click="openLibrary">前往我的书架</button>，已下载的 EPUB 仍可正常阅读。联网后可继续搜索。</p>
-      <p class="note">无需注册书源账号。仅展示 Gutenberg 标记为无版权限制并提供 EPUB 的作品；具体使用仍以所在地法律与原书页面说明为准。</p>
+      <p class="note">三个书库均可免注册搜索。Gutenberg 提供 EPUB；中文维基文库通过 WS Export 生成 EPUB；青空文库将公开的 XHTML 正文转换为 EPUB。作品的版权与使用条件请以原书页和所在地法律为准。</p>
       <div class="catalog-heading">
-        <div><strong>{{ featuredMode ? "精选经典 · 8 本" : "搜索结果" }}</strong>
+        <div><strong>{{ featuredMode ? "精选经典 · 8 本" : BOOK_SOURCE_LABELS[source] + " · 搜索结果" }}</strong>
           <small v-if="featuredMode">无需联网查询 · 英文原版 · 下载需联网</small>
         </div>
-        <button v-if="!featuredMode" type="button" @click="showFeatured">返回精选</button>
+        <button v-if="!featuredMode && source === 'gutenberg'" type="button" @click="showFeatured">返回精选</button>
       </div>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
       <p v-if="searching && !results.length" class="hint" role="status">正在查询书库…</p>
@@ -26,7 +33,7 @@
           <img v-if="book.coverUrl && !brokenCovers.has(book.id)" :src="book.coverUrl" alt="" loading="lazy" class="cover" @error="brokenCovers.add(book.id)"/>
           <div v-else-if="featuredMode" class="cover featured-cover" aria-hidden="true"><span>{{ book.title.charAt(0) }}</span></div>
           <div v-else class="cover placeholder" aria-hidden="true">📖</div>
-          <div class="info"><strong>{{ book.title }}</strong><small>{{ book.authors.join("、") || "作者未知" }}</small><small>{{ languageLabel(book.language) }} · EPUB</small><small v-if="featuredMode" class="featured-description">{{ featuredNote(book.id) }}</small>
+          <div class="info"><strong>{{ book.title }}</strong><small>{{ book.authors.join("、") || "作者未知" }}</small><small>{{ languageLabel(book.language) }} · {{ BOOK_SOURCE_LABELS[sourceForBook(book)] }} · EPUB</small><small v-if="featuredMode" class="featured-description">{{ featuredNote(book.id) }}</small>
             <div class="actions"><button v-if="downloaded.has(book.id)" type="button" class="primary" @click="openBook(book.id)">阅读</button>
               <button v-else type="button" class="primary" :disabled="!!downloadingId || !online" @click="download(book)">{{ downloadingId === book.id ? '下载中 ' + (progress === null ? '…' : progress + '%') : '下载到书架' }}</button>
               <a :href="book.sourceUrl" target="_blank" rel="noopener noreferrer">原书页</a>
@@ -44,7 +51,7 @@
       <div v-for="book in library" :key="book.id" class="book-row">
         <img v-if="localCoverUrls[book.id] || (online && book.coverUrl && !brokenCovers.has(book.id))" :src="localCoverUrls[book.id] || book.coverUrl" alt="" loading="lazy" class="cover" @error="brokenCovers.add(book.id)"/>
         <div v-else class="cover placeholder" aria-hidden="true">📖</div>
-        <div class="info"><strong>{{ book.title }}</strong><small>{{ book.authors.join("、") || "作者未知" }}</small><small>{{ formatBytes(book.bytes) }} · 已保存</small>
+        <div class="info"><strong>{{ book.title }}</strong><small>{{ book.authors.join("、") || "作者未知" }}</small><small>{{ languageLabel(book.language) }} · {{ BOOK_SOURCE_LABELS[sourceForBook(book)] }} · {{ formatBytes(book.bytes) }} · 已保存</small>
           <div class="actions"><button type="button" class="primary" @click="openBook(book.id)">继续阅读</button><button type="button" @click="exportLibraryBook(book)">导出</button><button type="button" class="danger" @click="remove(book.id)">删除</button></div>
         </div>
       </div>
@@ -58,13 +65,14 @@ import { useRouter } from "vue-router";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
 import { useKeyStore } from "@/stores/keys";
 import { getCachedGutenbergSearch, searchGutenberg, type CatalogBook } from "@/services/ebookCatalog";
+import { BOOK_SOURCE_LABELS, sourceForBook, searchOtherLibrary, type BookSource } from "@/services/ebookSources";
 import { FEATURED_BOOKS, featuredNote } from "@/services/ebookFeatured";
-import { downloadGutenbergBook } from "@/services/ebookDownload";
+import { downloadCatalogBook } from "@/services/ebookDownload";
 import { deleteLibraryBook, exportLibraryBook, listLibraryBooks, type LibraryBook } from "@/services/ebookLibrary";
 
 const router = useRouter(), keys = useKeyStore();
 const account = computed(() => keys.pkHex);
-const tab = ref<"discover"|"library">("discover"), query = ref(""), language = ref("");
+const tab = ref<"discover"|"library">("discover"), query = ref(""), language = ref(""), source = ref<BookSource>("gutenberg");
 const searching = ref(false), results = ref<CatalogBook[]>([]), library = ref<LibraryBook[]>([]);
 const featuredMode = ref(true);
 const displayedBooks = computed(() => featuredMode.value ? FEATURED_BOOKS : results.value);
@@ -112,7 +120,7 @@ function openBook(id:string) { void router.push({ name:"EbookReader",params:{id}
 async function search(append:boolean) {
   if (!online.value) { searching.value = false; error.value = ""; return; }
   searchController?.abort();
-  const cached = getCachedGutenbergSearch(query.value, page.value, language.value);
+  const cached = source.value === "gutenberg" ? getCachedGutenbergSearch(query.value, page.value, language.value) : null;
   if (cached) {
     results.value = append ? [...results.value, ...cached.books] : cached.books;
     hasNext.value = cached.hasNext;
@@ -123,10 +131,22 @@ async function search(append:boolean) {
   if (!append) { results.value = []; hasNext.value = false; }
   const controller = new AbortController(); searchController = controller; searching.value = true; error.value = "";
   try {
-    const data = await searchGutenberg(query.value, page.value, language.value, controller.signal);
+    const data = source.value === "gutenberg" ? await searchGutenberg(query.value, page.value, language.value, controller.signal) :
+      await searchOtherLibrary(source.value, query.value, page.value, controller.signal);
     if (!controller.signal.aborted) { results.value = append ? [...results.value,...data.books] : data.books; hasNext.value = data.hasNext; }
   } catch(e) { if (!controller.signal.aborted) error.value = message(e); }
   finally { if (searchController === controller) { searching.value = false; searchController = null; } }
+}
+function onSourceChange() {
+  searchController?.abort();
+  searchController = null;
+  query.value = "";
+  results.value = [];
+  page.value = 1;
+  hasNext.value = false;
+  searching.value = false;
+  error.value = "";
+  featuredMode.value = source.value === "gutenberg";
 }
 function showFeatured() {
   searchController?.abort();
@@ -141,7 +161,8 @@ function showFeatured() {
 }
 function startSearch() {
   if (!query.value.trim()) {
-    showFeatured();
+    if (source.value === "gutenberg") showFeatured();
+    else { searchController?.abort(); results.value = []; hasNext.value = false; searching.value = false; error.value = ""; }
     return;
   }
   featuredMode.value = false;
@@ -154,7 +175,7 @@ async function download(book:CatalogBook) {
   downloadingId.value = book.id; progress.value = null; error.value = "";
   const controller = new AbortController(); downloadController = controller;
   try {
-    await downloadGutenbergBook(account.value, book, value => { progress.value = value; }, controller.signal);
+    await downloadCatalogBook(account.value, book, value => { progress.value = value; }, controller.signal);
     await refreshLibrary(); tab.value = "library";
   } catch(e) { if (!controller.signal.aborted) error.value = message(e); }
   finally { downloadingId.value = ""; downloadController = null; }
@@ -202,7 +223,7 @@ onUnmounted(() => {
 .search-row button{min-width:70px;border:0;border-radius:10px}
 button:disabled{opacity:.55}
 .filters{display:flex;align-items:center;gap:8px;color:var(--fg-64748b);font-size:12px}
-.filters select{border:1px solid var(--bd-e2e8f0);padding:7px;border-radius:8px;background:var(--bg-fff);color:inherit;font-size:16px}.filters span{margin-left:auto}
+.filters select{min-width:0;max-width:100%;border:1px solid var(--bd-e2e8f0);padding:7px;border-radius:8px;background:var(--bg-fff);color:inherit;font-size:16px}.filters span{margin-left:auto}
 .note{font-size:12px;line-height:1.6;color:var(--fg-64748b);margin:14px 0}
 .offline-message button{margin:0 4px;padding:2px 0;border:0;border-bottom:1px solid currentColor;background:transparent;color:inherit;font:inherit;font-weight:600;cursor:pointer}
 .error{color:#b91c1c;background:#fef2f2;border-radius:10px;padding:12px;font-size:13px}

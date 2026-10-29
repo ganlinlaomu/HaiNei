@@ -1,6 +1,7 @@
 import { validGutenbergEpubUrl, type CatalogBook } from "@/services/ebookCatalog";
 import { MAX_EPUB_SIZE, checkBookStorageSpace, saveLibraryBook } from "@/services/ebookLibrary";
 import { OfflineEpub } from "@/services/ebookEpub";
+import { makeAozoraEpub } from "@/services/ebookAozora";
 
 /** Downloads only verified Gutenberg EPUBs. Complete before IndexedDB commit. */
 export async function downloadGutenbergBook(
@@ -52,4 +53,53 @@ export async function downloadGutenbergBook(
   await checkBookStorageSpace(received + (cover?.size || 0));
   await saveLibraryBook(account, book, file, cover);
   onProgress(100);
+}
+
+
+/** Same EPUB library & reader for all three sources; source gateways are allowlisted. */
+export async function downloadCatalogBook(
+  account:string, book:CatalogBook, onProgress:(percent:number|null)=>void, signal?:AbortSignal
+):Promise<void>{
+  if(book.id.startsWith("gutenberg:"))return downloadGutenbergBook(account,book,onProgress,signal);
+  if(book.id.startsWith("aozora:")){
+    const target=new URL(book.epubUrl);
+    if(target.protocol!=="https:"||target.hostname!=="www.aozora.gr.jp"||
+      !/^\/cards\/\d{6}\/files\/\d+_[\w-]+\.html$/.test(target.pathname))throw new Error("不受支持的青空文库作品地址");
+    const response=await fetch("/api/books/aozora/text?url="+encodeURIComponent(target.href),{signal,cache:"no-store"});
+    if(!response.ok)throw new Error("青空文库正文无法下载（HTTP "+response.status+"）");
+    const length=Number(response.headers.get("Content-Length")||0);
+    if(length>5*1024*1024)throw new Error("作品正文过大");
+    const html=await response.text();
+    if(html.length>5*1024*1024)throw new Error("作品正文过大");
+    const file=makeAozoraEpub(html,book.title,book.authors.join("、")||"青空文庫");
+    onProgress(80);
+    const checked=await OfflineEpub.open(file);
+    checked.destroy();
+    await checkBookStorageSpace(file.size);
+    if(signal?.aborted)throw new DOMException("下载已取消","AbortError");
+    await saveLibraryBook(account,book,file);
+    onProgress(100);
+    return;
+  }
+  if(book.id.startsWith("wikisource:")){
+    if(!/^wikisource:\d+$/.test(book.id)||!book.title||book.title.length>180)throw new Error("不受支持的维基文库作品");
+    const response=await fetch("/api/books/wikisource/epub?page="+encodeURIComponent(book.title),{signal,cache:"no-store"});
+    if(!response.ok)throw new Error(response.status===413?"EPUB 超过 25MB":"维基文库无法导出 EPUB（HTTP "+response.status+"），可尝试其他已完成的作品");
+    const announced=Number(response.headers.get("Content-Length")||0);
+    if(announced>MAX_EPUB_SIZE)throw new Error("EPUB 超过 25MB");
+    const buffer=await response.arrayBuffer();
+    if(buffer.byteLength>MAX_EPUB_SIZE||buffer.byteLength<100)throw new Error("下载的 EPUB 大小异常");
+    const bytes=new Uint8Array(buffer);
+    if(bytes[0]!==0x50||bytes[1]!==0x4b)throw new Error("维基文库没有返回有效的 EPUB");
+    const file=new Blob([buffer],{type:"application/epub+zip"});
+    const checked=await OfflineEpub.open(file);
+    let cover:Blob|null=null;
+    try{cover=await checked.coverImage();}finally{checked.destroy();}
+    await checkBookStorageSpace(file.size+(cover?.size||0));
+    if(signal?.aborted)throw new DOMException("下载已取消","AbortError");
+    await saveLibraryBook(account,book,file,cover);
+    onProgress(100);
+    return;
+  }
+  throw new Error("未知书库");
 }
