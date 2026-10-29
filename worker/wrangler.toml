@@ -3,12 +3,6 @@ main = "src/index.ts"
 compatibility_date = "2026-09-15"
 compatibility_flags = ["nodejs_compat"]
 
-# D1 runs in WNAM while users are in Japan. Auth, quota and push make several
-# sequential D1 queries per request; run the Worker next to the database so a
-# request pays one trans-Pacific round trip instead of one per query.
-[placement]
-mode = "smart"
-
 [vars]
 AUTH_CHALLENGE_TTL_SECONDS = "300"
 AUTH_CHALLENGE_PER_MINUTE_PER_SOURCE = "120"
@@ -40,8 +34,9 @@ crons = ["17 3 * * *"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "blossom-imgbed-db"
-database_id = "28adbba4-77ec-418e-af4b-6a1e91cbe927"
+# APAC, next to HaiNei's users in Japan (moved from WNAM 2026-10-29).
+database_name = "blossom-imgbed-db-apac"
+database_id = "ac926de3-67a9-44e4-8a9e-5b1ebcf18bfc"
 migrations_dir = "migrations"
 
 [[services]]
