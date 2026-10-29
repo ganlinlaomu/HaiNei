@@ -26,8 +26,25 @@
         </form>
         <p v-if="dictionaryError" class="dictionary-error" role="alert">{{ dictionaryError }}</p>
       </section>
-      <p class="reader-lookup-hint">{{ dictionaryStatus === "installed" ? "轻点英文单词，离线查看中文释义" : "轻点英文单词查词 · 首次请在 Aa 下载词典" }}</p>
-      <div ref="scroller" class="chapter-scroller" @scroll.passive="onScroll"><div class="chapter-stage"><iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" /><div class="chapter-tap-layer" aria-hidden="true" @click="lookupTappedWord" /></div></div>
+      <p class="reader-lookup-hint">{{ dictionaryStatus === "installed" ? "轻点英文单词查词 · 长按选句摘录" : "轻点英文单词查词（首次请在 Aa 下载词典）· 长按选句摘录" }}</p>
+      <div ref="scroller" class="chapter-scroller" @scroll.passive="onScroll"><div class="chapter-stage"><iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" />
+        <div v-if="excerptRects.length" class="excerpt-highlights" aria-hidden="true"><span v-for="(box, i) in excerptRects" :key="i" :style="{ left: box.left + 'px', top: box.top + 'px', width: box.width + 'px', height: box.height + 'px' }" /></div>
+        <div class="chapter-tap-layer" aria-hidden="true" @click="lookupTappedWord"
+          @pointerdown="excerptPointerDown" @pointermove="excerptPointerMove" @pointerup="excerptPointerUp"
+          @pointercancel="excerptPointerCancel" @touchmove="excerptTouchMove" @contextmenu.prevent /></div></div>
+      <aside v-if="excerptSpan && !excerptDragging" class="excerpt-bar" role="toolbar" aria-label="摘录选中的文字">
+        <div class="excerpt-bar-info">
+          <span>已选 {{ excerptLength }} 字<template v-if="excerptLength > MAX_EXCERPT_CHARS">（摘录时保留前 {{ MAX_EXCERPT_CHARS }} 字）</template></span>
+          <button type="button" aria-label="取消选择" @click="clearExcerpt">×</button>
+        </div>
+        <div class="excerpt-bar-actions">
+          <button type="button" @click="growExcerpt('before')">‹ 前一句</button>
+          <button type="button" @click="growExcerpt('after')">后一句 ›</button>
+          <button type="button" @click="copyExcerpt">复制</button>
+          <button v-if="excerptWord" type="button" @click="lookupExcerptWord">查词</button>
+          <button type="button" class="excerpt-primary" @click="publishExcerpt">摘录</button>
+        </div>
+      </aside>
       <aside v-if="selectedWord" class="dictionary-card" aria-label="英汉单词释义" role="dialog">
         <div class="dictionary-card-header">
           <strong>{{ dictionaryEntry?.word || selectedWord }}</strong>
@@ -64,8 +81,13 @@ import { getLibraryBook, saveLibraryCover, updateReadingState, type LibraryBook 
 import { OfflineEpub } from "@/services/ebookEpub";
 import { DICTIONARY_ATTRIBUTION, installDictionary, isDictionaryInstalled, lookupDictionary, normalizeSelection, type DictionaryEntry } from "@/services/ebookDictionary";
 import { wordAtPoint } from "@/services/ebookWordSelection";
+import {
+  ChapterTextIndex, MAX_EXCERPT_CHARS, excerptText, extendSpan, formatExcerptPost, growBySentence, sentenceBounds,
+  type TextSpan,
+} from "@/services/ebookExcerpt";
+import { useUIStore } from "@/stores/ui";
 
-const keys = useKeyStore(), route = useRoute(), router = useRouter();
+const keys = useKeyStore(), ui = useUIStore(), route = useRoute(), router = useRouter();
 const book = ref<LibraryBook|null>(null), epub = ref<OfflineEpub|null>(null);
 const chapterIndex = ref(0), chapterPercent = ref(0), chapterHtml = ref("");
 const fontSize = ref(18), theme = ref<"light"|"sepia"|"dark">("light");
@@ -98,6 +120,7 @@ async function saveNow() {
 async function loadChapter(index:number, percent:number) {
   if (!epub.value || index < 0 || index >= epub.value.chapters.length) return;
   dismissLookup();
+  clearExcerpt();
   const request = ++chapterRequest;
   error.value = "";
   try {
@@ -119,6 +142,8 @@ function frameLoaded() {
   frame.value.style.height = "1px";
   const contentHeight = Math.max(1,doc.documentElement.scrollHeight,doc.body.scrollHeight);
   frame.value.style.height = contentHeight + "px";
+  textIndex = null;
+  clearExcerpt();
   const max = Math.max(0,container.scrollHeight - container.clientHeight);
   container.scrollTop = Math.round(max * restorePercent);
 }
@@ -149,12 +174,145 @@ function openDictionaryWord(word: string) {
 // srcdoc iframe, so taps land on a parent-owned layer above it. A click only
 // fires for a tap (not a scroll); the caret lookup itself is a plain DOM call.
 function lookupTappedWord(event: MouseEvent) {
+  // The click a long press's own release may synthesise is not a tap.
+  if (event.timeStamp - excerptGestureEndedAt < 120) return;
+  if (excerptSpan.value) { clearExcerpt(); return; }
   const doc = frame.value?.contentDocument;
   const rect = frame.value?.getBoundingClientRect();
   if (!doc || !rect) return;
   const word = wordAtPoint(doc, event.clientX - rect.left, event.clientY - rect.top);
   if (word) openDictionaryWord(word);
   else if (selectedWord.value) dismissLookup();
+}
+// Long-press excerpts. The system selection cannot start under the tap
+// layer, so a long press picks the sentence under the finger, dragging moves
+// the far end, and the highlight is drawn by us from the range's rects.
+const LONG_PRESS_MS = 450, PRESS_MOVE_TOLERANCE = 10;
+type HighlightBox = { left: number; top: number; width: number; height: number };
+const excerptSpan = ref<TextSpan|null>(null), excerptRects = ref<HighlightBox[]>([]), excerptDragging = ref(false);
+let textIndex: ChapterTextIndex | null = null, excerptAnchor: TextSpan | null = null;
+let press: { id: number; x: number; y: number; target: Element | null; timer: ReturnType<typeof setTimeout> | null } | null = null;
+let excerptGestureEndedAt = -Infinity;
+const excerptValue = computed(() => excerptSpan.value && textIndex ? excerptText(textIndex.text, excerptSpan.value) : "");
+const excerptLength = computed(() => Array.from(excerptValue.value).length);
+const excerptWord = computed(() => /^[A-Za-z'’-]+[.,;:!?"”’)]*$/.test(excerptValue.value) ? normalizeSelection(excerptValue.value) : null);
+function chapterText() {
+  const doc = frame.value?.contentDocument;
+  if (!doc?.body) return null;
+  if (!textIndex) textIndex = new ChapterTextIndex(doc);
+  return textIndex;
+}
+function offsetAtClient(clientX: number, clientY: number) {
+  const rect = frame.value?.getBoundingClientRect();
+  const index = chapterText();
+  return rect && index ? index.offsetAtPoint(clientX - rect.left, clientY - rect.top) : null;
+}
+function setExcerpt(span: TextSpan) {
+  if (span.end <= span.start || !textIndex) return;
+  excerptSpan.value = span;
+  excerptRects.value = textIndex.rects(span);
+}
+function clearExcerpt() {
+  cancelPress();
+  excerptSpan.value = null;
+  excerptRects.value = [];
+  excerptAnchor = null;
+  excerptDragging.value = false;
+}
+function cancelPress() {
+  if (press?.timer) clearTimeout(press.timer);
+  press = null;
+}
+function excerptPointerDown(event: PointerEvent) {
+  if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+  cancelPress();
+  const current = { id: event.pointerId, x: event.clientX, y: event.clientY, target: event.currentTarget as Element | null, timer: null as ReturnType<typeof setTimeout> | null };
+  current.timer = setTimeout(() => startExcerpt(current), LONG_PRESS_MS);
+  press = current;
+}
+function startExcerpt(current: NonNullable<typeof press>) {
+  if (press !== current) return;
+  current.timer = null;
+  const offset = offsetAtClient(current.x, current.y);
+  const index = textIndex;
+  if (offset === null || !index) { cancelPress(); return; }
+  const span = sentenceBounds(index.text, offset);
+  const rect = frame.value?.getBoundingClientRect();
+  // Browsers snap a caret in blank margins to the nearest text; only start
+  // a selection when the finger is actually on (or right next to) it.
+  const x = current.x - (rect?.left || 0), y = current.y - (rect?.top || 0);
+  const onText = index.rects(span).some(box =>
+    x >= box.left - 24 && x <= box.left + box.width + 24 && y >= box.top - 12 && y <= box.top + box.height + 12);
+  if (span.end <= span.start || !onText) { cancelPress(); return; }
+  dismissLookup();
+  excerptAnchor = span;
+  setExcerpt(span);
+  excerptDragging.value = true;
+  try { navigator.vibrate?.(8); } catch { /* optional */ }
+  try { current.target?.setPointerCapture?.(current.id); } catch { /* pointer already gone */ }
+}
+function excerptPointerMove(event: PointerEvent) {
+  if (!press || event.pointerId !== press.id) return;
+  if (!excerptDragging.value) {
+    // Moving before the long press fires is a scroll, not a selection.
+    if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > PRESS_MOVE_TOLERANCE) cancelPress();
+    return;
+  }
+  const offset = offsetAtClient(event.clientX, event.clientY);
+  if (offset !== null && excerptAnchor && textIndex) setExcerpt(extendSpan(textIndex.text, excerptAnchor, offset));
+}
+function excerptTouchMove(event: TouchEvent) {
+  // Once selecting, the finger extends the selection instead of scrolling.
+  if (excerptDragging.value && event.cancelable) event.preventDefault();
+}
+function excerptPointerUp(event: PointerEvent) {
+  if (!press || event.pointerId !== press.id) return;
+  const selecting = excerptDragging.value;
+  cancelPress();
+  excerptDragging.value = false;
+  if (selecting) excerptGestureEndedAt = event.timeStamp;
+}
+function excerptPointerCancel(event: PointerEvent) {
+  if (!press || event.pointerId !== press.id) return;
+  cancelPress();
+  excerptDragging.value = false;
+}
+function growExcerpt(direction: "before" | "after") {
+  if (!excerptSpan.value || !textIndex) return;
+  const span = growBySentence(textIndex.text, excerptSpan.value, direction);
+  excerptAnchor = span;
+  setExcerpt(span);
+}
+async function copyExcerpt() {
+  const text = excerptValue.value;
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    ui.addToast("已复制", 1500, "success");
+    clearExcerpt();
+  } catch {
+    ui.addToast("复制失败，请改用摘录", 2000, "error");
+  }
+}
+function lookupExcerptWord() {
+  const word = excerptWord.value;
+  clearExcerpt();
+  if (word) openDictionaryWord(word);
+}
+function publishExcerpt() {
+  const text = excerptValue.value;
+  if (!text) return;
+  const prefill = formatExcerptPost(text, {
+    title: book.value?.title,
+    authors: book.value?.authors,
+    chapter: epub.value?.chapters[chapterIndex.value]?.title,
+  });
+  clearExcerpt();
+  // The composer lets the user pick 动态 (friends) or 笔记 (only me).
+  ui.openPostEditor(undefined, prefill);
+}
+function relayoutExcerpt() {
+  if (excerptSpan.value && textIndex) excerptRects.value = textIndex.rects(excerptSpan.value);
 }
 function lookupManualWord() {
   const word = normalizeSelection(manualWord.value);
@@ -244,6 +402,7 @@ async function init() {
 }
 watch(account,(next) => { if (loadedAccount && next !== loadedAccount) void router.replace("/settings"); });
 onMounted(() => {
+  window.addEventListener("resize", relayoutExcerpt);
   void init();
   void isDictionaryInstalled().then(installed => {
     if (readerAlive && dictionaryStatus.value === "checking") {
@@ -255,6 +414,8 @@ onMounted(() => {
   });
 });
 onUnmounted(() => {
+  window.removeEventListener("resize", relayoutExcerpt);
+  clearExcerpt();
   readerAlive = false;
   lookupRevision++;
   chapterRequest++;
@@ -276,7 +437,18 @@ onUnmounted(() => {
 .chapter-scroller{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .chapter-stage{position:relative}
 .chapter-frame{display:block;width:100%;height:1px;border:0;background:transparent}
-.chapter-tap-layer{position:absolute;inset:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.chapter-tap-layer{position:absolute;inset:0;cursor:pointer;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+.excerpt-highlights{position:absolute;inset:0;pointer-events:none}
+.excerpt-highlights span{position:absolute;border-radius:2px;background:#3b82f647}
+.reader-page.theme-dark .excerpt-highlights span{background:#60a5fa59}
+.excerpt-bar{position:fixed;z-index:56;left:10px;right:10px;bottom:calc(62px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto;padding:8px 10px 10px;border-radius:14px;border:1px solid #8b8b8b35;box-shadow:0 8px 30px #0003;background:#fff;color:#242830}
+.reader-page.theme-sepia .excerpt-bar{background:#fff9ed;color:#433c31}
+.reader-page.theme-dark .excerpt-bar{background:#2e343d;color:#f3f4f6}
+.excerpt-bar-info{display:flex;align-items:center;justify-content:space-between;font-size:12px;opacity:.8}
+.excerpt-bar-info button{min-width:40px;min-height:36px;border:0;background:transparent;color:inherit;font-size:20px}
+.excerpt-bar-actions{display:flex;flex-wrap:wrap;gap:6px}
+.excerpt-bar-actions button{flex:1 1 auto;min-height:40px;padding:0 10px;border:1px solid #8885;border-radius:9px;background:transparent;color:inherit;font-size:14px;white-space:nowrap}
+.excerpt-bar-actions .excerpt-primary{border-color:#2563eb;background:#2563eb;color:#fff;font-weight:600}
 .reader-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:54px;padding:4px 14px;border-top:1px solid #8884}
 .reader-footer button{border:0;color:inherit;background:transparent;min-height:40px;padding:0 12px;font-size:14px}
 .reader-footer button:disabled{opacity:.3}
