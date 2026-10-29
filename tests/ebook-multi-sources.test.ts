@@ -53,7 +53,7 @@ describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
   });
 
   it("identifies Wiki search as HaiNei, as required by Wikimedia API policy",async()=>{
-    const fetcher=vi.fn(async()=>new Response(JSON.stringify({query:{search:[]}})));
+    const fetcher=vi.fn(async (_url:string,_options?:RequestInit)=>new Response(JSON.stringify({query:{search:[]}})));
     vi.stubGlobal("fetch",fetcher);
     const response=await wikiSearch(request("https://pwa.lostr.space/api/books/wikisource/search?q="+encodeURIComponent("唐詩")+"&page=1"));
     expect(response.status).toBe(200);
