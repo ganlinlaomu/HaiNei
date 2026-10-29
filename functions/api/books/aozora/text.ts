@@ -4,7 +4,7 @@
  */
 const LIMIT = 5 * 1024 * 1024;
 const HTML_PATH = /^\/cards\/(\d{6})\/files\/(\d+)_[\w-]+\.html$/;
-const MIRROR_PREFIX = "https://aozorahack.org/aozorabunko_text";
+const MIRROR_PREFIX = "https://raw.githubusercontent.com/aozorahack/aozorabunko_text/master";
 const RESPONSE_HEADERS = { "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" };
 
 function validOfficial(value: string): { url: URL; person: string; work: string } | null {
@@ -22,7 +22,7 @@ function validMirror(value: string, person: string, work: string): URL | null {
   try {
     if (!value || value.length > 500) return null;
     const url = new URL(value);
-    const match = /^\/aozorabunko_text\/cards\/(\d{6})\/files\/(\d+_[\w-]+)\/\2\.txt$/.exec(url.pathname);
+    const match = /^\/aozorahack\/aozorabunko_text\/master\/cards\/(\d{6})\/files\/(\d+_[\w-]+)\/\2\.txt$/.exec(url.pathname);
     if (url.protocol !== "https:" || url.origin !== new URL(MIRROR_PREFIX).origin ||
         url.port || url.username || url.password || url.search || url.hash ||
         !match || match[1] !== person || !match[2].startsWith(work + "_")) return null;
