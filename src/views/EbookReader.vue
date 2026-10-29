@@ -19,8 +19,14 @@
             {{ dictionaryStatus === "downloading" ? "正在下载 " + dictionaryProgress + "%" : "下载词典" }}
           </button>
         </div>
+        <form class="dictionary-manual" @submit.prevent="lookupManualWord">
+          <label for="ebook-lookup-word">手动查词</label>
+          <input id="ebook-lookup-word" v-model="manualWord" type="search" placeholder="输入英文单词" autocomplete="off"/>
+          <button type="submit">查询</button>
+        </form>
         <p v-if="dictionaryError" class="dictionary-error" role="alert">{{ dictionaryError }}</p>
       </section>
+      <p class="reader-lookup-hint">{{ dictionaryStatus === "installed" ? "轻点英文单词，离线查看中文释义" : "轻点英文单词查词 · 首次请在 Aa 下载词典" }}</p>
       <div ref="scroller" class="chapter-scroller" @scroll.passive="onScroll"><iframe ref="frame" class="chapter-frame" title="电子书正文" sandbox="allow-same-origin" :srcdoc="chapterHtml" @load="frameLoaded" /></div>
       <aside v-if="selectedWord" class="dictionary-card" aria-label="英汉单词释义" role="dialog">
         <div class="dictionary-card-header">
@@ -57,6 +63,7 @@ import { useKeyStore } from "@/stores/keys";
 import { getLibraryBook, saveLibraryCover, updateReadingState, type LibraryBook } from "@/services/ebookLibrary";
 import { OfflineEpub } from "@/services/ebookEpub";
 import { DICTIONARY_ATTRIBUTION, installDictionary, isDictionaryInstalled, lookupDictionary, normalizeSelection, type DictionaryEntry } from "@/services/ebookDictionary";
+import { wordAtPoint } from "@/services/ebookWordSelection";
 
 const keys = useKeyStore(), route = useRoute(), router = useRouter();
 const book = ref<LibraryBook|null>(null), epub = ref<OfflineEpub|null>(null);
@@ -64,10 +71,13 @@ const chapterIndex = ref(0), chapterPercent = ref(0), chapterHtml = ref("");
 const fontSize = ref(18), theme = ref<"light"|"sepia"|"dark">("light");
 const loading = ref(true), error = ref(""), settingsOpen = ref(false);
 const frame = ref<HTMLIFrameElement|null>(null);
-const selectedWord = ref(""), dictionaryEntry = ref<DictionaryEntry|null>(null);
+const selectedWord = ref(""), manualWord = ref(""), dictionaryEntry = ref<DictionaryEntry|null>(null);
 const dictionaryStatus = ref<"checking"|"not-installed"|"downloading"|"installed">("checking");
 const dictionaryProgress = ref(0), dictionaryError = ref(""), dictionaryLookingUp = ref(false);
 let selectionDocument: Document|null = null, selectionTimer: ReturnType<typeof setTimeout>|null = null;
+let tapLookupTimer: ReturnType<typeof setTimeout>|null = null;
+let lastTouchEnd = 0;
+let touchStart: { x: number; y: number; at: number } | null = null;
 let lookupRevision = 0, readerAlive = true;
 const scroller = ref<HTMLDivElement|null>(null);
 const account = computed(() => keys.pkHex);
@@ -117,36 +127,104 @@ function frameLoaded() {
   container.scrollTop = Math.round(max * restorePercent);
   // Our own listener runs in the parent origin; publisher scripts remain
   // disabled inside the sandboxed srcdoc iframe.
-  if (selectionDocument) selectionDocument.removeEventListener("selectionchange", queueSelectedWord);
+  // iOS can delay or omit selectionchange inside a script-disabled iframe.
+  // Also listen for completed taps/long-presses in the same-origin document;
+  // publisher JS remains disabled and no text is transmitted.
+  unbindFrameSelection();
   selectionDocument = doc;
   doc.addEventListener("selectionchange", queueSelectedWord);
+  doc.addEventListener("touchstart", recordFrameTouchStart, { passive: true });
+  doc.addEventListener("touchend", completeFrameTouch, { passive: true });
+  doc.addEventListener("touchcancel", cancelFrameTouch, { passive: true });
+  doc.addEventListener("mouseup", completeFrameMouse);
 }
+function unbindFrameSelection() {
+  if (!selectionDocument) return;
+  selectionDocument.removeEventListener("selectionchange", queueSelectedWord);
+  selectionDocument.removeEventListener("touchstart", recordFrameTouchStart);
+  selectionDocument.removeEventListener("touchend", completeFrameTouch);
+  selectionDocument.removeEventListener("touchcancel", cancelFrameTouch);
+  selectionDocument.removeEventListener("mouseup", completeFrameMouse);
+  selectionDocument = null;
+  touchStart = null;
+  if (tapLookupTimer) clearTimeout(tapLookupTimer);
+  tapLookupTimer = null;
+}
+
 function dismissLookup() {
   lookupRevision++;
   selectedWord.value = "";
   dictionaryEntry.value = null;
   dictionaryLookingUp.value = false;
 }
+function openDictionaryWord(word: string) {
+  if (word === selectedWord.value) return;
+  selectedWord.value = word;
+  dictionaryEntry.value = null;
+  dictionaryError.value = "";
+  const revision = ++lookupRevision;
+  if (dictionaryStatus.value !== "installed") return;
+  dictionaryLookingUp.value = true;
+  void lookupDictionary(word).then(entry => {
+    if (readerAlive && revision === lookupRevision) dictionaryEntry.value = entry;
+  }).catch(() => {
+    if (readerAlive && revision === lookupRevision) dictionaryError.value = "词库读取失败，请重新下载词典";
+  }).finally(() => {
+    if (readerAlive && revision === lookupRevision) dictionaryLookingUp.value = false;
+  });
+}
+function recordFrameTouchStart(event: TouchEvent) {
+  if (event.touches.length !== 1) { touchStart = null; return; }
+  const point = event.touches[0];
+  touchStart = { x: point.clientX, y: point.clientY, at: Date.now() };
+}
+function cancelFrameTouch() { touchStart = null; }
+function completeFrameTouch(event: TouchEvent) {
+  lastTouchEnd = Date.now();
+  const start = touchStart;
+  touchStart = null;
+  if (!start || event.changedTouches.length !== 1 || event.touches.length !== 0) return;
+  const point = event.changedTouches[0];
+  if (Math.hypot(start.x - point.clientX, start.y - point.clientY) > 14) return;
+  // Prefer an actual selection on a long press, but allow a quick single tap
+  // to resolve its word without relying on iOS native selection menus.
+  scheduleFrameWord(point.clientX, point.clientY, Date.now() - start.at >= 450);
+}
+function completeFrameMouse(event: MouseEvent) {
+  // Mobile Safari may synthesize a mouseup after touchend; do not override
+  // the user's tapped word with an older native selection.
+  if (event.button !== 0 || Date.now() - lastTouchEnd < 850) return;
+  scheduleFrameWord(event.clientX, event.clientY, true);
+}
+function scheduleFrameWord(x: number, y: number, preferSelection: boolean) {
+  const doc = selectionDocument;
+  if (!doc) return;
+  if (tapLookupTimer) clearTimeout(tapLookupTimer);
+  tapLookupTimer = setTimeout(() => {
+    tapLookupTimer = null;
+    if (!readerAlive || selectionDocument !== doc) return;
+    const selected = normalizeSelection(doc.getSelection()?.toString() || "");
+    const tapped = wordAtPoint(doc, x, y);
+    const word = preferSelection ? (selected || tapped) : (tapped || selected);
+    if (word) openDictionaryWord(word);
+  }, 180);
+}
+function lookupManualWord() {
+  const word = normalizeSelection(manualWord.value);
+  if (!word) {
+    dictionaryError.value = "请输入一个英文单词";
+    return;
+  }
+  openDictionaryWord(word);
+  settingsOpen.value = false;
+}
 function queueSelectedWord() {
   if (selectionTimer) clearTimeout(selectionTimer);
   selectionTimer = setTimeout(() => {
     selectionTimer = null;
-    const selected = frame.value?.contentWindow?.getSelection()?.toString() || "";
+    const selected = selectionDocument?.getSelection()?.toString() || "";
     const word = normalizeSelection(selected);
-    if (!word || word === selectedWord.value) return;
-    selectedWord.value = word;
-    dictionaryEntry.value = null;
-    dictionaryError.value = "";
-    const revision = ++lookupRevision;
-    if (dictionaryStatus.value !== "installed") return;
-    dictionaryLookingUp.value = true;
-    void lookupDictionary(word).then(entry => {
-      if (readerAlive && revision === lookupRevision) dictionaryEntry.value = entry;
-    }).catch(() => {
-      if (readerAlive && revision === lookupRevision) dictionaryError.value = "词库读取失败，请重新下载词典";
-    }).finally(() => {
-      if (readerAlive && revision === lookupRevision) dictionaryLookingUp.value = false;
-    });
+    if (word) openDictionaryWord(word);
   }, 240);
 }
 async function refreshDictionaryLookup() {
@@ -232,13 +310,16 @@ onMounted(() => {
   void isDictionaryInstalled().then(installed => {
     if (readerAlive && dictionaryStatus.value === "checking") {
       dictionaryStatus.value = installed ? "installed" : "not-installed";
+      if (installed && selectedWord.value) void refreshDictionaryLookup();
     }
+  }).catch(() => {
+    if (readerAlive && dictionaryStatus.value === "checking") dictionaryStatus.value = "not-installed";
   });
 });
 onUnmounted(() => {
   readerAlive = false;
   lookupRevision++;
-  if (selectionDocument) selectionDocument.removeEventListener("selectionchange", queueSelectedWord);
+  unbindFrameSelection();
   if (selectionTimer) clearTimeout(selectionTimer);
   chapterRequest++;
   if (saveTimer) clearTimeout(saveTimer);
@@ -255,6 +336,7 @@ onUnmounted(() => {
 .reader-header>div{display:grid;min-width:0;gap:3px;text-align:center}
 .reader-header strong{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:14px}
 .reader-header small{color:inherit;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+.reader-lookup-hint{margin:0;padding:5px 14px;text-align:center;font-size:11px;line-height:1.5;opacity:.65}
 .chapter-scroller{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .chapter-frame{display:block;width:100%;height:1px;border:0;background:transparent}
 .reader-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:54px;padding:4px 14px;border-top:1px solid #8884}
@@ -267,6 +349,9 @@ onUnmounted(() => {
 .settings button,.settings select{min-height:34px;border:1px solid #8885;border-radius:8px;background:transparent;color:inherit;padding:4px 7px}
 .settings select{max-width:180px;font-size:16px}
 .dictionary-settings{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dictionary-manual{display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%}
+.dictionary-manual input{flex:1;min-width:120px;min-height:40px;border:1px solid #8885;border-radius:8px;background:transparent;color:inherit;padding:4px 10px;font-size:16px}
+.dictionary-manual button{min-height:40px}
 .dictionary-ready{color:#16803d;font-weight:600}
 .dictionary-error{color:#b91c1c;font-size:12px;line-height:1.5}
 .dictionary-card{position:fixed;z-index:55;left:12px;right:12px;bottom:calc(62px + env(safe-area-inset-bottom));max-width:520px;margin:0 auto;padding:14px 16px;border-radius:14px;border:1px solid #8b8b8b35;box-shadow:0 8px 30px #0003;background:var(--bg-fff,#fff);color:var(--fg-172033,#242830)}
