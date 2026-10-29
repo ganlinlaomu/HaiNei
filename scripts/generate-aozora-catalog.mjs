@@ -89,7 +89,7 @@ export function rowsFromAozoraCsv(csv) {
           !textZip.search && !textZip.hash && match &&
           match[1] === source.pathname.split("/")[2] &&
           match[2].startsWith(String(id) + "_")) {
-        textUrl = "https://aozorahack.org/aozorabunko_text/cards/" + match[1] +
+        textUrl = "https://raw.githubusercontent.com/aozorahack/aozorabunko_text/master/cards/" + match[1] +
           "/files/" + match[2] + "/" + match[2] + ".txt";
       }
     } catch { /* Some works do not have a downloadable text ZIP. */ }
