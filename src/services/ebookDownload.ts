@@ -66,7 +66,10 @@ export async function downloadCatalogBook(
     if(target.protocol!=="https:"||target.hostname!=="www.aozora.gr.jp"||
       !/^\/cards\/\d{6}\/files\/\d+_[\w-]+\.html$/.test(target.pathname))throw new Error("不受支持的青空文库作品地址");
     const response=await fetch("/api/books/aozora/text?url="+encodeURIComponent(target.href),{signal,cache:"no-store"});
-    if(!response.ok)throw new Error("青空文库正文无法下载（HTTP "+response.status+"）");
+    if(!response.ok)throw new Error(response.status===502
+      ? "青空文库主站与备用站暂时无法连接，请稍后重试（HTTP 502）"
+      : response.status===413 ? "青空文库正文超过 5MB 限制"
+      : "青空文库正文无法下载（HTTP "+response.status+"）");
     const length=Number(response.headers.get("Content-Length")||0);
     if(length>5*1024*1024)throw new Error("作品正文过大");
     const html=await response.text();
