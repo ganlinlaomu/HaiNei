@@ -36,8 +36,11 @@ export const useUIStore = defineStore("ui", () => {
 
   /** Composer type to preselect on the next open (e.g. 新待办 from the to-do bar). */
   const postEditorType = ref<"post" | "note" | "todo" | null>(null);
-  function openPostEditor(type?: "post" | "note" | "todo") {
+  /** Text to put at the top of the composer on the next open (e.g. an ebook excerpt). */
+  const postEditorPrefill = ref<string | null>(null);
+  function openPostEditor(type?: "post" | "note" | "todo", prefill?: string) {
     postEditorType.value = type || null;
+    postEditorPrefill.value = prefill || null;
     showPostEditor.value = true;
   }
 
@@ -67,6 +70,7 @@ export const useUIStore = defineStore("ui", () => {
     showPostEditor,
     openPostEditor,
     postEditorType,
+    postEditorPrefill,
     closePostEditor,
     showNewConversation,
     openNewConversation,

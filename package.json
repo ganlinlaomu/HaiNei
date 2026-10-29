@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.179",
-  "releaseSummary": "图片上传更快：发帖图片先缩小再压缩，私信选图即开始处理，切后台中断的上传会自动重传",
+  "version": "0.1.180",
+  "releaseSummary": "电子书：长按选句摘录，一键发到动态或存为笔记；轻点查词照常可用",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

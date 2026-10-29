@@ -1164,9 +1164,16 @@ export default defineComponent({
         if (generation !== openGeneration || !ui.showPostEditor || keys.pkHex !== accountAtOpen) return;
         draftAccount = accountAtOpen;
         const draft = loadPostDraft(accountAtOpen);
-        postType.value = requestedComposerType || draft?.type || "post";
+        const prefill = ui.postEditorPrefill;
+        ui.postEditorPrefill = null;
+        // An excerpt is written up as a post or a note, not as a to-do list.
+        const draftType = prefill && draft?.type === "todo" ? "post" : draft?.type;
+        postType.value = requestedComposerType || draftType || "post";
         requestedComposerType = null;
-        content.value = draft?.content || "";
+        // An excerpt goes above any saved draft text, never replacing it.
+        content.value = prefill
+          ? prefill + (draft?.content?.trim() ? "\n" + draft.content : "")
+          : draft?.content || "";
         todoTitle.value = draft?.todoTitle || "";
         todoTasks.value = draft?.todoTasks?.length ? normalizeComposerTodoTasks(draft.todoTasks)
           : postType.value === "todo" ? composerTodoTasksFromText(content.value) : [];
@@ -1189,7 +1196,13 @@ export default defineComponent({
           overlay.value.focus();
         }
         // Don't auto-focus textarea to avoid mobile keyboard popup
-        // Users can manually click the textarea when ready to type
+        // Users can manually click the textarea when ready to type.
+        // An excerpt is the exception: the user came here to write about it.
+        if (prefill && textarea.value) {
+          textarea.value.focus({ preventScroll: true });
+          const caret = prefill.length;
+          textarea.value.setSelectionRange(caret, caret);
+        }
       } else {
         closeMention();
         // The editor may also be closed by bottom navigation or another
