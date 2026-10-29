@@ -1,0 +1,73 @@
+import { afterEach,describe,expect,it,vi } from "vitest";
+import { onRequestGet as wikiSearch } from "../functions/api/books/wikisource/search";
+import { onRequestGet as wikiExport } from "../functions/api/books/wikisource/epub";
+import { onRequestGet as aozoraText } from "../functions/api/books/aozora/text";
+import { parseAozoraCsv } from "../functions/api/books/aozora/search";
+import { searchOtherLibrary,sourceForBook } from "@/services/ebookSources";
+import { zipEpub } from "@/services/ebookAozora";
+afterEach(()=>vi.unstubAllGlobals());
+const request=(url:string)=>({request:new Request(url)});
+describe("Chinese Wikisource + Japanese Aozora source adapters",()=>{
+  it("only searches Chinese Wikisource article namespace, preserving exact page titles",async()=>{
+    const fetcher=vi.fn(async()=>new Response(JSON.stringify({
+      query:{search:[{pageid:120,ns:0,title:"論語"},{pageid:12,ns:1,title:"讨论:論語"},{pageid:3,ns:0,title:"論語/學而第一"}]},
+      continue:{sroffset:20}
+    })));
+    vi.stubGlobal("fetch",fetcher);
+    const data=await (await wikiSearch(request("https://pwa.lostr.space/api/books/wikisource/search?q="+encodeURIComponent("論語")+"&page=1"))).json() as any;
+    expect(data.books.map((b:any)=>b.id)).toEqual(["wikisource:120","wikisource:3"]);
+    expect(data.books[0].sourceUrl).toContain("zh.wikisource.org");
+    expect(data.books[0].epubUrl).toContain("ws-export-app.wmcloud.org");
+    expect(data.hasNext).toBe(true);
+    expect(String(fetcher.mock.calls[0][0])).toContain("srnamespace=0");
+  });
+  it("rejects arbitrary WS export pages and disallows off-site redirects",async()=>{
+    const fetcher=vi.fn(async()=>new Response(null,{status:302,headers:{Location:"https://evil.example/steal.epub"}}));
+    vi.stubGlobal("fetch",fetcher);
+    const bad=await wikiExport(request("https://pwa.lostr.space/api/books/wikisource/epub?page="+encodeURIComponent("Template:Main")));
+    expect(bad.status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+    const redirect=await wikiExport(request("https://pwa.lostr.space/api/books/wikisource/epub?page="+encodeURIComponent("論語")));
+    expect(redirect.status).toBe(502);
+  });
+  it("does not accept untrusted Aozora source hosts or paths",async()=>{
+    const fetcher=vi.fn();
+    vi.stubGlobal("fetch",fetcher);
+    const bad=await aozoraText(request("https://pwa.lostr.space/api/books/aozora/text?url="+encodeURIComponent("https://evil.test/cards/000148/files/773_14560.html")));
+    expect(bad.status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+    const valid=await aozoraText(request("https://pwa.lostr.space/api/books/aozora/text?url="+encodeURIComponent("https://www.aozora.gr.jp/cards/000148/files/773_14560.html")));
+    expect(valid.status).toBe(502);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("filters copyrighted works and role duplicates from official Aozora metadata",()=>{
+    const names=["作品ID","作品名","作品著作権フラグ","人物著作権フラグ","役割フラグ","姓名","XHTML/HTMLファイルURL","図書カードURL"];
+    const row=(id:number,rights:string,role:string)=>[id===773?"000773":String(id),"こころ",rights,"なし",role,"夏目漱石",
+      "https://www.aozora.gr.jp/cards/000148/files/773_14560.html","https://www.aozora.gr.jp/cards/000148/card773.html"].join(",");
+    const result=parseAozoraCsv("\uFEFF"+names.join(",")+"\r\n"+[row(773,"なし","著者"),row(773,"なし","著者"),
+      row(13,"あり","著者"),row(14,"なし","翻訳者")].join("\r\n"));
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({id:773,title:"こころ",author:"夏目漱石"});
+  });
+  it("generates a valid ZIP with an uncompressed first mimetype entry",async()=>{
+    const epub=zipEpub([["mimetype","application/epub+zip"],["META-INF/container.xml","<container/>"],["OEBPS/chapter1.xhtml","<html/>"]]);
+    const bytes=new Uint8Array(await epub.arrayBuffer());
+    expect(Array.from(bytes.slice(0,4))).toEqual([0x50,0x4b,0x03,0x04]);
+    expect(new TextDecoder().decode(bytes.slice(38,58))).toBe("application/epub+zip");
+    expect(bytes.length).toBeGreaterThan(130);
+  });
+  it("keeps same-origin routing, distinct book IDs and no extra user accounts",async()=>{
+    expect(sourceForBook({id:"aozora:773"})).toBe("aozora");
+    expect(sourceForBook({id:"wikisource:120"})).toBe("wikisource");
+    expect(sourceForBook({id:"gutenberg:1342"})).toBe("gutenberg");
+    const fetcher=vi.fn(async()=>new Response(JSON.stringify({books:[{
+      id:"aozora:773",title:"こころ",authors:["夏目漱石"],language:"ja",
+      sourceUrl:"https://www.aozora.gr.jp/cards/000148/card773.html",
+      epubUrl:"https://www.aozora.gr.jp/cards/000148/files/773_14560.html",downloads:0
+    }],hasNext:false})));
+    vi.stubGlobal("fetch",fetcher);
+    const results=await searchOtherLibrary("aozora","こころ",1);
+    expect(results.books).toHaveLength(1);
+    expect(fetcher.mock.calls[0][0]).toContain("/api/books/aozora/search");
+  });
+});
