@@ -53,6 +53,21 @@ describe("private cards in the owner's feed", () => {
     ], OWNER)).toEqual([]);
   });
 
+  it("previews due time, title and sharing before expanding to task text", () => {
+    const bar = readFileSync("src/components/HomeTodoBar.vue", "utf8");
+    const peek = bar.slice(bar.indexOf('class="todo-peek"'), bar.indexOf("</button>", bar.indexOf('class="todo-peek"')));
+    expect(peek).toContain('@click="toggleExpanded"');
+    expect(peek.indexOf('v-if="first.due"')).toBeLessThan(peek.indexOf('v-if="first.listTitle"'));
+    expect(peek.indexOf('v-if="first.listTitle"')).toBeLessThan(peek.indexOf('v-if="first.shared"'));
+    expect(peek).toContain('!first.due && !first.listTitle && !first.shared');
+    expect(peek).toContain('class="peek-fallback">{{ first.text }}');
+    const expanded = bar.slice(bar.indexOf('class="todo-item"'), bar.indexOf("</button>", bar.indexOf('class="todo-item"')));
+    expect(expanded.indexOf('class="todo-meta"')).toBeLessThan(expanded.indexOf('class="todo-text"'));
+    expect(expanded).toContain('v-if="task.due"');
+    expect(expanded).toContain('v-if="task.listTitle"');
+    expect(expanded).toContain('v-if="task.shared"');
+  });
+
   it("is wired into Home and opens the matching note in 私人空间", () => {
     const home = readFileSync("src/views/Home.vue", "utf8");
     expect(home).toContain('<PrivateNoteCard v-if="m.privateNote" :item="m" @height="recordPostHeight" />');

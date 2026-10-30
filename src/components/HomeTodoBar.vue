@@ -5,8 +5,12 @@
       <span class="todo-summary"><strong>待办 {{ tasks.length }} 项</strong><span v-if="overdueCount" class="due-chip">{{ overdueCount }} 项逾期</span></span>
       <span class="chevron">{{ expanded ? "收起 ▴" : "展开 ▾" }}</span>
     </button>
-    <button v-if="!expanded && first" class="todo-peek" type="button" @click="openTask(first)">
-      <span v-if="first.pinned" aria-label="已置顶">📌 </span><span v-if="first.shared" aria-label="共享待办">👥 </span>{{ first.text }}<span v-if="first.due" class="peek-list" :class="{ overdue: dueOf(first).overdue }"> · {{ dueOf(first).label }}</span><span v-else-if="first.listTitle" class="peek-list"> · {{ first.listTitle }}</span>
+    <button v-if="!expanded && first" class="todo-peek" type="button" @click="toggleExpanded">
+      <span v-if="first.pinned" class="peek-pin" aria-label="已置顶">📌</span>
+      <span v-if="first.due" class="peek-due" :class="{ overdue: dueOf(first).overdue }">{{ dueOf(first).label }}{{ dueOf(first).overdue ? " · 已逾期" : "" }}</span>
+      <strong v-if="first.listTitle" class="peek-title">{{ first.listTitle }}</strong>
+      <span v-if="first.shared" class="peek-shared">👥 共享</span>
+      <span v-if="!first.due && !first.listTitle && !first.shared" class="peek-fallback">{{ first.text }}</span>
     </button>
 
     <template v-if="expanded">
@@ -15,8 +19,13 @@
           <input type="checkbox" :checked="isDone(task)" :disabled="saving === task.taskId"
             :aria-label="`${isDone(task) ? '取消完成' : '完成'}：${task.text}`" @change="toggle(task)" />
           <button class="todo-item" type="button" @click="openTask(task)">
+            <span v-if="task.pinned || task.shared || task.listTitle || task.due" class="todo-meta">
+              <span v-if="task.due" :class="{ overdue: dueOf(task).overdue }">{{ dueOf(task).label }}{{ dueOf(task).overdue ? " · 已逾期" : "" }}</span>
+              <span v-if="task.listTitle" class="todo-list-title">{{ task.listTitle }}</span>
+              <span v-if="task.shared">👥 共享</span>
+              <span v-if="task.pinned" aria-label="已置顶">📌</span>
+            </span>
             <span class="todo-text">{{ task.text }}</span>
-            <span v-if="task.pinned || task.shared || task.listTitle || task.due" class="todo-meta"><span v-if="task.pinned">📌</span><span v-if="task.shared" aria-label="共享待办">👥</span><span v-if="task.due" :class="{ overdue: dueOf(task).overdue }">{{ dueOf(task).label }}{{ dueOf(task).overdue ? ' · 已逾期' : '' }}</span><span v-if="task.listTitle">{{ task.due ? ' · ' : '' }}{{ task.listTitle }}</span></span>
           </button>
         </li>
       </ul>
@@ -127,16 +136,20 @@ onBeforeUnmount(() => {
 .todo-summary{flex:1;color:var(--fg-202938);font-size:14px}
 .todo-summary strong{color:var(--fg-0f1419)}
 .chevron{color:var(--fg-8b98a5);font-size:12px}
-.todo-peek{display:block;width:100%;margin-top:-6px;padding:0 16px 10px 46px;overflow:hidden;border:0;background:transparent;color:var(--fg-64748b);font:inherit;font-size:13px;text-align:left;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
-.peek-list{color:var(--fg-8b98a5)}
+.todo-peek{display:flex;width:100%;align-items:center;flex-wrap:wrap;gap:4px 8px;margin-top:-6px;padding:0 16px 10px 46px;border:0;background:transparent;color:var(--fg-64748b);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.peek-due{color:var(--fg-8b98a5);white-space:nowrap}
+.peek-title{min-width:0;color:var(--fg-202938);font-size:13px;overflow-wrap:anywhere}
+.peek-shared{white-space:nowrap}
+.peek-fallback{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .overdue{color:#e5484d!important}
 .due-chip{margin-left:6px;padding:1px 7px;border-radius:999px;background:rgba(229,72,77,.12);color:#e5484d;font-size:12px}
 .todo-list{margin:0;padding:0 16px;list-style:none}
 .todo-list li{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-top:1px solid var(--bd-edf1f5)}
 .todo-list input{width:18px;height:18px;flex:0 0 18px;margin:2px 0 0;accent-color:#1d9bf0}
-.todo-item{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.todo-item{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:3px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .todo-text{color:var(--fg-202938);font-size:15px;line-height:1.45;overflow-wrap:anywhere}
-.todo-meta{display:flex;gap:4px;color:var(--fg-8b98a5);font-size:12px}
+.todo-meta{display:flex;flex-wrap:wrap;gap:2px 8px;color:var(--fg-8b98a5);font-size:12px;line-height:1.4}
+.todo-list-title{color:var(--fg-64748b);overflow-wrap:anywhere}
 .done .todo-text{color:var(--fg-8b98a5);text-decoration:line-through}
 .todo-foot{display:flex;justify-content:space-between;gap:12px;padding:6px 16px 10px}
 .link{min-height:32px;padding:0;border:0;background:transparent;color:var(--fg-2563eb);font:inherit;font-size:13px;cursor:pointer}

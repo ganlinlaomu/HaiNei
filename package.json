@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.185",
-  "releaseSummary": "电子书修复翻页卡顿和页面横穿，预排版下一页并采用驿书同款 Noto Serif SC 字体",
+  "version": "0.1.186",
+  "releaseSummary": "Feed 待办摘要优先展示时间、标题和共享状态，展开后显示具体任务",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
