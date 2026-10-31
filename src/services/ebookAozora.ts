@@ -118,3 +118,42 @@ export function makeAozoraEpub(html:string,title:string,author:string):Blob{
   ];
   return zipEpub(entries);
 }
+
+
+/** Convert only a trusted, bounded text archive into safe EPUB paragraphs.
+ * Soranoha markdown contains ruby HTML, whereas Aozorahack provides the
+ * original Shift-JIS Aozora notation. No external content is embedded.
+ */
+export function makeAozoraFallbackEpub(
+  text: string, format: "markdown" | "plain", title: string, author: string,
+): Blob {
+  if (new TextEncoder().encode(text).byteLength > 5 * 1024 * 1024) {
+    throw new Error("青空文库正文过大");
+  }
+  let lines = text.replace(/\r\n?/g, "\n").split("\n");
+  if (format === "plain") {
+    // Strip the explanatory preface between Aozora's two dashed separators.
+    const boundaries = lines.flatMap((line, i) => /^-{20,}\s*$/.test(line) ? [i] : []);
+    if (boundaries.length >= 2 && boundaries[0] < 120 && boundaries[1] < 240) {
+      lines = lines.slice(boundaries[1] + 1);
+    }
+  }
+  const markup = lines.map(line => {
+    let value = line.trim();
+    if (!value) return "";
+    if (format === "plain") {
+      value = escapeXml(value.replace(/［＃[^］\n]{1,160}］/g, ""));
+      // Render Aozora's standard inline reading annotations as EPUB ruby.
+      value = value.replace(/｜([^｜《》]{1,60})《([^《》]{1,60})》/g, "<ruby>$1<rt>$2</rt></ruby>");
+      value = value.replace(/([\p{Script=Han}々]{1,40})《([^《》]{1,60})》/gu, "<ruby>$1<rt>$2</rt></ruby>");
+    } else {
+      // Escape markdown's ordinary text, allowing only ruby structural tags.
+      value = escapeXml(value).replace(/&lt;(\/?)(ruby|rt|rp)&gt;/gi, "<$1$2>");
+    }
+    const heading = format === "markdown" ? /^(#{1,3})\s+(.+)$/.exec(value) : null;
+    if (heading) return "<h" + heading[1].length + ">" + heading[2] +
+      "</h" + heading[1].length + ">";
+    return "<p>" + value + "</p>";
+  }).filter(Boolean);
+  return makeAozoraEpub('<div class="main_text">' + markup.join("") + "</div>", title, author);
+}
