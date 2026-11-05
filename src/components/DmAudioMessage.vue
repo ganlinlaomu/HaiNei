@@ -56,6 +56,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import type { PrivateAudioMedia } from "@/nostr/messaging/privateMedia";
 import { decryptDmAudio } from "@/utils/encryptedDmAudio";
+import { debugLog } from "@/utils/debugLog";
 
 const WAVEFORM_BAR_COUNT = 32;
 
@@ -161,9 +162,10 @@ async function ensureAudioBlob() {
   }
   if (!props.media?.encryptedRef || !props.accountPubkey) throw new Error("语音暂不可用");
   const account = props.accountPubkey;
-  controller = new AbortController();
-  const blob = await decryptDmAudio(props.media.encryptedRef, controller.signal);
-  if (controller.signal.aborted || props.accountPubkey !== account) throw new DOMException("Aborted", "AbortError");
+  const run = new AbortController();
+  controller = run;
+  const blob = await decryptDmAudio(props.media.encryptedRef, run.signal);
+  if (run.signal.aborted || props.accountPubkey !== account) throw new DOMException("Aborted", "AbortError");
   decryptedBlob = blob;
   return blob;
 }
@@ -178,14 +180,28 @@ async function ensureSource() {
     await nextTick();
     return true;
   } catch (cause) {
-    if (!(cause instanceof DOMException && cause.name === "AbortError")) error.value = "语音加载失败";
+    if (!isAbortError(cause)) {
+      error.value = "语音加载失败";
+      debugLog("ui", "dm_audio_load_failed", { error: errorName(cause), message: cause instanceof Error ? cause.message : "" }, "warn");
+    }
     return false;
   } finally {
     loading.value = false;
   }
 }
 
+function isAbortError(cause: unknown) {
+  return errorName(cause) === "AbortError";
+}
+
+function errorName(cause: unknown) {
+  return cause instanceof Error || cause instanceof DOMException ? cause.name : "unknown";
+}
+
 async function toggle() {
+  // The download below outlives the tap's user activation. WebKit lifts its
+  // playback restriction on an element that load()s inside the gesture.
+  if (!sourceUrl.value) audio.value?.load();
   if (props.suspended || !(await ensureSource())) return;
   if (!audio.value) return;
 
@@ -193,7 +209,12 @@ async function toggle() {
     error.value = "";
     await audio.value.play()
       .then(() => { playing.value = true; })
-      .catch(() => { error.value = "语音播放失败"; });
+      .catch(cause => {
+        // pause() or a source change while play() is pending is not a failure.
+        if (isAbortError(cause)) return;
+        error.value = "语音播放失败";
+        debugLog("ui", "dm_audio_play_failed", { error: errorName(cause), mime: props.media?.mime || "" }, "warn");
+      });
   } else {
     audio.value.pause();
     playing.value = false;
@@ -214,8 +235,10 @@ function handleEnded() {
 }
 
 
+// One source per value: the parent re-parses `media` on every render, and a
+// getter returning a fresh array would fire here each time, killing playback.
 watch(
-  () => [props.media?.encryptedRef, props.previewUrl, props.accountPubkey, props.waveformKey],
+  [() => props.media?.encryptedRef, () => props.previewUrl, () => props.accountPubkey, () => props.waveformKey],
   () => {
     releaseRuntimeAudio();
   }
