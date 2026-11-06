@@ -520,6 +520,18 @@ describe("encrypted private audio messages", () => {
     expect(await blob.text()).toBe("local voice");
   });
 
+  it("keeps a voice message loading and playing across parent re-renders", () => {
+    const player = readFileSync(join(process.cwd(), "src/components/DmAudioMessage.vue"), "utf8");
+    // Messages.vue re-parses `media` on every render, so a getter returning one
+    // new array would release the audio each time and surface as 重试.
+    expect(player).toContain("[() => props.media?.encryptedRef, () => props.previewUrl, () => props.accountPubkey, () => props.waveformKey]");
+    expect(player).not.toContain("() => [props.media?.encryptedRef");
+    // downloadMedia aborts with a plain Error named AbortError, not a DOMException.
+    expect(player).not.toContain("cause instanceof DOMException && cause.name");
+    expect(player).toContain('errorName(cause) === "AbortError"');
+    expect(player).not.toContain("controller.signal.aborted");
+  });
+
   it("wires playback and route/account cleanup into the conversation without persisting Blob URLs", () => {
     const messages = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
     const player = readFileSync(join(process.cwd(), "src/components/DmAudioMessage.vue"), "utf8");
