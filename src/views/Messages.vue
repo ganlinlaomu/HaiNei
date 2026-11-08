@@ -396,6 +396,7 @@ import { hasDisappearingMarker, DISAPPEARING_DM_TYPE, type BurnDuration } from "
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { canImportDirectMessage } from "@/services/privateSpaceImport";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
+import { imagesToAppend } from "@/utils/selectedImages";
 import { directMessagesForPeer, useDirectMessagesStore, WAITING_NETWORK_ERROR } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
@@ -1326,14 +1327,15 @@ function removeSelectedImage(index: number) {
   if (!selectedImages.value.length && imageInput.value) imageInput.value.value = "";
 }
 function selectImages(event: Event) {
-  const files = [...((event.target as HTMLInputElement).files || [])]
-    .filter(file => file.type.startsWith("image/"));
-  if (!files.length) return;
-  clearSelectedImages();
-  selectedImages.value = files.slice(0, MAX_SELECTED_IMAGES)
-    .map(file => ({ file, preview: URL.createObjectURL(file) }));
-  for (const image of selectedImages.value) void warmEncryptedCommentImage(image.file).catch(() => undefined);
-  if (files.length > MAX_SELECTED_IMAGES) ui.addToast(`一次最多选择 ${MAX_SELECTED_IMAGES} 张图片`, 2200, "info");
+  const input = event.target as HTMLInputElement;
+  const picked = [...(input.files || [])];
+  // Reset so picking the same photo again after removing it still fires change.
+  input.value = "";
+  const { added, overflow } = imagesToAppend(selectedImages.value.map(image => image.file), picked, MAX_SELECTED_IMAGES);
+  const images = added.map(file => ({ file, preview: URL.createObjectURL(file) }));
+  selectedImages.value = [...selectedImages.value, ...images];
+  for (const image of images) void warmEncryptedCommentImage(image.file).catch(() => undefined);
+  if (overflow) ui.addToast(`一次最多发送 ${MAX_SELECTED_IMAGES} 张图片`, 2200, "info");
 }
 function sendVoiceRecordingResult(result: VoiceRecordingResult, account: string, peer: string) {
   if (disposed || keys.pkHex !== account || peerPubkey.value !== peer) return;
