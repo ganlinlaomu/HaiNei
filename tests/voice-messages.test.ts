@@ -571,7 +571,8 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain('accept="image/*"');
     expect(messages).toContain('accept="image/*" multiple');
     expect(messages).toContain('v-for="(image, index) in selectedImages"');
-    expect(messages).toContain("files.slice(0, MAX_SELECTED_IMAGES)");
+    expect(messages).toContain("imagesToAppend(selectedImages.value.map(image => image.file), picked, MAX_SELECTED_IMAGES)");
+    expect(messages).toContain("selectedImages.value = [...selectedImages.value, ...images]");
     expect(messages).toContain("images.forEach((image, index) => directMessages.send(");
     expect(messages).toContain(".attachment-file-input{position:absolute;inset:0;width:100%;height:100%");
     expect(messages).not.toContain('capture="');
