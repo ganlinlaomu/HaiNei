@@ -544,8 +544,8 @@ describe("encrypted private audio messages", () => {
     expect(recorder).toContain("session.isActive()");
     expect(recorder).toContain("session.elapsedMs()");
     expect(recorder).toContain("shallowRef<VoiceRecordingSession");
-    expect(messages).toContain("keys.pkHex !== account");
-    expect(messages).toContain("peerPubkey.value !== peer");
+    const composerActions = readFileSync(join(process.cwd(), "src/composables/useDmComposerActions.ts"), "utf8");
+    expect(composerActions).toContain("account() !== accountAtStart || peer() !== peerAtStart");
     expect(recorder).toContain("recording.value !== session");
     expect(recorder).toContain("URL.createObjectURL(result.blob)");
     expect(messages).toContain('aria-label="按住录音"');
@@ -560,20 +560,21 @@ describe("encrypted private audio messages", () => {
     expect(messages).not.toContain(':disabled="!accepted || !keys.pkHex || startingRecording"');
     expect(messages).toContain(':disabled="!accepted || !keys.pkHex || finishingRecording || disappearingSeconds !== null"');
     expect(messages).toContain("松开发送 · ← 取消 · ↑ 锁定");
-    expect(messages).toContain("MIN_VOICE_DURATION_SECONDS = 1");
-    expect(messages).toContain('ui.addToast("说话时间太短"');
-    expect(messages).toContain("directMessages.sendAudio(peer, result");
+    const composerSend = readFileSync(join(process.cwd(), "src/composables/useDmComposerActions.ts"), "utf8");
+    expect(composerSend).toContain("MIN_VOICE_DURATION_SECONDS = 1");
+    expect(composerSend).toContain('notify("说话时间太短"');
+    expect(composerSend).toContain("directMessages.sendAudio(peerAtStart, result");
     expect(recorder).toContain("onAutoFinish: () => { autoSendVoiceOnFinish = true; }");
     expect(messages).toContain('class="attachment-file-input sr-file-input"');
     expect(messages).toContain(':disabled="!accepted || !keys.pkHex"');
     expect(messages).not.toContain('@click="chooseImage"');
-    expect(messages).toContain("imageInput.value?.click()");
+    expect(composerSend).toContain("imageInput.value?.click()");
     expect(messages).toContain('accept="image/*"');
     expect(messages).toContain('accept="image/*" multiple');
     expect(messages).toContain('v-for="(image, index) in selectedImages"');
     // 追加、去重、上限的行为见 tests/component/dm-image-selection.test.ts。
     expect(messages).toContain("useDmImageSelection({");
-    expect(messages).toContain("images.forEach((image, index) => directMessages.send(");
+    expect(composerSend).toContain("images.forEach((image, index) => directMessages.send(");
     expect(messages).toContain(".attachment-file-input{position:absolute;inset:0;width:100%;height:100%");
     expect(messages).not.toContain('capture="');
     expect(messages).toContain("attachmentMenuOpen");

@@ -201,7 +201,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toMatch(/\.replying-copy span\s*\{[^}]*-webkit-line-clamp:\s*2;[^}]*white-space:\s*normal;/);
     // No change to the actual quoted message ID / send path.
     expect(chat).toContain('@click.stop="jumpToQuotedMessage(message.replyTo)"');
-    expect(chat).toContain("const replyTo = replyingToMessage.value?.id;");
+    expect(chat).toContain("replyTarget: () => replyingToMessage.value?.id");
+    expect(readFileSync(join(process.cwd(), "src/composables/useDmComposerActions.ts"), "utf8")).toContain("const replyTo = replyTarget();");
   });
 
   it("supports quoted replies in direct-message bubbles and composer", () => {
@@ -240,10 +241,13 @@ describe("direct-message navigation and UI contract", () => {
     expect(gestures).toContain(".post-image-preview, .optimistic-image, .voice-message");
     expect(chat).toContain('target.scrollIntoView({ behavior: "smooth", block: "center" })');
     expect(chat).toContain("'message-highlight': highlightedMessageId === message.id");
-    expect(chat).toContain("images.forEach((image, index) => directMessages.send(");
-    expect(chat).toContain('index === 0 ? replyTo : undefined');
-    expect(chat).toContain("directMessages.send(peerPubkey.value, text, undefined, replyTo, disappearingSeconds.value ?? undefined)");
-    expect(chat).toContain("directMessages.sendAudio(peerPubkey.value, audio, replyTo)");
+    // Send rules themselves: tests/component/dm-composer-actions.test.ts.
+    const composerActions = readFileSync(join(process.cwd(), "src/composables/useDmComposerActions.ts"), "utf8");
+    expect(chat).toContain("useDmComposerActions({");
+    expect(composerActions).toContain("images.forEach((image, index) => directMessages.send(");
+    expect(composerActions).toContain('index === 0 ? replyTo : undefined');
+    expect(composerActions).toContain("directMessages.send(peer(), text, undefined, replyTo, disappearingSeconds.value ?? undefined)");
+    expect(composerActions).toContain("directMessages.sendAudio(peer(), audio, replyTo)");
     expect(store).toContain("replyTo: task.replyTo");
     expect(store).toContain("replyTo === message.replyTo");
     expect(taskRepository).toContain("record.replyTo");
@@ -801,7 +805,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(meta).toContain("font-size:9px;font-weight:400");
     expect(meta).toContain("opacity:.85");
     expect(chat).toContain('@retry="message.outgoing && retryOutgoingMessage(message.outgoing.localId)"');
-    expect(chat).toContain('draft.value = ""');
+    expect(readFileSync(join(process.cwd(), "src/composables/useDmComposerActions.ts"), "utf8")).toContain('draft.value = ""');
     expect(chat).not.toContain("sendError");
     expect(chat).not.toContain("sending.value");
     const store = readThemedSource(join(process.cwd(), "src/stores/directMessages.ts"), "utf8");
