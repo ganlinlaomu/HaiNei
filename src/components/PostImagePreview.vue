@@ -372,7 +372,8 @@ export default defineComponent({
           || keys.pkHex !== accountAtStart
           || images.value[idx] !== item
         ) return;
-        if (item.originalStatus === "loaded" && originalObjectUrls.has(item.originalUrl)) return;
+        // await 期间可能已有另一次加载把状态改成 loaded。
+        if ((item.originalStatus as LoadStatus) === "loaded" && originalObjectUrls.has(item.originalUrl)) return;
         if (originalObjectUrls.delete(item.originalUrl)) URL.revokeObjectURL(item.originalUrl);
         const objectUrl = URL.createObjectURL(blob);
         originalObjectUrls.add(objectUrl);

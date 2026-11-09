@@ -326,7 +326,7 @@ function getNotificationContent(n: any) {
   const allInteractions = interactions.getComments(n.messageId);
   const rootPost = messagesById.value.get(n.messageId);
   
-  const rootSummary = summarizeNotificationText(rootPost?.content || rootPost?.text || "");
+  const rootSummary = summarizeNotificationText(rootPost?.content || "");
 
   // 处理点赞
   if (n.type === "like") {
