@@ -86,7 +86,9 @@ describe("burn countdown", () => {
 
   it("compares message id lists without building a joined signature string", () => {
     const chat = readFileSync("src/views/Messages.vue", "utf8");
-    expect(chat).toContain("if (sameIds(nextIds, previousIdsOrUndefined)) return;");
+    const messageWindow = readFileSync("src/composables/useChatMessageWindow.ts", "utf8");
+    expect(messageWindow).toContain("if (sameIds(nextIds, previousIdsOrUndefined)) return;");
+    expect(messageWindow).not.toContain('.join("\\0")');
     expect(chat).not.toContain('.join("\\0")');
   });
 });

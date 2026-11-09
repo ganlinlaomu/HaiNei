@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.190",
-  "releaseSummary": "稳定性改进：私信语音、选图和待办加了自动化测试",
+  "version": "0.1.191",
+  "releaseSummary": "稳定性改进：私信滚动定位拆成独立模块并加了测试",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
