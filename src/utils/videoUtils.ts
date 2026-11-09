@@ -94,13 +94,27 @@ export function parseVideoUrl(url: string): VideoData | null {
     };
   }
   
-  // Valid https URL but not a recognized video platform - treat as external
-  return {
-    type: 'video',
-    url: trimmedUrl,
-    provider: 'External',
-    embedUrl: trimmedUrl
-  };
+  // Any other link (a map, a shop, an article) is not a video.
+  return null;
+}
+
+/**
+ * Editors before 0.1.194 stored every pasted https link as a [video:{...}]
+ * block, so a map link showed as a broken player. Put the link of such a
+ * block back as plain text; real video blocks are left alone.
+ */
+export function unwrapNonVideoBlocks(content: string): string {
+  return content.replace(/\[video:(\{[^\]]+\})\]/g, (block, json: string) => {
+    try {
+      const url = JSON.parse(json)?.url;
+      if (typeof url !== 'string') return block;
+      const trimmed = url.trim();
+      if (isHttpsUrl(trimmed) && !isEncryptedVideoRef(trimmed) && !parseVideoUrl(trimmed)) return trimmed;
+    } catch {
+      // Not JSON: leave the block for the existing parsing to drop.
+    }
+    return block;
+  });
 }
 
 /**

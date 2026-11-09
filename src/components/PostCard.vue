@@ -88,7 +88,7 @@ import { useKeyStore } from "@/stores/keys";
 import { useUIStore } from "@/stores/ui";
 import { formatRelativeTime } from "@/utils/format";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
-import { extractVideoData, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
+import { extractVideoData, getVideoUrlRemovalPatterns, unwrapNonVideoBlocks } from "@/utils/videoUtils";
 import { openProfile } from "@/utils/profileNavigation";
 import { useRouter } from "vue-router";
 import { useFeedPreferencesStore } from "@/stores/feedPreferences";
@@ -122,7 +122,7 @@ const menuOpen = ref(false);
 const importingPost = ref(false);
 const importablePost = computed(() => canImportPost(props.message));
 const patterns = getVideoUrlRemovalPatterns();
-const cleanText = computed(() => (props.message.content || "")
+const cleanText = computed(() => unwrapNonVideoBlocks(props.message.content || "")
   .replace(/!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/gi, "")
   .replace(/https?:\/\/[^\s)]+?\.(?:png|jpe?g|gif|webp|avif|svg)(?:\?[^\s)]*)?/gi, "")
   .replace(/\[video:(\{[^\]]+\})\]/g, "").replace(patterns.youtubePattern, "").replace(patterns.vimeoPattern, "").replace(patterns.directVideoPattern, "")
