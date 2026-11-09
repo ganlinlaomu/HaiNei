@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.195",
-  "releaseSummary": "私信里的视频点卡片直接播放，地图链接显示地图缩略图",
+  "version": "0.1.196",
+  "releaseSummary": "私信里的视频改为全屏播放，不再挤在气泡里",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

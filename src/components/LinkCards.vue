@@ -1,19 +1,8 @@
 <template>
   <div v-if="cards.length" class="link-cards">
     <div v-for="card in cards" :key="card.url" class="link-card" :class="card.kind">
-      <div v-if="loaded.has(card.url) && card.embedUrl" class="link-embed">
-        <!-- The app sends no referrer by default; YouTube refuses to play
-             without one, so this tapped-open player sends only our origin. -->
-        <iframe
-          :src="card.embedUrl"
-          :title="`${card.site} 播放器`"
-          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-          allowfullscreen
-          referrerpolicy="strict-origin-when-cross-origin"
-        ></iframe>
-      </div>
       <img
-        v-else-if="loaded.has(card.url) && card.kind === 'image' && !failed.has(card.url)"
+        v-if="loaded.has(card.url) && card.kind === 'image' && !failed.has(card.url)"
         class="link-image"
         :src="card.url"
         alt="链接中的图片"
@@ -23,14 +12,15 @@
         <MapLinkThumb :url="card.url" />
       </a>
       <div class="link-row">
-        <!-- Videos and images open in the card itself; tapping anywhere on
-             the card plays or shows it. Other sites open as links. -->
+        <!-- Tapping anywhere on a video card plays it full width over the
+             page; an image card shows the image in place. Other sites open
+             as links. -->
         <button
           v-if="canLoad(card)"
           class="link-main"
           type="button"
           :aria-label="card.kind === 'image' ? '显示图片' : `播放 ${card.site} 视频`"
-          @click.stop="load(card.url)"
+          @click.stop="activate(card)"
         >
           <span class="link-badge" aria-hidden="true">{{ BADGES[card.kind] }}</span>
           <span class="link-copy">
@@ -56,12 +46,20 @@
         >{{ card.kind === "image" ? "打开" : `在 ${card.site} 打开` }}</a>
       </div>
     </div>
+    <VideoViewer
+      v-if="playing?.embedUrl"
+      :embed-url="playing.embedUrl"
+      :url="playing.url"
+      :site="playing.site"
+      @close="playing = null"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import MapLinkThumb from "@/components/MapLinkThumb.vue";
+import VideoViewer from "@/components/VideoViewer.vue";
 import { linkCardsFor, type LinkInfo, type LinkKind } from "@/utils/links";
 
 const props = withDefaults(defineProps<{ text: string; max?: number }>(), { max: 3 });
@@ -75,6 +73,13 @@ const BADGES: Record<LinkKind, string> = {
 const cards = computed(() => linkCardsFor(props.text, props.max));
 const loaded = ref(new Set<string>());
 const failed = ref(new Set<string>());
+
+const playing = ref<LinkInfo | null>(null);
+
+function activate(card: LinkInfo) {
+  if (card.embedUrl) playing.value = card;
+  else load(card.url);
+}
 
 function canLoad(card: LinkInfo) {
   if (loaded.value.has(card.url)) return false;
@@ -116,8 +121,6 @@ function markFailed(url: string) {
 .link-copy strong{overflow:hidden;color:var(--fg-0f1419);font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .link-copy small{overflow:hidden;color:var(--fg-536471);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
 .link-open{flex:none;padding:6px 2px;color:var(--fg-536471);font-size:11px;text-decoration:none;white-space:nowrap}
-.link-embed{position:relative;aspect-ratio:16/9;background:#000}
-.link-embed iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .link-map{display:block}
 .link-image{display:block;width:100%;max-height:320px;object-fit:contain;background:var(--bg-eff3f4)}
 </style>
