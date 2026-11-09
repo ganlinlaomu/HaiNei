@@ -140,15 +140,26 @@ export const useKeyStore = defineStore("keys", {
       // the vault or account-store loads. A mounted PWA can render between
       // these awaits even when the previous account is already unlocked.
       useDirectMessagesStore().beginReadStateRestore(pk);
+      // Each local step before the stores below gets its own mark: together
+      // they sit between "mounted" and "account_stores_loaded" on a cold start.
+      let stepStarted = Date.now();
+      const step = (name: string) => {
+        startupMark(name, { durationMs: Date.now() - stepStarted });
+        stepStarted = Date.now();
+      };
       await unlockLocalVault(pk, vaultSecretHex, isCurrent);
+      step("vault_unlocked");
       if (!isCurrent()) return;
       await migrateLocalVault(db, pk);
+      step("vault_migrated");
       if (!isCurrent()) return;
       // Vault keys are required to examine encrypted NIP-17 routing tags.
       await syncedMessageRepository.migrateMessageRoutingAfterUnlock(pk);
+      step("message_routing_migrated");
       if (!isCurrent()) return;
       void syncedMessageRepository.migrateCallLogClassAfterUnlock(pk, isCurrent).catch(() => undefined);
       await hydratePrivateDeviceValues(pk);
+      step("device_values_hydrated");
       if (!isCurrent()) return;
       const account = pk.slice(0, 8);
       // Settings must load first so no later store can use the previous account's
@@ -158,6 +169,7 @@ export const useKeyStore = defineStore("keys", {
       } catch (e) {
         console.error(`[account] settings load failed account=${account}`, e);
       }
+      step("settings_loaded");
       if (isCurrent()) registerRelaySessionSigner(pk, this.signEvent.bind(this));
       // Warm only after this account's settings have been materialized, otherwise
       // an account switch can briefly reconnect using the previous account's Relay mirror.
@@ -654,8 +666,15 @@ export const useKeyStore = defineStore("keys", {
 
     async unlockWithDeviceCredential() {
       if (!this.pkHex) throw new Error("未找到公钥信息");
+      let stepStarted = Date.now();
+      const step = (name: string) => {
+        startupMark(name, { durationMs: Date.now() - stepStarted });
+        stepStarted = Date.now();
+      };
       const skHex = await unlockDevicePrivateKey(this.pkHex);
+      step("device_key_unlocked");
       if (await safeGetPublicKey(skHex) !== this.pkHex) throw new Error("本机登录凭据与当前账号不匹配");
+      step("key_checked");
       this.skHex = skHex;
       this.isEncrypted = true;
       this.isUnlocked = true;
@@ -663,6 +682,7 @@ export const useKeyStore = defineStore("keys", {
       this.loginTimestamp = Math.floor(Date.now() / 1000);
       await this.persistActiveSession();
       await this.rememberCurrentAccount();
+      step("account_remembered");
       await this.loadAccountStores(this.pkHex);
     },
 
@@ -1180,13 +1200,17 @@ export const useKeyStore = defineStore("keys", {
         }
 
         const sk = deviceStorage.getItem("skHex");
+        const checkStarted = Date.now();
         if (!sk || await safeGetPublicKey(sk) !== this.pkHex) throw new Error("本地私钥与公钥不匹配");
+        startupMark("key_checked", { durationMs: Date.now() - checkStarted });
         this.skHex = sk;
         this.isEncrypted = false;
         this.credentialMode = "session";
         this.isUnlocked = true;
+        const rememberStarted = Date.now();
         await this.clearPersistedSession();
         await this.rememberCurrentAccount();
+        startupMark("account_remembered", { durationMs: Date.now() - rememberStarted });
         await this.loadAccountStores(this.pkHex);
         this.isRestored = true;
         debugLog("account", "session_restore_success", { pubkeyPrefix: this.pkHex, loginMethod: method }, "info");

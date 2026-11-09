@@ -4,6 +4,8 @@ import { isLocalVaultLocked } from "@/services/localVault";
 
 const values = new Map<string, string>();
 let hydrated = false;
+/** Accounts with pre-vault private rows still in deviceKeyValues, seen at boot. */
+const legacyPrivateAccounts = new Set<string>();
 const pendingWrites = new Set<Promise<void>>();
 function trackWrite(write: Promise<void>) {
  pendingWrites.add(write);
@@ -18,12 +20,20 @@ export function clearPrivateDeviceValues(account: string) {
 }
 export async function hydratePrivateDeviceValues(account: string) {
  // Upgrade old device rows one at a time, deleting only after encrypted commit.
- const legacy = await db.deviceKeyValues.toArray();
- for(const row of legacy) if(privateAccount(row.key)===account) {
-  await db.accountMeta.put({accountPubkey:account,key:`private-device:${row.key}`,value:row.value});
-  await db.deviceKeyValues.delete(row.key);
+ // hydrateDeviceStorage already read the table at boot; read it again only
+ // when that pass saw an old row for this account (or never ran).
+ if (!hydrated || legacyPrivateAccounts.has(account)) {
+  const legacy = await db.deviceKeyValues.toArray();
+  for(const row of legacy) if(privateAccount(row.key)===account) {
+   await db.accountMeta.put({accountPubkey:account,key:`private-device:${row.key}`,value:row.value});
+   await db.deviceKeyValues.delete(row.key);
+  }
+  legacyPrivateAccounts.delete(account);
  }
- const rows=await db.accountMeta.where("accountPubkey").equals(account).filter(row=>row.key.startsWith("private-device:")).toArray();
+ // Range over the primary key: reading every accountMeta row of the account
+ // (decrypting each) to keep a handful was a large part of cold start.
+ const rows=await db.accountMeta.where("[accountPubkey+key]")
+  .between([account,"private-device:"],[account,"private-device:\uffff"],true,true).toArray();
  for(const row of rows)values.set(row.key.slice("private-device:".length),String(row.value));
 }
 
@@ -32,7 +42,12 @@ export async function hydrateDeviceStorage() {
   if (hydrated) return;
   const rows = await db.deviceKeyValues.toArray();
   values.clear();
-  for (const row of rows) if (!privateAccount(row.key)) values.set(row.key, row.value);
+  legacyPrivateAccounts.clear();
+  for (const row of rows) {
+    const account = privateAccount(row.key);
+    if (account) legacyPrivateAccounts.add(account);
+    else values.set(row.key, row.value);
+  }
   hydrated = true;
 }
 

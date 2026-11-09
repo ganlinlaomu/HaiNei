@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.198",
-  "releaseSummary": "私信和帖子里的视频卡片直接显示缩略图，点一下就播放",
+  "version": "0.1.199",
+  "releaseSummary": "冷启动时读取设备设置更快，并记录启动各步骤耗时",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
