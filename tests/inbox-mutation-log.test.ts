@@ -116,8 +116,10 @@ describe("debug log buffer", () => {
 describe("chat scroll handling", () => {
   it("coalesces scroll events per frame and skips repeated reads of the same message", () => {
     const chat = readFileSync(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(chat).toContain("messageScrollFrame = requestAnimationFrame(");
+    const messageWindow = readFileSync(join(process.cwd(), "src/composables/useChatMessageWindow.ts"), "utf8");
+    expect(messageWindow).toContain("messageScrollFrame = requestAnimationFrame(");
     expect(chat).toContain("if (key === markedReadKey) return Promise.resolve();");
-    expect(chat).toContain("if (messageScrollFrame !== null) cancelAnimationFrame(messageScrollFrame);");
+    expect(messageWindow).toContain("if (messageScrollFrame !== null) cancelAnimationFrame(messageScrollFrame);");
+    expect(chat).toContain("disposeMessageWindow();");
   });
 });

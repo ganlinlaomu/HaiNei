@@ -666,7 +666,8 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("searchComplete");
     expect(chat).toContain("directMessages.loadPeerMessageContext(peerPubkey.value, messageId, 20)");
     expect(chat).toContain("searchContextActive");
-    expect(chat).toContain("if (searchContextActive.value)");
+    const messageWindow = readThemedSource(join(process.cwd(), "src/composables/useChatMessageWindow.ts"), "utf8");
+    expect(messageWindow).toContain("if (searchContextActive.value)");
     expect(chat).toContain("await focusMessage(messageId)");
     expect(chat).toContain("'message-highlight': highlightedMessageId === message.id");
     expect(chat).toContain("watch([draft, replyingToId], scheduleDraftSave)");
@@ -697,22 +698,25 @@ describe("direct-message navigation and UI contract", () => {
   });
 
   it("keeps long DM rendering bounded while preserving playback, anchors, and latest-read semantics", () => {
+    // Window behaviour itself: tests/component/chat-message-window.test.ts.
     const chat = readThemedSource(join(process.cwd(), "src/views/Messages.vue"), "utf8");
-    expect(chat).toContain("const windowEnd = ref(initialWindowRange.end)");
-    expect(chat).toContain("mergeBoundedMessageIndexes(");
-    expect(chat).toContain("MAX_RENDERED_MESSAGES = 100");
-    expect(chat).toContain("shiftBoundedMessageWindow");
-    expect(chat).toContain("mergeBoundedMessageIndexes");
+    const messageWindow = readThemedSource(join(process.cwd(), "src/composables/useChatMessageWindow.ts"), "utf8");
+    expect(chat).toContain("useChatMessageWindow({");
+    expect(messageWindow).toContain("const windowEnd = ref(initialWindowRange.end)");
+    expect(messageWindow).toContain("MAX_RENDERED_MESSAGES = 100");
+    expect(messageWindow).toContain("shiftBoundedMessageWindow");
+    expect(messageWindow).toContain("mergeBoundedMessageIndexes(");
     expect(chat).toContain("retainedPlaybackMessageId");
-    expect(chat).toContain("refreshRetainedPlaybackMessage");
+    expect(messageWindow).toContain("refreshRetainedPlaybackMessage");
     expect(chat).not.toContain("currentPinnedMessageIndexes");
-    expect(chat).toContain("captureMessageDomAnchor");
-    expect(chat).toContain("restoreMessageDomAnchor");
-    expect(chat).toContain('querySelector<HTMLElement>(".voice-shell.playing")');
+    expect(messageWindow).toContain("captureMessageDomAnchor");
+    expect(messageWindow).toContain("restoreMessageDomAnchor");
+    expect(messageWindow).toContain('querySelector<HTMLElement>(".voice-shell.playing")');
     expect(chat).toContain('messageList.value?.addEventListener("load", handleMessageMediaLoad, true)');
     expect(chat).toContain('messageList.value?.removeEventListener("load", handleMessageMediaLoad, true)');
-    expect(chat).toContain("windowEnd.value >= messages.value.length");
-    expect(chat).toContain("if (!loadingConversation) void markVisibleMessagesRead()");
+    expect(messageWindow).toContain("windowEnd.value >= messages.value.length");
+    expect(messageWindow).toContain("if (!isLoading()) void markRead()");
+    expect(chat).toContain("isLoading: () => loadingConversation");
   });
 
   it("offers a jump-to-latest control without changing DM read or sync semantics", () => {
@@ -721,8 +725,9 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("pendingTailCount");
     expect(chat).toContain("showJumpToLatest");
     expect(chat).toContain("function jumpToLatest()");
-    expect(chat).toContain("isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD)");
-    expect(chat).toContain("pendingTailCount.value += newTailCount");
+    const messageWindow = readThemedSource(join(process.cwd(), "src/composables/useChatMessageWindow.ts"), "utf8");
+    expect(messageWindow).toContain("isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD)");
+    expect(messageWindow).toContain("pendingTailCount.value += newTailCount");
     expect(chat).toContain("showJumpToLatest.value = false");
     expect(chat).toContain("pendingTailCount.value = 0");
   });
