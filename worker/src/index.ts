@@ -4,6 +4,7 @@ import { createMediaSession, createMediaSessions } from "./media";
 import { createRelaySession, relayPublicConfig } from "./relay";
 import { createTurnCredentials } from "./turn";
 import { handleTileRequest, isTilePath } from "./tiles";
+import { handleMapLinkRequest, MAP_LINK_PATH } from "./mapLinks";
 import {
   getPushPublicKey,
   removePushSubscription, setPushForeground, acknowledgeVisibleCall,
@@ -57,6 +58,9 @@ export async function handleRequest(request: Request, env: Env) {
   try {
     if (isTilePath(path) && request.method === "GET") {
       return await handleTileRequest(request, path);
+    }
+    if (path === MAP_LINK_PATH && request.method === "GET") {
+      return await handleMapLinkRequest(request);
     }
     if (path === "/api/relay/config" && request.method === "GET") {
       return json(relayPublicConfig(env));

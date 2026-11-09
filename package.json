@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.194",
-  "releaseSummary": "修复帖子里的地图等普通链接被显示成打不开的视频",
+  "version": "0.1.195",
+  "releaseSummary": "私信里的视频点卡片直接播放，地图链接显示地图缩略图",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

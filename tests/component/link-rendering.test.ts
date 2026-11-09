@@ -65,27 +65,36 @@ describe("链接卡片", () => {
     expect(cards.map(card => card.get("strong").text())).toEqual(["X", "GitHub"]);
     expect(cards[0].get("small").text()).toBe("x.com");
     expect(cards[0].get("a").attributes()).toMatchObject({ href: "https://x.com/jack/status/20", target: "_blank" });
-    expect(wrapper.find(".link-load").exists()).toBe(false);
+    expect(wrapper.find("button.link-main").exists()).toBe(false);
+    expect(wrapper.find(".link-open").exists()).toBe(false);
   });
 
-  it("YouTube 点「播放」之前不加载任何东西，点了才嵌入播放器", async () => {
+  it("YouTube 卡片点之前不加载任何东西，点卡片就在原地播放", async () => {
     const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ" } });
     expect(wrapper.find("iframe").exists()).toBe(false);
     expect(wrapper.find("img").exists()).toBe(false);
+    expect(wrapper.get("button.link-main").text()).toContain("点击播放 · YouTube");
 
-    await wrapper.get(".link-load").trigger("click");
+    await wrapper.get("button.link-main").trigger("click");
 
     const iframe = wrapper.get("iframe");
     expect(iframe.attributes("src")).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1&playsinline=1");
     expect(iframe.attributes("referrerpolicy")).toBe("strict-origin-when-cross-origin");
-    expect(wrapper.find(".link-load").exists()).toBe(false);
+    expect(wrapper.find("button.link-main").exists()).toBe(false);
+  });
+
+  it("视频卡片角落有「在 YouTube 打开」，点它才跳出去", () => {
+    const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ" } });
+    const open = wrapper.get("a.link-open");
+    expect(open.text()).toBe("在 YouTube 打开");
+    expect(open.attributes()).toMatchObject({ href: "https://youtu.be/dQw4w9WgXcQ", target: "_blank" });
   });
 
   it("图片链接点「显示」才加载图片，加载失败就收起", async () => {
     const wrapper = mount(LinkCards, { props: { text: "https://example.com/cat.png" } });
     expect(wrapper.find("img").exists()).toBe(false);
 
-    await wrapper.get(".link-load").trigger("click");
+    await wrapper.get("button.link-main").trigger("click");
     expect(wrapper.get("img").attributes("src")).toBe("https://example.com/cat.png");
 
     await wrapper.get("img").trigger("error");
@@ -100,8 +109,9 @@ describe("链接卡片", () => {
       template: `<div @click="outer"><LinkCards text="https://youtu.be/dQw4w9WgXcQ" /></div>`,
       setup: () => ({ outer }),
     });
-    await wrapper.get(".link-load").trigger("click");
-    await wrapper.get(".link-main").trigger("click");
+    await wrapper.get("a.link-open").trigger("click");
+    await wrapper.get("button.link-main").trigger("click");
+    await wrapper.get("a.link-main").trigger("click");
     expect(outer).not.toHaveBeenCalled();
   });
 });

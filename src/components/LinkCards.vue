@@ -19,21 +19,41 @@
         alt="链接中的图片"
         @error="markFailed(card.url)"
       />
+      <a v-if="card.kind === 'maps'" class="link-map" :href="card.url" target="_blank" rel="noopener noreferrer nofollow" tabindex="-1" aria-hidden="true" @click.stop>
+        <MapLinkThumb :url="card.url" />
+      </a>
       <div class="link-row">
-        <a class="link-main" :href="card.url" target="_blank" rel="noopener noreferrer nofollow" @click.stop>
+        <!-- Videos and images open in the card itself; tapping anywhere on
+             the card plays or shows it. Other sites open as links. -->
+        <button
+          v-if="canLoad(card)"
+          class="link-main"
+          type="button"
+          :aria-label="card.kind === 'image' ? '显示图片' : `播放 ${card.site} 视频`"
+          @click.stop="load(card.url)"
+        >
+          <span class="link-badge" aria-hidden="true">{{ BADGES[card.kind] }}</span>
+          <span class="link-copy">
+            <strong>{{ card.kind === "image" ? "点击显示图片" : `点击播放 · ${card.site}` }}</strong>
+            <small>{{ card.display }}</small>
+          </span>
+        </button>
+        <a v-else class="link-main" :href="card.url" target="_blank" rel="noopener noreferrer nofollow" @click.stop>
           <span class="link-badge" aria-hidden="true">{{ BADGES[card.kind] }}</span>
           <span class="link-copy">
             <strong>{{ card.site }}</strong>
             <small>{{ card.display }}</small>
           </span>
         </a>
-        <button
-          v-if="canLoad(card)"
-          class="link-load"
-          type="button"
-          :aria-label="card.kind === 'image' ? '显示图片' : `播放 ${card.site} 视频`"
-          @click.stop="load(card.url)"
-        >{{ card.kind === "image" ? "显示" : "▶ 播放" }}</button>
+        <a
+          v-if="(card.embedUrl || card.kind === 'image') && !loaded.has(card.url)"
+          class="link-open"
+          :href="card.url"
+          target="_blank"
+          rel="noopener noreferrer nofollow"
+          :aria-label="`在 ${card.site} 打开`"
+          @click.stop
+        >{{ card.kind === "image" ? "打开" : `在 ${card.site} 打开` }}</a>
       </div>
     </div>
   </div>
@@ -41,6 +61,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import MapLinkThumb from "@/components/MapLinkThumb.vue";
 import { linkCardsFor, type LinkInfo, type LinkKind } from "@/utils/links";
 
 const props = withDefaults(defineProps<{ text: string; max?: number }>(), { max: 3 });
@@ -75,7 +96,7 @@ function markFailed(url: string) {
 :empty + .link-cards{margin-top:0}
 .link-card{overflow:hidden;border:1px solid var(--bd-e5eaf0);border-radius:12px;background:var(--bg-f7f9f9)}
 .link-row{display:flex;align-items:center;gap:6px;min-width:0;padding:7px 8px}
-.link-main{display:flex;flex:1;align-items:center;gap:9px;min-width:0;color:inherit;text-decoration:none}
+.link-main{display:flex;flex:1;align-items:center;gap:9px;min-width:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;text-decoration:none;cursor:pointer}
 .link-badge{display:grid;flex:none;width:30px;height:30px;place-items:center;border-radius:8px;background:#64748b;color:#fff;font-size:14px;font-weight:700;line-height:1}
 .youtube .link-badge{background:#ff0033}
 .vimeo .link-badge{background:#17d5ff}
@@ -94,8 +115,9 @@ function markFailed(url: string) {
 .link-copy{display:grid;min-width:0;gap:1px}
 .link-copy strong{overflow:hidden;color:var(--fg-0f1419);font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .link-copy small{overflow:hidden;color:var(--fg-536471);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
-.link-load{flex:none;min-height:30px;padding:0 10px;border:0;border-radius:999px;background:var(--bg-eff3f4);color:var(--fg-0f1419);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.link-open{flex:none;padding:6px 2px;color:var(--fg-536471);font-size:11px;text-decoration:none;white-space:nowrap}
 .link-embed{position:relative;aspect-ratio:16/9;background:#000}
 .link-embed iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.link-map{display:block}
 .link-image{display:block;width:100%;max-height:320px;object-fit:contain;background:var(--bg-eff3f4)}
 </style>
