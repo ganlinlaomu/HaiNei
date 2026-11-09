@@ -106,8 +106,9 @@ describe("location UI", () => {
     expect(chat).toContain('@click="openLocationSheet"');
     expect(chat).toContain("<LocationShareSheet");
     expect(chat).toContain('<DmLocationCard v-else-if="locationShare(message.content)"');
-    expect(chat).toContain("serializeLocationShare(location), undefined, undefined, undefined, { preserveDraft: true }");
-    const open = chat.slice(chat.indexOf("function openLocationSheet()"), chat.indexOf("function sendLocation("));
+    const composerActions = read("src/composables/useDmComposerActions.ts");
+    expect(composerActions).toContain("serializeLocationShare(location), undefined, undefined, undefined, { preserveDraft: true }");
+    const open = composerActions.slice(composerActions.indexOf("function openLocationSheet()"), composerActions.indexOf("function sendLocation("));
     expect(open).toContain("disappearingSeconds.value !== null");
     expect(read("src/services/privateSpaceImport.ts")).toContain("!parseLocationShare(message.content)");
   });

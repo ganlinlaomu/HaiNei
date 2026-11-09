@@ -389,7 +389,7 @@ import DmMessageMeta from "@/components/DmMessageMeta.vue";
 import LocationShareSheet from "@/components/LocationShareSheet.vue";
 import { DIRECT_MESSAGE_TYPE, directMessagePreview } from "@/nostr/messaging/directMessages";
 import { parseFriendRecommendation } from "@/nostr/messaging/friendRecommendation";
-import { parseLocationShare, serializeLocationShare, type LocationShare } from "@/nostr/messaging/locationShare";
+import { parseLocationShare } from "@/nostr/messaging/locationShare";
 import { useLiveLocationStore } from "@/stores/liveLocation";
 import { shortNpub } from "@/utils/nostrQr";
 import { hasDisappearingMarker, DISAPPEARING_DM_TYPE, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
@@ -398,6 +398,7 @@ import { canImportDirectMessage } from "@/services/privateSpaceImport";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
 import { useDmImageSelection } from "@/composables/useDmImageSelection";
 import { useChatMessageWindow } from "@/composables/useChatMessageWindow";
+import { useDmComposerActions } from "@/composables/useDmComposerActions";
 import { directMessagesForPeer, useDirectMessagesStore, WAITING_NETWORK_ERROR } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
@@ -406,7 +407,6 @@ import { useUIStore } from "@/stores/ui";
 import { loadCallEngine, loadedCallEngine } from "@/stores/call";
 import { useMessagesStore, type InboxItem, type InboxMutation } from "@/stores/messages";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
-import type { VoiceRecordingResult } from "@/utils/voiceRecorder";
 import { openProfile } from "@/utils/profileNavigation";
 import { useMentionComposer } from "@/composables/useMentionComposer";
 import { useDmSearch } from "@/composables/useDmSearch";
@@ -623,8 +623,6 @@ const actionMenuImportable = computed(() => {
     message, keys.pkHex, peerPubkey.value, isDisappearing(message) || isBurned(message),
   );
 });
-const canSend = computed(() => !!keys.pkHex && accepted.value && !recording.value && (!!draft.value.trim() || selectedImages.value.length > 0 || !!recordedAudio.value));
-const MIN_VOICE_DURATION_SECONDS = 1;
 let replyHighlightTimer: number | null = null;
 let loadingConversation = false;
 let loadGeneration = 0;
@@ -638,6 +636,26 @@ const friendRecommendation = parseFriendRecommendation;
 const locationShare = parseLocationShare;
 const locationSheetOpen = ref(false);
 const liveLocation = useLiveLocationStore();
+const {
+  canSend, submitMessage, sendVoiceRecordingResult, sendLocation,
+  openRecommendationPicker, openLocationSheet, chooseImageFromMenu, enableDisappearing, disableDisappearing,
+} = useDmComposerActions({
+  account: () => keys.pkHex,
+  peer: () => peerPubkey.value,
+  accepted: () => accepted.value,
+  supportsNip44: () => keys.supportsNip44,
+  isDisposed: () => disposed,
+  draft, replyingToId,
+  replyTarget: () => replyingToMessage.value?.id,
+  cancelReply: () => cancelReply(),
+  selectedImages, imageInput, clearSelectedImages,
+  recording, recordedAudio, clearRecordedAudio, voiceError, voiceCaptureOwnsAudioSession,
+  textInput, disappearingSeconds, attachmentMenuOpen, locationSheetOpen,
+  showRecommendationPicker, clearAfterSend,
+  directMessages,
+  startLiveSharing: (peer, durationSeconds, location) => liveLocation.startSharing(peer, durationSeconds, location),
+  notify: (message, durationMs, kind) => ui.addToast(message, durationMs, kind),
+});
 const audioMedia = (message: InboxItem) => parsePrivateAudioMessage(message.content)?.media || null;
 const hasAudio = (message: InboxItem) => !!message.outgoing?.hasAudio || !!audioMedia(message);
 const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreviewUrl || hasImage(message.content);
@@ -1034,126 +1052,6 @@ async function load() {
     if (generation === loadGeneration) loadingConversation = false;
   }
 }
-function openRecommendationPicker() {
-  attachmentMenuOpen.value = false;
-  if (!accepted.value || !keys.supportsNip44 || disappearingSeconds.value !== null) {
-    ui.addToast("当前账号无法发送加密好友名片", 2000, "info");
-    return;
-  }
-  textInput.value?.blur();
-  showRecommendationPicker();
-}
-function openLocationSheet() {
-  attachmentMenuOpen.value = false;
-  if (!accepted.value) return;
-  if (disappearingSeconds.value !== null) {
-    ui.addToast("阅后即焚仅支持纯文字消息", 2200, "info");
-    return;
-  }
-  textInput.value?.blur();
-  locationSheetOpen.value = true;
-}
-async function sendLocation(location: LocationShare, durationSeconds = 0) {
-  locationSheetOpen.value = false;
-  if (!accepted.value) return;
-  if (durationSeconds > 0) {
-    try {
-      await liveLocation.startSharing(peerPubkey.value, durationSeconds, location);
-    } catch (error) {
-      ui.addToast(error instanceof Error ? error.message : "位置共享失败", 2200, "error");
-    }
-    return;
-  }
-  try {
-    // Like a friend card: a separate message that leaves the typed draft alone.
-    directMessages.send(peerPubkey.value, serializeLocationShare(location), undefined, undefined, undefined, { preserveDraft: true });
-  } catch (error) {
-    ui.addToast(error instanceof Error ? error.message : "位置发送失败", 2200, "error");
-  }
-}
-function chooseImageFromMenu() {
-  attachmentMenuOpen.value = false;
-  if (accepted.value && disappearingSeconds.value === null) imageInput.value?.click();
-}
-function enableDisappearing() {
-  attachmentMenuOpen.value = false;
-  if (!accepted.value || !keys.supportsNip44) {
-    ui.addToast("当前账号无法发送加密临时消息", 2000, "info");
-    return;
-  }
-  if (selectedImages.value.length || recordedAudio.value || voiceCaptureOwnsAudioSession.value) {
-    ui.addToast("请先移除图片或语音，阅后即焚仅支持文字", 2200, "info");
-    return;
-  }
-  cancelReply();
-  disappearingSeconds.value = 10;
-  void nextTick(() => textInput.value?.focus());
-}
-function disableDisappearing() {
-  disappearingSeconds.value = null;
-}
-function sendVoiceRecordingResult(result: VoiceRecordingResult, account: string, peer: string) {
-  if (disposed || keys.pkHex !== account || peerPubkey.value !== peer) return;
-  if (result.duration < MIN_VOICE_DURATION_SECONDS) {
-    ui.addToast("说话时间太短", 1_600, "info");
-    return;
-  }
-  try {
-    directMessages.sendAudio(peer, result, replyingToMessage.value?.id);
-    cancelReply();
-  } catch (error) {
-    voiceError.value = error instanceof Error ? error.message : "语音发送失败";
-    ui.addToast(voiceError.value, 2_200, "error");
-  }
-}
-function submitMessage() {
-  if (!canSend.value) return;
-  if (disappearingSeconds.value !== null && (recordedAudio.value || selectedImages.value.length || replyingToId.value)) {
-    ui.addToast("阅后即焚仅支持纯文字消息", 2200, "info");
-    return;
-  }
-  if (recordedAudio.value) {
-    const audio = recordedAudio.value;
-    const replyTo = replyingToMessage.value?.id;
-    try {
-      directMessages.sendAudio(peerPubkey.value, audio, replyTo);
-      clearAfterSend(() => {
-        draft.value = "";
-        clearRecordedAudio();
-        cancelReply();
-      });
-    } catch (error) {
-      voiceError.value = error instanceof Error ? error.message : "语音发送失败";
-      ui.addToast(voiceError.value, 2200, "error");
-    }
-    return;
-  }
-  const text = draft.value;
-  const images = selectedImages.value.map(image => image.file);
-  const replyTo = replyingToMessage.value?.id;
-  try {
-    if (images.length) {
-      images.forEach((image, index) => directMessages.send(
-        peerPubkey.value,
-        index === 0 ? text : "",
-        image,
-        index === 0 ? replyTo : undefined,
-      ));
-    } else {
-      directMessages.send(peerPubkey.value, text, undefined, replyTo, disappearingSeconds.value ?? undefined);
-    }
-    disappearingSeconds.value = null;
-    attachmentMenuOpen.value = false;
-    clearAfterSend(() => {
-      draft.value = "";
-      clearSelectedImages();
-      cancelReply();
-    });
-  } catch (error) {
-    ui.addToast(error instanceof Error ? error.message : "发送失败，请稍后重试", 2200, "error");
-  }
-}
-
 let appliedInboxRevision = messageStore.inboxRevision;
 function applyLatestInboxMutation() {
   // The watcher can coalesce several revisions into one run; replay each one

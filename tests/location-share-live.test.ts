@@ -476,7 +476,8 @@ describe("live location UI", () => {
 
   it("is reachable from the chat and the conversation list", () => {
     const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
-    expect(read("src/views/Messages.vue")).toContain("await liveLocation.startSharing(peerPubkey.value, durationSeconds, location)");
+    expect(read("src/views/Messages.vue")).toContain("liveLocation.startSharing(peer, durationSeconds, location)");
+    expect(read("src/composables/useDmComposerActions.ts")).toContain("await startLiveSharing(peer(), durationSeconds, location)");
     expect(read("src/views/Conversations.vue")).toContain('<LiveLocationBanner :name-of="displayName" />');
     expect(read("src/components/LocationShareSheet.vue")).toContain("共享 15 分钟");
     expect(read("src/components/LocationShareSheet.vue")).toContain("共享 1 小时");
