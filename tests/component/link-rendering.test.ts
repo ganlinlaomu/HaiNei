@@ -69,39 +69,52 @@ describe("链接卡片", () => {
     expect(wrapper.find(".link-open").exists()).toBe(false);
   });
 
-  it("YouTube 卡片点之前不加载任何东西，点卡片就在聊天里原地播放", async () => {
+  it("YouTube 卡片直接显示经 Worker 中转的缩略图，点了在聊天里原地播放", async () => {
     const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ" } });
     expect(wrapper.find("iframe").exists()).toBe(false);
-    expect(wrapper.find("img").exists()).toBe(false);
-    expect(wrapper.get("button.link-main").text()).toContain("点击播放 · YouTube");
-    expect(wrapper.classes()).not.toContain("playing");
+    const thumb = wrapper.get("button.link-video img.link-video-thumb");
+    expect(thumb.attributes("src")).toMatch(/\/api\/video-thumb\/youtube\/dQw4w9WgXcQ\.jpg$/);
+    expect(thumb.attributes("src")).not.toContain("ytimg.com");
+    expect(thumb.attributes()).toMatchObject({ crossorigin: "anonymous", referrerpolicy: "origin" });
+    // Messages.vue widens a message that holds a video card.
+    expect(wrapper.classes()).toContain("video");
 
-    await wrapper.get("button.link-main").trigger("click");
+    await wrapper.get("button.link-video").trigger("click");
 
     const iframe = wrapper.get(".link-embed iframe");
     expect(iframe.attributes("src")).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1&playsinline=1");
     expect(iframe.attributes("referrerpolicy")).toBe("strict-origin-when-cross-origin");
     expect(iframe.attributes("allowfullscreen")).toBeDefined();
-    // Messages.vue widens the message while it holds a playing video.
-    expect(wrapper.classes()).toContain("playing");
+    expect(wrapper.find("button.link-video").exists()).toBe(false);
     expect(wrapper.find("button.link-main").exists()).toBe(false);
     expect(document.querySelector(".video-viewer")).toBeNull();
   });
 
+  it("缩略图加载失败时仍显示播放按钮", async () => {
+    const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ" } });
+    await wrapper.get("img.link-video-thumb").trigger("error");
+    expect(wrapper.find("img.link-video-thumb").exists()).toBe(false);
+    expect(wrapper.get("button.link-video .link-video-play").text()).toBe("▶");
+  });
+
+  it("没有视频的卡片不加宽消息", () => {
+    expect(mount(LinkCards, { props: { text: "https://x.com/a" } }).classes()).not.toContain("video");
+  });
+
   it("同一条消息里一次只播一个视频", async () => {
     const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ https://vimeo.com/123456" } });
-    await wrapper.findAll("button.link-main")[0].trigger("click");
-    await wrapper.get("button.link-main").trigger("click");
+    await wrapper.findAll("button.link-video")[0].trigger("click");
+    await wrapper.get("button.link-video").trigger("click");
     const players = wrapper.findAll("iframe");
     expect(players).toHaveLength(1);
     expect(players[0].attributes("src")).toBe("https://player.vimeo.com/video/123456?autoplay=1");
   });
 
-  it("聊天页在播放时把这条消息撑到全宽", async () => {
+  it("聊天页把带视频的消息撑到全宽", async () => {
     const { readFileSync } = await import("node:fs");
     const chat = readFileSync("src/views/Messages.vue", "utf8");
-    expect(chat).toContain(".message-stack:has(.link-cards.playing){flex:1 1 auto;max-width:min(100%,560px)}");
-    expect(chat).toContain(".message-bubble:has(.link-cards.playing){width:100%}");
+    expect(chat).toContain(".message-stack:has(.link-cards.video){flex:1 1 auto;max-width:min(100%,560px)}");
+    expect(chat).toContain(".message-bubble:has(.link-cards.video){width:100%}");
   });
 
   it("视频卡片角落有「在 YouTube 打开」，点它才跳出去", () => {
@@ -140,9 +153,10 @@ describe("链接卡片", () => {
 describe("帖子里的视频", () => {
   const youtube = { type: "video", url: "https://youtu.be/dQw4w9WgXcQ", provider: "YouTube", embedUrl: "https://www.youtube.com/embed/dQw4w9WgXcQ" } as const;
 
-  it("YouTube 先显示播放按钮，点了才加载播放器", async () => {
+  it("YouTube 先显示缩略图和播放按钮，点了才加载播放器", async () => {
     const wrapper = mount(VideoPlayer, { props: { videoData: youtube } });
     expect(wrapper.find("iframe").exists()).toBe(false);
+    expect(wrapper.get(".video-facade img").attributes("src")).toMatch(/\/api\/video-thumb\/youtube\/dQw4w9WgXcQ\.jpg$/);
 
     await wrapper.get(".video-facade").trigger("click");
 
