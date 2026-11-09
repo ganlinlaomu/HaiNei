@@ -7,6 +7,15 @@
         type="button"
         @click.stop="openMention(segment.pubkey, $event)"
       >{{ segment.text }}</button>
+      <a
+        v-else-if="segment.type === 'link'"
+        class="text-link"
+        :href="segment.url"
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        :title="segment.url"
+        @click.stop
+      >{{ shortLinkText(segment.url) }}</a>
       <template v-else>{{ segment.text }}</template>
     </template>
   </span>
@@ -19,7 +28,8 @@ import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useProfilesStore } from "@/stores/profiles";
-import { splitKnownMentions, type KnownMention } from "@/utils/mentions";
+import { splitKnownMentions, type KnownMention, type MentionTextSegment } from "@/utils/mentions";
+import { shortLinkText, splitLinks, type LinkSegment } from "@/utils/links";
 import { HAINEI_BOT_NAME, isHaiNeiBot } from "@/utils/haineiBot";
 import { openProfile } from "@/utils/profileNavigation";
 
@@ -47,7 +57,10 @@ const known = computed<KnownMention[]>(() => {
   ];
 });
 
-const segments = computed(() => splitKnownMentions(props.text, known.value));
+// Links first, so a mention label that happens to occur inside a URL stays part of the link.
+type Segment = MentionTextSegment | Extract<LinkSegment, { type: "link" }>;
+const segments = computed(() => splitLinks(props.text).flatMap((segment): Segment[] =>
+  segment.type === "link" ? [segment] : splitKnownMentions(segment.text, known.value)));
 
 function openMention(pubkey: string, event: Event) {
   return openProfile(router, keys.pkHex, pubkey, event);
@@ -57,5 +70,7 @@ function openMention(pubkey: string, event: Event) {
 <style scoped>
 .mention-text{white-space:inherit}
 .mention-link{display:inline;padding:0;border:0;background:transparent;color:var(--fg-2563eb);font:inherit;line-height:inherit;vertical-align:baseline;cursor:pointer}
+.text-link{color:var(--fg-2563eb);text-decoration:none;overflow-wrap:anywhere;-webkit-touch-callout:default}
+.text-link:active{text-decoration:underline}
 .mention-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px;border-radius:3px}
 </style>

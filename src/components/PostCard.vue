@@ -40,6 +40,7 @@
     <div v-if="cleanText" class="message-text">
       <MentionText :text="displayedText" /><button v-if="isLong" class="text-button" type="button" @click="expanded = !expanded">{{ expanded ? "收起" : "全文" }}</button>
     </div>
+    <LinkCards v-if="cleanText" :text="cleanText" />
     <PostImagePreview v-if="hasImages" :content="message.content" :show-all="true" @double-like="likeFromImage" />
     <VideoPlayer v-if="video" :video-data="video" />
     <div class="actions">
@@ -95,6 +96,7 @@ import { usePostsStore } from "@/stores/posts";
 import { useBookmarksStore } from "@/stores/bookmarks";
 import ProfileAvatar from "./ProfileAvatar.vue";
 import MentionText from "./MentionText.vue";
+import LinkCards from "./LinkCards.vue";
 import { shouldSendDoubleTapLike } from "@/utils/feedCarousel";
 import { extractImageUrls } from "@/utils/extractImageUrls";
 import { loadProfileView } from "@/router/lazyViews";

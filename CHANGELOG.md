@@ -1,3 +1,9 @@
+## 0.1.193 — 2026-11-09
+
+- 私信、帖子和评论里的链接可以点击，在新窗口打开，不带来源信息。正文显示去掉 `https://` 的简短地址，过长时截断。
+- YouTube、Vimeo、X、Instagram、TikTok、ニコニコ、Google/Apple 地图、Amazon、GitHub、维基百科、Spotify、LINE 和图片链接，在私信和帖子里显示成卡片（站点名和简短地址），每条最多 3 张。卡片只根据网址生成，不会去抓取网页。
+- YouTube、Vimeo 和图片要点一下才加载，不点就不会连到这些网站。帖子里原有的 YouTube/Vimeo 播放器也改成点击后才加载。
+
 ## 0.1.192 — 2026-11-09
 
 - 私信的发送规则（文字、阅后即焚、多张图片、录音、按住说话、位置、好友名片和附件菜单的限制）从 Messages.vue 拆到 `useDmComposerActions`，行为不变。Messages.vue 从 1398 行减到 1296 行。

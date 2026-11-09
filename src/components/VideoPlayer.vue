@@ -9,23 +9,38 @@
     
     <!-- Direct video rendering without thumbnail -->
     <div v-else class="video-player">
-      <!-- YouTube embed -->
+      <!-- YouTube / Vimeo: nothing loads from the video site until tapped. -->
+      <button
+        v-if="embed.iframeUrl && !playerLoaded"
+        type="button"
+        class="video-facade"
+        :aria-label="`播放 ${videoData.provider} 视频`"
+        @click.stop="playerLoaded = true"
+      >
+        <span class="video-facade-play" aria-hidden="true">▶</span>
+        <span class="video-facade-label">点击播放 {{ videoData.provider }} 视频</span>
+      </button>
+
+      <!-- YouTube embed. The app sends no referrer by default and YouTube
+           refuses to play without one, so this player sends only our origin. -->
       <iframe
-        v-if="videoData.provider === 'YouTube' && embed.iframeUrl"
-        :src="embed.iframeUrl"
+        v-else-if="videoData.provider === 'YouTube' && embed.iframeUrl"
+        :src="`${embed.iframeUrl}?autoplay=1&playsinline=1`"
         frameborder="0"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowfullscreen
+        referrerpolicy="strict-origin-when-cross-origin"
         class="video-iframe"
       ></iframe>
 
       <!-- Vimeo embed -->
       <iframe
         v-else-if="videoData.provider === 'Vimeo' && embed.iframeUrl"
-        :src="embed.iframeUrl"
+        :src="`${embed.iframeUrl}?autoplay=1`"
         frameborder="0"
         allow="autoplay; fullscreen; picture-in-picture"
         allowfullscreen
+        referrerpolicy="strict-origin-when-cross-origin"
         class="video-iframe"
       ></iframe>
 
@@ -51,7 +66,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, PropType, computed } from 'vue';
+import { defineComponent, PropType, computed, ref } from 'vue';
 import { safeVideoEmbed, type VideoData } from '@/utils/videoUtils';
 import { isEncryptedVideoRef, decodeEncryptedVideoRef } from '@/utils/encryptedVideoRef';
 import EncryptedVideoPlayer from './EncryptedVideoPlayer.vue';
@@ -83,8 +98,10 @@ export default defineComponent({
 
     // Never bind raw videoData URLs: they come from peer-authored content.
     const embed = computed(() => safeVideoEmbed(props.videoData));
+    const playerLoaded = ref(false);
 
     return {
+      playerLoaded,
       settings,
       isEncrypted,
       encryptedMetadata,
@@ -121,6 +138,36 @@ export default defineComponent({
 
 .video-element {
   background: #000;
+}
+
+.video-facade {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 0;
+  background: #111827;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.video-facade-play {
+  display: grid;
+  width: 56px;
+  height: 40px;
+  place-items: center;
+  border-radius: 12px;
+  background: #ff0033;
+  font-size: 18px;
+}
+
+.video-facade-label {
+  font-size: 13px;
+  opacity: .85;
 }
 
 .video-fallback {
