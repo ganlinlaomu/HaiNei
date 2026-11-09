@@ -167,7 +167,7 @@
                 </div>
               </template>
               <template v-else>
-                <MentionText v-if="messageText(message.content)" class="bubble-text" :text="messageText(message.content)" />
+                <MentionText v-if="messageText(message.content)" class="bubble-text" :text="messageText(message.content)" hide-card-links />
                 <LinkCards v-if="messageText(message.content)" :text="messageText(message.content)" />
 
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />

@@ -17,7 +17,7 @@ export type LinkInfo = {
   url: string;
   /** Site name shown on the card. */
   site: string;
-  /** Host and path without scheme or "www.", shortened for display. */
+  /** Host without "www.", e.g. "youtu.be". */
   display: string;
   /** Present for videos that can be played inline after a tap. */
   embedUrl?: string;
@@ -27,7 +27,6 @@ export type LinkInfo = {
 // so "看这个https://a.jp/x。" ends before "。".
 const URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'`　-〿！-／：-＠［-｀｛-･]+/gi;
 const TRAILING_PUNCTUATION = /[.,;:!?'"*_~]+$/;
-const DISPLAY_LENGTH = 42;
 
 function trimUrl(raw: string) {
   let url = raw.replace(TRAILING_PUNCTUATION, "");
@@ -73,23 +72,26 @@ export function splitLinks(text: string): LinkSegment[] {
   return segments.length ? segments : [{ type: "text", text }];
 }
 
-function shortDisplay(parsed: URL) {
-  const host = parsed.hostname.replace(/^www\./, "");
-  const path = `${parsed.pathname === "/" ? "" : parsed.pathname}${parsed.search}`;
-  let display = host + path;
-  try {
-    display = decodeURI(display);
-  } catch {
-    // Keep the encoded form when it is not valid UTF-8.
-  }
-  return Array.from(display).length > DISPLAY_LENGTH
-    ? `${Array.from(display).slice(0, DISPLAY_LENGTH - 1).join("")}…`
-    : display;
+/** The host a link points to, without "www.", e.g. "tenki.jp". */
+export function linkHost(url: string) {
+  return new URL(url).hostname.replace(/^www\./, "");
 }
 
-/** Short form of a link for running text: no scheme or "www.", truncated. */
-export function shortLinkText(url: string) {
-  return shortDisplay(new URL(url));
+/**
+ * `text` without the given links, for text shown above their cards: the
+ * spaces a link leaves behind are tidied so "看 https://… ，好" reads "看，好".
+ */
+export function stripLinks(text: string, urls: ReadonlySet<string>) {
+  if (!urls.size) return text;
+  return splitLinks(text)
+    .map(segment => segment.type === "link" && urls.has(segment.url) ? " " : segment.text)
+    .join("")
+    .replace(/[ \t]+(?=[\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65])/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 const hostIs = (host: string, ...domains: string[]) =>
@@ -107,7 +109,7 @@ function youtubeId(parsed: URL, host: string) {
 export function classifyLink(url: string): LinkInfo {
   const parsed = new URL(url);
   const host = parsed.hostname.toLowerCase().replace(/^(www|m|mobile)\./, "");
-  const display = shortDisplay(parsed);
+  const display = linkHost(url);
   const info = (kind: LinkKind, site: string, embedUrl?: string): LinkInfo => ({ kind, url, site, display, embedUrl });
 
   if (hostIs(host, "youtube.com", "youtu.be", "youtube-nocookie.com")) {

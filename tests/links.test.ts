@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyLink, linkCardsFor, normalizeLinkUrl, splitLinks } from "@/utils/links";
+import { classifyLink, linkCardsFor, linkHost, normalizeLinkUrl, splitLinks, stripLinks } from "@/utils/links";
 
 const links = (text: string) => splitLinks(text).filter(segment => segment.type === "link").map(segment => segment.text);
 
@@ -107,13 +107,10 @@ describe("classifyLink", () => {
     expect(kind("https://fakegithub.com/a")).toBe("web");
   });
 
-  it("显示地址去掉协议和 www.，过长时截断", () => {
-    expect(classifyLink("https://www.example.com/a?b=1").display).toBe("example.com/a?b=1");
-    expect(classifyLink("https://example.com/").display).toBe("example.com");
-    expect(classifyLink("https://ja.wikipedia.org/wiki/%E6%9D%B1%E4%BA%AC").display).toBe("ja.wikipedia.org/wiki/東京");
-    const long = classifyLink(`https://example.com/${"a".repeat(80)}`).display;
-    expect(Array.from(long)).toHaveLength(42);
-    expect(long.endsWith("…")).toBe(true);
+  it("只显示域名，不显示路径和参数", () => {
+    expect(classifyLink("https://www.example.com/a?b=1").display).toBe("example.com");
+    expect(classifyLink(`https://www.amazon.co.jp/dp/B000?tag=${"x".repeat(80)}`).display).toBe("amazon.co.jp");
+    expect(linkHost("https://maps.app.goo.gl/abc")).toBe("maps.app.goo.gl");
   });
 
   it("普通网页的站点名是域名", () => {
@@ -134,5 +131,23 @@ describe("linkCardsFor", () => {
     expect(linkCardsFor(text).map(card => card.kind)).toEqual(["youtube", "x", "github"]);
     expect(linkCardsFor(text, 1).map(card => card.kind)).toEqual(["youtube"]);
     expect(linkCardsFor("只有 https://example.com")).toEqual([]);
+  });
+});
+
+describe("stripLinks", () => {
+  const strip = (text: string, ...urls: string[]) => stripLinks(text, new Set(urls));
+
+  it("去掉指定的链接，整理留下的空格", () => {
+    expect(strip("看这个视频 https://youtu.be/dQw4w9WgXcQ ，还有别的", "https://youtu.be/dQw4w9WgXcQ")).toBe("看这个视频，还有别的");
+    expect(strip("看 https://x.com/a 和 https://example.com/b", "https://x.com/a")).toBe("看 和 https://example.com/b");
+    expect(strip("https://x.com/a", "https://x.com/a")).toBe("");
+  });
+
+  it("保留换行，只收掉多余的空行", () => {
+    expect(strip("第一行\nhttps://x.com/a\n\n\n第二行", "https://x.com/a")).toBe("第一行\n\n第二行");
+  });
+
+  it("没有要去掉的链接时原样返回", () => {
+    expect(strip("看  https://example.com")).toBe("看  https://example.com");
   });
 });

@@ -38,7 +38,7 @@
       </div>
     </header>
     <div v-if="cleanText" class="message-text">
-      <MentionText :text="displayedText" /><button v-if="isLong" class="text-button" type="button" @click="expanded = !expanded">{{ expanded ? "收起" : "全文" }}</button>
+      <MentionText :text="displayedText" hide-card-links /><button v-if="isLong" class="text-button" type="button" @click="expanded = !expanded">{{ expanded ? "收起" : "全文" }}</button>
     </div>
     <LinkCards v-if="cleanText" :text="cleanText" />
     <PostImagePreview v-if="hasImages" :content="message.content" :show-all="true" @double-like="likeFromImage" />

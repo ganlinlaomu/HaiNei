@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
   "version": "0.1.193",
-  "releaseSummary": "私信和帖子里的链接可以点了，YouTube、X、地图等显示成卡片",
+  "releaseSummary": "私信和帖子里的链接可以点了，不再显示长地址，YouTube、X、地图等显示成卡片",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

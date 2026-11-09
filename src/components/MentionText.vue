@@ -15,7 +15,7 @@
         rel="noopener noreferrer nofollow"
         :title="segment.url"
         @click.stop
-      >{{ shortLinkText(segment.url) }}</a>
+      >{{ linkHost(segment.url) }}</a>
       <template v-else>{{ segment.text }}</template>
     </template>
   </span>
@@ -29,11 +29,13 @@ import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useProfilesStore } from "@/stores/profiles";
 import { splitKnownMentions, type KnownMention, type MentionTextSegment } from "@/utils/mentions";
-import { shortLinkText, splitLinks, type LinkSegment } from "@/utils/links";
+import { linkCardsFor, linkHost, splitLinks, stripLinks, type LinkSegment } from "@/utils/links";
 import { HAINEI_BOT_NAME, isHaiNeiBot } from "@/utils/haineiBot";
 import { openProfile } from "@/utils/profileNavigation";
 
-const props = defineProps<{ text: string }>();
+// hideCardLinks: the caller shows <LinkCards> for this text, so links that
+// get a card are left out of the text instead of appearing twice.
+const props = defineProps<{ text: string; hideCardLinks?: boolean }>();
 const router = useRouter();
 const keys = useKeyStore();
 const friends = useFriendsStore();
@@ -59,7 +61,10 @@ const known = computed<KnownMention[]>(() => {
 
 // Links first, so a mention label that happens to occur inside a URL stays part of the link.
 type Segment = MentionTextSegment | Extract<LinkSegment, { type: "link" }>;
-const segments = computed(() => splitLinks(props.text).flatMap((segment): Segment[] =>
+const shownText = computed(() => props.hideCardLinks
+  ? stripLinks(props.text, new Set(linkCardsFor(props.text).map(card => card.url)))
+  : props.text);
+const segments = computed(() => splitLinks(shownText.value).flatMap((segment): Segment[] =>
   segment.type === "link" ? [segment] : splitKnownMentions(segment.text, known.value)));
 
 function openMention(pubkey: string, event: Event) {

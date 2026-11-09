@@ -24,10 +24,10 @@ describe("正文里的链接", () => {
       target: "_blank",
       rel: "noopener noreferrer nofollow",
     });
-    // Running text shows the short form; the full URL is what opens.
-    expect(link.text()).toBe("example.com/a");
+    // Running text shows only the host; the full URL is what opens.
+    expect(link.text()).toBe("example.com");
     expect(link.attributes("title")).toBe("https://example.com/a");
-    expect(wrapper.text()).toBe("看 example.com/a。好");
+    expect(wrapper.text()).toBe("看 example.com。好");
   });
 
   it("@提及 和链接可以同时出现；链接里的 @ 不会被当成提及", () => {
@@ -63,7 +63,7 @@ describe("链接卡片", () => {
     const wrapper = mount(LinkCards, { props: { text: "https://x.com/jack/status/20 和 https://github.com/vuejs/core" } });
     const cards = wrapper.findAll(".link-card");
     expect(cards.map(card => card.get("strong").text())).toEqual(["X", "GitHub"]);
-    expect(cards[0].get("small").text()).toBe("x.com/jack/status/20");
+    expect(cards[0].get("small").text()).toBe("x.com");
     expect(cards[0].get("a").attributes()).toMatchObject({ href: "https://x.com/jack/status/20", target: "_blank" });
     expect(wrapper.find(".link-load").exists()).toBe(false);
   });
@@ -133,13 +133,28 @@ describe("帖子里的视频", () => {
   });
 });
 
-describe("正文里的长链接", () => {
-  it("显示简短地址，点开仍是完整链接", () => {
-    const url = `https://www.amazon.co.jp/dp/B0000000?tag=${"x".repeat(60)}`;
-    const wrapper = mount(MentionText, { props: { text: url } });
-    const link = wrapper.get("a");
+describe("正文里不出现长链接", () => {
+  it("普通链接只显示域名，点开仍是完整链接", () => {
+    const url = `https://www.tenki.jp/forecast/3/16/4410/13101/?tag=${"x".repeat(60)}`;
+    const link = mount(MentionText, { props: { text: url } }).get("a");
     expect(link.attributes("href")).toBe(url);
-    expect(link.text().startsWith("amazon.co.jp/dp/B0000000")).toBe(true);
-    expect(link.text().endsWith("…")).toBe(true);
+    expect(link.text()).toBe("tenki.jp");
+  });
+
+  it("配了卡片的地方，出卡片的链接从正文里去掉，普通链接留着显示域名", () => {
+    const text = "看这个视频 https://youtu.be/dQw4w9WgXcQ ，天气 https://tenki.jp/forecast/3";
+    const wrapper = mount(MentionText, { props: { text, hideCardLinks: true } });
+    expect(wrapper.text()).toBe("看这个视频，天气 tenki.jp");
+    expect(wrapper.findAll("a").map(a => a.attributes("href"))).toEqual(["https://tenki.jp/forecast/3"]);
+  });
+
+  it("没配卡片的地方（评论、阅后即焚）链接都留着，只显示域名", () => {
+    const wrapper = mount(MentionText, { props: { text: "看 https://youtu.be/dQw4w9WgXcQ" } });
+    expect(wrapper.text()).toBe("看 youtu.be");
+  });
+
+  it("消息只有一个出卡片的链接时，正文为空", () => {
+    const wrapper = mount(MentionText, { props: { text: "https://x.com/jack/status/20", hideCardLinks: true } });
+    expect(wrapper.text()).toBe("");
   });
 });

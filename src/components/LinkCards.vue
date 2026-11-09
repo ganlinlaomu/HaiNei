@@ -71,6 +71,8 @@ function markFailed(url: string) {
 
 <style scoped>
 .link-cards{display:grid;gap:6px;margin-top:6px;min-width:0}
+/* The text above held only links that became these cards. */
+:empty + .link-cards{margin-top:0}
 .link-card{overflow:hidden;border:1px solid var(--bd-e5eaf0);border-radius:12px;background:var(--bg-f7f9f9)}
 .link-row{display:flex;align-items:center;gap:6px;min-width:0;padding:7px 8px}
 .link-main{display:flex;flex:1;align-items:center;gap:9px;min-width:0;color:inherit;text-decoration:none}
