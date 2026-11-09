@@ -396,7 +396,7 @@ import { hasDisappearingMarker, DISAPPEARING_DM_TYPE, type BurnDuration } from "
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { canImportDirectMessage } from "@/services/privateSpaceImport";
 import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
-import { imagesToAppend } from "@/utils/selectedImages";
+import { useDmImageSelection } from "@/composables/useDmImageSelection";
 import { directMessagesForPeer, useDirectMessagesStore, WAITING_NETWORK_ERROR } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
@@ -530,7 +530,11 @@ const {
   search: (peer, query, options) => directMessages.searchPeerMessages(peer, query, options),
 });
 const searchInput = ref<HTMLInputElement | null>(null);
-const selectedImages = ref<Array<{ file: File; preview: string }>>([]);
+const { selectedImages, imageInput, clearSelectedImages, removeSelectedImage, selectImages } = useDmImageSelection({
+  max: 9,
+  notify: message => ui.addToast(message, 2200, "info"),
+  warm: file => warmEncryptedCommentImage(file),
+});
 const attachmentMenuOpen = ref(false);
 const {
   recommendationPickerOpen, recommendationQuery, selectedRecommendation, recommendableFriends,
@@ -569,7 +573,6 @@ const {
   hasPendingImage: () => selectedImages.value.length > 0,
   send: (result, account, peer) => sendVoiceRecordingResult(result, account, peer),
 });
-const imageInput = ref<HTMLInputElement | null>(null);
 const textInput = ref<HTMLTextAreaElement | null>(null);
 const mentionCandidates = computed<MentionCandidate[]>(() => {
   const peer = peerPubkey.value;
@@ -648,7 +651,6 @@ const MAX_RENDERED_MESSAGES = 100;
 const TOP_LOAD_THRESHOLD = 120;
 const BOTTOM_FOLLOW_THRESHOLD = 120;
 const MIN_VOICE_DURATION_SECONDS = 1;
-const MAX_SELECTED_IMAGES = 9;
 let replyHighlightTimer: number | null = null;
 let prependingOlder = false;
 let windowMutationInProgress = false;
@@ -1315,27 +1317,6 @@ function enableDisappearing() {
 }
 function disableDisappearing() {
   disappearingSeconds.value = null;
-}
-function clearSelectedImages() {
-  for (const image of selectedImages.value) URL.revokeObjectURL(image.preview);
-  selectedImages.value = [];
-  if (imageInput.value) imageInput.value.value = "";
-}
-function removeSelectedImage(index: number) {
-  const [removed] = selectedImages.value.splice(index, 1);
-  if (removed) URL.revokeObjectURL(removed.preview);
-  if (!selectedImages.value.length && imageInput.value) imageInput.value.value = "";
-}
-function selectImages(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const picked = [...(input.files || [])];
-  // Reset so picking the same photo again after removing it still fires change.
-  input.value = "";
-  const { added, overflow } = imagesToAppend(selectedImages.value.map(image => image.file), picked, MAX_SELECTED_IMAGES);
-  const images = added.map(file => ({ file, preview: URL.createObjectURL(file) }));
-  selectedImages.value = [...selectedImages.value, ...images];
-  for (const image of images) void warmEncryptedCommentImage(image.file).catch(() => undefined);
-  if (overflow) ui.addToast(`一次最多发送 ${MAX_SELECTED_IMAGES} 张图片`, 2200, "info");
 }
 function sendVoiceRecordingResult(result: VoiceRecordingResult, account: string, peer: string) {
   if (disposed || keys.pkHex !== account || peerPubkey.value !== peer) return;

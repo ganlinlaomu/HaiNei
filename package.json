@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.189",
-  "releaseSummary": "修复待办更新失败时没有提示的问题",
+  "version": "0.1.190",
+  "releaseSummary": "稳定性改进：私信语音、选图和待办加了自动化测试",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
@@ -29,7 +29,9 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^4.0.0",
+    "@vue/test-utils": "^2.5.1",
     "fake-indexeddb": "^6.0.1",
+    "happy-dom": "^21.0.4",
     "typescript": "^5.4.2",
     "vite": "^5.0.0",
     "vitest": "^4.1.11",
