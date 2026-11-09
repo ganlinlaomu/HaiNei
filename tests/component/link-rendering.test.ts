@@ -69,18 +69,42 @@ describe("链接卡片", () => {
     expect(wrapper.find(".link-open").exists()).toBe(false);
   });
 
-  it("YouTube 卡片点之前不加载任何东西，点卡片就在原地播放", async () => {
-    const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ" } });
-    expect(wrapper.find("iframe").exists()).toBe(false);
+  it("YouTube 卡片点之前不加载任何东西，点卡片打开全屏播放层", async () => {
+    const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ" }, attachTo: document.body });
+    expect(document.querySelector("iframe")).toBeNull();
     expect(wrapper.find("img").exists()).toBe(false);
     expect(wrapper.get("button.link-main").text()).toContain("点击播放 · YouTube");
 
     await wrapper.get("button.link-main").trigger("click");
 
-    const iframe = wrapper.get("iframe");
-    expect(iframe.attributes("src")).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1&playsinline=1");
-    expect(iframe.attributes("referrerpolicy")).toBe("strict-origin-when-cross-origin");
-    expect(wrapper.find("button.link-main").exists()).toBe(false);
+    // Teleported to <body>, outside the chat bubble.
+    const viewer = document.body.querySelector<HTMLElement>(":scope > .video-viewer")!;
+    expect(viewer.getAttribute("role")).toBe("dialog");
+    const iframe = viewer.querySelector("iframe")!;
+    expect(iframe.getAttribute("src")).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1&playsinline=1");
+    expect(iframe.getAttribute("referrerpolicy")).toBe("strict-origin-when-cross-origin");
+    expect(viewer.querySelector("a")!.getAttribute("href")).toBe("https://youtu.be/dQw4w9WgXcQ");
+
+    viewer.querySelector<HTMLButtonElement>(".video-viewer-close")!.click();
+    await wrapper.vm.$nextTick();
+    expect(document.querySelector(".video-viewer")).toBeNull();
+    expect(wrapper.find("button.link-main").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("按 Esc 或点黑色背景也能关闭播放层", async () => {
+    const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ" }, attachTo: document.body });
+    await wrapper.get("button.link-main").trigger("click");
+    await wrapper.vm.$nextTick();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(document.querySelector(".video-viewer")).toBeNull();
+
+    await wrapper.get("button.link-main").trigger("click");
+    document.querySelector<HTMLElement>(".video-viewer")!.click();
+    await wrapper.vm.$nextTick();
+    expect(document.querySelector(".video-viewer")).toBeNull();
+    wrapper.unmount();
   });
 
   it("视频卡片角落有「在 YouTube 打开」，点它才跳出去", () => {
@@ -111,8 +135,8 @@ describe("链接卡片", () => {
     });
     await wrapper.get("a.link-open").trigger("click");
     await wrapper.get("button.link-main").trigger("click");
-    await wrapper.get("a.link-main").trigger("click");
     expect(outer).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
 });
 
