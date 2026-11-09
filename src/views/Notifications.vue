@@ -203,6 +203,7 @@ import SwipeLucideIcon from "@/components/SwipeLucideIcon.vue";
 import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { openProfile } from "@/utils/profileNavigation";
+import { unwrapNonVideoBlocks } from "@/utils/videoUtils";
 import { useSwipeActions } from "@/composables/useSwipeActions";
 
 const notifications = useNotificationsStore();
@@ -355,7 +356,7 @@ function getNotificationContent(n: any) {
 
 function summarizeNotificationText(text: string, maxLength = 40) {
   if (!text) return "[媒体动态]";
-  let cleanText = text
+  let cleanText = unwrapNonVideoBlocks(text)
     .replace(/!\[.*?\]\(blossom\+aesgcm:[^\s)]+\)/gi, "[加密图片]")
     .replace(/\[video:\{.*?\}\]/gi, "[视频]")
     .replace(/https?:\/\/[^\s]+/gi, "[链接]")

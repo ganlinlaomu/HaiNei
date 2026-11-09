@@ -1,6 +1,6 @@
 import type { PrivateSpaceAttachment, PrivateSpaceRecord, PrivateSpaceSource } from "@/db/dexie";
 import { extractImageUrls } from "@/utils/extractImageUrls";
-import { extractVideoData, getVideoUrlRemovalPatterns } from "@/utils/videoUtils";
+import { extractVideoData, getVideoUrlRemovalPatterns, unwrapNonVideoBlocks } from "@/utils/videoUtils";
 
 const HEX_ID = /^[0-9a-f]{64}$/i;
 const URL_SAFE = /^(?:https?:\/\/|blossom\+aesgcm:)/i;
@@ -31,7 +31,7 @@ function unwrapSerializedEvent(content: string): string {
 /** Content extracted from a renderable post; not the Nostr event or NIP-17 wrapper. */
 export function extractPrivateSpaceContent(content: string, includeMedia = true):
   { text: string; attachments: PrivateSpaceAttachment[] } {
-  const visible = unwrapSerializedEvent(content);
+  const visible = unwrapNonVideoBlocks(unwrapSerializedEvent(content));
   const attachments: PrivateSpaceAttachment[] = [];
   if (includeMedia) {
     for (const url of extractImageUrls(visible).slice(0, MAX_ATTACHMENTS)) {
