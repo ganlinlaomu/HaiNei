@@ -92,7 +92,7 @@ describe("user mentions", () => {
     expect(post).toContain('base === "仅自己可见" ? "仅自己和 Hainei Bot"');
     const mentionView = readFileSync(join(process.cwd(), "src/components/MentionText.vue"), "utf8");
     expect(mentionView).toContain("isHaiNeiBot(friend.pubkey) ? HAINEI_BOT_NAME : undefined");
-    expect(postCard).toContain('<MentionText :text="displayedText" />');
+    expect(postCard).toContain('<MentionText :text="displayedText" hide-card-links />');
     expect(comment).toContain('h(MentionText, { text: rowProps.comment.text })');
     expect(dm).toContain('<MentionText class="bubble-text"');
     expect(directStore).toContain("const text = content.trim()");

@@ -167,7 +167,8 @@
                 </div>
               </template>
               <template v-else>
-                <MentionText v-if="messageText(message.content)" class="bubble-text" :text="messageText(message.content)" />
+                <MentionText v-if="messageText(message.content)" class="bubble-text" :text="messageText(message.content)" hide-card-links />
+                <LinkCards v-if="messageText(message.content)" :text="messageText(message.content)" />
 
                 <img v-if="message.outgoing?.imagePreviewUrl" :src="message.outgoing.imagePreviewUrl" class="optimistic-image" alt="待发送私信图片" />
                 <PostImagePreview v-else-if="hasImage(message.content)" :content="message.content" :show-all="true" alt-text="私信图片" />
@@ -382,6 +383,7 @@ import DmBurnCountdown from "@/components/DmBurnCountdown.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
 import MentionText from "@/components/MentionText.vue";
+import LinkCards from "@/components/LinkCards.vue";
 import MessageActionMenu from "@/components/MessageActionMenu.vue";
 import RecommendationPicker from "@/components/RecommendationPicker.vue";
 import DmLocationCard from "@/components/DmLocationCard.vue";
