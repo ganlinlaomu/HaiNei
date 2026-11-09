@@ -69,42 +69,39 @@ describe("链接卡片", () => {
     expect(wrapper.find(".link-open").exists()).toBe(false);
   });
 
-  it("YouTube 卡片点之前不加载任何东西，点卡片打开全屏播放层", async () => {
-    const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ" }, attachTo: document.body });
-    expect(document.querySelector("iframe")).toBeNull();
+  it("YouTube 卡片点之前不加载任何东西，点卡片就在聊天里原地播放", async () => {
+    const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ" } });
+    expect(wrapper.find("iframe").exists()).toBe(false);
     expect(wrapper.find("img").exists()).toBe(false);
     expect(wrapper.get("button.link-main").text()).toContain("点击播放 · YouTube");
+    expect(wrapper.classes()).not.toContain("playing");
 
     await wrapper.get("button.link-main").trigger("click");
 
-    // Teleported to <body>, outside the chat bubble.
-    const viewer = document.body.querySelector<HTMLElement>(":scope > .video-viewer")!;
-    expect(viewer.getAttribute("role")).toBe("dialog");
-    const iframe = viewer.querySelector("iframe")!;
-    expect(iframe.getAttribute("src")).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1&playsinline=1");
-    expect(iframe.getAttribute("referrerpolicy")).toBe("strict-origin-when-cross-origin");
-    expect(viewer.querySelector("a")!.getAttribute("href")).toBe("https://youtu.be/dQw4w9WgXcQ");
-
-    viewer.querySelector<HTMLButtonElement>(".video-viewer-close")!.click();
-    await wrapper.vm.$nextTick();
+    const iframe = wrapper.get(".link-embed iframe");
+    expect(iframe.attributes("src")).toBe("https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1&playsinline=1");
+    expect(iframe.attributes("referrerpolicy")).toBe("strict-origin-when-cross-origin");
+    expect(iframe.attributes("allowfullscreen")).toBeDefined();
+    // Messages.vue widens the message while it holds a playing video.
+    expect(wrapper.classes()).toContain("playing");
+    expect(wrapper.find("button.link-main").exists()).toBe(false);
     expect(document.querySelector(".video-viewer")).toBeNull();
-    expect(wrapper.find("button.link-main").exists()).toBe(true);
-    wrapper.unmount();
   });
 
-  it("按 Esc 或点黑色背景也能关闭播放层", async () => {
-    const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ" }, attachTo: document.body });
+  it("同一条消息里一次只播一个视频", async () => {
+    const wrapper = mount(LinkCards, { props: { text: "https://youtu.be/dQw4w9WgXcQ https://vimeo.com/123456" } });
+    await wrapper.findAll("button.link-main")[0].trigger("click");
     await wrapper.get("button.link-main").trigger("click");
-    await wrapper.vm.$nextTick();
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    await wrapper.vm.$nextTick();
-    expect(document.querySelector(".video-viewer")).toBeNull();
+    const players = wrapper.findAll("iframe");
+    expect(players).toHaveLength(1);
+    expect(players[0].attributes("src")).toBe("https://player.vimeo.com/video/123456?autoplay=1");
+  });
 
-    await wrapper.get("button.link-main").trigger("click");
-    document.querySelector<HTMLElement>(".video-viewer")!.click();
-    await wrapper.vm.$nextTick();
-    expect(document.querySelector(".video-viewer")).toBeNull();
-    wrapper.unmount();
+  it("聊天页在播放时把这条消息撑到全宽", async () => {
+    const { readFileSync } = await import("node:fs");
+    const chat = readFileSync("src/views/Messages.vue", "utf8");
+    expect(chat).toContain(".message-stack:has(.link-cards.playing){flex:1 1 auto;max-width:min(100%,560px)}");
+    expect(chat).toContain(".message-bubble:has(.link-cards.playing){width:100%}");
   });
 
   it("视频卡片角落有「在 YouTube 打开」，点它才跳出去", () => {
