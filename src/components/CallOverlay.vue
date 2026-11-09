@@ -106,7 +106,8 @@ async function claimIncomingNotification() {
   const account = keys.pkHex;
   const sender = call.peer;
   await nextTick();
-  if (document.visibilityState !== "visible" || call.callId !== id || call.phase === "idle") return;
+  // call 是响应式 store，await 之后 phase 可能已经变成 idle。
+  if (document.visibilityState !== "visible" || call.callId !== id || (call.phase as string) === "idle") return;
   navigator.serviceWorker?.controller?.postMessage({ type: "INCOMING_RINGTONE_START", callId: id });
   const { acknowledgeCallNotification } = await import("@/services/pushNotifications");
   await acknowledgeCallNotification(account, keys.signEvent.bind(keys), sender, messageId,

@@ -44,12 +44,14 @@
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from "vue";
 import type { PrivateSpaceRecord, PrivateSpaceTask } from "@/db/dexie";
 import { useKeyStore } from "@/stores/keys";
+import { useUIStore } from "@/stores/ui";
 import { describeDue, openTaskInCalendar, sameDay, startOfDay, startOfWeek, timeOfDay, todoIcon } from "@/utils/todoPlanning";
 
 type PlanItem = { task: PrivateSpaceTask; record: PrivateSpaceRecord };
 const props = defineProps<{ records: PrivateSpaceRecord[] }>();
 const emit = defineEmits<{ open: [recordId: string]; changed: []; add: [due: number] }>();
 const keys = useKeyStore();
+const ui = useUIStore();
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
 
 const today = ref(startOfDay(Date.now()));

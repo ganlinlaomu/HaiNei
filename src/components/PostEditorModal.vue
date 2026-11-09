@@ -717,54 +717,9 @@ export default defineComponent({
       }
     }
      
-    // signEvent wrapper: prefer keys.signEvent -> window.nostr.signEvent -> nostr-tools v2 local signing (skHex)
+    // keys store 总是提供 signEvent（私钥 / NIP-07 / bunker 都在里面处理）
     async function signEventWrapper(evt: any) {
-      // prefer keys store
-      if ((keys as any).signEvent && typeof (keys as any).signEvent === "function") {
-        return await (keys as any).signEvent(evt);
-      }
-      // try injected extension
-      if ((window as any).nostr && typeof (window as any).nostr.signEvent === "function") {
-        return await (window as any).nostr.signEvent(evt);
-      }
-      // fallback: local nostr-tools v2 using skHex (not recommended on public sites)
-      if ((keys as any).skHex && typeof (keys as any).skHex === "string" && (keys as any).skHex.trim().length === 64) {
-        try {
-          const nt = await import("nostr-tools");
-          const sk = (keys as any).skHex as string;
-          if (typeof nt.getPublicKey === "function") evt.pubkey = nt.getPublicKey(sk);
-          if (typeof nt.getEventHash === "function") evt.id = nt.getEventHash(evt);
-          // prefer nt.signEvent if available
-          if (typeof nt.signEvent === "function") {
-            const maybe = nt.signEvent(evt, sk);
-            if (maybe && typeof maybe.then === "function") {
-              const res = await maybe;
-              return res;
-            }
-            return maybe;
-          }
-          // try nt.schnorr.sign (v2)
-          if (nt.schnorr && typeof nt.schnorr.sign === "function") {
-            const msgHex = evt.id || nt.getEventHash(evt);
-            const sig = await nt.schnorr.sign(msgHex, sk);
-            evt.sig = typeof sig === "string" ? sig : Array.from(sig).map((b:number)=>b.toString(16).padStart(2,"0")).join("");
-            return evt;
-          }
-          // try nt.secp256k1.sign
-          if (nt.secp256k1 && typeof nt.secp256k1.sign === "function") {
-            const idHex = evt.id || nt.getEventHash(evt);
-            const r = await nt.secp256k1.sign(idHex, sk);
-            if (r && typeof r === "object" && (r as any).signature) evt.sig = (r as any).signature;
-            else if (typeof r === "string") evt.sig = r;
-            else evt.sig = String(r);
-            return evt;
-          }
-          throw new Error("nostr-tools v2 没有可用签名函数");
-        } catch (e: any) {
-          throw new Error("本地签名失败: " + (e && e.message ? e.message : String(e)));
-        }
-      }
-      throw new Error("未找到可用签名器（keys.signEvent / window.nostr / 本地 skHex）");
+      return await keys.signEvent(evt);
     }
 
     async function startUpload(item: PostEditorUploadItem, accountAtStart: string) {
@@ -1292,7 +1247,7 @@ export default defineComponent({
             continue;
           }
           // Create encrypted image reference
-          if (img.encryptionKey && img.encryptionIv && img.originalMime) {
+          if (img.url && img.encryptionKey && img.encryptionIv && img.originalMime) {
             // Export key to raw bytes
             const keyBytes = await crypto.subtle.exportKey("raw", img.encryptionKey);
             const keyBase64 = bytesToBase64(new Uint8Array(keyBytes));

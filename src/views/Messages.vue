@@ -1466,7 +1466,7 @@ onMounted(() => {
   void load();
   // Chat-only idle warming: never parse WebRTC while the home screen boots,
   // but normally have its methods ready before the user presses call.
-  scheduleBackgroundTask("chat-call-warmup", () => loadCallEngine(), { priority: "idle", timeoutMs: 1_500 });
+  scheduleBackgroundTask("chat-call-warmup", async () => { await loadCallEngine(); }, { priority: "idle", timeoutMs: 1_500 });
 });
 watch([draft, replyingToId], scheduleDraftSave);
 watch([() => keys.pkHex, peerPubkey], (_next, previous) => {

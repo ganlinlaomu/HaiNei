@@ -70,7 +70,9 @@ async function refreshCacheStats(force = false) {
   if (!force && cacheRefresh?.account === account) return cacheRefresh.promise;
   const requestId = ++cacheRequestId;
   loadingCache.value = true;
-  const promise = (async () => {
+  // 先建好 refresh 再启动请求，finally 里只比较这个对象，不在赋值前引用 promise。
+  const refresh = { account, promise: Promise.resolve() };
+  refresh.promise = (async () => {
     try {
       const stats = await getCacheStats(account);
       if (requestId !== cacheRequestId || keyStore.pkHex !== account) return;
@@ -83,11 +85,11 @@ async function refreshCacheStats(force = false) {
       }
     } finally {
       if (requestId === cacheRequestId) loadingCache.value = false;
-      if (cacheRefresh?.promise === promise) cacheRefresh = null;
+      if (cacheRefresh === refresh) cacheRefresh = null;
     }
   })();
-  cacheRefresh = { account, promise };
-  return promise;
+  cacheRefresh = refresh;
+  return refresh.promise;
 }
 
 function scheduleCacheStatsRefresh(force = false) {

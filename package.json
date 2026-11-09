@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.188",
-  "releaseSummary": "私信选照片可以多次追加，不再替换之前选好的照片",
+  "version": "0.1.189",
+  "releaseSummary": "修复待办更新失败时没有提示的问题",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
@@ -9,7 +9,7 @@
     "build": "node scripts/update-app-version.js && node scripts/update-sw-version.js && node scripts/generate-ebook-dictionary.mjs && node scripts/generate-aozora-catalog.mjs && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit && tsc -p worker/tsconfig.json",
+    "typecheck": "vue-tsc --noEmit && tsc -p worker/tsconfig.json",
     "deploy:cf:pages": "npm run build && node scripts/deploy-cloudflare-pages.js",
     "build:verify": "node scripts/generate-ebook-dictionary.mjs && node scripts/generate-aozora-catalog.mjs && vite build",
     "dictionary:generate": "node scripts/generate-ebook-dictionary.mjs",
@@ -33,6 +33,7 @@
     "typescript": "^5.4.2",
     "vite": "^5.0.0",
     "vitest": "^4.1.11",
+    "vue-tsc": "^2.2.12",
     "wrangler": "4.151.2"
   }
 }
