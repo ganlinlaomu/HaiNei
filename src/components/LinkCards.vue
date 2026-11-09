@@ -1,5 +1,5 @@
 <template>
-  <div v-if="cards.length" class="link-cards" :class="{ playing: !!playingUrl }">
+  <div v-if="cards.length" class="link-cards" :class="{ video: cards.some(card => card.embedUrl) }">
     <div v-for="card in cards" :key="card.url" class="link-card" :class="card.kind">
       <div v-if="playingUrl === card.url && card.embedUrl" class="link-embed">
         <!-- The app sends no referrer by default; YouTube refuses to play
@@ -12,6 +12,26 @@
           referrerpolicy="strict-origin-when-cross-origin"
         ></iframe>
       </div>
+      <button
+        v-else-if="card.embedUrl"
+        class="link-video"
+        type="button"
+        :aria-label="`播放 ${card.site} 视频`"
+        @click.stop="activate(card)"
+      >
+        <!-- Through the HaiNei Worker: the video site never sees the reader. -->
+        <img
+          v-if="card.thumbPath && !failed.has(card.url)"
+          class="link-video-thumb"
+          :src="`${workerBase}${card.thumbPath}`"
+          crossorigin="anonymous"
+          referrerpolicy="origin"
+          loading="lazy"
+          alt=""
+          @error="markFailed(card.url)"
+        />
+        <span class="link-video-play" aria-hidden="true">▶</span>
+      </button>
       <img
         v-else-if="loaded.has(card.url) && card.kind === 'image' && !failed.has(card.url)"
         class="link-image"
@@ -35,7 +55,7 @@
         >
           <span class="link-badge" aria-hidden="true">{{ BADGES[card.kind] }}</span>
           <span class="link-copy">
-            <strong>{{ card.kind === "image" ? "点击显示图片" : `点击播放 · ${card.site}` }}</strong>
+            <strong>{{ card.kind === "image" ? "点击显示图片" : card.site }}</strong>
             <small>{{ card.display }}</small>
           </span>
         </button>
@@ -63,6 +83,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import MapLinkThumb from "@/components/MapLinkThumb.vue";
+import { haineiWorkerBaseUrl } from "@/services/workerUrl";
 import { linkCardsFor, type LinkInfo, type LinkKind } from "@/utils/links";
 
 const props = withDefaults(defineProps<{ text: string; max?: number }>(), { max: 3 });
@@ -74,6 +95,7 @@ const BADGES: Record<LinkKind, string> = {
 };
 
 const cards = computed(() => linkCardsFor(props.text, props.max));
+const workerBase = haineiWorkerBaseUrl();
 const loaded = ref(new Set<string>());
 const failed = ref(new Set<string>());
 
@@ -126,6 +148,9 @@ function markFailed(url: string) {
 .link-copy small{overflow:hidden;color:var(--fg-536471);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
 .link-open{flex:none;padding:6px 2px;color:var(--fg-536471);font-size:11px;text-decoration:none;white-space:nowrap}
 .link-embed{position:relative;aspect-ratio:16/9;background:#000}
+.link-video{position:relative;display:block;width:100%;aspect-ratio:16/9;padding:0;overflow:hidden;border:0;background:#111827;cursor:pointer}
+.link-video-thumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.link-video-play{position:absolute;top:50%;left:50%;display:grid;width:56px;height:40px;place-items:center;border-radius:12px;background:rgba(255,0,51,.92);color:#fff;font-size:18px;transform:translate(-50%,-50%);box-shadow:0 2px 10px rgba(0,0,0,.3)}
 .link-embed iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .link-map{display:block}
 .link-image{display:block;width:100%;max-height:320px;object-fit:contain;background:var(--bg-eff3f4)}

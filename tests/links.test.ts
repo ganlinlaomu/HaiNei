@@ -70,7 +70,9 @@ describe("classifyLink", () => {
         embedUrl: "https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1&playsinline=1",
       });
     }
-    expect(classifyLink("https://www.youtube.com/@channel")).toMatchObject({ kind: "youtube", embedUrl: undefined });
+    expect(classifyLink("https://youtu.be/dQw4w9WgXcQ").thumbPath).toBe("/api/video-thumb/youtube/dQw4w9WgXcQ.jpg");
+    expect(classifyLink("https://vimeo.com/76979871").thumbPath).toBe("/api/video-thumb/vimeo/76979871.jpg");
+    expect(classifyLink("https://www.youtube.com/@channel")).toMatchObject({ kind: "youtube", embedUrl: undefined, thumbPath: undefined });
     expect(classifyLink("https://youtu.be/<script>")).toMatchObject({ kind: "youtube", embedUrl: undefined });
   });
 

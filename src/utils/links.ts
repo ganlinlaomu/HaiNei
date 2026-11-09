@@ -21,6 +21,8 @@ export type LinkInfo = {
   display: string;
   /** Present for videos that can be played inline after a tap. */
   embedUrl?: string;
+  /** HaiNei Worker path of the video's thumbnail (proxied, see worker/src/videoThumbs.ts). */
+  thumbPath?: string;
 };
 
 // Stops at whitespace, angle brackets, quotes and full-width CJK punctuation,
@@ -110,15 +112,20 @@ export function classifyLink(url: string): LinkInfo {
   const parsed = new URL(url);
   const host = parsed.hostname.toLowerCase().replace(/^(www|m|mobile)\./, "");
   const display = linkHost(url);
-  const info = (kind: LinkKind, site: string, embedUrl?: string): LinkInfo => ({ kind, url, site, display, embedUrl });
+  const info = (kind: LinkKind, site: string, embedUrl?: string, thumbPath?: string): LinkInfo =>
+    ({ kind, url, site, display, embedUrl, thumbPath });
 
   if (hostIs(host, "youtube.com", "youtu.be", "youtube-nocookie.com")) {
     const id = youtubeId(parsed, host);
-    return info("youtube", "YouTube", id ? `https://www.youtube.com/embed/${id}?autoplay=1&playsinline=1` : undefined);
+    return id
+      ? info("youtube", "YouTube", `https://www.youtube.com/embed/${id}?autoplay=1&playsinline=1`, `/api/video-thumb/youtube/${id}.jpg`)
+      : info("youtube", "YouTube");
   }
   if (hostIs(host, "vimeo.com")) {
     const id = parsed.pathname.match(/^\/(\d+)(?:\/|$)/)?.[1];
-    return info("vimeo", "Vimeo", id ? `https://player.vimeo.com/video/${id}?autoplay=1` : undefined);
+    return id
+      ? info("vimeo", "Vimeo", `https://player.vimeo.com/video/${id}?autoplay=1`, `/api/video-thumb/vimeo/${id}.jpg`)
+      : info("vimeo", "Vimeo");
   }
   if (hostIs(host, "x.com", "twitter.com")) return info("x", "X");
   if (hostIs(host, "instagram.com")) return info("instagram", "Instagram");

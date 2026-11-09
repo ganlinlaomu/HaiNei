@@ -17,6 +17,17 @@
         :aria-label="`播放 ${videoData.provider} 视频`"
         @click.stop="playerLoaded = true"
       >
+        <!-- Through the HaiNei Worker: the video site never sees the reader. -->
+        <img
+          v-if="thumbUrl && !thumbFailed"
+          class="video-facade-thumb"
+          :src="thumbUrl"
+          crossorigin="anonymous"
+          referrerpolicy="origin"
+          loading="lazy"
+          alt=""
+          @error="thumbFailed = true"
+        />
         <span class="video-facade-play" aria-hidden="true">▶</span>
         <span class="video-facade-label">点击播放 {{ videoData.provider }} 视频</span>
       </button>
@@ -68,6 +79,8 @@
 <script lang="ts">
 import { defineComponent, PropType, computed, ref } from 'vue';
 import { safeVideoEmbed, type VideoData } from '@/utils/videoUtils';
+import { classifyLink } from '@/utils/links';
+import { haineiWorkerBaseUrl } from '@/services/workerUrl';
 import { isEncryptedVideoRef, decodeEncryptedVideoRef } from '@/utils/encryptedVideoRef';
 import EncryptedVideoPlayer from './EncryptedVideoPlayer.vue';
 import { useSettingsStore } from '@/stores/settings';
@@ -99,9 +112,20 @@ export default defineComponent({
     // Never bind raw videoData URLs: they come from peer-authored content.
     const embed = computed(() => safeVideoEmbed(props.videoData));
     const playerLoaded = ref(false);
+    const thumbFailed = ref(false);
+    // Same proxied thumbnail as chat link cards, from the validated embed URL.
+    const thumbUrl = computed(() => {
+      const iframeUrl = embed.value.iframeUrl;
+      if (!iframeUrl) return '';
+      const id = /\/embed\/([A-Za-z0-9_-]{11})$/.exec(iframeUrl)?.[1] || /\/video\/(\d+)$/.exec(iframeUrl)?.[1];
+      const path = id && classifyLink(props.videoData.provider === 'YouTube' ? `https://youtu.be/${id}` : `https://vimeo.com/${id}`).thumbPath;
+      return path ? `${haineiWorkerBaseUrl()}${path}` : '';
+    });
 
     return {
       playerLoaded,
+      thumbFailed,
+      thumbUrl,
       settings,
       isEncrypted,
       encryptedMetadata,
@@ -155,7 +179,21 @@ export default defineComponent({
   cursor: pointer;
 }
 
+.video-facade-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.video-facade-label {
+  position: relative;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .7);
+}
+
 .video-facade-play {
+  position: relative;
   display: grid;
   width: 56px;
   height: 40px;
