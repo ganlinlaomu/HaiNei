@@ -69,6 +69,27 @@ describe("client TURN servers", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("retries soon after a network failure instead of disabling TURN for an hour", async () => {
+    vi.useFakeTimers();
+    try {
+      const iceServers = [{ urls: ["turn:turn.cloudflare.com:3478"], username: "u", credential: "c" }];
+      const fetchMock = vi.fn<() => Promise<Response>>().mockRejectedValue(new TypeError("Failed to fetch"));
+      vi.stubGlobal("fetch", fetchMock);
+      registerRelaySessionSigner(PUBKEY, signer as any);
+      expect(await turnIceServers()).toEqual([]);
+      const failedCalls = fetchMock.mock.calls.length;
+      expect(await turnIceServers()).toEqual([]);
+      expect(fetchMock).toHaveBeenCalledTimes(failedCalls);
+
+      vi.advanceTimersByTime(31_000);
+      fetchMock.mockReset();
+      fetchMock.mockImplementation(async () => new Response(JSON.stringify({ iceServers, expiresAt: Math.floor(Date.now() / 1000) + 12 * 3600 }), { status: 201 }));
+      expect(await turnIceServers()).toEqual(iceServers);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("is passed to the file transfer's WebRTC config without delaying the join", () => {
     const nearby = readFileSync("src/services/nearbyTransfer.ts", "utf8");
     expect(nearby).toContain("rtcConfig: { iceServers: [...ICE_SERVERS, ...turn] }");

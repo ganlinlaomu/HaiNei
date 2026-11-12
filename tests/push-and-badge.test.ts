@@ -636,6 +636,24 @@ describe("privacy-preserving push and badge", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it("counts one message once against the recipient limit, whatever the device count", async () => {
+    const db = new PushD1();
+    for (const device of ["one", "two", "three"]) addSubscription(db, `https://web.push.apple.com/${device}`);
+    authorize(db);
+    const send = vi.fn(async () => new Response(null, { status: 201 }));
+    vi.stubGlobal("fetch", send);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const env = { ...pushEnv(db), PUSH_TRIGGER_PER_MINUTE_PER_RECIPIENT: "5" };
+
+    for (let index = 0; index < 5; index++) {
+      await expect(triggerGenericPush(env, ACCOUNT, [OTHER], "message", String(index).repeat(64))).resolves.toMatchObject({ sent: 3, failed: 0 });
+    }
+    // A retry of a delivered message is deduplicated without using budget.
+    await expect(triggerGenericPush(env, ACCOUNT, [OTHER], "message", "0".repeat(64))).resolves.toMatchObject({ sent: 0, failed: 0 });
+    expect(send).toHaveBeenCalledTimes(15);
+    expect([...db.rateLimits.entries()].find(([bucket]) => bucket.startsWith(`push:recipient:${OTHER}`))?.[1]).toBe(5);
+  });
+
   it("rejects custom push origins and malformed subscription keys", async () => {
     const db = new PushD1();
     const env = pushEnv(db);

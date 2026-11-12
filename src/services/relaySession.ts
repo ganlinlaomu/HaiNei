@@ -308,9 +308,11 @@ export async function managedReceivedSinceRelay(): Promise<string> {
 export type TurnIceServer = { urls: string | string[]; username?: string; credential?: string };
 const TURN_RENEW_BEFORE_SECONDS = 30 * 60;
 const TURN_UNAVAILABLE_RETRY_MS = 60 * 60_000;
+// Offline, timeout or an account switch says nothing about the TURN service.
+const TURN_TRANSIENT_RETRY_MS = 30_000;
 const turnStorageKey = (pubkey: string) => `nostr_turn_servers_${pubkey}`;
 let turnCache: { pubkey: string; iceServers: TurnIceServer[]; expiresAt: number } | null = null;
-let turnInflight: Promise<TurnIceServer[]> | null = null;
+let turnInflight: { pubkey: string; flight: Promise<TurnIceServer[]> } | null = null;
 let turnUnavailableUntil = 0;
 
 export function resetTurnCredentialsForTests() {
@@ -340,8 +342,13 @@ export async function turnIceServers(): Promise<TurnIceServer[]> {
     }
   } catch { /* fetch a fresh set */ }
   if (Date.now() < turnUnavailableUntil) return [];
-  turnInflight ??= (async () => {
+  if (turnInflight?.pubkey === current.pubkey) return turnInflight.flight;
+  const entry = { pubkey: current.pubkey, flight: Promise.resolve<TurnIceServer[]>([]) };
+  entry.flight = (async () => {
+    let refused = false;
     try {
+      // Yield first so a synchronous failure cannot clear the entry before it is stored.
+      await Promise.resolve();
       const base = workerBaseUrl();
       const endpoint = `${base}/api/turn/credentials`;
       const response = await signedWorkerPost(current.signEvent, current.pubkey, {
@@ -360,6 +367,7 @@ export async function turnIceServers(): Promise<TurnIceServer[]> {
           body: JSON.stringify(body),
         }, 8_000),
       });
+      refused = !response.ok;
       const body = await json(response, "turn");
       const iceServers: TurnIceServer[] = Array.isArray(body?.iceServers) ? body.iceServers.filter((server: any) => server && server.urls) : [];
       const expiresAt = Number(body?.expiresAt);
@@ -368,11 +376,14 @@ export async function turnIceServers(): Promise<TurnIceServer[]> {
       try { deviceStorage.setItem(turnStorageKey(current.pubkey), JSON.stringify({ iceServers, expiresAt })); } catch { /* memory copy */ }
       return iceServers;
     } catch {
-      turnUnavailableUntil = Date.now() + TURN_UNAVAILABLE_RETRY_MS;
+      if (identity === current) {
+        turnUnavailableUntil = Date.now() + (refused ? TURN_UNAVAILABLE_RETRY_MS : TURN_TRANSIENT_RETRY_MS);
+      }
       return [];
     } finally {
-      turnInflight = null;
+      if (turnInflight === entry) turnInflight = null;
     }
   })();
-  return turnInflight;
+  turnInflight = entry;
+  return entry.flight;
 }

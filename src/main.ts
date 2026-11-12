@@ -19,6 +19,7 @@ import { installIncomingRingtoneActivation } from "@/utils/audioUnlock";
 
 let serviceWorkerRegistration: Promise<ServiceWorkerRegistration> | null = null;
 let serviceWorkerLoadListenerAttached = false;
+let mounted = false;
 
 function isNativeContainer() {
   const capacitor = (window as Window & {
@@ -108,6 +109,7 @@ async function bootstrap() {
   // Do not initialize any ringtone or AudioContext during cold start.
   const vueMountStartedAt = performance.now();
   app.mount("#app");
+  mounted = true;
   startupMark("mounted", {
     bootMs,
     storageHydrationMs,
@@ -142,6 +144,8 @@ registerServiceWorker();
 
 void bootstrap().catch(error => {
   console.error("[main] bootstrap failed", error);
+  // A failure after the normal mount must not mount a second app on #app.
+  if (mounted) return;
   const app = createApp(App);
   const pinia = createPinia();
   app.use(pinia);

@@ -634,6 +634,10 @@ async function deliverPushRows(
   const config = pushConfig(env);
   const timeoutMs = integerSetting(env.PUSH_FETCH_TIMEOUT_MS, 8000, 1000, 30000);
 
+  const recipientLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_RECIPIENT, 30, 5, 600);
+  const deviceLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_DEVICE, 30, 5, 600);
+  const recipientBudgets = new Map<string, Promise<void>>();
+
   const deadline = Date.now() + 20_000;
   await mapWithConcurrency(rows, 4, async row => {
     if (Date.now() >= deadline) { diagnostics.failed += 1; return; }
@@ -642,13 +646,18 @@ async function deliverPushRows(
     try {
       // Re-validate persisted data in case an older deployment stored unsafe rows.
       validatedPushEndpoint(env, row.endpoint);
-      const recipientLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_RECIPIENT, 30, 5, 600);
-      const deviceLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_DEVICE, 30, 5, 600);
-      const endpointFingerprint = (await sha256Hex(row.endpoint)).slice(0, 24);
-      await consumeRateLimit(env, `push:recipient:${row.account_pubkey}`, recipientLimit, 60, now);
-      await consumeRateLimit(env, `push:device:${endpointFingerprint}`, deviceLimit, 60, now);
+      // Reserve first: a retry of an already delivered message must not use
+      // up the recipient's budget.
       reservation = await reservePushDelivery(env, senderPubkey, row.account_pubkey, messageId, row.endpoint, now);
       if (!reservation.reserved) return;
+      // One message counts once per recipient, however many devices they have.
+      let recipientBudget = recipientBudgets.get(row.account_pubkey);
+      if (!recipientBudget) {
+        recipientBudget = consumeRateLimit(env, `push:recipient:${row.account_pubkey}`, recipientLimit, 60, now);
+        recipientBudgets.set(row.account_pubkey, recipientBudget);
+      }
+      await recipientBudget;
+      await consumeRateLimit(env, `push:device:${reservation.endpointHash.slice(0, 24)}`, deviceLimit, 60, now);
 
       const basePayload = {
         ...pushPayload,
