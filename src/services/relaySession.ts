@@ -343,7 +343,8 @@ export async function turnIceServers(): Promise<TurnIceServer[]> {
   } catch { /* fetch a fresh set */ }
   if (Date.now() < turnUnavailableUntil) return [];
   if (turnInflight?.pubkey === current.pubkey) return turnInflight.flight;
-  const flight = (async () => {
+  const entry = { pubkey: current.pubkey, flight: Promise.resolve<TurnIceServer[]>([]) };
+  entry.flight = (async () => {
     let refused = false;
     try {
       const base = workerBaseUrl();
@@ -378,9 +379,9 @@ export async function turnIceServers(): Promise<TurnIceServer[]> {
       }
       return [];
     } finally {
-      if (turnInflight?.flight === flight) turnInflight = null;
+      if (turnInflight === entry) turnInflight = null;
     }
   })();
-  turnInflight = { pubkey: current.pubkey, flight };
-  return flight;
+  turnInflight = entry;
+  return entry.flight;
 }
