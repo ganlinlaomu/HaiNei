@@ -200,7 +200,9 @@ export async function handleRequest(request: Request, env: Env) {
       );
       const diagnostics = await triggerGenericPush(env, pubkey, payload.recipientPubkeys, payload.type, payload.messageId, payload.hints);
       console.info({ ...diagnostics, message: "push trigger processed" });
-      if (diagnostics.failed > 0) return json({ error: "push_delivery_failed" }, 503);
+      // Retry only for a recipient no device of whom was reached: one broken
+      // endpoint must not make every message to them retry for a day.
+      if (diagnostics.undelivered) return json({ error: "push_delivery_failed" }, 503);
       return json({ accepted: true }, 202);
     }
     return json({ error: "not_found" }, 404);

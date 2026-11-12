@@ -102,6 +102,8 @@ type PushDiagnostics = {
   failed: number;
   expired: number;
   handled?: number;
+  // Recipients with a failed device and no device reached; set only when > 0.
+  undelivered?: number;
 };
 
 // Wait before creating a Web Push, not after: WebKit requires every delivered
@@ -637,10 +639,12 @@ async function deliverPushRows(
   const recipientLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_RECIPIENT, 30, 5, 600);
   const deviceLimit = integerSetting(env.PUSH_TRIGGER_PER_MINUTE_PER_DEVICE, 30, 5, 600);
   const recipientBudgets = new Map<string, Promise<void>>();
+  const reached = new Set<string>();
+  const missed = new Set<string>();
 
   const deadline = Date.now() + 20_000;
   await mapWithConcurrency(rows, 4, async row => {
-    if (Date.now() >= deadline) { diagnostics.failed += 1; return; }
+    if (Date.now() >= deadline) { diagnostics.failed += 1; missed.add(row.account_pubkey); return; }
     const host = endpointHost(row.endpoint);
     let reservation: { reserved: boolean; endpointHash: string } | undefined;
     try {
@@ -705,6 +709,7 @@ async function deliverPushRows(
       if (response.ok) {
         await completePushDelivery(env, senderPubkey, row.account_pubkey, messageId, reservation.endpointHash, true, now);
         diagnostics.sent += 1;
+        reached.add(row.account_pubkey);
         console.info({ endpointHost: host, status: response.status, message: "push sent" });
         return;
       }
@@ -717,6 +722,7 @@ async function deliverPushRows(
         diagnostics.expired += 1;
       } else {
         diagnostics.failed += 1;
+        missed.add(row.account_pubkey);
       }
       console.error({
         endpointHost: host,
@@ -728,6 +734,7 @@ async function deliverPushRows(
         await completePushDelivery(env, senderPubkey, row.account_pubkey, messageId, reservation.endpointHash, false, now).catch(() => {});
       }
       diagnostics.failed += 1;
+      missed.add(row.account_pubkey);
       console.error({
         endpointHost: host,
         message: safePushErrorMessage(error, [row.endpoint, row.p256dh, row.auth, config.privateKey]),
@@ -735,6 +742,8 @@ async function deliverPushRows(
     }
   });
 
+  const undelivered = [...missed].filter(pubkey => !reached.has(pubkey)).length;
+  if (undelivered) diagnostics.undelivered = undelivered;
   // Old delivery rows are removed by the daily scheduled cleanup.
   return diagnostics;
 }
