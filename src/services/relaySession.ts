@@ -347,6 +347,8 @@ export async function turnIceServers(): Promise<TurnIceServer[]> {
   entry.flight = (async () => {
     let refused = false;
     try {
+      // Yield first so a synchronous failure cannot clear the entry before it is stored.
+      await Promise.resolve();
       const base = workerBaseUrl();
       const endpoint = `${base}/api/turn/credentials`;
       const response = await signedWorkerPost(current.signEvent, current.pubkey, {
