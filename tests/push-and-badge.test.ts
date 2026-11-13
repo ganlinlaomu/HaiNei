@@ -731,7 +731,7 @@ describe("privacy-preserving push and badge", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(triggerGenericPush(pushEnv(db), ACCOUNT, [OTHER], "message", MESSAGE_ID)).resolves.toEqual({
-      requested: 1, subscriptionsFound: 1, sent: 0, failed: 1, expired: 0,
+      requested: 1, subscriptionsFound: 1, sent: 0, failed: 1, expired: 0, undelivered: 1,
     });
     expect(db.subscriptions.has(`${OTHER}|${row.endpoint}`)).toBe(true);
   });
@@ -765,6 +765,25 @@ describe("privacy-preserving push and badge", () => {
     }), env);
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: "push_delivery_failed" });
+  });
+
+  it("accepts the trigger when one of the recipient's devices was reached", async () => {
+    const db = new PushD1();
+    const env = pushEnv(db);
+    const secret = generateSecretKey();
+    addSubscription(db, "https://web.push.apple.com/phone");
+    addSubscription(db, "https://web.push.apple.com/broken-tablet");
+    authorize(db, getPublicKey(secret));
+    const payload = { recipientPubkeys: [OTHER], type: "message", messageId: MESSAGE_ID };
+    const signedBody = await authenticatedBody(env, secret, "/api/push/trigger", payload);
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown) => new Response(null, { status: String(url).includes("broken") ? 503 : 201 })));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const response = await handleRequest(new Request("https://worker.test/api/push/trigger", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(signedBody),
+    }), env);
+    expect(response.status).toBe(202);
+    expect(db.subscriptions.size).toBe(2);
   });
 
   it("tests only an authenticated account's own endpoint without requiring self-authorization", async () => {
