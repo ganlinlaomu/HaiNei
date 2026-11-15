@@ -9,11 +9,15 @@ const SKIP_BITRATE = 2_000_000;
 const even = (value: number) => Math.max(2, Math.round(value / 2) * 2);
 
 /**
- * Re-encode a picked video to H.264/AAC MP4 at most 1280px on its longest side.
+ * Re-encode a picked video (DM or post) to H.264/AAC MP4 at most 1280px on its longest side.
  * Returns the original when the device cannot encode (no WebCodecs), when the
  * video is already small enough, or when re-encoding would not make it smaller.
  */
-export async function compressDmVideo(file: File, signal?: AbortSignal): Promise<File> {
+export async function compressVideoForUpload(
+  file: File,
+  options: { signal?: AbortSignal; onProgress?: (progress: number) => void } = {},
+): Promise<File> {
+  const { signal, onProgress } = options;
   if (typeof VideoEncoder === "undefined") return file;
   const startedAt = Date.now();
   const {
@@ -44,7 +48,9 @@ export async function compressDmVideo(file: File, signal?: AbortSignal): Promise
     });
     // Never trade the sound (or the picture) for a smaller file.
     if (!conversion.isValid || conversion.discardedTracks.length) return file;
+    if (onProgress) conversion.onProgress = progress => onProgress(Math.min(1, Math.max(0, progress)));
     const abort = () => { void conversion.cancel(); };
+    if (signal?.aborted) abort();
     signal?.addEventListener("abort", abort, { once: true });
     try {
       await conversion.execute();

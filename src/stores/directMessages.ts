@@ -42,7 +42,7 @@ import { deviceStorage } from "@/services/deviceStorage";
 import { takeWarmedCommentImage, uploadEncryptedCommentImage } from "@/utils/commentImage";
 import { prepareEncryptedDmAudio, uploadPreparedEncryptedDmAudio } from "@/utils/encryptedDmAudio";
 import { prepareEncryptedDmVideo, uploadPreparedEncryptedDmVideo } from "@/utils/encryptedDmVideo";
-import { compressDmVideo } from "@/utils/dmVideoCompression";
+import { compressVideoForUpload } from "@/utils/videoCompression";
 import { MAX_DM_VIDEO_BYTES, MAX_DM_VIDEO_SOURCE_BYTES, serializePrivateAudioMessage, serializePrivateVideoMessage } from "@/nostr/messaging/privateMedia";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
 import { useNotificationsStore } from "@/stores/notifications";
@@ -1751,7 +1751,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       void (async () => {
         try {
           await outgoingDmTaskRepository.put(task);
-          const compressed = await compressDmVideo(video).catch(error => {
+          const compressed = await compressVideoForUpload(video).catch(error => {
             debugLog("media", "dm_video_compress_failed", { reason: error instanceof Error ? error.name : "unknown" }, "warn");
             return video;
           });
