@@ -58,7 +58,7 @@ export function createCallMediaGate(options: {
 
 /** Log state, never microphone contents, SDP, device labels or track IDs. */
 export function callMediaState(pc: RTCPeerConnection, localStream: MediaStream | null) {
-  const localTracks = localStream?.getAudioTracks?.() || [];
+  const localTracks: MediaStreamTrack[] = localStream?.getAudioTracks?.() || [];
   return {
     signalingState: pc.signalingState || "unknown",
     localTracks: localTracks.map(track => ({ muted: track.muted, enabled: track.enabled, state: track.readyState })),

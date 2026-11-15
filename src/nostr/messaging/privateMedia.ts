@@ -50,6 +50,8 @@ export function parsePrivateAudioMessage(content: string): PrivateAudioMessage |
 
 /** Upload ceiling of the media Worker (MAX_FILE_SIZE_BYTES), less the AES-GCM tag. */
 export const MAX_DM_VIDEO_BYTES = 25 * 1024 * 1024 - 16;
+/** Largest picked video we try to compress below MAX_DM_VIDEO_BYTES. */
+export const MAX_DM_VIDEO_SOURCE_BYTES = 1024 * 1024 * 1024;
 
 export type PrivateVideoMedia = {
   encryptedRef: string;

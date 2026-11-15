@@ -9,7 +9,8 @@ const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
 const location = { lat: 35.68, lng: 139.76, accuracy: 10, at: 1_700_000_000 };
 const voice = (duration = 3) => ({ blob: new Blob(["v"]), mime: "audio/mp4", duration, size: 1 });
-const image = (name: string): SelectedDmImage => ({ file: new File([name], name, { type: "image/jpeg" }), preview: `blob:${name}` });
+const image = (name: string): SelectedDmImage => ({ file: new File([name], name, { type: "image/jpeg" }), preview: `blob:${name}`, kind: "image" });
+const video = (name: string): SelectedDmImage => ({ file: new File([name], name, { type: "video/mp4" }), preview: `blob:${name}`, kind: "video" });
 
 function setup(overrides: { accepted?: boolean; nip44?: boolean } = {}) {
   const state = {
@@ -41,6 +42,7 @@ function setup(overrides: { accepted?: boolean; nip44?: boolean } = {}) {
     clearAfterSend: vi.fn((clear: () => void) => clear()),
     send: vi.fn(),
     sendAudio: vi.fn(),
+    sendVideo: vi.fn(),
     startLiveSharing: vi.fn(() => Promise.resolve()),
     notify: vi.fn(),
     click: vi.spyOn(fileInput, "click").mockImplementation(() => {}),
@@ -59,7 +61,7 @@ function setup(overrides: { accepted?: boolean; nip44?: boolean } = {}) {
     textInput: ref(textarea), disappearingSeconds, attachmentMenuOpen, locationSheetOpen,
     showRecommendationPicker: spies.showRecommendationPicker,
     clearAfterSend: spies.clearAfterSend,
-    directMessages: { send: spies.send, sendAudio: spies.sendAudio } as any,
+    directMessages: { send: spies.send, sendAudio: spies.sendAudio, sendVideo: spies.sendVideo } as any,
     startLiveSharing: spies.startLiveSharing,
     notify: spies.notify,
   });
@@ -116,6 +118,38 @@ describe("私信发送", () => {
     ]);
     expect(t.selectedImages.value).toEqual([]);
     expect(t.draft.value).toBe("");
+  });
+
+  it("图片和视频一起发：文字和引用跟第一张图片，每个视频单独一条", () => {
+    t.draft.value = "看看";
+    t.replyTo("msg-1");
+    t.selectedImages.value = [video("v1.mp4"), image("a.jpg"), video("v2.mp4")];
+    const [v1, a, v2] = t.selectedImages.value.map(selected => selected.file);
+
+    t.actions.submitMessage();
+
+    expect(t.spies.send.mock.calls).toEqual([[PEER, "看看", a, "msg-1"]]);
+    expect(t.spies.sendVideo.mock.calls).toEqual([[PEER, v1, undefined], [PEER, v2, undefined]]);
+    expect(t.selectedImages.value).toEqual([]);
+  });
+
+  it("只有视频时，文字单独发一条，引用跟文字；没有文字时引用跟第一个视频", () => {
+    t.draft.value = "这个";
+    t.replyTo("msg-1");
+    t.selectedImages.value = [video("v1.mp4")];
+    const [v1] = t.selectedImages.value.map(selected => selected.file);
+    t.actions.submitMessage();
+    expect(t.spies.send.mock.calls).toEqual([[PEER, "这个", undefined, "msg-1", undefined]]);
+    expect(t.spies.sendVideo.mock.calls).toEqual([[PEER, v1, undefined]]);
+
+    t.spies.send.mockClear();
+    t.spies.sendVideo.mockClear();
+    t.replyTo("msg-2");
+    t.selectedImages.value = [video("v2.mp4")];
+    const [v2] = t.selectedImages.value.map(selected => selected.file);
+    t.actions.submitMessage();
+    expect(t.spies.send).not.toHaveBeenCalled();
+    expect(t.spies.sendVideo.mock.calls).toEqual([[PEER, v2, "msg-2"]]);
   });
 
   it("只有图片没有文字也能发送", () => {

@@ -42,7 +42,8 @@ import { deviceStorage } from "@/services/deviceStorage";
 import { takeWarmedCommentImage, uploadEncryptedCommentImage } from "@/utils/commentImage";
 import { prepareEncryptedDmAudio, uploadPreparedEncryptedDmAudio } from "@/utils/encryptedDmAudio";
 import { prepareEncryptedDmVideo, uploadPreparedEncryptedDmVideo } from "@/utils/encryptedDmVideo";
-import { MAX_DM_VIDEO_BYTES, serializePrivateAudioMessage, serializePrivateVideoMessage } from "@/nostr/messaging/privateMedia";
+import { compressDmVideo } from "@/utils/dmVideoCompression";
+import { MAX_DM_VIDEO_BYTES, MAX_DM_VIDEO_SOURCE_BYTES, serializePrivateAudioMessage, serializePrivateVideoMessage } from "@/nostr/messaging/privateMedia";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
 import { useNotificationsStore } from "@/stores/notifications";
 import { useFriendsStore } from "@/stores/friends";
@@ -128,6 +129,8 @@ const PEER_HISTORY_WARM_TTL_MS = 30_000;
 const MAX_UNREAD_RECONCILE_ATTEMPTS = 4;
 const peerHistoryWarmups = new Map<string, { createdAt: number; promise: Promise<PeerHistoryPage> }>();
 const activeOutgoingTasks = new Map<string, Promise<void>>();
+/** Video tasks whose compression and encryption is running in this session. */
+const preparingVideoTasks = new Set<string>();
 // Uploads cut off by the app going to the background are retried this often
 // before they are reported as failed.
 const MAX_INTERRUPTED_UPLOAD_RETRIES = 3;
@@ -1722,7 +1725,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!canStartDirectMessage(account, peer, friendships.isAccepted)) throw new Error(peer === account ? "无法向自己发送私信" : "只能向已接受的好友发送私信");
       const mime = video.type || "video/mp4";
       if (!mime.startsWith("video/")) throw new Error("请选择视频文件");
-      if (!video.size || video.size > MAX_DM_VIDEO_BYTES) throw new Error("视频不能超过 25MB");
+      if (!video.size) throw new Error("视频文件为空");
+      if (video.size > MAX_DM_VIDEO_SOURCE_BYTES) throw new Error("视频太大，请先剪短再发送");
       const now = Date.now();
       const clock = nextMessageClock(now);
       const task: OutgoingDmTaskRecord = {
@@ -1743,11 +1747,17 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         taskPreviewUrls.set(taskKey(account, task.localId), URL.createObjectURL(video));
       }
       this.outgoingTasks = [...this.outgoingTasks, task];
+      preparingVideoTasks.add(taskKey(account, task.localId));
       void (async () => {
         try {
           await outgoingDmTaskRepository.put(task);
-          const preparedVideo = await prepareEncryptedDmVideo(video, video.name);
-          const updated = { ...task, preparedVideo, updatedAt: Date.now() };
+          const compressed = await compressDmVideo(video).catch(error => {
+            debugLog("media", "dm_video_compress_failed", { reason: error instanceof Error ? error.name : "unknown" }, "warn");
+            return video;
+          });
+          if (compressed.size > MAX_DM_VIDEO_BYTES) throw new Error("视频压缩后仍超过 25MB，请剪短后再发送");
+          const preparedVideo = await prepareEncryptedDmVideo(compressed, compressed.name);
+          const updated = { ...task, preparedVideo, videoMime: preparedVideo.mime, videoSize: preparedVideo.size, updatedAt: Date.now() };
           await outgoingDmTaskRepository.put(updated);
           if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return;
           const index = this.outgoingTasks.findIndex(item => item.accountPubkey === account && item.localId === task.localId);
@@ -1760,6 +1770,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
             lastError: `prepare_failed: ${error instanceof Error ? error.message : "视频加密失败"}`,
             updatedAt: Date.now(),
           });
+        } finally {
+          preparingVideoTasks.delete(taskKey(account, task.localId));
         }
       })();
       return task.localId;
@@ -1846,7 +1858,12 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         if (!task || task.state === "sent" || useKeyStore().pkHex.toLowerCase() !== account) return;
         if (task.imageName && !task.imageBytes && !task.preparedImage && !task.uploadedRef && !task.outgoingId) return;
         if (task.mediaType === "audio" && !task.preparedAudio && !task.uploadedRef && !task.outgoingId) return;
-        if (task.mediaType === "video" && !task.preparedVideo && !task.uploadedRef && !task.outgoingId) return;
+        if (task.mediaType === "video" && !task.preparedVideo && !task.uploadedRef && !task.outgoingId) {
+          // Still compressing in this session, or the app was closed while it
+          // was: the picked file is gone, so that video has to be picked again.
+          if (!preparingVideoTasks.has(key)) await this.failTask(localId, "upload_failed", new Error("视频处理被中断，请重新选择"));
+          return;
+        }
         const friendships = useFriendshipsStore();
         if (friendships.loadedFor !== account) await friendships.load(account);
         if (!friendships.isAccepted(task.peerPubkey)) {

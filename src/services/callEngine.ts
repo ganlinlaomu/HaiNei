@@ -155,7 +155,7 @@ function startQualitySampling(session: CallSession, room: Room) {
         .find(track => track.kind === "audio" && track.readyState === "live" && track.id === inbound?.trackIdentifier);
       if (receiverTrack?.muted === false && inbound?.packetsReceived > 0 && session.remoteStream
         && !session.remoteStream.getAudioTracks().some(track => track.muted === false && track.readyState === "live")
-        && !session.remoteStream.getAudioTracks().includes(receiverTrack)) {
+        && !(session.remoteStream.getAudioTracks() as MediaStreamTrack[]).includes(receiverTrack)) {
         startupMark("call_receiver_track_corrected", { previousTrackMuted: session.remoteStream.getAudioTracks()[0]?.muted ?? null });
         playRemote(session, new MediaStream([receiverTrack]), "receiver_track_corrected");
       }
@@ -223,7 +223,7 @@ function startQualitySampling(session: CallSession, room: Room) {
           outboundCandidateCount: outboundCandidates.length,
           packetsSent: outbound?.packetsSent ?? null,
           receiverCount: connection.getReceivers?.().filter(receiver => receiver.track?.kind === "audio").length ?? null,
-          outputMatchesReceiver: receiverTrack ? session.remoteStream?.getAudioTracks?.().includes(receiverTrack) ?? false : null,
+          outputMatchesReceiver: receiverTrack ? (session.remoteStream?.getAudioTracks?.() as MediaStreamTrack[] | undefined)?.includes(receiverTrack) ?? false : null,
           trackCount: session.remoteStream?.getAudioTracks?.().length ?? 0,
           trackMuted: track?.muted ?? null,
           trackEnabled: track?.enabled ?? null,
