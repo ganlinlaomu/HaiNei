@@ -110,7 +110,7 @@
                     :show-all="true"
                     alt-text="草稿图片"
                   />
-                  <div v-else class="thumb-placeholder">图片</div>
+                  <div v-else class="thumb-placeholder">{{ item.file?.type.startsWith('video/') ? '视频' : '图片' }}</div>
                   
                   <!-- Upload progress overlay -->
                   <div v-if="item.status === 'uploading'" class="upload-overlay">
@@ -286,6 +286,8 @@ import {
   type EncryptedImageVariant,
 } from "@/utils/encryptedImageRef";
 import { encodeEncryptedVideoRef } from "@/utils/encryptedVideoRef";
+import { compressVideoForUpload } from "@/utils/videoCompression";
+import { MAX_DM_VIDEO_BYTES as MAX_UPLOAD_VIDEO_BYTES } from "@/nostr/messaging/privateMedia";
 import { exportKeyToBase64 } from "@/utils/videoCrypto";
 import { bytesToBase64 } from "@/nostr/crypto";
 import { parseVideoUrl as parseVideoUrlUtil } from "@/utils/videoUtils";
@@ -856,7 +858,20 @@ export default defineComponent({
       updateUploadItem(item.id, { status: "uploading", progress: 0, errorShort: undefined, errorDetails: undefined });
 
       try {
-        const prepared = await prepareEncryptedVideo(file);
+        // The first 40% of the ring is compression, the rest the upload.
+        const compressed = await compressVideoForUpload(file, {
+          signal: uploadController.signal,
+          onProgress: p => {
+            if (!uploadController.signal.aborted) updateUploadItem(item.id, { progress: Math.round(p * 40) });
+          },
+        }).catch(error => {
+          if (uploadController.signal.aborted) throw error;
+          console.warn("video compression failed, uploading original", error instanceof Error ? error.name : "unknown");
+          return file;
+        });
+        if (uploadController.signal.aborted) return;
+        if (compressed.size > MAX_UPLOAD_VIDEO_BYTES) throw new Error("视频压缩后仍超过 25MB，请剪短后再发");
+        const prepared = await prepareEncryptedVideo(compressed);
         if (uploadController.signal.aborted) return;
         
         // Upload encrypted file with fallback to multiple servers
@@ -865,7 +880,7 @@ export default defineComponent({
           signEvent: signEventWrapper,
           signal: uploadController.signal,
           onProgress: (p:number) => {
-            if (!uploadController.signal.aborted) updateUploadItem(item.id, { progress: p });
+            if (!uploadController.signal.aborted) updateUploadItem(item.id, { progress: 40 + Math.round(p * 0.6) });
           }
         });
         
@@ -881,7 +896,7 @@ export default defineComponent({
           alg: "AES-GCM",
           iv: prepared.iv,
           key: keyBase64,
-          size: file.size
+          size: compressed.size
         });
         const completedVideo: PostDraftVideo = {
           url: encryptedRef,

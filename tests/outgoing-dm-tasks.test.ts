@@ -43,7 +43,7 @@ vi.mock("@/utils/encryptedDmAudio", () => ({
   prepareEncryptedDmAudio: mocks.prepareAudio,
   uploadPreparedEncryptedDmAudio: mocks.uploadAudio,
 }));
-vi.mock("@/utils/dmVideoCompression", () => ({ compressDmVideo: mocks.compressVideo }));
+vi.mock("@/utils/videoCompression", () => ({ compressVideoForUpload: mocks.compressVideo }));
 vi.mock("@/utils/encryptedDmVideo", () => ({
   prepareEncryptedDmVideo: mocks.prepareVideo,
   uploadPreparedEncryptedDmVideo: mocks.uploadVideo,
