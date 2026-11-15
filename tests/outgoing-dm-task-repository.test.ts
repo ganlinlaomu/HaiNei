@@ -114,4 +114,16 @@ describe("account-scoped outgoing DM task persistence", () => {
     expect(stored).not.toHaveProperty("previewUrl");
     expect(JSON.stringify(stored)).not.toContain("blob:runtime");
   });
+
+  it("persists the encrypted video and its metadata across restarts", async () => {
+    await outgoingDmTaskRepository.put({
+      accountPubkey: ACCOUNT, localId: "video-1", peerPubkey: OTHER, text: "",
+      mediaType: "video", videoMime: "video/mp4", videoSize: 5,
+      preparedVideo: { encryptedBytes: bytes("cipher"), encryptedName: "video.encrypted", mime: "video/mp4", iv: "iv", key: "key", size: 5 },
+      state: "uploading", createdAt: 1, updatedAt: 1,
+    });
+    const stored = await outgoingDmTaskRepository.get(ACCOUNT, "video-1");
+    expect(stored).toMatchObject({ mediaType: "video", videoMime: "video/mp4", videoSize: 5 });
+    expect(new TextDecoder().decode(stored!.preparedVideo!.encryptedBytes)).toBe("cipher");
+  });
 });

@@ -2,7 +2,7 @@ import type { InboxItem } from "@/nostr/messaging/messageViewModel";
 import { isFeedRenderableMessage, isHomeControl } from "@/nostr/messaging/messageViewModel";
 import { hasDisappearingMarker, isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
 import { isConversationMessage } from "@/nostr/messaging/messageRouting";
-import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
+import { parsePrivateAudioMessage, parsePrivateVideoMessage } from "@/nostr/messaging/privateMedia";
 import { parseFriendRecommendation } from "@/nostr/messaging/friendRecommendation";
 import { parseLocationShare } from "@/nostr/messaging/locationShare";
 import { privateSpaceRepository, type PrivateSpaceRepository } from "@/repositories/privateSpaceRepository";
@@ -51,6 +51,7 @@ export function canImportDirectMessage(
     && !isExpiredDisappearing(message.tags)
     && !isHomeControl(message.tags, message.content)
     && !parsePrivateAudioMessage(message.content)
+    && !parsePrivateVideoMessage(message.content)
     && !parseFriendRecommendation(message.content)
     && !parseLocationShare(message.content)
     && (!message.outgoing || message.outgoing.state === "sent")

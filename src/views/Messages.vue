@@ -135,6 +135,11 @@
                 :own="isOwn(message)"
                 :suspended="voiceCaptureOwnsAudioSession"
               />
+              <div v-else-if="hasVideo(message)" class="dm-video">
+                <video v-if="message.outgoing?.videoPreviewUrl" :src="message.outgoing.videoPreviewUrl" class="dm-video-preview" controls playsinline preload="metadata"></video>
+                <VideoPlayer v-else-if="videoMedia(message)" :video-data="dmVideoData(videoMedia(message)!)" />
+                <span v-else class="temporary-caption">[视频]</span>
+              </div>
               <template v-else-if="friendRecommendation(message.content)">
                 <div class="recommended-friend-card">
                   <span class="recommendation-eyebrow">推荐朋友</span>
@@ -228,6 +233,9 @@
       <div v-if="attachmentMenuOpen" class="dm-attachment-menu" role="menu" aria-label="添加消息内容">
         <button type="button" role="menuitem" @click="chooseImageFromMenu">
           <span aria-hidden="true">▧</span> 图片
+        </button>
+        <button type="button" role="menuitem" @click="chooseVideoFromMenu">
+          <span aria-hidden="true">▷</span> 视频
         </button>
         <button type="button" role="menuitem" @click="openRecommendationPicker">
           <span aria-hidden="true">♧</span> 推荐朋友
@@ -350,6 +358,7 @@
         </div>
       </form>
       <input ref="imageInput" class="attachment-file-input sr-file-input" type="file" accept="image/*" multiple :disabled="!accepted || !keys.pkHex" @change="selectImages" />
+      <input ref="videoInput" class="attachment-file-input sr-file-input" type="file" accept="video/*" :disabled="!accepted || !keys.pkHex" @change="sendSelectedVideo" />
     </div>
     <LocationShareSheet
       v-if="locationSheetOpen"
@@ -375,10 +384,11 @@
 import { compareInboxItems } from "@/nostr/messaging/sync/sorting";
 import { networkOnline } from "@/services/networkStatus";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import DmAudioMessage from "@/components/DmAudioMessage.vue";
+const VideoPlayer = defineAsyncComponent(() => import("@/components/VideoPlayer.vue"));
 import DmBurnCountdown from "@/components/DmBurnCountdown.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
 import MentionSuggestions from "@/components/MentionSuggestions.vue";
@@ -397,7 +407,8 @@ import { shortNpub } from "@/utils/nostrQr";
 import { hasDisappearingMarker, DISAPPEARING_DM_TYPE, type BurnDuration } from "@/nostr/messaging/disappearingMessages";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { canImportDirectMessage } from "@/services/privateSpaceImport";
-import { parsePrivateAudioMessage } from "@/nostr/messaging/privateMedia";
+import { parsePrivateAudioMessage, parsePrivateVideoMessage, type PrivateVideoMedia } from "@/nostr/messaging/privateMedia";
+import type { VideoData } from "@/utils/videoUtils";
 import { useDmImageSelection } from "@/composables/useDmImageSelection";
 import { useChatMessageWindow } from "@/composables/useChatMessageWindow";
 import { useDmComposerActions } from "@/composables/useDmComposerActions";
@@ -520,6 +531,7 @@ const {
   search: (peer, query, options) => directMessages.searchPeerMessages(peer, query, options),
 });
 const searchInput = ref<HTMLInputElement | null>(null);
+const videoInput = ref<HTMLInputElement | null>(null);
 const { selectedImages, imageInput, clearSelectedImages, removeSelectedImage, selectImages } = useDmImageSelection({
   max: 9,
   notify: message => ui.addToast(message, 2200, "info"),
@@ -633,14 +645,14 @@ let composerFocused = false;
 let composerFocusSettleTimer: number | null = null;
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
-const messageText = (content: string) => ["[图片]", "[语音]", "[好友推荐]", "[位置]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
+const messageText = (content: string) => ["[图片]", "[语音]", "[视频]", "[好友推荐]", "[位置]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
 const friendRecommendation = parseFriendRecommendation;
 const locationShare = parseLocationShare;
 const locationSheetOpen = ref(false);
 const liveLocation = useLiveLocationStore();
 const {
   canSend, submitMessage, sendVoiceRecordingResult, sendLocation,
-  openRecommendationPicker, openLocationSheet, chooseImageFromMenu, enableDisappearing, disableDisappearing,
+  openRecommendationPicker, openLocationSheet, chooseImageFromMenu, chooseVideoFromMenu, sendSelectedVideo, enableDisappearing, disableDisappearing,
 } = useDmComposerActions({
   account: () => keys.pkHex,
   peer: () => peerPubkey.value,
@@ -650,7 +662,7 @@ const {
   draft, replyingToId,
   replyTarget: () => replyingToMessage.value?.id,
   cancelReply: () => cancelReply(),
-  selectedImages, imageInput, clearSelectedImages,
+  selectedImages, imageInput, videoInput, clearSelectedImages,
   recording, recordedAudio, clearRecordedAudio, voiceError, voiceCaptureOwnsAudioSession,
   textInput, disappearingSeconds, attachmentMenuOpen, locationSheetOpen,
   showRecommendationPicker, clearAfterSend,
@@ -660,6 +672,9 @@ const {
 });
 const audioMedia = (message: InboxItem) => parsePrivateAudioMessage(message.content)?.media || null;
 const hasAudio = (message: InboxItem) => !!message.outgoing?.hasAudio || !!audioMedia(message);
+const videoMedia = (message: InboxItem) => parsePrivateVideoMessage(message.content)?.media || null;
+const hasVideo = (message: InboxItem) => !!message.outgoing?.hasVideo || !!videoMedia(message);
+const dmVideoData = (media: PrivateVideoMedia): VideoData => ({ type: "video", url: media.encryptedRef, provider: "Encrypted", embedUrl: media.encryptedRef });
 const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreviewUrl || hasImage(message.content);
 const isMediaCaption = (message: InboxItem) => hasMessageImage(message) && !!messageText(message.content);
 const isOwn = (message: InboxItem) => message.pubkey === keys.pkHex;
@@ -694,7 +709,7 @@ function quotePreview(message?: InboxItem) {
   if (!message) return "引用的消息暂不可用";
   if (isDisappearing(message)) return "阅后即焚消息";
   const preview = directMessagePreview(message.content);
-  return quotedMessageExcerpt(preview || (hasAudio(message) ? "[语音]" : hasMessageImage(message) ? "[图片]" : "消息"));
+  return quotedMessageExcerpt(preview || (hasAudio(message) ? "[语音]" : hasVideo(message) ? "[视频]" : hasMessageImage(message) ? "[图片]" : "消息"));
 }
 function quotedMessage(replyTo?: string) {
   return lookupMessage(replyTo);
@@ -1295,4 +1310,5 @@ onBeforeUnmount(() => {
   white-space: normal;
 }
 
+.dm-video{width:min(260px,65vw);margin:-9px -12px}.quoted-message+.dm-video{margin-top:0}.dm-video :deep(.video-player-container),.dm-video-preview{display:block;width:100%;max-height:360px;border-radius:16px;background:#000}
 </style>
