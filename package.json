@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.200",
-  "releaseSummary": "修复多设备收件人的推送限流，通话中继断网后更快恢复",
+  "version": "0.1.201",
+  "releaseSummary": "私信可以发送视频",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

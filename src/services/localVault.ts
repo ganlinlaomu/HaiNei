@@ -17,6 +17,7 @@ const fields: Record<string, string[]> = {
     "imageBytes",
     "preparedImage",
     "preparedAudio",
+    "preparedVideo",
     "uploadedRef",
     "lastError",
   ],

@@ -13,7 +13,7 @@ type ToastKind = "info" | "success" | "error";
  * What the DM composer sends and when: text (optionally burn-after-reading),
  * images as one message each with the text and reply on the first, recorded
  * voice, locations and friend cards, plus the attachment menu's guards
- * (burn-after-reading is text only).
+ * (burn-after-reading is text only). A picked video is sent on its own at once.
  */
 export function useDmComposerActions(options: {
   account: () => string;
@@ -28,6 +28,7 @@ export function useDmComposerActions(options: {
   cancelReply: () => void;
   selectedImages: Readonly<Ref<SelectedDmImage[]>>;
   imageInput: Readonly<Ref<HTMLInputElement | null>>;
+  videoInput: Readonly<Ref<HTMLInputElement | null>>;
   clearSelectedImages: () => void;
   recording: Readonly<Ref<unknown>>;
   recordedAudio: Readonly<Ref<VoiceRecordingResult | null>>;
@@ -40,13 +41,13 @@ export function useDmComposerActions(options: {
   locationSheetOpen: Ref<boolean>;
   showRecommendationPicker: () => void;
   clearAfterSend: (clear: () => void) => void;
-  directMessages: Pick<ReturnType<typeof useDirectMessagesStore>, "send" | "sendAudio">;
+  directMessages: Pick<ReturnType<typeof useDirectMessagesStore>, "send" | "sendAudio" | "sendVideo">;
   startLiveSharing: (peer: string, durationSeconds: number, location: LocationShare) => Promise<unknown>;
   notify: (message: string, durationMs: number, kind: ToastKind) => void;
 }) {
   const {
     account, peer, accepted, supportsNip44, isDisposed, draft, replyingToId, replyTarget, cancelReply,
-    selectedImages, imageInput, clearSelectedImages, recording, recordedAudio, clearRecordedAudio, voiceError,
+    selectedImages, imageInput, videoInput, clearSelectedImages, recording, recordedAudio, clearRecordedAudio, voiceError,
     voiceCaptureOwnsAudioSession, textInput, disappearingSeconds, attachmentMenuOpen, locationSheetOpen,
     showRecommendationPicker, clearAfterSend, directMessages, startLiveSharing, notify,
   } = options;
@@ -93,6 +94,29 @@ export function useDmComposerActions(options: {
   function chooseImageFromMenu() {
     attachmentMenuOpen.value = false;
     if (accepted() && disappearingSeconds.value === null) imageInput.value?.click();
+  }
+  function chooseVideoFromMenu() {
+    attachmentMenuOpen.value = false;
+    if (!accepted()) return;
+    if (disappearingSeconds.value !== null) {
+      notify("阅后即焚仅支持纯文字消息", 2200, "info");
+      return;
+    }
+    videoInput.value?.click();
+  }
+  /** A picked video goes out at once as its own message, like a voice clip. */
+  function sendSelectedVideo(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    // Reset so picking the same video again still fires change.
+    input.value = "";
+    if (!file || !accepted()) return;
+    try {
+      directMessages.sendVideo(peer(), file, replyTarget());
+      cancelReply();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "视频发送失败", 2200, "error");
+    }
   }
   function enableDisappearing() {
     attachmentMenuOpen.value = false;
@@ -175,6 +199,6 @@ export function useDmComposerActions(options: {
 
   return {
     canSend, submitMessage, sendVoiceRecordingResult, sendLocation,
-    openRecommendationPicker, openLocationSheet, chooseImageFromMenu, enableDisappearing, disableDisappearing,
+    openRecommendationPicker, openLocationSheet, chooseImageFromMenu, chooseVideoFromMenu, sendSelectedVideo, enableDisappearing, disableDisappearing,
   };
 }

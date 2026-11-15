@@ -31,6 +31,8 @@ export type InboxItem = {
     audioSize?: number;
     hasImage: boolean;
     hasAudio?: boolean;
+    videoPreviewUrl?: string;
+    hasVideo?: boolean;
     lastError?: string;
   };
 };

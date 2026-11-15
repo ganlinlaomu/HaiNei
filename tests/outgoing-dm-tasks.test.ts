@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   hiddenEpoch: 0,
   prepareAudio: vi.fn(),
   uploadAudio: vi.fn(),
+  prepareVideo: vi.fn(),
+  uploadVideo: vi.fn(),
   queueGet: vi.fn(),
   taskList: vi.fn(),
   taskPut: vi.fn(),
@@ -39,6 +41,10 @@ vi.mock("@/utils/commentImage", () => ({ uploadEncryptedCommentImage: mocks.uplo
 vi.mock("@/utils/encryptedDmAudio", () => ({
   prepareEncryptedDmAudio: mocks.prepareAudio,
   uploadPreparedEncryptedDmAudio: mocks.uploadAudio,
+}));
+vi.mock("@/utils/encryptedDmVideo", () => ({
+  prepareEncryptedDmVideo: mocks.prepareVideo,
+  uploadPreparedEncryptedDmVideo: mocks.uploadVideo,
 }));
 vi.mock("@/repositories/outgoingDmTaskRepository", () => ({
   outgoingDmTaskRepository: {
@@ -107,6 +113,8 @@ beforeEach(() => {
   mocks.upload.mockReset();
   mocks.prepareAudio.mockReset();
   mocks.uploadAudio.mockReset();
+  mocks.prepareVideo.mockReset();
+  mocks.uploadVideo.mockReset();
   mocks.queueGet.mockReset().mockResolvedValue(undefined);
   mocks.taskList.mockReset().mockImplementation(async (account: string) => [...mocks.tasks.values()].filter(task => task.accountPubkey === account));
   mocks.taskPut.mockReset().mockImplementation(async (task: any) => { mocks.tasks.set(`${task.accountPubkey}:${task.localId}`, task); return task; });
@@ -282,6 +290,40 @@ describe("optimistic outgoing DM tasks", () => {
     });
     finishSend(canonical("canonical-audio", content));
     await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
+  });
+
+  it("sends an encrypted video as one message and drops its bytes once uploaded", async () => {
+    const preparedVideo = {
+      encryptedBytes: bytes("cipher"), encryptedName: "video.encrypted", mime: "video/mp4",
+      iv: "iv", key: "key", size: 5,
+    };
+    let finishUpload!: (value: any) => void;
+    mocks.prepareVideo.mockResolvedValue(preparedVideo);
+    mocks.uploadVideo.mockImplementation(() => new Promise(resolve => { finishUpload = resolve; }));
+    mocks.send.mockImplementation(async (options: any) => canonical("canonical-video", options.content));
+    const { direct } = seed();
+    direct.sendVideo(PEER, new File(["video"], "clip.mp4", { type: "video/mp4" }));
+
+    expect(direct.peerMessages(PEER)[0].outgoing).toMatchObject({ state: "uploading", hasVideo: true, hasImage: false, videoPreviewUrl: "blob:preview" });
+    await vi.waitFor(() => expect(mocks.uploadVideo).toHaveBeenCalledOnce());
+    const key = `${ACCOUNT}:${direct.outgoingTasks[0].localId}`;
+    expect(mocks.tasks.get(key).preparedVideo.encryptedBytes).toBeInstanceOf(ArrayBuffer);
+
+    finishUpload({ encryptedRef: "blossom+aesgcm+video:abc", mime: "video/mp4", size: 5 });
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
+    expect(JSON.parse(mocks.send.mock.calls[0][0].content)).toEqual({
+      type: "video",
+      media: { encryptedRef: "blossom+aesgcm+video:abc", mime: "video/mp4", size: 5 },
+    });
+    expect(mocks.tasks.get(key).preparedVideo).toBeUndefined();
+  });
+
+  it("rejects a video over the upload limit before queueing anything", () => {
+    const { direct } = seed();
+    const big = new File(["x"], "big.mp4", { type: "video/mp4" });
+    Object.defineProperty(big, "size", { value: 26 * 1024 * 1024 });
+    expect(() => direct.sendVideo(PEER, big)).toThrow("视频不能超过 25MB");
+    expect(direct.outgoingTasks).toHaveLength(0);
   });
 
   it("does not start a second active upload for the same local task", async () => {
