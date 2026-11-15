@@ -1,10 +1,10 @@
 import { ref } from "vue";
 import { imagesToAppend } from "@/utils/selectedImages";
 
-export type SelectedDmImage = { file: File; preview: string };
+export type SelectedDmImage = { file: File; preview: string; kind: "image" | "video" };
 
 /**
- * Images picked for the next DM: each pick appends to the current selection
+ * Photos and videos picked for the next DM: each pick appends to the current selection
  * (deduplicated, capped at `max`), and every preview object URL is revoked
  * when its image leaves the selection.
  */
@@ -33,11 +33,13 @@ export function useDmImageSelection(options: {
     const picked = [...(input.files || [])];
     // Reset so picking the same photo again after removing it still fires change.
     input.value = "";
-    const { added, overflow } = imagesToAppend(selectedImages.value.map(image => image.file), picked, options.max);
-    const images = added.map(file => ({ file, preview: URL.createObjectURL(file) }));
+    const { added, overflow } = imagesToAppend(selectedImages.value.map(image => image.file), picked, options.max, { videos: true });
+    const images: SelectedDmImage[] = added.map(file => ({
+      file, preview: URL.createObjectURL(file), kind: file.type.startsWith("video/") ? "video" : "image",
+    }));
     selectedImages.value = [...selectedImages.value, ...images];
-    for (const image of images) void options.warm?.(image.file).catch(() => undefined);
-    if (overflow) options.notify(`一次最多发送 ${options.max} 张图片`);
+    for (const image of images) if (image.kind === "image") void options.warm?.(image.file).catch(() => undefined);
+    if (overflow) options.notify(`一次最多发送 ${options.max} 个图片或视频`);
   }
 
   return { selectedImages, imageInput, clearSelectedImages, removeSelectedImage, selectImages };

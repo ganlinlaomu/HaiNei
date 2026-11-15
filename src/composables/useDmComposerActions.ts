@@ -13,7 +13,7 @@ type ToastKind = "info" | "success" | "error";
  * What the DM composer sends and when: text (optionally burn-after-reading),
  * images as one message each with the text and reply on the first, recorded
  * voice, locations and friend cards, plus the attachment menu's guards
- * (burn-after-reading is text only). A picked video is sent on its own at once.
+ * (burn-after-reading is text only). Each picked video is its own message.
  */
 export function useDmComposerActions(options: {
   account: () => string;
@@ -28,7 +28,6 @@ export function useDmComposerActions(options: {
   cancelReply: () => void;
   selectedImages: Readonly<Ref<SelectedDmImage[]>>;
   imageInput: Readonly<Ref<HTMLInputElement | null>>;
-  videoInput: Readonly<Ref<HTMLInputElement | null>>;
   clearSelectedImages: () => void;
   recording: Readonly<Ref<unknown>>;
   recordedAudio: Readonly<Ref<VoiceRecordingResult | null>>;
@@ -47,7 +46,7 @@ export function useDmComposerActions(options: {
 }) {
   const {
     account, peer, accepted, supportsNip44, isDisposed, draft, replyingToId, replyTarget, cancelReply,
-    selectedImages, imageInput, videoInput, clearSelectedImages, recording, recordedAudio, clearRecordedAudio, voiceError,
+    selectedImages, imageInput, clearSelectedImages, recording, recordedAudio, clearRecordedAudio, voiceError,
     voiceCaptureOwnsAudioSession, textInput, disappearingSeconds, attachmentMenuOpen, locationSheetOpen,
     showRecommendationPicker, clearAfterSend, directMessages, startLiveSharing, notify,
   } = options;
@@ -94,29 +93,6 @@ export function useDmComposerActions(options: {
   function chooseImageFromMenu() {
     attachmentMenuOpen.value = false;
     if (accepted() && disappearingSeconds.value === null) imageInput.value?.click();
-  }
-  function chooseVideoFromMenu() {
-    attachmentMenuOpen.value = false;
-    if (!accepted()) return;
-    if (disappearingSeconds.value !== null) {
-      notify("阅后即焚仅支持纯文字消息", 2200, "info");
-      return;
-    }
-    videoInput.value?.click();
-  }
-  /** A picked video goes out at once as its own message, like a voice clip. */
-  function sendSelectedVideo(event: Event) {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    // Reset so picking the same video again still fires change.
-    input.value = "";
-    if (!file || !accepted()) return;
-    try {
-      directMessages.sendVideo(peer(), file, replyTarget());
-      cancelReply();
-    } catch (error) {
-      notify(error instanceof Error ? error.message : "视频发送失败", 2200, "error");
-    }
   }
   function enableDisappearing() {
     attachmentMenuOpen.value = false;
@@ -172,8 +148,9 @@ export function useDmComposerActions(options: {
       return;
     }
     const text = draft.value;
-    const images = selectedImages.value.map(image => image.file);
-    const replyTo = replyTarget();
+    const images = selectedImages.value.filter(item => item.kind !== "video").map(item => item.file);
+    const videos = selectedImages.value.filter(item => item.kind === "video").map(item => item.file);
+    let replyTo = replyTarget();
     try {
       if (images.length) {
         images.forEach((image, index) => directMessages.send(
@@ -182,9 +159,13 @@ export function useDmComposerActions(options: {
           image,
           index === 0 ? replyTo : undefined,
         ));
-      } else {
+        replyTo = undefined;
+      } else if (text.trim() || !videos.length) {
         directMessages.send(peer(), text, undefined, replyTo, disappearingSeconds.value ?? undefined);
+        replyTo = undefined;
       }
+      // A video carries no caption: the text went out above as its own message.
+      videos.forEach((video, index) => directMessages.sendVideo(peer(), video, index === 0 ? replyTo : undefined));
       disappearingSeconds.value = null;
       attachmentMenuOpen.value = false;
       clearAfterSend(() => {
@@ -199,6 +180,6 @@ export function useDmComposerActions(options: {
 
   return {
     canSend, submitMessage, sendVoiceRecordingResult, sendLocation,
-    openRecommendationPicker, openLocationSheet, chooseImageFromMenu, chooseVideoFromMenu, sendSelectedVideo, enableDisappearing, disableDisappearing,
+    openRecommendationPicker, openLocationSheet, chooseImageFromMenu, enableDisappearing, disableDisappearing,
   };
 }

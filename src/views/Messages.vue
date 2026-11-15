@@ -223,19 +223,18 @@
         </div>
         <button type="button" aria-label="取消引用回复" @click="cancelReply">×</button>
       </div>
-      <div v-if="selectedImages.length" class="selected-images" aria-label="待发送图片">
-        <div v-for="(image, index) in selectedImages" :key="image.preview" class="selected-image">
-          <img :src="image.preview" :alt="`待发送图片 ${index + 1}`" />
-          <button type="button" :aria-label="`移除第 ${index + 1} 张图片`" @click="removeSelectedImage(index)">×</button>
+      <div v-if="selectedImages.length" class="selected-images" aria-label="待发送图片和视频">
+        <div v-for="(image, index) in selectedImages" :key="image.preview" class="selected-image" :class="{ video: image.kind === 'video' }">
+          <video v-if="image.kind === 'video'" :src="`${image.preview}#t=0.1`" muted playsinline preload="metadata" :aria-label="`待发送视频 ${index + 1}`"></video>
+          <img v-else :src="image.preview" :alt="`待发送图片 ${index + 1}`" />
+          <span v-if="image.kind === 'video'" class="selected-video-badge" aria-hidden="true">▶</span>
+          <button type="button" :aria-label="`移除第 ${index + 1} 个${image.kind === 'video' ? '视频' : '图片'}`" @click="removeSelectedImage(index)">×</button>
         </div>
       </div>
       <p v-if="voiceError" class="voice-error" role="alert">{{ voiceError }}</p>
       <div v-if="attachmentMenuOpen" class="dm-attachment-menu" role="menu" aria-label="添加消息内容">
         <button type="button" role="menuitem" @click="chooseImageFromMenu">
-          <span aria-hidden="true">▧</span> 图片
-        </button>
-        <button type="button" role="menuitem" @click="chooseVideoFromMenu">
-          <span aria-hidden="true">▷</span> 视频
+          <span aria-hidden="true">▧</span> 图片和视频
         </button>
         <button type="button" role="menuitem" @click="openRecommendationPicker">
           <span aria-hidden="true">♧</span> 推荐朋友
@@ -357,8 +356,7 @@
           </button>
         </div>
       </form>
-      <input ref="imageInput" class="attachment-file-input sr-file-input" type="file" accept="image/*" multiple :disabled="!accepted || !keys.pkHex" @change="selectImages" />
-      <input ref="videoInput" class="attachment-file-input sr-file-input" type="file" accept="video/*" :disabled="!accepted || !keys.pkHex" @change="sendSelectedVideo" />
+      <input ref="imageInput" class="attachment-file-input sr-file-input" type="file" accept="image/*,video/*" multiple :disabled="!accepted || !keys.pkHex" @change="selectImages" />
     </div>
     <LocationShareSheet
       v-if="locationSheetOpen"
@@ -531,7 +529,6 @@ const {
   search: (peer, query, options) => directMessages.searchPeerMessages(peer, query, options),
 });
 const searchInput = ref<HTMLInputElement | null>(null);
-const videoInput = ref<HTMLInputElement | null>(null);
 const { selectedImages, imageInput, clearSelectedImages, removeSelectedImage, selectImages } = useDmImageSelection({
   max: 9,
   notify: message => ui.addToast(message, 2200, "info"),
@@ -652,7 +649,7 @@ const locationSheetOpen = ref(false);
 const liveLocation = useLiveLocationStore();
 const {
   canSend, submitMessage, sendVoiceRecordingResult, sendLocation,
-  openRecommendationPicker, openLocationSheet, chooseImageFromMenu, chooseVideoFromMenu, sendSelectedVideo, enableDisappearing, disableDisappearing,
+  openRecommendationPicker, openLocationSheet, chooseImageFromMenu, enableDisappearing, disableDisappearing,
 } = useDmComposerActions({
   account: () => keys.pkHex,
   peer: () => peerPubkey.value,
@@ -662,7 +659,7 @@ const {
   draft, replyingToId,
   replyTarget: () => replyingToMessage.value?.id,
   cancelReply: () => cancelReply(),
-  selectedImages, imageInput, videoInput, clearSelectedImages,
+  selectedImages, imageInput, clearSelectedImages,
   recording, recordedAudio, clearRecordedAudio, voiceError, voiceCaptureOwnsAudioSession,
   textInput, disappearingSeconds, attachmentMenuOpen, locationSheetOpen,
   showRecommendationPicker, clearAfterSend,
@@ -1214,7 +1211,7 @@ onBeforeUnmount(() => {
 .jump-to-latest{position:absolute;right:18px;bottom:calc(94px + env(safe-area-inset-bottom));z-index:4;display:flex;min-width:42px;height:42px;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid var(--bd-d8dee5);border-radius:999px;background:var(--bg-fff);color:var(--fg-0f1419);box-shadow:0 5px 18px rgba(15,23,42,.16);font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent}.jump-to-latest:active{background:var(--bg-f7f9f9);transform:scale(.97)}.jump-to-latest>span{font-size:20px;line-height:1}.jump-to-latest strong{font-size:12px;font-weight:650;white-space:nowrap}
 .composer-region{position:relative;z-index:3;width:min(100%,720px);margin:0 auto;padding:4px 0 calc(28px + env(safe-area-inset-bottom));background:linear-gradient(180deg,var(--bg-rgba-255-255-255-0),var(--bg-fff) 22%);transition:padding-bottom 180ms ease}.composer-region:has(.chat-composer:focus-within){padding-bottom:calc(8px + env(safe-area-inset-bottom))}
 .replying-preview{display:flex;min-width:0;align-items:center;gap:10px;margin:0 16px 6px;padding:7px 10px 7px 12px;border-left:3px solid #1687e8;border-radius:10px;background:var(--bg-f7f9f9)}.replying-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}.replying-copy strong,.replying-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.replying-copy strong{color:var(--fg-0f1419);font-size:12px}.replying-copy span{color:var(--fg-536471);font-size:12px}.replying-preview>button{width:30px;height:30px;flex:0 0 30px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--fg-536471);font-size:22px}.replying-preview>button:active{background:var(--bg-e8ecef)}
-.selected-images{display:flex;gap:9px;margin:0 16px 8px;padding:6px 8px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity}.selected-image{position:relative;width:64px;height:64px;flex:0 0 64px;scroll-snap-align:start}.selected-image img{width:100%;height:100%;object-fit:cover;border:1px solid var(--bd-e2e8f0);border-radius:12px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}.voice-error{margin:0 24px 6px;color:var(--fg-dc2626);font-size:12px}
+.selected-images{display:flex;gap:9px;margin:0 16px 8px;padding:6px 8px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity}.selected-image{position:relative;width:64px;height:64px;flex:0 0 64px;scroll-snap-align:start}.selected-image img,.selected-image video{display:block;width:100%;height:100%;object-fit:cover;background:#000;border:1px solid var(--bd-e2e8f0);border-radius:12px}.selected-image button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:#263241;color:#fff}.voice-error{margin:0 24px 6px;color:var(--fg-dc2626);font-size:12px}
 .chat-composer{position:relative;width:calc(100% - 48px);min-width:0;margin:0 auto;border:1px solid var(--bd-d8dee5);border-radius:24px;background:var(--bg-fff);box-shadow:0 4px 18px rgba(15,23,42,.11);transition:width 180ms ease,border-color 180ms ease,box-shadow 180ms ease}.chat-composer:focus-within{width:calc(100% - 32px);border-color:var(--bd-c8d0d9);box-shadow:0 5px 20px rgba(15,23,42,.13)}.composer-normal{display:grid;box-sizing:border-box;min-width:0;min-height:48px;grid-template-columns:44px minmax(0,1fr) 44px;align-items:center;padding:2px 8px;transition:min-height 180ms ease}.composer-normal textarea{grid-column:2;grid-row:1;min-width:0;min-height:36px;max-height:108px;box-sizing:border-box;padding:7px 6px 6px;border:0;outline:0;resize:none;overflow-y:hidden;background:transparent;color:var(--fg-0f1419);font:inherit;font-size:16px;line-height:22px}.composer-actions{display:contents}.composer-actions-spacer{display:none}.composer-actions .attachment-button{grid-column:1;grid-row:1}.composer-actions .send-button{grid-column:3;grid-row:1}.persistent-microphone{grid-column:3;grid-row:1;align-self:center;justify-self:end;z-index:1}.composer-normal:focus-within{min-height:76px;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 34px;align-items:stretch;padding:6px 8px 4px}.composer-normal:focus-within textarea{grid-column:1;grid-row:1;width:100%;padding:4px 6px 3px}.composer-normal:focus-within .composer-actions{display:flex;grid-column:1;grid-row:2;min-width:0;min-height:34px;align-items:center;justify-content:space-between}.composer-normal:focus-within .composer-actions-spacer{display:block;flex:1}.composer-normal:focus-within .persistent-microphone{grid-column:1;grid-row:2;justify-self:end;align-self:center}.composer-normal.voice-active{display:flex;min-height:48px;align-items:center;gap:4px;padding:2px 8px}.composer-normal.voice-active .persistent-microphone{margin-left:auto}.composer-preview{display:flex;box-sizing:border-box;min-width:0;min-height:48px;align-items:center;gap:4px;padding:2px 8px}.image-input{display:none}.attachment-file-input{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;opacity:0;cursor:pointer}.attachment-button.disabled{opacity:.36;pointer-events:none}.composer-icon-button{display:grid;position:relative;width:44px;height:44px;flex:0 0 44px;margin:-5px;padding:5px;place-items:center;border:0;border-radius:50%;background:transparent;color:var(--fg-0f1419);-webkit-tap-highlight-color:transparent}.composer-icon-visual{display:grid;width:34px;height:34px;place-items:center;border-radius:50%;background:transparent}.composer-icon-visual svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.attachment-button .composer-icon-visual svg{width:20px;height:20px;stroke-width:1.8}.microphone-button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}.microphone-button.active .composer-icon-visual{background:var(--bg-f1f5f9)}.send-button{color:#fff}.send-button .send-visual{background:var(--bg-0f1419)}.send-button .send-visual svg{width:18px;height:18px}.chat-composer button:disabled{opacity:.36}
 .composer-recording{display:flex;min-width:0;flex:1;height:46px;align-items:center;gap:8px;padding:0 8px;touch-action:none}.recording-dot{width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#ef4444;animation:recording-pulse 1.2s ease-in-out infinite}.composer-recording.cancelling .recording-dot{animation:none}.composer-recording strong{font-size:14px;font-variant-numeric:tabular-nums}.voice-waveform{display:flex;height:22px;align-items:center;gap:2px}.voice-waveform i{display:block;width:2px;height:8px;border-radius:2px;background:#8b98a5;animation:voice-wave .72s ease-in-out infinite alternate}.voice-waveform i:nth-child(2){animation-delay:-.18s}.voice-waveform i:nth-child(3){animation-delay:-.36s}.voice-waveform i:nth-child(4){animation-delay:-.54s}.voice-waveform i:nth-child(5){animation-delay:-.27s}.voice-gesture-hint{margin-left:auto;color:var(--fg-657786);font-size:12px;white-space:nowrap}.composer-recording.cancelling .voice-gesture-hint{color:var(--fg-dc2626)}.voice-lock-label{margin-left:auto;color:var(--fg-657786);font-size:12px}.composer-recording button{min-width:50px;height:38px;border:0;background:transparent;color:var(--fg-536471);font-weight:600}.composer-recording .finish-recording{color:var(--fg-1687e8)}.finishing-label{margin-left:auto;color:var(--fg-536471);font-size:14px}.composer-preview{padding-left:10px}.composer-voice-preview{min-width:0;flex:1}.composer-preview :deep(.voice-message){min-width:0;grid-template-columns:34px minmax(70px,1fr) 36px}.remove-audio{font-size:25px;color:var(--fg-64748b)}
 @keyframes recording-pulse{50%{opacity:.35}}@keyframes voice-wave{from{height:5px}to{height:19px}}
@@ -1310,5 +1307,5 @@ onBeforeUnmount(() => {
   white-space: normal;
 }
 
-.dm-video{width:min(260px,65vw);margin:-9px -12px}.quoted-message+.dm-video{margin-top:0}.dm-video :deep(.video-player-container),.dm-video-preview{display:block;width:100%;max-height:360px;border-radius:16px;background:#000}
+.selected-video-badge{position:absolute;left:5px;bottom:5px;display:grid;width:20px;height:20px;place-items:center;border-radius:50%;background:rgba(15,20,25,.72);color:#fff;font-size:9px;pointer-events:none}.dm-video{width:min(260px,65vw);margin:-9px -12px}.quoted-message+.dm-video{margin-top:0}.dm-video :deep(.video-player-container),.dm-video-preview{display:block;width:100%;max-height:360px;border-radius:16px;background:#000}
 </style>

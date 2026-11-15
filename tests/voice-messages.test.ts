@@ -569,8 +569,8 @@ describe("encrypted private audio messages", () => {
     expect(messages).toContain(':disabled="!accepted || !keys.pkHex"');
     expect(messages).not.toContain('@click="chooseImage"');
     expect(composerSend).toContain("imageInput.value?.click()");
-    expect(messages).toContain('accept="image/*"');
-    expect(messages).toContain('accept="image/*" multiple');
+    expect(messages).toContain('accept="image/*,video/*"');
+    expect(messages).toContain('accept="image/*,video/*" multiple');
     expect(messages).toContain('v-for="(image, index) in selectedImages"');
     // 追加、去重、上限的行为见 tests/component/dm-image-selection.test.ts。
     expect(messages).toContain("useDmImageSelection({");

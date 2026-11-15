@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   prepareAudio: vi.fn(),
   uploadAudio: vi.fn(),
   prepareVideo: vi.fn(),
+  compressVideo: vi.fn(),
   uploadVideo: vi.fn(),
   queueGet: vi.fn(),
   taskList: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock("@/utils/encryptedDmAudio", () => ({
   prepareEncryptedDmAudio: mocks.prepareAudio,
   uploadPreparedEncryptedDmAudio: mocks.uploadAudio,
 }));
+vi.mock("@/utils/dmVideoCompression", () => ({ compressDmVideo: mocks.compressVideo }));
 vi.mock("@/utils/encryptedDmVideo", () => ({
   prepareEncryptedDmVideo: mocks.prepareVideo,
   uploadPreparedEncryptedDmVideo: mocks.uploadVideo,
@@ -114,6 +116,7 @@ beforeEach(() => {
   mocks.prepareAudio.mockReset();
   mocks.uploadAudio.mockReset();
   mocks.prepareVideo.mockReset();
+  mocks.compressVideo.mockReset().mockImplementation(async (file: File) => file);
   mocks.uploadVideo.mockReset();
   mocks.queueGet.mockReset().mockResolvedValue(undefined);
   mocks.taskList.mockReset().mockImplementation(async (account: string) => [...mocks.tasks.values()].filter(task => task.accountPubkey === account));
@@ -318,12 +321,51 @@ describe("optimistic outgoing DM tasks", () => {
     expect(mocks.tasks.get(key).preparedVideo).toBeUndefined();
   });
 
-  it("rejects a video over the upload limit before queueing anything", () => {
+  it("encrypts the compressed video, not the picked original", async () => {
+    const compressed = new File(["small"], "clip.mp4", { type: "video/mp4" });
+    mocks.compressVideo.mockResolvedValue(compressed);
+    mocks.prepareVideo.mockResolvedValue({ encryptedBytes: bytes("c"), encryptedName: "v", mime: "video/mp4", iv: "iv", key: "key", size: 5 });
+    mocks.uploadVideo.mockReturnValue(new Promise(() => {}));
     const { direct } = seed();
+    direct.sendVideo(PEER, new File(["a much larger original"], "clip.mov", { type: "video/quicktime" }));
+    await vi.waitFor(() => expect(mocks.prepareVideo).toHaveBeenCalledOnce());
+    expect(mocks.prepareVideo.mock.calls[0][0]).toBe(compressed);
+  });
+
+  it("fails the task when the video is still over 25MB after compression", async () => {
     const big = new File(["x"], "big.mp4", { type: "video/mp4" });
     Object.defineProperty(big, "size", { value: 26 * 1024 * 1024 });
-    expect(() => direct.sendVideo(PEER, big)).toThrow("视频不能超过 25MB");
-    expect(direct.outgoingTasks).toHaveLength(0);
+    mocks.compressVideo.mockResolvedValue(big);
+    const { direct } = seed();
+    direct.sendVideo(PEER, big);
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("upload_failed"));
+    expect(mocks.prepareVideo).not.toHaveBeenCalled();
+    expect(mocks.uploadVideo).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the original when compression throws", async () => {
+    mocks.compressVideo.mockRejectedValue(new Error("EncodingError"));
+    mocks.prepareVideo.mockResolvedValue({ encryptedBytes: bytes("c"), encryptedName: "v", mime: "video/mp4", iv: "iv", key: "key", size: 5 });
+    mocks.uploadVideo.mockReturnValue(new Promise(() => {}));
+    const { direct } = seed();
+    const original = new File(["video"], "clip.mp4", { type: "video/mp4" });
+    direct.sendVideo(PEER, original);
+    await vi.waitFor(() => expect(mocks.prepareVideo).toHaveBeenCalledOnce());
+    expect(mocks.prepareVideo.mock.calls[0][0]).toBe(original);
+  });
+
+  it("fails a video task left unprepared by a closed app instead of uploading forever", async () => {
+    const { direct } = seed();
+    const task = {
+      accountPubkey: ACCOUNT, localId: "video-stale", peerPubkey: PEER, text: "",
+      mediaType: "video" as const, videoMime: "video/mp4", videoSize: 5,
+      state: "uploading" as const, createdAt: 1, updatedAt: 1,
+    };
+    mocks.tasks.set(`${ACCOUNT}:video-stale`, task);
+    direct.outgoingTasks = [task];
+    await direct.runTask("video-stale");
+    expect(direct.outgoingTasks[0]).toMatchObject({ state: "upload_failed" });
+    expect(mocks.uploadVideo).not.toHaveBeenCalled();
   });
 
   it("does not start a second active upload for the same local task", async () => {

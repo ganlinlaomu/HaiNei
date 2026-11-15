@@ -88,7 +88,7 @@ describe("私信选图片", () => {
     expect(names(wrapper)).toHaveLength(9);
     expect(names(wrapper).slice(-2)).toEqual(["x.jpg", "y.jpg"]);
     expect(notify).toHaveBeenCalledOnce();
-    expect(notify).toHaveBeenCalledWith("一次最多发送 9 张图片");
+    expect(notify).toHaveBeenCalledWith("一次最多发送 9 个图片或视频");
   });
 
   it("移除中间一张只释放那一张的预览", async () => {
@@ -110,6 +110,21 @@ describe("私信选图片", () => {
 
     expect(names(wrapper)).toEqual([]);
     expect(vi.mocked(URL.revokeObjectURL).mock.calls.map(call => call[0])).toEqual(["blob:preview-1", "blob:preview-2"]);
+  });
+
+  it("视频和图片一起追加，视频标记为 video 且不预热", async () => {
+    let selection!: ReturnType<typeof useDmImageSelection>;
+    const wrapper = mount(defineComponent({
+      setup() {
+        selection = useDmImageSelection({ max: 9, notify, warm });
+        return () => h("input", { ref: selection.imageInput, type: "file", onChange: selection.selectImages });
+      },
+    }));
+    await pick(wrapper, [photo("a.jpg")]);
+    await pick(wrapper, [photo("clip.mov", "video/quicktime")]);
+
+    expect(selection.selectedImages.value.map(item => [item.file.name, item.kind])).toEqual([["a.jpg", "image"], ["clip.mov", "video"]]);
+    expect(warm).toHaveBeenCalledTimes(1);
   });
 
   it("预热失败不影响选图", async () => {
