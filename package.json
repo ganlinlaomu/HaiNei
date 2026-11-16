@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.205",
-  "releaseSummary": "首页可以置顶动态，好友的也可以，最多 5 条",
+  "version": "0.1.206",
+  "releaseSummary": "冷启动不再白屏，首页内容更早出现",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

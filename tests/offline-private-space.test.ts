@@ -29,8 +29,11 @@ describe("service worker precache", () => {
 describe("views wait for the unlocked session", () => {
   it("router waits for session restore to finish, not just for pkHex", () => {
     const router = readFileSync("src/router/index.ts", "utf8");
-    expect(router).toContain("if (!keyStore.isRestored) {");
+    expect(router).toContain("if (!keyStore.isRestored) await untilAccountViewsCanRender(keyStore, router);");
     expect(router).not.toContain("if (!keyStore.pkHex && !keyStore.loginMethod) {");
+    // Early release still requires the unlocked vault and this account's loaded stores.
+    const ready = readFileSync("src/router/accountViewsReady.ts", "utf8");
+    expect(ready).toContain("keyStore.isUnlocked && keyStore.accountStoresReadyFor === keyStore.pkHex");
   });
 
   it("私人空间 loads only once the account's local stores are ready", () => {

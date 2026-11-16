@@ -50,6 +50,9 @@
     </section>
 
     <div ref="feedElement" class="feed">
+      <!-- Cold start: post-shaped placeholders while the local feed loads,
+           instead of a blank page. -->
+      <FeedSkeleton v-if="isInitialLoad && displayedMessages.length === 0" />
       <div v-if="!isInitialLoad && displayedMessages.length === 0" class="empty-feed">
         <template v-if="acceptedFriends.length === 0">
           <strong>还没有好友</strong>
@@ -97,6 +100,7 @@ import { logger } from "@/utils/logger";
 import { debugLog, startupMark } from "@/utils/debugLog";
 import { onAppResume } from "@/services/appResumeCoordinator";
 import PostCard from "@/components/PostCard.vue";
+import FeedSkeleton from "@/components/FeedSkeleton.vue";
 import PrivateNoteCard from "@/components/PrivateNoteCard.vue";
 import { usePrivateFeedCards } from "@/composables/usePrivateFeedCards";
 import HomeTodoBar from "@/components/HomeTodoBar.vue";
@@ -134,7 +138,7 @@ function compareHomeMessages(a: { id: string; created_at?: number }, b: { id: st
 
 export default defineComponent({
   name: "Home",
-  components: { PostCard, PrivateNoteCard, HomeTodoBar },
+  components: { PostCard, PrivateNoteCard, HomeTodoBar, FeedSkeleton },
   setup() {
     const friends = useFriendsStore();
     const friendships = useFriendshipsStore();

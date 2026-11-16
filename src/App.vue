@@ -5,6 +5,13 @@
     <CallNotificationRecovery />
     <CallOverlay v-if="call.phase !== 'idle'" />
     <HeaderBar v-if="!hideAppChrome" />
+    <!-- Cold start of a signed-in account: the first navigation waits for the
+         local vault and stores (router/index.ts), so show Home's outline
+         instead of an empty page between the bottom bar and the feed. -->
+    <div v-if="showBootHome" class="app-page boot-home" aria-busy="true">
+      <header class="primary-page-header"><h1 class="primary-page-title">海内</h1></header>
+      <FeedSkeleton />
+    </div>
     <router-view v-slot="{ Component }">
       <keep-alive :key="`${keys.pkHex}:${keys.sessionGeneration}:${keys.isUnlocked}`" :include="['Home', 'Friends', 'Conversations', 'Calls', 'Notifications', 'Settings', 'SystemSettings']">
         <component :is="Component" />
@@ -57,6 +64,7 @@ import { computed, defineAsyncComponent, defineComponent, onBeforeUnmount, onMou
 import { useRoute, useRouter } from "vue-router";
 import CallNotificationRecovery from "@/components/CallNotificationRecovery.vue";
 import HeaderBar from "@/components/HeaderBar.vue";
+import FeedSkeleton from "@/components/FeedSkeleton.vue";
 import ToastContainer from "@/components/ToastContainer.vue";
 import UpdateNotification from "@/components/UpdateNotification.vue";
 import AndroidUpdateNotification from "@/components/AndroidUpdateNotification.vue";
@@ -85,7 +93,7 @@ const loadCallOverlay = () => import("@/components/CallOverlay.vue");
 const CallOverlay = defineAsyncComponent(loadCallOverlay);
 
 export default defineComponent({
-  components: { CallNotificationRecovery, HeaderBar, ToastContainer, PostEditorModal, UpdateNotification, AndroidUpdateNotification, CallOverlay },
+  components: { CallNotificationRecovery, HeaderBar, ToastContainer, PostEditorModal, UpdateNotification, AndroidUpdateNotification, CallOverlay, FeedSkeleton },
   setup() {
     const route = useRoute();
     const router = useRouter();
@@ -103,6 +111,10 @@ export default defineComponent({
     const postEditorReady = ref(false);
     const postEditorLoadError = ref(false);
     const hideAppChrome = computed(() => route.meta.hideHeader === true);
+    // Only for a launch that opens Home with a remembered account; deep links
+    // and the login screen keep their own first paint.
+    const launchedAtHome = typeof location === "undefined" || /^#?\/?$/.test(location.hash);
+    const showBootHome = computed(() => launchedAtHome && route.matched.length === 0 && !!keys.pkHex);
     const primaryRoutes = new Set(["Home"]);
     const isPrimaryRoute = computed(() => !hideAppChrome.value && primaryRoutes.has(String(route.name || "")));
     const isConversationsRoute = computed(() => route.name === "Conversations");
@@ -303,6 +315,7 @@ export default defineComponent({
       document.body.classList.remove("login-page", "post-editor-open");
     });
     return {
+      showBootHome,
       call,
       keys,
       ui,
