@@ -23,6 +23,7 @@ const Debug = () => import("@/views/Debug.vue");
 const SharedMedia = () => import("@/views/SharedMedia.vue");
 const ShareTarget = () => import("@/views/ShareTarget.vue");
 import { useKeyStore } from "@/stores/keys";
+import { untilAccountViewsCanRender } from "@/router/accountViewsReady";
 import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
 
 /**
@@ -191,19 +192,12 @@ router.beforeEach(async (to, from, next) => {
       if (appContainer) saveHomeScroll(keyStore.pkHex, appContainer.scrollTop);
     }
     
-    // Wait for session restoration to finish. main.ts starts it before the
-    // first navigation and it sets pkHex/loginMethod *before* unlocking the
-    // local vault, so checking pkHex alone let views read a locked vault
-    // (blank Home, 私人空间「保存失败：local_vault_locked」). restoreSession()
-    // joins the in-flight restore instead of starting another one.
-    if (!keyStore.isRestored) {
-      try {
-        await keyStore.restoreSession();
-      } catch (e) {
-        console.error("[router] Failed to restore session:", e);
-        // Continue with navigation, will be redirected to login if needed
-      }
-    }
+    // Wait for session restoration. main.ts starts it before the first
+    // navigation and it sets pkHex/loginMethod *before* unlocking the local
+    // vault, so checking pkHex alone let views read a locked vault (blank
+    // Home, 私人空间「保存失败：local_vault_locked」). restoreSession() joins
+    // the in-flight restore instead of starting another one.
+    if (!keyStore.isRestored) await untilAccountViewsCanRender(keyStore, router);
 
     const requiresAuth = !!(to.meta && (to.meta as any).requiresAuth);
 
