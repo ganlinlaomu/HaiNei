@@ -3,7 +3,7 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.207";
+export const APP_VERSION = "0.1.208";
 export const DB_VERSION = 24;
 export const DATABASE_NAME = "closed_community_db";
 
@@ -831,6 +831,14 @@ export class HaiNeiDatabase extends Dexie {
     // rows are reclassified after unlock (tags are sealed during upgrade).
     this.version(24).stores({
       syncedMessages: "[accountPubkey+id], accountPubkey, [accountPubkey+conversationId+createdAt], [accountPubkey+conversationId+createdAt+id], [accountPubkey+createdAt+id], [accountPubkey+conversationId+messageClass+createdAt+id], [accountPubkey+messageClass+createdAt+id], [accountPubkey+createdAt], [accountPubkey+senderPubkey], *transportEventIds, [accountPubkey+disappearingExpiresAt]"
+    });
+
+    // Sent outgoing rows were read (and their sealed gift wraps decrypted) in
+    // full on every launch. state and updatedAt are plain metadata, so the
+    // browser indexes existing rows itself: startup reads only unsent and
+    // recently sent rows, and old sent rows are pruned by primary key.
+    this.version(25).stores({
+      outgoingQueue: "[accountPubkey+outgoingId], accountPubkey, [accountPubkey+state], [accountPubkey+nextAttemptAt], [accountPubkey+state+updatedAt]"
     });
   }
 }

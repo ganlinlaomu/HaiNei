@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({ list: vi.fn(), outgoing: vi.fn(), purgeExpired
 vi.mock("@/repositories/syncedMessageRepository", () => ({
   syncedMessageRepository: { listRecent: mocks.list, listRecentFeed: mocks.list, insertMessageIfAbsent: vi.fn(), purgeExpiredDisappearing: mocks.purgeExpired },
 }));
-vi.mock("@/repositories/outgoingQueueRepository", () => ({ outgoingQueueRepository: { list: mocks.outgoing } }));
+vi.mock("@/repositories/outgoingQueueRepository", () => ({ outgoingQueueRepository: { listUnsent: mocks.outgoing, listSentSince: async () => [], pruneSent: async () => 0 } }));
 
 import { useMessagesStore } from "@/stores/messages";
 import { db } from "@/db/dexie";

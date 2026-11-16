@@ -11,7 +11,7 @@ vi.mock("@/repositories/syncedMessageRepository", () => ({
     insertMessageIfAbsent: vi.fn(), purgeExpiredDisappearing: mocks.purge,
   },
 }));
-vi.mock("@/repositories/outgoingQueueRepository", () => ({ outgoingQueueRepository: { list: mocks.outgoing } }));
+vi.mock("@/repositories/outgoingQueueRepository", () => ({ outgoingQueueRepository: { listUnsent: mocks.outgoing, listSentSince: async () => [], pruneSent: async () => 0 } }));
 
 import { useMessagesStore } from "@/stores/messages";
 

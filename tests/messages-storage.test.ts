@@ -8,7 +8,7 @@ vi.mock("@/repositories/syncedMessageRepository", () => ({
   syncedMessageRepository: { listRecent: mocks.list, listRecentFeed: mocks.list, insertMessageIfAbsent: mocks.insert, purgeExpiredDisappearing: mocks.purgeExpired }
 }));
 vi.mock("@/repositories/outgoingQueueRepository", () => ({
-  outgoingQueueRepository: { list: mocks.outgoing }
+  outgoingQueueRepository: { listUnsent: mocks.outgoing, listSentSince: async () => [], pruneSent: async () => 0 }
 }));
 
 import { useMessagesStore } from "@/stores/messages";
