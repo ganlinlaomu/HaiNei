@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.204",
-  "releaseSummary": "私信可以发文件，聊天里能看图片视频文件链接汇总，可从系统分享到海内，动态能置顶到个人主页",
+  "version": "0.1.205",
+  "releaseSummary": "首页可以置顶动态，好友的也可以，最多 5 条",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

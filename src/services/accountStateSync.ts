@@ -162,6 +162,7 @@ export function mergeNamespaceData(namespace: AccountStateNamespace, local: any,
     return {
       hidden: mergeByKey(local?.hidden || [], remote?.hidden || [], (item: any) => item.id),
       muted: mergeByKey(local?.muted || [], remote?.muted || [], (item: any) => item.pubkey),
+      pinned: mergeByKey(local?.pinned || [], remote?.pinned || [], (item: any) => item.id),
     };
   }
   return Number(remote?.updatedAt || 0) > Number(local?.updatedAt || 0) ? remote : local;

@@ -32,7 +32,7 @@
       <div class="overflow-wrap">
         <button class="overflow-button" type="button" aria-label="动态操作" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">•••</button>
         <div v-if="menuOpen" class="overflow-menu">
-          <button v-if="isOwn && canPin" type="button" :disabled="pinning" @click="togglePin">{{ pinnedOnProfile ? "取消置顶" : "置顶到个人主页" }}</button>
+          <button v-if="canPin" type="button" :disabled="pinning" @click="togglePin">{{ pinnedOnHome ? "取消置顶" : "置顶" }}</button>
           <button v-if="isOwn" type="button" @click="deleteOwnPost">删除此动态</button>
           <button v-else type="button" @click="hidePost">隐藏此动态</button>
           <button v-if="!isOwn" type="button" @click="muteAuthor">不看此人的动态</button>
@@ -157,19 +157,20 @@ function openAuthor(pubkey: string, event?: Event) {
 async function hidePost() { menuOpen.value = false; await feedPreferences.hide(props.message.id); ui.addToast("已在本机隐藏", 1600, "success"); }
 async function muteAuthor() { menuOpen.value = false; await feedPreferences.mute(props.message.pubkey); ui.addToast("已在本机隐藏该好友的动态", 1800, "success"); }
 const pinning = ref(false);
-// Only a delivered post has the id friends know it by.
+// A pin keys on the post's real id, which an unsent own post does not have yet.
 const canPin = computed(() => /^[0-9a-f]{64}$/.test(props.message.id) && (!deliveryState.value || deliveryState.value === "sent"));
-const pinnedOnProfile = computed(() => feedPreferences.pinnedPostOf(props.message.pubkey) === props.message.id);
+const pinnedOnHome = computed(() => feedPreferences.isPinned(props.message.id));
 async function togglePin() {
   menuOpen.value = false;
   if (pinning.value) return;
   pinning.value = true;
-  const unpin = pinnedOnProfile.value;
+  const unpin = pinnedOnHome.value;
   try {
-    await feedPreferences.pinOwn(unpin ? null : props.message, friends.getAcceptedList(friendships.isAccepted).map(friend => friend.pubkey));
-    ui.addToast(unpin ? "已取消置顶" : "已置顶到个人主页", 1600, "success");
-  } catch {
-    ui.addToast(unpin ? "已在本机取消置顶，通知好友失败，请稍后重试" : "已在本机置顶，通知好友失败，请稍后重试", 2400, "error");
+    if (unpin) await feedPreferences.unpin(props.message.id);
+    else await feedPreferences.pin(props.message.id);
+    ui.addToast(unpin ? "已取消置顶" : "已置顶到首页", 1600, "success");
+  } catch (error) {
+    ui.addToast(error instanceof Error && error.message.startsWith("最多") ? `${error.message}，请先取消一条` : "置顶失败，请重试", 2200, "error");
   } finally {
     pinning.value = false;
   }

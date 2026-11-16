@@ -39,6 +39,16 @@
 
     <HomeTodoBar :tasks="privateTodos" />
 
+    <section v-if="pinnedPosts.length" class="pinned-feed" aria-label="置顶动态">
+      <PostCard
+        v-for="m in pinnedPosts"
+        :key="`pinned:${m.id}`"
+        :message="m"
+        pinned
+        :open-comment-id="route.query.mid === m.id ? String(route.query.rid || route.query.iid || '') : undefined"
+      />
+    </section>
+
     <div ref="feedElement" class="feed">
       <div v-if="!isInitialLoad && displayedMessages.length === 0" class="empty-feed">
         <template v-if="acceptedFriends.length === 0">
@@ -144,13 +154,40 @@ export default defineComponent({
     const inboxRevision = computed(() => msgs.inboxRevision);
     const feedPreferenceRevision = computed(() => feedPreferences.revision);
     const isHomeRenderable = isFeedRenderableMessage;
+    // Pinned posts live in their own section above the feed, never twice.
+    const isFeedListMessage = (message: InboxItem) => isHomeRenderable(message)
+      && feedPreferences.isVisible(message) && !feedPreferences.isPinned(message.id);
+    const pinnedPosts = ref<InboxItem[]>([]);
+    let pinnedLoadGeneration = 0;
+    async function refreshPinnedPosts() {
+      const generation = ++pinnedLoadGeneration;
+      const account = keys.pkHex;
+      const ids = feedPreferences.pinnedIds;
+      if (!account || feedPreferences.loadedFor !== account.toLowerCase() || !ids.length) {
+        pinnedPosts.value = [];
+        return;
+      }
+      const found: InboxItem[] = [];
+      for (const id of ids) {
+        // The live inbox copy wins so delivery state matches the feed card.
+        let post = msgs.inbox.find(message => message.id === id)
+          || storedHistory.value.find(message => message.id === id);
+        if (!post) {
+          const record = await syncedMessageRepository.get(account, id).catch(() => undefined);
+          if (generation !== pinnedLoadGeneration || account !== keys.pkHex) return;
+          post = record ? syncedMessageRecordToInboxItem(record) : undefined;
+        }
+        if (post && isHomeRenderable(post) && feedPreferences.isVisible(post)) found.push(post);
+      }
+      if (generation === pinnedLoadGeneration && account === keys.pkHex) pinnedPosts.value = found;
+    }
     const storedHistory = ref<InboxItem[]>([]);
     let historyCursor: {createdAt:number;id:string} | undefined;
     const historyExhausted = ref(false);
     // The owner's own notes and open to-dos, visible to nobody else.
     const { cards: privateCards, todos: privateTodos, revision: privateCardsRevision } = usePrivateFeedCards(() => applyPrivateCards());
     const visibleInbox = () => [
-      ...[...new Map([...storedHistory.value,...msgs.inbox].map(m=>[m.id,m])).values()].filter(message => isHomeRenderable(message) && feedPreferences.isVisible(message)),
+      ...[...new Map([...storedHistory.value,...msgs.inbox].map(m=>[m.id,m])).values()].filter(isFeedListMessage),
       ...privateCards.value,
     ];
 
@@ -214,8 +251,7 @@ export default defineComponent({
             : msgs.inbox.find(message => message.id === mutation.itemId);
           if (inserted
             && !present.has(inserted.id)
-            && isHomeRenderable(inserted)
-            && feedPreferences.isVisible(inserted)) {
+            && isFeedListMessage(inserted)) {
             next = insertSortedHomeMessage(next, inserted);
             present.add(inserted.id);
             insertedVisible.push(inserted);
@@ -759,6 +795,12 @@ async function safeUpdateLocalRefs() {
     // initializeHomeRuntime invokes this again after the account snapshot is ready.
     if (!readyForPending.value || homeAccountPk !== keys.pkHex) return;
 
+    if (feedPreferences.isPinned(mid) && pinnedPosts.value.some(message => message.id === mid)) {
+      // The pinned card above the feed takes the comment target itself.
+      scrollContainer?.scrollTo({ top: 0, behavior: "auto" });
+      notificationJumpDone.value = true;
+      return;
+    }
     const targetPost = await resolveNotificationPost(mid);
     if (!targetPost || route.query.mid !== mid) {
       logger.warn("通知跳转失败：目标动态未找到", mid);
@@ -939,6 +981,10 @@ async function safeUpdateLocalRefs() {
 );
    
     // Watch for route query changes to handle notification jump state
+    watch([() => feedPreferences.revision, () => msgs.inboxRevision, () => keys.pkHex], () => {
+      void refreshPinnedPosts().catch(error => logger.warn("pinned posts refresh failed", error));
+    }, { immediate: true });
+
     watch(() => route.path, path => {
       if (path === "/" && reconcilePending) void safeUpdateLocalRefs();
     });
@@ -955,6 +1001,7 @@ async function safeUpdateLocalRefs() {
 
     return {
       displayedMessages,
+      pinnedPosts,
       pendingMessages,
       showPendingMessages,
       container,
@@ -1057,6 +1104,11 @@ async function safeUpdateLocalRefs() {
 .notification-icon { font-size:14px; line-height:1; color:var(--fg-2563eb) }
 .notification-text { font-size:13px }
 
+.pinned-feed {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 6px solid var(--bd-eff1f3);
+}
 .feed {
   display: flex;
   flex-direction: column;
