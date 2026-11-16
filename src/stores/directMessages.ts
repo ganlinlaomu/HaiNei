@@ -1311,7 +1311,9 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const messages = useMessagesStore();
       const friendships = useFriendshipsStore();
       await Promise.all([
-        messages.loadedFor === account ? Promise.resolve() : messages.load(account),
+        // Conversation heads come from the full inbox window, not the
+        // cold-start first page that lets Home render early.
+        messages.whenInboxComplete(account),
         friendships.loadedFor === account && !friendships.loading ? Promise.resolve() : friendships.load(account),
       ]);
       if (useKeyStore().pkHex.toLowerCase() !== account) return;

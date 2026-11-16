@@ -601,6 +601,18 @@ export class SyncedMessageRepository {
     return newest?.createdAt || undefined;
   }
 
+  /**
+   * The newest Feed-class records ("other": posts, interactions), for the
+   * first Home page at cold start. Each record read is a vault decrypt, so
+   * this is much cheaper than listRecent's full window.
+   */
+  async listRecentFeed(accountPubkey: string, limit = 60) {
+    const account = normalizeAccountPubkey(accountPubkey);
+    return this.database.syncedMessages.where("[accountPubkey+messageClass+createdAt+id]")
+      .between([account, "other", 0, ""], [account, "other", Number.MAX_SAFE_INTEGER, "\uffff"])
+      .reverse().limit(limit).toArray();
+  }
+
   async listRecent(accountPubkey: string, limit = 200) {
     const account = normalizeAccountPubkey(accountPubkey);
     const recent = await this.database.syncedMessages.where("[accountPubkey+createdAt]")
