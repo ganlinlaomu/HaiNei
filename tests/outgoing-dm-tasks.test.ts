@@ -6,6 +6,7 @@ const ACCOUNT = "a".repeat(64);
 const PEER = "b".repeat(64);
 const OTHER = "c".repeat(64);
 const bytes = (value: string) => new TextEncoder().encode(value).buffer;
+const RealURL = globalThis.URL;
 
 const mocks = vi.hoisted(() => ({
   key: { pkHex: "a".repeat(64), supportsNip44: true, signEvent: vi.fn(), nip44Encrypt: vi.fn() },
@@ -20,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   prepareVideo: vi.fn(),
   compressVideo: vi.fn(),
   uploadVideo: vi.fn(),
+  prepareFile: vi.fn(),
+  uploadFile: vi.fn(),
   queueGet: vi.fn(),
   taskList: vi.fn(),
   taskPut: vi.fn(),
@@ -48,6 +51,10 @@ vi.mock("@/utils/encryptedDmVideo", () => ({
   prepareEncryptedDmVideo: mocks.prepareVideo,
   uploadPreparedEncryptedDmVideo: mocks.uploadVideo,
 }));
+vi.mock("@/utils/encryptedDmFile", () => ({
+  prepareEncryptedDmFile: mocks.prepareFile,
+  uploadPreparedEncryptedDmFile: mocks.uploadFile,
+}));
 vi.mock("@/repositories/outgoingDmTaskRepository", () => ({
   outgoingDmTaskRepository: {
     get: vi.fn(async (account: string, localId: string) => mocks.tasks.get(`${account}:${localId}`)),
@@ -75,6 +82,8 @@ vi.mock("@/repositories/metaRepository", () => ({
 }));
 
 import { useDirectMessagesStore } from "@/stores/directMessages";
+import { encodeEncryptedFileRef } from "@/nostr/messaging/privateFile";
+import { bytesToBase64 } from "@/nostr/crypto";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useMessagesStore } from "@/stores/messages";
 
@@ -319,6 +328,44 @@ describe("optimistic outgoing DM tasks", () => {
       media: { encryptedRef: "blossom+aesgcm+video:abc", mime: "video/mp4", size: 5 },
     });
     expect(mocks.tasks.get(key).preparedVideo).toBeUndefined();
+  });
+
+  it("sends an encrypted file as one message and drops its bytes once uploaded", async () => {
+    const fileRef = encodeEncryptedFileRef({
+      v: 1, url: "https://media.example/f", mime: "application/pdf", alg: "AES-GCM",
+      iv: bytesToBase64(new Uint8Array(12)), key: bytesToBase64(new Uint8Array(32)), size: 4,
+    });
+    mocks.prepareFile.mockResolvedValue({
+      encryptedBytes: bytes("cipher"), encryptedName: "file.encrypted", name: "plan.pdf",
+      mime: "application/pdf", iv: "iv", key: "key", size: 4,
+    });
+    mocks.uploadFile.mockResolvedValue({ encryptedRef: fileRef, name: "plan.pdf", mime: "application/pdf", size: 4 });
+    mocks.send.mockImplementation(async (options: any) => canonical("canonical-file", options.content));
+    // The file ref check parses its https URL, so keep a real URL constructor.
+    vi.stubGlobal("URL", class extends RealURL {
+      static createObjectURL = vi.fn(() => "blob:preview");
+      static revokeObjectURL = vi.fn();
+    });
+    const { direct } = seed();
+    direct.sendFile(PEER, new File(["plan"], "../plan.pdf", { type: "application/pdf" }));
+
+    expect(direct.peerMessages(PEER)[0].outgoing).toMatchObject({ state: "uploading", hasFile: true, hasImage: false, fileName: "plan.pdf", fileSize: 4 });
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
+    expect(JSON.parse(mocks.send.mock.calls[0][0].content)).toEqual({
+      type: "file",
+      media: { encryptedRef: fileRef, name: "plan.pdf", mime: "application/pdf", size: 4 },
+    });
+    const key = `${ACCOUNT}:${direct.outgoingTasks[0].localId}`;
+    expect(mocks.tasks.get(key).preparedFile).toBeUndefined();
+  });
+
+  it("refuses empty and oversized files before creating a task", () => {
+    const { direct } = seed();
+    expect(() => direct.sendFile(PEER, new File([], "empty.txt"))).toThrow("文件为空");
+    const big = new File(["x"], "big.zip");
+    Object.defineProperty(big, "size", { value: 26 * 1024 * 1024 });
+    expect(() => direct.sendFile(PEER, big)).toThrow("25MB");
+    expect(direct.outgoingTasks).toHaveLength(0);
   });
 
   it("encrypts the compressed video, not the picked original", async () => {

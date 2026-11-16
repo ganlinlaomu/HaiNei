@@ -20,6 +20,8 @@ import {
 } from "@/router/lazyViews";
 // Lazy load less frequently accessed views
 const Debug = () => import("@/views/Debug.vue");
+const SharedMedia = () => import("@/views/SharedMedia.vue");
+const ShareTarget = () => import("@/views/ShareTarget.vue");
 import { useKeyStore } from "@/stores/keys";
 import { loadHomeScroll, saveHomeScroll } from "@/utils/homeScroll";
 
@@ -85,6 +87,18 @@ const routes: Array<RouteRecordRaw> = [
     path: "/messages/:pubkey",
     name: "Messages",
     component: loadMessagesView,
+    meta: { requiresAuth: true, hideBottomNav: true }
+  },
+  {
+    path: "/messages/:pubkey/media",
+    name: "SharedMedia",
+    component: SharedMedia,
+    meta: { requiresAuth: true, hideBottomNav: true }
+  },
+  {
+    path: "/share",
+    name: "ShareTarget",
+    component: ShareTarget,
     meta: { requiresAuth: true, hideBottomNav: true }
   },
   {

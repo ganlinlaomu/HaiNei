@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.203",
-  "releaseSummary": "动态里的视频也会先压缩再上传，大视频不再提示文件太大",
+  "version": "0.1.204",
+  "releaseSummary": "私信可以发文件，聊天里能看图片视频文件链接汇总，可从系统分享到海内，动态能置顶到个人主页",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

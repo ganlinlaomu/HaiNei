@@ -3,7 +3,7 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.203";
+export const APP_VERSION = "0.1.204";
 export const DB_VERSION = 24;
 export const DATABASE_NAME = "closed_community_db";
 
@@ -287,6 +287,15 @@ export type PreparedEncryptedDmVideo = {
   key: string;
   size: number;
 };
+export type PreparedEncryptedDmFile = {
+  encryptedBytes: ArrayBuffer;
+  encryptedName: string;
+  name: string;
+  mime: string;
+  iv: string;
+  key: string;
+  size: number;
+};
 export type OutgoingDmTaskRecord = {
   accountPubkey: string;
   localId: string;
@@ -299,11 +308,15 @@ export type OutgoingDmTaskRecord = {
   imageName?: string;
   imageType?: string;
   preparedImage?: PreparedEncryptedImage;
-  mediaType?: "image" | "audio" | "video";
+  mediaType?: "image" | "audio" | "video" | "file";
   preparedAudio?: PreparedEncryptedAudio;
   preparedVideo?: PreparedEncryptedDmVideo;
   videoMime?: string;
   videoSize?: number;
+  preparedFile?: PreparedEncryptedDmFile;
+  fileName?: string;
+  fileMime?: string;
+  fileSize?: number;
   audioMime?: string;
   audioDuration?: number;
   audioSize?: number;

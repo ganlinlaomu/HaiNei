@@ -29,6 +29,10 @@ export function useDmComposerActions(options: {
   selectedImages: Readonly<Ref<SelectedDmImage[]>>;
   imageInput: Readonly<Ref<HTMLInputElement | null>>;
   clearSelectedImages: () => void;
+  /** Documents picked or shared in; each one goes out as its own message. */
+  selectedFiles?: Readonly<Ref<File[]>>;
+  fileInput?: Readonly<Ref<HTMLInputElement | null>>;
+  clearSelectedFiles?: () => void;
   recording: Readonly<Ref<unknown>>;
   recordedAudio: Readonly<Ref<VoiceRecordingResult | null>>;
   clearRecordedAudio: () => void;
@@ -40,7 +44,7 @@ export function useDmComposerActions(options: {
   locationSheetOpen: Ref<boolean>;
   showRecommendationPicker: () => void;
   clearAfterSend: (clear: () => void) => void;
-  directMessages: Pick<ReturnType<typeof useDirectMessagesStore>, "send" | "sendAudio" | "sendVideo">;
+  directMessages: Pick<ReturnType<typeof useDirectMessagesStore>, "send" | "sendAudio" | "sendVideo"> & Partial<Pick<ReturnType<typeof useDirectMessagesStore>, "sendFile">>;
   startLiveSharing: (peer: string, durationSeconds: number, location: LocationShare) => Promise<unknown>;
   notify: (message: string, durationMs: number, kind: ToastKind) => void;
 }) {
@@ -49,9 +53,11 @@ export function useDmComposerActions(options: {
     selectedImages, imageInput, clearSelectedImages, recording, recordedAudio, clearRecordedAudio, voiceError,
     voiceCaptureOwnsAudioSession, textInput, disappearingSeconds, attachmentMenuOpen, locationSheetOpen,
     showRecommendationPicker, clearAfterSend, directMessages, startLiveSharing, notify,
+    selectedFiles, fileInput, clearSelectedFiles,
   } = options;
+  const fileCount = () => selectedFiles?.value.length || 0;
 
-  const canSend = computed(() => !!account() && accepted() && !recording.value && (!!draft.value.trim() || selectedImages.value.length > 0 || !!recordedAudio.value));
+  const canSend = computed(() => !!account() && accepted() && !recording.value && (!!draft.value.trim() || selectedImages.value.length > 0 || fileCount() > 0 || !!recordedAudio.value));
 
   function openRecommendationPicker() {
     attachmentMenuOpen.value = false;
@@ -94,14 +100,18 @@ export function useDmComposerActions(options: {
     attachmentMenuOpen.value = false;
     if (accepted() && disappearingSeconds.value === null) imageInput.value?.click();
   }
+  function chooseFileFromMenu() {
+    attachmentMenuOpen.value = false;
+    if (accepted() && disappearingSeconds.value === null) fileInput?.value?.click();
+  }
   function enableDisappearing() {
     attachmentMenuOpen.value = false;
     if (!accepted() || !supportsNip44()) {
       notify("当前账号无法发送加密临时消息", 2000, "info");
       return;
     }
-    if (selectedImages.value.length || recordedAudio.value || voiceCaptureOwnsAudioSession.value) {
-      notify("请先移除图片或语音，阅后即焚仅支持文字", 2200, "info");
+    if (selectedImages.value.length || fileCount() || recordedAudio.value || voiceCaptureOwnsAudioSession.value) {
+      notify("请先移除图片、文件或语音，阅后即焚仅支持文字", 2200, "info");
       return;
     }
     cancelReply();
@@ -127,7 +137,7 @@ export function useDmComposerActions(options: {
   }
   function submitMessage() {
     if (!canSend.value) return;
-    if (disappearingSeconds.value !== null && (recordedAudio.value || selectedImages.value.length || replyingToId.value)) {
+    if (disappearingSeconds.value !== null && (recordedAudio.value || selectedImages.value.length || fileCount() || replyingToId.value)) {
       notify("阅后即焚仅支持纯文字消息", 2200, "info");
       return;
     }
@@ -150,6 +160,11 @@ export function useDmComposerActions(options: {
     const text = draft.value;
     const images = selectedImages.value.filter(item => item.kind !== "video").map(item => item.file);
     const videos = selectedImages.value.filter(item => item.kind === "video").map(item => item.file);
+    const files = [...(selectedFiles?.value || [])];
+    if (files.length && !directMessages.sendFile) {
+      notify("当前无法发送文件", 2200, "error");
+      return;
+    }
     let replyTo = replyTarget();
     try {
       if (images.length) {
@@ -160,17 +175,20 @@ export function useDmComposerActions(options: {
           index === 0 ? replyTo : undefined,
         ));
         replyTo = undefined;
-      } else if (text.trim() || !videos.length) {
+      } else if (text.trim() || (!videos.length && !files.length)) {
         directMessages.send(peer(), text, undefined, replyTo, disappearingSeconds.value ?? undefined);
         replyTo = undefined;
       }
       // A video carries no caption: the text went out above as its own message.
       videos.forEach((video, index) => directMessages.sendVideo(peer(), video, index === 0 ? replyTo : undefined));
+      if (videos.length) replyTo = undefined;
+      files.forEach((file, index) => directMessages.sendFile!(peer(), file, index === 0 ? replyTo : undefined));
       disappearingSeconds.value = null;
       attachmentMenuOpen.value = false;
       clearAfterSend(() => {
         draft.value = "";
         clearSelectedImages();
+        clearSelectedFiles?.();
         cancelReply();
       });
     } catch (error) {
@@ -180,6 +198,6 @@ export function useDmComposerActions(options: {
 
   return {
     canSend, submitMessage, sendVoiceRecordingResult, sendLocation,
-    openRecommendationPicker, openLocationSheet, chooseImageFromMenu, enableDisappearing, disableDisappearing,
+    openRecommendationPicker, openLocationSheet, chooseImageFromMenu, chooseFileFromMenu, enableDisappearing, disableDisappearing,
   };
 }

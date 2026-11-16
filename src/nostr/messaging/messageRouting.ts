@@ -39,6 +39,7 @@ export function isHomeControl(tags: string[][] | undefined, content?: string) {
     || values.has("t:hainei-profile")
     || values.has("t:hainei-profile-request")
     || values.has("t:hainei-tombstone")
+    || values.has("t:hainei-feed-pin")
     || values.has(`t:${DM_RECEIPT_TYPE}`)
     || values.has(`t:${DM_BURN_CONTROL_TYPE}`)
     || values.has(`t:${CALL_CONTROL_TYPE}`)

@@ -31,6 +31,9 @@
         <button v-if="accepted" class="header-search-button" type="button" aria-label="语音通话" data-live-audio-action data-ringtone-arm @pointerdown="preloadCall" @click="startVoiceCall">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
         </button>
+        <button class="header-search-button" type="button" aria-label="聊天中的图片、视频、文件和链接" @click="openSharedMedia">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
+        </button>
         <button class="header-search-button" type="button" aria-label="搜索当前聊天" @click="openSearch">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
         </button>
@@ -93,7 +96,7 @@
             <svg viewBox="0 0 24 24"><path d="M9 8 4 12l5 4"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg>
           </span>
           <div class="message-stack">
-            <div class="message-bubble" :class="{ 'media-caption-bubble': !isDisappearing(message) && isMediaCaption(message), 'audio-bubble': !isDisappearing(message) && hasAudio(message), 'disappearing-bubble': isDisappearing(message), 'recommendation-bubble': !isDisappearing(message) && !!friendRecommendation(message.content), 'location-bubble': !isDisappearing(message) && !!locationShare(message.content) }">
+            <div class="message-bubble" :class="{ 'media-caption-bubble': !isDisappearing(message) && isMediaCaption(message), 'audio-bubble': !isDisappearing(message) && hasAudio(message), 'file-bubble': !isDisappearing(message) && hasFile(message), 'disappearing-bubble': isDisappearing(message), 'recommendation-bubble': !isDisappearing(message) && !!friendRecommendation(message.content), 'location-bubble': !isDisappearing(message) && !!locationShare(message.content) }">
               <template v-if="isDisappearing(message)">
                 <div v-if="isBurned(message)" class="burned-placeholder" role="status">
                   <span aria-hidden="true">✓</span> 临时消息已销毁
@@ -134,6 +137,13 @@
                 :waveform-key="message.id"
                 :own="isOwn(message)"
                 :suspended="voiceCaptureOwnsAudioSession"
+              />
+              <DmFileMessage
+                v-else-if="hasFile(message)"
+                :media="fileMedia(message)"
+                :pending-name="message.outgoing?.fileName"
+                :pending-size="message.outgoing?.fileSize"
+                :own="isOwn(message)"
               />
               <div v-else-if="hasVideo(message)" class="dm-video">
                 <video v-if="message.outgoing?.videoPreviewUrl" :src="message.outgoing.videoPreviewUrl" class="dm-video-preview" controls playsinline preload="metadata"></video>
@@ -231,10 +241,20 @@
           <button type="button" :aria-label="`移除第 ${index + 1} 个${image.kind === 'video' ? '视频' : '图片'}`" @click="removeSelectedImage(index)">×</button>
         </div>
       </div>
+      <div v-if="selectedFiles.length" class="selected-files" aria-label="待发送文件">
+        <div v-for="(file, index) in selectedFiles" :key="`${file.name}:${file.size}:${index}`" class="selected-file">
+          <span class="selected-file-name">{{ file.name || "文件" }}</span>
+          <small>{{ formatDmFileSize(file.size) }}</small>
+          <button type="button" :aria-label="`移除文件 ${file.name}`" @click="removeSelectedFile(index)">×</button>
+        </div>
+      </div>
       <p v-if="voiceError" class="voice-error" role="alert">{{ voiceError }}</p>
       <div v-if="attachmentMenuOpen" class="dm-attachment-menu" role="menu" aria-label="添加消息内容">
         <button type="button" role="menuitem" @click="chooseImageFromMenu">
           <span aria-hidden="true">▧</span> 图片和视频
+        </button>
+        <button type="button" role="menuitem" @click="chooseFileFromMenu">
+          <span aria-hidden="true">⎙</span> 文件
         </button>
         <button type="button" role="menuitem" @click="openRecommendationPicker">
           <span aria-hidden="true">♧</span> 推荐朋友
@@ -325,7 +345,7 @@
               </button>
               <span class="composer-actions-spacer" aria-hidden="true"></span>
               <button
-                v-if="draft.trim() || selectedImages.length"
+                v-if="draft.trim() || selectedImages.length || selectedFiles.length"
                 class="composer-icon-button send-button"
                 type="submit"
                 aria-label="发送"
@@ -338,7 +358,7 @@
             </div>
           </template>
           <button
-            v-show="voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImages.length)"
+            v-show="voiceCaptureOwnsAudioSession || (!draft.trim() && !selectedImages.length && !selectedFiles.length)"
             class="composer-icon-button microphone-button persistent-microphone"
             data-live-audio-action
             :class="{ active: voiceCaptureOwnsAudioSession }"
@@ -357,6 +377,7 @@
         </div>
       </form>
       <input ref="imageInput" class="attachment-file-input sr-file-input" type="file" accept="image/*,video/*" multiple :disabled="!accepted || !keys.pkHex" @change="selectImages" />
+      <input ref="fileInput" class="attachment-file-input sr-file-input" type="file" multiple :disabled="!accepted || !keys.pkHex" @change="selectFiles" />
     </div>
     <LocationShareSheet
       v-if="locationSheetOpen"
@@ -386,6 +407,9 @@ import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, r
 import { useRoute, useRouter } from "vue-router";
 import PostImagePreview from "@/components/PostImagePreview.vue";
 import DmAudioMessage from "@/components/DmAudioMessage.vue";
+import DmFileMessage from "@/components/DmFileMessage.vue";
+import { formatDmFileSize, MAX_DM_FILE_BYTES, parsePrivateFileMessage } from "@/nostr/messaging/privateFile";
+import { takePendingShare } from "@/services/shareTarget";
 const VideoPlayer = defineAsyncComponent(() => import("@/components/VideoPlayer.vue"));
 import DmBurnCountdown from "@/components/DmBurnCountdown.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
@@ -529,12 +553,60 @@ const {
   search: (peer, query, options) => directMessages.searchPeerMessages(peer, query, options),
 });
 const searchInput = ref<HTMLInputElement | null>(null);
-const { selectedImages, imageInput, clearSelectedImages, removeSelectedImage, selectImages } = useDmImageSelection({
+const { selectedImages, imageInput, clearSelectedImages, removeSelectedImage, selectImages, addImages } = useDmImageSelection({
   max: 9,
   notify: message => ui.addToast(message, 2200, "info"),
   warm: file => warmEncryptedCommentImage(file),
 });
 const attachmentMenuOpen = ref(false);
+const MAX_SELECTED_FILES = 9;
+const selectedFiles = ref<File[]>([]);
+const fileInput = ref<HTMLInputElement | null>(null);
+function addSelectedFiles(files: File[]) {
+  let skippedLarge = 0;
+  let skippedEmpty = 0;
+  const next = [...selectedFiles.value];
+  for (const file of files) {
+    if (!file.size) { skippedEmpty += 1; continue; }
+    if (file.size > MAX_DM_FILE_BYTES) { skippedLarge += 1; continue; }
+    if (next.length >= MAX_SELECTED_FILES) {
+      ui.addToast(`一次最多发送 ${MAX_SELECTED_FILES} 个文件`, 2200, "info");
+      break;
+    }
+    next.push(file);
+  }
+  selectedFiles.value = next;
+  if (skippedLarge) ui.addToast("超过 25MB 的文件无法发送", 2200, "info");
+  else if (skippedEmpty) ui.addToast("已跳过空文件", 1800, "info");
+}
+function selectFiles(event: Event) {
+  const input = event.target as HTMLInputElement;
+  addSelectedFiles([...(input.files || [])]);
+  input.value = "";
+}
+function removeSelectedFile(index: number) {
+  selectedFiles.value = selectedFiles.value.filter((_, itemIndex) => itemIndex !== index);
+}
+function clearSelectedFiles() {
+  selectedFiles.value = [];
+}
+/** Content shared in from another app (系统分享) lands in the composer, unsent. */
+async function applyPendingShare() {
+  const peer = peerPubkey.value;
+  if (disposed || !accepted.value) return;
+  const share = await takePendingShare(peer).catch(() => null);
+  if (!share || disposed || peer !== peerPubkey.value) return;
+  const media = share.files.filter(file => file.type.startsWith("image/") || file.type.startsWith("video/"));
+  const documents = share.files.filter(file => !media.includes(file));
+  if (media.length) addImages(media);
+  if (documents.length) addSelectedFiles(documents);
+  if (share.text) {
+    draft.value = draft.value.trim() ? `${draft.value.trimEnd()}\n${share.text}` : share.text;
+  }
+}
+function openSharedMedia() {
+  void router.push(`/messages/${peerPubkey.value}/media`);
+}
 const {
   recommendationPickerOpen, recommendationQuery, selectedRecommendation, recommendableFriends,
   recommendationName, recommendationBio, recommendationActionLabel, recommendationActionDisabled,
@@ -642,14 +714,14 @@ let composerFocused = false;
 let composerFocusSettleTimer: number | null = null;
 
 const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
-const messageText = (content: string) => ["[图片]", "[语音]", "[视频]", "[好友推荐]", "[位置]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
+const messageText = (content: string) => parsePrivateFileMessage(content) ? "" : ["[图片]", "[语音]", "[视频]", "[好友推荐]", "[位置]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
 const friendRecommendation = parseFriendRecommendation;
 const locationShare = parseLocationShare;
 const locationSheetOpen = ref(false);
 const liveLocation = useLiveLocationStore();
 const {
   canSend, submitMessage, sendVoiceRecordingResult, sendLocation,
-  openRecommendationPicker, openLocationSheet, chooseImageFromMenu, enableDisappearing, disableDisappearing,
+  openRecommendationPicker, openLocationSheet, chooseImageFromMenu, chooseFileFromMenu, enableDisappearing, disableDisappearing,
 } = useDmComposerActions({
   account: () => keys.pkHex,
   peer: () => peerPubkey.value,
@@ -660,6 +732,7 @@ const {
   replyTarget: () => replyingToMessage.value?.id,
   cancelReply: () => cancelReply(),
   selectedImages, imageInput, clearSelectedImages,
+  selectedFiles, fileInput, clearSelectedFiles,
   recording, recordedAudio, clearRecordedAudio, voiceError, voiceCaptureOwnsAudioSession,
   textInput, disappearingSeconds, attachmentMenuOpen, locationSheetOpen,
   showRecommendationPicker, clearAfterSend,
@@ -671,6 +744,8 @@ const audioMedia = (message: InboxItem) => parsePrivateAudioMessage(message.cont
 const hasAudio = (message: InboxItem) => !!message.outgoing?.hasAudio || !!audioMedia(message);
 const videoMedia = (message: InboxItem) => parsePrivateVideoMessage(message.content)?.media || null;
 const hasVideo = (message: InboxItem) => !!message.outgoing?.hasVideo || !!videoMedia(message);
+const fileMedia = (message: InboxItem) => parsePrivateFileMessage(message.content)?.media || null;
+const hasFile = (message: InboxItem) => !!message.outgoing?.hasFile || !!fileMedia(message);
 const dmVideoData = (media: PrivateVideoMedia): VideoData => ({ type: "video", url: media.encryptedRef, provider: "Encrypted", embedUrl: media.encryptedRef });
 const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreviewUrl || hasImage(message.content);
 const isMediaCaption = (message: InboxItem) => hasMessageImage(message) && !!messageText(message.content);
@@ -706,7 +781,7 @@ function quotePreview(message?: InboxItem) {
   if (!message) return "引用的消息暂不可用";
   if (isDisappearing(message)) return "阅后即焚消息";
   const preview = directMessagePreview(message.content);
-  return quotedMessageExcerpt(preview || (hasAudio(message) ? "[语音]" : hasVideo(message) ? "[视频]" : hasMessageImage(message) ? "[图片]" : "消息"));
+  return quotedMessageExcerpt(preview || (hasAudio(message) ? "[语音]" : hasVideo(message) ? "[视频]" : hasFile(message) ? `[文件] ${message.outgoing?.fileName || ""}`.trim() : hasMessageImage(message) ? "[图片]" : "消息"));
 }
 function quotedMessage(replyTo?: string) {
   return lookupMessage(replyTo);
@@ -1130,7 +1205,7 @@ onMounted(() => {
   window.visualViewport?.addEventListener("resize", handleVisualViewportResize);
   window.addEventListener("pagehide", handlePageHide);
   messageList.value?.addEventListener("load", handleMessageMediaLoad, true);
-  void load();
+  void load().then(applyPendingShare);
   // Chat-only idle warming: never parse WebRTC while the home screen boots,
   // but normally have its methods ready before the user presses call.
   scheduleBackgroundTask("chat-call-warmup", async () => { await loadCallEngine(); }, { priority: "idle", timeoutMs: 1_500 });
@@ -1146,6 +1221,7 @@ watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
   closeRecommendationPicker();
   locationSheetOpen.value = false;
   clearSelectedImages();
+  clearSelectedFiles();
   openingMessageId.value = "";
   if (previous?.[0] && previous?.[1]) flushDraft(previous[0], previous[1]);
   pauseDraftPersistence();
@@ -1206,6 +1282,8 @@ onBeforeUnmount(() => {
 .message-line .message-bubble,.message-line .message-bubble *{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important}
 .message-line .bubble-text,.message-line .quoted-message,.message-line .quoted-message *{-webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important}.message-line.own{justify-content:flex-end}.avatar-slot{display:flex;width:28px;flex:0 0 28px}.swipe-reply-indicator{display:grid;height:30px;flex:0 0 auto;place-items:center;overflow:hidden;border-radius:50%;color:var(--fg-657786);transition:color 120ms ease,background 120ms ease}.swipe-reply-indicator.active{background:var(--bg-e8f4fd);color:var(--fg-1687e8)}.swipe-reply-indicator svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.message-stack{display:flex;max-width:min(76%,430px);align-items:flex-end;flex-direction:column}.message-line:not(.own) .message-stack{align-items:flex-start}.message-bubble{max-width:100%;padding:9px 12px;border-radius:18px 18px 18px 5px;background:var(--bg-eff3f4);color:var(--fg-0f1419);line-height:1.45;overflow:hidden}.message-line.own .message-bubble{border-radius:18px 18px 5px 18px;background:var(--bg-d9efff)}.quoted-message{display:flex;width:100%;min-width:0;flex-direction:column;gap:1px;margin:0 0 6px;padding:6px 8px;border:0;border-left:3px solid #1687e8;border-radius:7px;background:var(--bg-rgba-255-255-255-58);color:inherit;font:inherit;line-height:1.25;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}.quoted-message:active{background:var(--bg-rgba-255-255-255-88)}.quoted-message strong{overflow:hidden;color:var(--fg-536471);font-size:11px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.quoted-message span{overflow:hidden;max-width:280px;color:var(--fg-536471);font-size:12px;text-overflow:ellipsis;white-space:nowrap}.message-line.message-highlight .message-bubble{animation:message-target-highlight 1.25s ease-out}.message-stack:has(.link-cards.video){flex:1 1 auto;max-width:min(100%,560px)}.message-bubble:has(.link-cards.video){width:100%}.message-bubble:has(.link-cards.video) .link-cards{margin-right:-12px;margin-left:-12px}.message-bubble:has(.link-cards.video) .link-cards :deep(.link-card){border-right:0;border-left:0;border-radius:0}.bubble-text{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}.call-back-link{display:inline-block;margin-top:4px;padding:2px 0;border:0;background:transparent;color:var(--fg-1687e8);font:inherit;font-size:13px;font-weight:650;cursor:pointer}.optimistic-image{display:block;width:min(260px,65vw);max-height:320px;margin:6px -4px -1px;object-fit:cover;border-radius:12px}.message-bubble :deep(.post-image-preview){margin:-9px -12px}.message-bubble :deep(.carousel-shell){border-radius:16px}.media-caption-bubble{width:min(260px,65vw);padding:0}.media-caption-bubble>.quoted-message{margin:8px 10px 6px}.media-caption-bubble .optimistic-image{width:100%;max-height:320px;margin:0;border-radius:0}.media-caption-bubble :deep(.post-image-preview){margin:0}.media-caption-bubble :deep(.carousel-shell){margin:0;border-radius:0}.caption-area{padding:8px 10px 7px}
 .audio-bubble{padding:9px 10px}
+.file-bubble{padding:2px}
+.selected-files{display:flex;flex-direction:column;gap:6px;margin:0 16px 8px}.selected-file{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 6px 0 12px;border:1px solid var(--bd-e2e8f0);border-radius:10px;background:var(--bg-fff);color:var(--fg-0f1419);font-size:14px}.selected-file-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.selected-file small{flex:0 0 auto;color:var(--fg-64748b);font-size:12px}.selected-file button{display:grid;place-items:center;flex:0 0 32px;width:32px;height:32px;border:0;border-radius:50%;background:transparent;color:var(--fg-64748b);font-size:20px}
 .message-line.action-menu-source .message-bubble{box-shadow:0 0 0 3px rgba(22,135,232,.12)}
 @keyframes message-target-highlight{0%{filter:brightness(.92);box-shadow:0 0 0 4px rgba(22,135,232,.24)}55%{filter:brightness(.98);box-shadow:0 0 0 3px rgba(22,135,232,.12)}100%{filter:none;box-shadow:0 0 0 0 rgba(22,135,232,0)}}
 .jump-to-latest{position:absolute;right:18px;bottom:calc(94px + env(safe-area-inset-bottom));z-index:4;display:flex;min-width:42px;height:42px;align-items:center;justify-content:center;gap:6px;padding:0 12px;border:1px solid var(--bd-d8dee5);border-radius:999px;background:var(--bg-fff);color:var(--fg-0f1419);box-shadow:0 5px 18px rgba(15,23,42,.16);font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent}.jump-to-latest:active{background:var(--bg-f7f9f9);transform:scale(.97)}.jump-to-latest>span{font-size:20px;line-height:1}.jump-to-latest strong{font-size:12px;font-weight:650;white-space:nowrap}
