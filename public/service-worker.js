@@ -2,7 +2,7 @@
  * Clean & Stable Service Worker
  * ====================================================== */
 
-const VERSION = "0.1.203"; // ⚠️ 更新代码时同步修改此版本号
+const VERSION = "0.1.204"; // ⚠️ 更新代码时同步修改此版本号
 const BUILD_ID = "source-86656ec9f1782666"; // Replaced by scripts/update-sw-version.js on every production build
 const CACHE_PREFIX = 'closed-community-pwa';
 const ASSETS_CACHE = `${CACHE_PREFIX}-assets-${VERSION}-${BUILD_ID}`;
@@ -382,10 +382,56 @@ function offlinePage() {
     { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
+// 系统分享（Web Share Target）：manifest 把分享 POST 到 /share-target。
+// 内容只在本机暂存，等用户在 App 里选好友后放进输入框，不会自动发送。
+// 这个缓存名不以 CACHE_PREFIX 开头，版本更新时不会被 activate 清掉。
+const SHARE_INBOX_CACHE = 'hainei-share-inbox-v1';
+const SHARE_META_URL = new URL('/__hainei_share__/meta', self.location.origin).href;
+const SHARE_FILE_URL_PREFIX = new URL('/__hainei_share__/file/', self.location.origin).href;
+const SHARE_MAX_FILES = 9;
+const SHARE_MAX_FILE_BYTES = 1024 * 1024 * 1024;
+
+async function storeSharedPayload(request) {
+  const form = await request.formData();
+  const pieces = [];
+  for (const name of ['title', 'text', 'url']) {
+    const value = form.get(name);
+    if (typeof value === 'string' && value.trim() && !pieces.some((piece) => piece.includes(value.trim()))) pieces.push(value.trim());
+  }
+  const files = form.getAll('files')
+    .filter((file) => typeof file === 'object' && file && typeof file.arrayBuffer === 'function' && file.size > 0 && file.size <= SHARE_MAX_FILE_BYTES)
+    .slice(0, SHARE_MAX_FILES);
+  await caches.delete(SHARE_INBOX_CACHE);
+  const cache = await caches.open(SHARE_INBOX_CACHE);
+  const entries = [];
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    const key = `${SHARE_FILE_URL_PREFIX}${index}`;
+    await cache.put(key, new Response(file, { headers: { 'Content-Type': 'application/octet-stream' } }));
+    entries.push({ key, name: String(file.name || `文件${index + 1}`).slice(0, 200), type: String(file.type || ''), size: file.size });
+  }
+  const meta = { v: 1, createdAt: Date.now(), text: pieces.join('\n').slice(0, 20000), files: entries };
+  await cache.put(SHARE_META_URL, new Response(JSON.stringify(meta), { headers: { 'Content-Type': 'application/json' } }));
+}
+
+async function handleShareTarget(request) {
+  try {
+    await storeSharedPayload(request);
+  } catch (error) {
+    console.warn('[SW] share target failed', error && error.name);
+  }
+  return Response.redirect(new URL('/#/share', self.location.origin).href, 303);
+}
+
 // Fetch 拦截：确保不缓存 API 请求
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
+
+  if (request.method === 'POST' && url.origin === self.location.origin && url.pathname === '/share-target') {
+    event.respondWith(handleShareTarget(request));
+    return;
+  }
 
   // 如果是 API 请求或非 GET 请求，直接跳过缓存
   if (url.pathname.includes('/api/') || request.method !== 'GET') {

@@ -33,6 +33,11 @@ export function useDmImageSelection(options: {
     const picked = [...(input.files || [])];
     // Reset so picking the same photo again after removing it still fires change.
     input.value = "";
+    addImages(picked);
+  }
+
+  /** Append already-obtained photos or videos, e.g. ones shared in from another app. */
+  function addImages(picked: File[]) {
     const { added, overflow } = imagesToAppend(selectedImages.value.map(image => image.file), picked, options.max, { videos: true });
     const images: SelectedDmImage[] = added.map(file => ({
       file, preview: URL.createObjectURL(file), kind: file.type.startsWith("video/") ? "video" : "image",
@@ -42,5 +47,5 @@ export function useDmImageSelection(options: {
     if (overflow) options.notify(`一次最多发送 ${options.max} 个图片或视频`);
   }
 
-  return { selectedImages, imageInput, clearSelectedImages, removeSelectedImage, selectImages };
+  return { selectedImages, imageInput, clearSelectedImages, removeSelectedImage, selectImages, addImages };
 }

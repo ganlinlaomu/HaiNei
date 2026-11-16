@@ -24,6 +24,7 @@ function setup(overrides: { accepted?: boolean; nip44?: boolean } = {}) {
   const draft = ref("");
   const replyingToId = ref("");
   const selectedImages = ref<SelectedDmImage[]>([]);
+  const selectedFiles = ref<File[]>([]);
   const recording = ref<unknown>(null);
   const recordedAudio = ref<ReturnType<typeof voice> | null>(null);
   const voiceError = ref("");
@@ -43,6 +44,8 @@ function setup(overrides: { accepted?: boolean; nip44?: boolean } = {}) {
     send: vi.fn(),
     sendAudio: vi.fn(),
     sendVideo: vi.fn(),
+    sendFile: vi.fn(),
+    clearSelectedFiles: vi.fn(() => { selectedFiles.value = []; }),
     startLiveSharing: vi.fn(() => Promise.resolve()),
     notify: vi.fn(),
     click: vi.spyOn(fileInput, "click").mockImplementation(() => {}),
@@ -61,13 +64,14 @@ function setup(overrides: { accepted?: boolean; nip44?: boolean } = {}) {
     textInput: ref(textarea), disappearingSeconds, attachmentMenuOpen, locationSheetOpen,
     showRecommendationPicker: spies.showRecommendationPicker,
     clearAfterSend: spies.clearAfterSend,
-    directMessages: { send: spies.send, sendAudio: spies.sendAudio, sendVideo: spies.sendVideo } as any,
+    selectedFiles, clearSelectedFiles: spies.clearSelectedFiles,
+    directMessages: { send: spies.send, sendAudio: spies.sendAudio, sendVideo: spies.sendVideo, sendFile: spies.sendFile } as any,
     startLiveSharing: spies.startLiveSharing,
     notify: spies.notify,
   });
   const replyTo = (id: string) => { replyingToId.value = id; state.replyTarget = id; };
   return {
-    state, actions, spies, draft, replyTo, replyingToId, selectedImages, recording, recordedAudio, voiceError,
+    state, actions, spies, draft, replyTo, replyingToId, selectedImages, selectedFiles, recording, recordedAudio, voiceError,
     voiceCaptureOwnsAudioSession, textarea, disappearingSeconds, attachmentMenuOpen, locationSheetOpen,
   };
 }
@@ -75,6 +79,32 @@ function setup(overrides: { accepted?: boolean; nip44?: boolean } = {}) {
 describe("私信发送", () => {
   let t: ReturnType<typeof setup>;
   beforeEach(() => { t = setup(); });
+
+  it("文件各自单独发送，文字先单独发一条，引用挂在文字上", () => {
+    t.draft.value = "合同在这";
+    t.replyTo("msg-1");
+    const a = new File(["a"], "a.pdf", { type: "application/pdf" });
+    const b = new File(["b"], "b.zip");
+    t.selectedFiles.value = [a, b];
+
+    expect(t.actions.canSend.value).toBe(true);
+    t.actions.submitMessage();
+
+    expect(t.spies.send).toHaveBeenCalledWith(PEER, "合同在这", undefined, "msg-1", undefined);
+    expect(t.spies.sendFile.mock.calls).toEqual([[PEER, a, undefined], [PEER, b, undefined]]);
+    expect(t.selectedFiles.value).toEqual([]);
+  });
+
+  it("只有文件时不发空文字，引用挂在第一个文件上", () => {
+    t.replyTo("msg-2");
+    const a = new File(["a"], "a.pdf");
+    t.selectedFiles.value = [a];
+
+    t.actions.submitMessage();
+
+    expect(t.spies.send).not.toHaveBeenCalled();
+    expect(t.spies.sendFile).toHaveBeenCalledWith(PEER, a, "msg-2");
+  });
 
   it("发送文字（带引用），发完清空输入框和引用", () => {
     t.draft.value = "你好";
@@ -275,7 +305,7 @@ describe("附件菜单", () => {
       prepare(t);
       t.actions.enableDisappearing();
       expect(t.disappearingSeconds.value).toBeNull();
-      expect(t.spies.notify).toHaveBeenCalledWith("请先移除图片或语音，阅后即焚仅支持文字", 2200, "info");
+      expect(t.spies.notify).toHaveBeenCalledWith("请先移除图片、文件或语音，阅后即焚仅支持文字", 2200, "info");
     }
   });
 

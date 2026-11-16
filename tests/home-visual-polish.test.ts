@@ -44,7 +44,7 @@ describe("Home visual polish contract", () => {
     expect(card).toContain("flat?: boolean");
     expect(card).toContain("'force-flat': flat");
     expect(card).toContain(".post-card:not(.force-flat)");
-    expect(profile).toContain('<PostCard v-for="post in ownerPosts" :key="post.id" :message="post" flat />');
+    expect(profile).toContain('<PostCard v-for="post in ownerPosts" :key="post.id" :message="post" :pinned="post.id === pinnedPostId" flat />');
     expect(profile).toContain(".post-list{display:grid;gap:0}");
     expect(profile).toContain(".profile-posts{width:100%;box-sizing:border-box;padding:4px 0 0}");
   });

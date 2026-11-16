@@ -33,6 +33,9 @@ export type InboxItem = {
     hasAudio?: boolean;
     videoPreviewUrl?: string;
     hasVideo?: boolean;
+    hasFile?: boolean;
+    fileName?: string;
+    fileSize?: number;
     lastError?: string;
   };
 };

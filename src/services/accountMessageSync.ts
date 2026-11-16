@@ -429,7 +429,7 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
         },
         processFriendshipMessage: message => friendships.processFriendshipMessage(message),
         processProfileMessage: message => profiles.processProfileMessage(message, friendships.isAccepted),
-        processFeedControlMessage: message => feedPreferences.processTombstone(
+        processFeedControlMessage: message => feedPreferences.processFeedControl(
           message,
           friendships.isAccepted,
           messageId => messages.inbox.find(item => item.id === messageId)?.pubkey,

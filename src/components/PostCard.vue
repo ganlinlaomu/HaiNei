@@ -7,6 +7,10 @@
       <div class="author-copy">
         <button class="profile-link name-link" type="button" @pointerdown="preloadProfile" @focus="preloadProfile" @click="openAuthor(message.pubkey, $event)">{{ displayName(message.pubkey) }}</button>
         <div class="author-meta">
+          <template v-if="pinned">
+            <span class="pinned-badge">置顶</span>
+            <span class="meta-separator" aria-hidden="true">·</span>
+          </template>
           <time :datetime="new Date(message.created_at * 1000).toISOString()">{{ formatRelativeTime(message.created_at) }}</time>
           <template v-if="isOwn && audience">
             <span class="meta-separator" aria-hidden="true">·</span>
@@ -28,6 +32,7 @@
       <div class="overflow-wrap">
         <button class="overflow-button" type="button" aria-label="动态操作" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">•••</button>
         <div v-if="menuOpen" class="overflow-menu">
+          <button v-if="isOwn && canPin" type="button" :disabled="pinning" @click="togglePin">{{ pinnedOnProfile ? "取消置顶" : "置顶到个人主页" }}</button>
           <button v-if="isOwn" type="button" @click="deleteOwnPost">删除此动态</button>
           <button v-else type="button" @click="hidePost">隐藏此动态</button>
           <button v-if="!isOwn" type="button" @click="muteAuthor">不看此人的动态</button>
@@ -108,7 +113,7 @@ const PostImagePreview = defineAsyncComponent(() => import("./PostImagePreview.v
 const VideoPlayer = defineAsyncComponent(() => import("./VideoPlayer.vue"));
 const CommentSheet = defineAsyncComponent(loadCommentSheet);
 
-const props = withDefaults(defineProps<{ message: InboxItem; openCommentId?: string; flat?: boolean }>(), { flat: false });
+const props = withDefaults(defineProps<{ message: InboxItem; openCommentId?: string; flat?: boolean; pinned?: boolean }>(), { flat: false, pinned: false });
 const emit = defineEmits<{ height: [id: string, height: number] }>();
 const keys = useKeyStore(); const friends = useFriendsStore(); const friendships = useFriendshipsStore(); const interactions = useInteractionsStore(); const ui = useUIStore();
 const posts = usePostsStore();
@@ -151,6 +156,24 @@ function openAuthor(pubkey: string, event?: Event) {
 }
 async function hidePost() { menuOpen.value = false; await feedPreferences.hide(props.message.id); ui.addToast("已在本机隐藏", 1600, "success"); }
 async function muteAuthor() { menuOpen.value = false; await feedPreferences.mute(props.message.pubkey); ui.addToast("已在本机隐藏该好友的动态", 1800, "success"); }
+const pinning = ref(false);
+// Only a delivered post has the id friends know it by.
+const canPin = computed(() => /^[0-9a-f]{64}$/.test(props.message.id) && (!deliveryState.value || deliveryState.value === "sent"));
+const pinnedOnProfile = computed(() => feedPreferences.pinnedPostOf(props.message.pubkey) === props.message.id);
+async function togglePin() {
+  menuOpen.value = false;
+  if (pinning.value) return;
+  pinning.value = true;
+  const unpin = pinnedOnProfile.value;
+  try {
+    await feedPreferences.pinOwn(unpin ? null : props.message, friends.getAcceptedList(friendships.isAccepted).map(friend => friend.pubkey));
+    ui.addToast(unpin ? "已取消置顶" : "已置顶到个人主页", 1600, "success");
+  } catch {
+    ui.addToast(unpin ? "已在本机取消置顶，通知好友失败，请稍后重试" : "已在本机置顶，通知好友失败，请稍后重试", 2400, "error");
+  } finally {
+    pinning.value = false;
+  }
+}
 async function deleteOwnPost() {
   menuOpen.value = false;
   try { await feedPreferences.tombstoneOwn(props.message); ui.addToast("已发送删除标记", 1800, "success"); }
@@ -282,4 +305,5 @@ onBeforeUnmount(() => observer?.disconnect());
 @keyframes instagram-heart-flight{0%{opacity:.3;transform:translateY(0) scale(.72)}8%{opacity:.7;transform:translateY(-24px) scale(1.18)}22%{opacity:1;transform:translateY(-74px) scale(1.78)}34%{transform:translateY(-104px) scale(2.18)}43%{transform:translateY(-106px) scale(2.2)}56%{transform:translateY(-90px) scale(2.02)}70%{transform:translateY(-50px) scale(1.55)}82%{transform:translateY(-26px) scale(1.25)}92%{opacity:1;transform:translateY(-10px) scale(1.04)}100%{opacity:0;transform:translateY(0) scale(.96)}}
 @media(min-width:640px){.post-card:not(.force-flat){padding:16px;border:1px solid var(--bd-e8edf3);border-radius:14px;box-shadow:0 2px 8px rgba(15,23,42,.035)}.post-card:not(.force-flat) .actions{padding-top:6px;border-top:1px solid var(--bd-f1f5f9)}.post-card:not(.force-flat) .message-text{line-height:1.62}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}.like-flight{display:none}.like-action.like-bounce .like-base{fill:currentColor;stroke:currentColor;color:inherit}}
+.pinned-badge{padding:1px 6px;border-radius:4px;background:var(--bg-e8f4fd);color:var(--fg-1687e8);font-size:11px;font-weight:700}
 </style>

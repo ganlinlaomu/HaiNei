@@ -43,6 +43,8 @@ import { takeWarmedCommentImage, uploadEncryptedCommentImage } from "@/utils/com
 import { prepareEncryptedDmAudio, uploadPreparedEncryptedDmAudio } from "@/utils/encryptedDmAudio";
 import { prepareEncryptedDmVideo, uploadPreparedEncryptedDmVideo } from "@/utils/encryptedDmVideo";
 import { compressVideoForUpload } from "@/utils/videoCompression";
+import { prepareEncryptedDmFile, uploadPreparedEncryptedDmFile } from "@/utils/encryptedDmFile";
+import { MAX_DM_FILE_BYTES, normalizeDmFileMime, sanitizeDmFileName, serializePrivateFileMessage } from "@/nostr/messaging/privateFile";
 import { MAX_DM_VIDEO_BYTES, MAX_DM_VIDEO_SOURCE_BYTES, serializePrivateAudioMessage, serializePrivateVideoMessage } from "@/nostr/messaging/privateMedia";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
 import { useNotificationsStore } from "@/stores/notifications";
@@ -233,6 +235,14 @@ export function taskContent(task: OutgoingDmTaskRecord) {
       size: task.videoSize || 0,
     });
   }
+  if (task.mediaType === "file" && task.uploadedRef) {
+    return serializePrivateFileMessage({
+      encryptedRef: task.uploadedRef,
+      name: task.fileName || "文件",
+      mime: task.fileMime || "application/octet-stream",
+      size: task.fileSize || 0,
+    });
+  }
   return `${task.text}${task.text && task.uploadedRef ? "\n" : ""}${task.uploadedRef ? `![](${task.uploadedRef})` : ""}`;
 }
 function taskInboxItem(task: OutgoingDmTaskRecord): InboxItem {
@@ -261,7 +271,10 @@ function taskInboxItem(task: OutgoingDmTaskRecord): InboxItem {
       audioSize: task.audioSize,
       videoPreviewUrl: task.mediaType === "video" && task.state !== "sent" ? taskPreviewUrls.get(taskKey(task.accountPubkey, task.localId)) : undefined,
       hasVideo: task.mediaType === "video",
-      hasImage: task.mediaType !== "audio" && task.mediaType !== "video" && (!!task.imageName || !!task.imageBytes || !!task.preparedImage || !!task.uploadedRef),
+      hasFile: task.mediaType === "file",
+      fileName: task.mediaType === "file" ? task.fileName : undefined,
+      fileSize: task.mediaType === "file" ? task.fileSize : undefined,
+      hasImage: task.mediaType !== "audio" && task.mediaType !== "video" && task.mediaType !== "file" && (!!task.imageName || !!task.imageBytes || !!task.preparedImage || !!task.uploadedRef),
       hasAudio: task.mediaType === "audio",
       lastError: task.lastError,
     },
@@ -1776,6 +1789,56 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       })();
       return task.localId;
     },
+    sendFile(peerPubkey: string, file: File, replyTo?: string) {
+      const keys = useKeyStore();
+      const account = keys.pkHex.toLowerCase();
+      const peer = peerPubkey.trim().toLowerCase();
+      const friendships = useFriendshipsStore();
+      if (!canStartDirectMessage(account, peer, friendships.isAccepted)) throw new Error(peer === account ? "无法向自己发送私信" : "只能向已接受的好友发送私信");
+      if (!file.size) throw new Error("文件为空");
+      if (file.size > MAX_DM_FILE_BYTES) throw new Error("文件不能超过 25MB");
+      const now = Date.now();
+      const clock = nextMessageClock(now);
+      const task: OutgoingDmTaskRecord = {
+        accountPubkey: account,
+        localId: createLocalId(),
+        peerPubkey: peer,
+        text: "",
+        ...(replyTo ? { replyTo } : {}),
+        mediaType: "file",
+        fileName: sanitizeDmFileName(file.name),
+        fileMime: normalizeDmFileMime(file.type),
+        fileSize: file.size,
+        state: "uploading",
+        createdAt: clock.createdAt,
+        createdMs: clock.ms,
+        updatedAt: now,
+      };
+      this.outgoingTasks = [...this.outgoingTasks, task];
+      preparingVideoTasks.add(taskKey(account, task.localId));
+      void (async () => {
+        try {
+          await outgoingDmTaskRepository.put(task);
+          const preparedFile = await prepareEncryptedDmFile(file);
+          const updated = { ...task, preparedFile, updatedAt: Date.now() };
+          await outgoingDmTaskRepository.put(updated);
+          if (useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return;
+          const index = this.outgoingTasks.findIndex(item => item.accountPubkey === account && item.localId === task.localId);
+          if (index >= 0) this.outgoingTasks.splice(index, 1, updated);
+          void this.runTask(task.localId);
+        } catch (error) {
+          if (useKeyStore().pkHex === account && this.loadedFor === account) await this.failTask(task.localId, "upload_failed", error);
+          else await outgoingDmTaskRepository.update(account, task.localId, {
+            state: "upload_failed",
+            lastError: `prepare_failed: ${error instanceof Error ? error.message : "文件加密失败"}`,
+            updatedAt: Date.now(),
+          });
+        } finally {
+          preparingVideoTasks.delete(taskKey(account, task.localId));
+        }
+      })();
+      return task.localId;
+    },
     async patchTask(localId: string, patch: Partial<OutgoingDmTaskRecord>) {
       const account = this.loadedFor || useKeyStore().pkHex.toLowerCase();
       const index = this.outgoingTasks.findIndex(task => task.accountPubkey === account && task.localId === localId);
@@ -1858,6 +1921,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         if (!task || task.state === "sent" || useKeyStore().pkHex.toLowerCase() !== account) return;
         if (task.imageName && !task.imageBytes && !task.preparedImage && !task.uploadedRef && !task.outgoingId) return;
         if (task.mediaType === "audio" && !task.preparedAudio && !task.uploadedRef && !task.outgoingId) return;
+        if (task.mediaType === "file" && !task.preparedFile && !task.uploadedRef && !task.outgoingId) {
+          if (!preparingVideoTasks.has(key)) await this.failTask(localId, "upload_failed", new Error("文件处理被中断，请重新选择"));
+          return;
+        }
         if (task.mediaType === "video" && !task.preparedVideo && !task.uploadedRef && !task.outgoingId) {
           // Still compressing in this session, or the app was closed while it
           // was: the picked file is gone, so that video has to be picked again.
@@ -1929,6 +1996,24 @@ export const useDirectMessagesStore = defineStore("directMessages", {
               state: "sending",
               lastError: undefined,
             })) || task;
+          } else if (task.mediaType === "file" && task.preparedFile && !task.uploadedRef) {
+            uploadHiddenEpoch = appHiddenEpoch();
+            task = (await this.patchTask(localId, { state: "uploading", lastError: undefined })) || task;
+            const preparedFile = task.preparedFile;
+            if (!preparedFile) throw new Error("待上传文件不存在");
+            const media = await uploadPreparedEncryptedDmFile(preparedFile, {
+              accountPubkey: account,
+              signEvent: useKeyStore().signEvent.bind(useKeyStore()),
+            });
+            task = (await this.patchTask(localId, {
+              uploadedRef: media.encryptedRef,
+              preparedFile: undefined,
+              fileName: media.name,
+              fileMime: media.mime,
+              fileSize: media.size,
+              state: "sending",
+              lastError: undefined,
+            })) || task;
           } else {
             task = (await this.patchTask(localId, { state: "sending", lastError: undefined })) || task;
           }
@@ -1982,7 +2067,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           }
           await this.failTask(localId, phase === "persist_failed"
             ? "send_failed"
-            : (current.imageBytes || current.preparedAudio || current.preparedVideo) && !current.uploadedRef && !current.outgoingId ? "upload_failed" : "send_failed", error);
+            : (current.imageBytes || current.preparedAudio || current.preparedVideo || current.preparedFile) && !current.uploadedRef && !current.outgoingId ? "upload_failed" : "send_failed", error);
         }
       })().finally(() => activeOutgoingTasks.delete(key));
       activeOutgoingTasks.set(key, work);

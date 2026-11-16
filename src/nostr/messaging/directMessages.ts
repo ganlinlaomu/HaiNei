@@ -1,5 +1,6 @@
 import type { CanonicalMessage } from "./protocol";
 import { parsePrivateAudioMessage, parsePrivateVideoMessage } from "./privateMedia";
+import { parsePrivateFileMessage } from "./privateFile";
 import { parseFriendRecommendation } from "./friendRecommendation";
 import { parseLocationShare } from "./locationShare";
 
@@ -35,6 +36,8 @@ export function directMessagePreview(content: string) {
   if (parseLocationShare(content)) return "[位置]";
   if (parsePrivateAudioMessage(content)) return "[语音]";
   if (parsePrivateVideoMessage(content)) return "[视频]";
+  const file = parsePrivateFileMessage(content);
+  if (file) return `[文件] ${file.media.name}`;
   const hasImage = /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
   const text = content
     .replace(/!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/gi, "")

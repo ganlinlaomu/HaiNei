@@ -44,7 +44,7 @@
       <section class="profile-posts" aria-label="用户动态">
         <h3>动态</h3>
         <div v-if="ownerPosts.length" class="post-list">
-          <PostCard v-for="post in ownerPosts" :key="post.id" :message="post" flat />
+          <PostCard v-for="post in ownerPosts" :key="post.id" :message="post" :pinned="post.id === pinnedPostId" flat />
         </div>
         <p v-else class="empty-posts">暂无动态</p>
       </section>
@@ -151,6 +151,7 @@ function compareProfilePosts(left: InboxItem, right: InboxItem) {
   return (right.created_at || 0) - (left.created_at || 0) || left.id.localeCompare(right.id);
 }
 
+const pinnedPostId = computed(() => feedPreferences.pinnedPostOf(ownerPubkey.value));
 const ownerPosts = computed(() => {
   if (!canView.value || messages.loadedFor !== keys.pkHex) return [];
   const merged = new Map<string, InboxItem>();
@@ -158,7 +159,9 @@ const ownerPosts = computed(() => {
   // Current inbox wins so optimistic delivery state and realtime replacements
   // stay identical to the Home card for the same message.
   for (const message of messages.inbox) merged.set(message.id, message);
-  return [...merged.values()].filter(isProfilePost).sort(compareProfilePosts);
+  const pinned = pinnedPostId.value;
+  return [...merged.values()].filter(isProfilePost)
+    .sort((left, right) => Number(right.id === pinned) - Number(left.id === pinned) || compareProfilePosts(left, right));
 });
 
 async function load() {

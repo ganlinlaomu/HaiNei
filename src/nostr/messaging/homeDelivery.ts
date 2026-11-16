@@ -4,7 +4,7 @@ import { debugLog } from "@/utils/debugLog";
 import { decodeFriendshipControl, isFriendshipControlMessage } from "@/nostr/messaging/friendshipControl";
 import { isHaiNeiProfileMessage, isHaiNeiProfileRequest } from "@/nostr/messaging/privateProfile";
 import type { NotificationItem } from "@/stores/notifications";
-import { isTombstoneMessage } from "@/nostr/messaging/feedControl";
+import { isFeedPinMessage, isTombstoneMessage } from "@/nostr/messaging/feedControl";
 import { isBurnControl } from "@/nostr/messaging/dmBurnControl";
 import { isCallControl } from "@/nostr/messaging/callControl";
 import { isLiveLocationControlTags } from "@/nostr/messaging/locationShare";
@@ -89,7 +89,7 @@ export function createHomeMessageHandler(delivery: HomeMessageDelivery) {
       debugLog("ui", "ui_private_profile_routed", diagnostic, "info");
       return false;
     }
-    if (isTombstoneMessage(message)) {
+    if (isTombstoneMessage(message) || isFeedPinMessage(message)) {
       await delivery.processFeedControlMessage?.(message);
       debugLog("ui", "ui_feed_control_routed", diagnostic, "info");
       return false;

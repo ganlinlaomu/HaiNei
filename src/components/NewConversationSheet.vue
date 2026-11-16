@@ -7,7 +7,7 @@
             <button type="button" class="close-button" aria-label="关闭" @click="closeSheet">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
             </button>
-            <h2 id="new-conversation-title">新私信</h2>
+            <h2 id="new-conversation-title">{{ title || "新私信" }}</h2>
             <span></span>
           </header>
 
@@ -62,7 +62,7 @@ import { useKeyStore } from "@/stores/keys";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { useUIStore } from "@/stores/ui";
 
-const props = defineProps<{ visible: boolean }>();
+const props = defineProps<{ visible: boolean; title?: string }>();
 const emit = defineEmits<{ close: []; select: [pubkey: string] }>();
 const keys = useKeyStore();
 const friends = useFriendsStore();
