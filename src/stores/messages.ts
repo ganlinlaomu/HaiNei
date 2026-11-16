@@ -30,6 +30,15 @@ export type InboxMutation = {
 };
 
 const MAX_INBOX_ITEMS = 1000;
+/**
+ * Cold start reads only this many of the newest Feed records before Home may
+ * render; every record read is a local-vault decrypt (~2ms each on a phone).
+ * The full window (listRecent + conversation heads) follows in the background.
+ */
+const FIRST_PAGE_FEED_RECORDS = 60;
+/** Lets Home paint the first page before the full read competes with it. */
+const FULL_INBOX_DELAY_MS = 50;
+let fullInboxLoad: { account: string; promise: Promise<void> } | null = null;
 /** Mutations kept so watchers that coalesce several revisions can replay them. */
 const MAX_MUTATION_LOG = 64;
 
@@ -106,6 +115,8 @@ export const useMessagesStore = defineStore("messages", {
     inbox: [] as InboxItem[],
     outbox: [] as OutboxItem[],
     loadedFor: "" as string,
+    /** True while only the cold-start first page is loaded. */
+    inboxPartial: false,
     inboxRevision: 0,
     lastInboxMutation: null as InboxMutation | null,
     // Not reactive: consumers are woken by inboxRevision and read it on demand.
@@ -142,7 +153,7 @@ export const useMessagesStore = defineStore("messages", {
       if (this.loadedFor === targetPk) return;
       this.loadedFor = targetPk;
       try {
-        await this.loadDurableInbox(targetPk);
+        await this.loadDurableInbox(targetPk, { firstPage: true });
       } catch (error) {
         // Never leave the store marked as loaded with an empty inbox (for
         // example when the local vault was not unlocked yet); a later load
@@ -152,7 +163,20 @@ export const useMessagesStore = defineStore("messages", {
       }
     },
 
-    async loadDurableInbox(targetPk: string) {
+    /**
+     * Resolves once the whole local inbox window is loaded, not just the
+     * cold-start first page. Builders of complete views (the conversation
+     * list) wait for this; Home does not.
+     */
+    async whenInboxComplete(targetPk: string) {
+      if (this.loadedFor !== targetPk) await this.load(targetPk);
+      if (!this.inboxPartial || this.loadedFor !== targetPk) return;
+      if (fullInboxLoad?.account === targetPk) await fullInboxLoad.promise;
+      // The background read failed or was superseded: read it here instead.
+      if (this.inboxPartial && this.loadedFor === targetPk) await this.loadDurableInbox(targetPk, { mergeLive: true });
+    },
+
+    async loadDurableInbox(targetPk: string, options: { firstPage?: boolean; mergeLive?: boolean } = {}) {
       // One-time, account-scoped import of the migrated legacy mirror.
       try {
         const ik = inboxKeyFor(targetPk);
@@ -185,7 +209,9 @@ export const useMessagesStore = defineStore("messages", {
         // Leave the legacy key intact so a later load can retry safely.
       }
       const listStarted = Date.now();
-      const records = await syncedMessageRepository.listRecent(targetPk);
+      const records = options.firstPage
+        ? await syncedMessageRepository.listRecentFeed(targetPk, FIRST_PAGE_FEED_RECORDS)
+        : await syncedMessageRepository.listRecent(targetPk);
       if (this.loadedFor !== targetPk) return;
       const durableInbox: InboxItem[] = records
         .filter(record => !isHomeControl(record.tags, record.plaintext) && !isExpiredDisappearing(record.tags))
@@ -232,20 +258,40 @@ export const useMessagesStore = defineStore("messages", {
           outgoing: outgoingState,
         });
       }
+      if (options.mergeLive) {
+        // Keep what arrived (realtime, sent) while only the first page was loaded.
+        for (const item of toRaw(this.inbox)) if (!inboxById.has(item.id)) inboxById.set(item.id, item);
+      }
       this.inbox = [...inboxById.values()].sort((a, b) =>
-        messageOrderAt(b.created_at, b.tags) - messageOrderAt(a.created_at, a.tags) || a.id.localeCompare(b.id));
+        messageOrderAt(b.created_at, b.tags) - messageOrderAt(a.created_at, a.tags) || a.id.localeCompare(b.id))
+        .slice(0, MAX_INBOX_ITEMS);
       this.recordInboxMutation("replace");
-      startupMark("inbox_loaded", { records: records.length, durationMs: Date.now() - listStarted });
+      this.inboxPartial = !!options.firstPage;
+      if (options.firstPage) {
+        startupMark("inbox_first_page", { records: records.length, durationMs: Date.now() - listStarted });
+        const promise = new Promise<void>(resolve => setTimeout(resolve, FULL_INBOX_DELAY_MS))
+          .then(() => this.loadedFor === targetPk && this.inboxPartial
+            ? this.loadDurableInbox(targetPk, { mergeLive: true })
+            : undefined)
+          .catch(error => console.warn("[inbox] full load failed", error instanceof Error ? error.message : "unknown error"));
+        fullInboxLoad = { account: targetPk, promise };
+        void promise.finally(() => { if (fullInboxLoad?.promise === promise) fullInboxLoad = null; });
+      } else {
+        startupMark("inbox_loaded", { records: records.length, durationMs: Date.now() - listStarted });
+      }
       // Burning expired disappearing messages scans (and decrypts) every
       // stored message. It used to run before this list and kept Home blank
       // and the phone busy for seconds; expired ones are already filtered out
       // above, so it now runs afterwards in the background.
-      scheduleBackgroundTask(`purge-disappearing:${targetPk}`, async () => {
-        const started = Date.now();
-        const cleaned = await syncedMessageRepository.purgeExpiredDisappearing(targetPk);
-        startupMark("disappearing_purged", { cleaned, durationMs: Date.now() - started });
-        if (cleaned && this.loadedFor === targetPk) await this.loadDurableInbox(targetPk);
-      }, { timeoutMs: 5_000 });
+      // The full load (not the cold-start first page) schedules the purge.
+      if (!options.firstPage) {
+        scheduleBackgroundTask(`purge-disappearing:${targetPk}`, async () => {
+          const started = Date.now();
+          const cleaned = await syncedMessageRepository.purgeExpiredDisappearing(targetPk);
+          startupMark("disappearing_purged", { cleaned, durationMs: Date.now() - started });
+          if (cleaned && this.loadedFor === targetPk) await this.loadDurableInbox(targetPk);
+        }, { timeoutMs: 5_000 });
+      }
       this.outbox = outgoing.filter(item => item.state === "sent").map(item => {
         const message = item.message as CanonicalMessage;
         return {
@@ -338,6 +384,8 @@ export const useMessagesStore = defineStore("messages", {
       this.inbox = [];
       this.outbox = [];
       this.loadedFor = "";
+      this.inboxPartial = false;
+      fullInboxLoad = null;
       this.recordInboxMutation("reset");
       if (removeFromStorage) {
         try { if (ik) deviceStorage.removeItem(ik); } catch {}

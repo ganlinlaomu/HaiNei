@@ -5,7 +5,7 @@ const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
 const mocks = vi.hoisted(() => ({ list: vi.fn(), insert: vi.fn(), outgoing: vi.fn(), purgeExpired: vi.fn() }));
 vi.mock("@/repositories/syncedMessageRepository", () => ({
-  syncedMessageRepository: { listRecent: mocks.list, insertMessageIfAbsent: mocks.insert, purgeExpiredDisappearing: mocks.purgeExpired }
+  syncedMessageRepository: { listRecent: mocks.list, listRecentFeed: mocks.list, insertMessageIfAbsent: mocks.insert, purgeExpiredDisappearing: mocks.purgeExpired }
 }));
 vi.mock("@/repositories/outgoingQueueRepository", () => ({
   outgoingQueueRepository: { list: mocks.outgoing }

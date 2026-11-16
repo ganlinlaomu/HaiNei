@@ -985,6 +985,14 @@ async function safeUpdateLocalRefs() {
 );
    
     // Watch for route query changes to handle notification jump state
+    // Cold start renders from the inbox's first page; once the full window is
+    // in, fill a short first page (never shrink or reorder what is shown).
+    watch(() => msgs.inboxPartial, partial => {
+      if (partial || !readyForPending.value || homeAccountPk !== keys.pkHex) return;
+      if (displayedMessages.value.length >= PAGE_SIZE) return;
+      reconcileStartupSnapshot(false);
+    });
+
     watch([() => feedPreferences.revision, () => msgs.inboxRevision, () => keys.pkHex], () => {
       void refreshPinnedPosts().catch(error => logger.warn("pinned posts refresh failed", error));
     }, { immediate: true });
