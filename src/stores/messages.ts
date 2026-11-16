@@ -3,11 +3,12 @@ import { defineStore } from "pinia";
 import { markRaw, toRaw } from "vue";
 import { deviceStorage } from "@/services/deviceStorage";
 import { scheduleBackgroundTask } from "@/services/backgroundWorkScheduler";
-import { startupMark } from "@/utils/debugLog";
+import { debugLog, startupMark } from "@/utils/debugLog";
 import { useKeyStore } from "./keys";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { isExpiredDisappearing } from "@/nostr/messaging/disappearingMessages";
-import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
+import { outgoingQueueRepository, SENT_RETENTION_MS } from "@/repositories/outgoingQueueRepository";
+import { outgoingDmTaskRepository } from "@/repositories/outgoingDmTaskRepository";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { notifyCanonicalMessageAdded } from "@/services/directMessageStateEvents";
 import { isConversationMessage } from "@/nostr/messaging/messageRouting";
@@ -38,6 +39,9 @@ const MAX_INBOX_ITEMS = 1000;
 const FIRST_PAGE_FEED_RECORDS = 60;
 /** Lets Home paint the first page before the full read competes with it. */
 const FULL_INBOX_DELAY_MS = 50;
+/** Sent rows shown as optimistic posts / outbox: recent ones only. */
+const RECENT_SENT_MS = 3 * 24 * 60 * 60 * 1000;
+const RECENT_SENT_LIMIT = 50;
 let fullInboxLoad: { account: string; promise: Promise<void> } | null = null;
 /** Mutations kept so watchers that coalesce several revisions can replay them. */
 const MAX_MUTATION_LOG = 64;
@@ -212,11 +216,19 @@ export const useMessagesStore = defineStore("messages", {
       const records = options.firstPage
         ? await syncedMessageRepository.listRecentFeed(targetPk, FIRST_PAGE_FEED_RECORDS)
         : await syncedMessageRepository.listRecent(targetPk);
+      const recordsMs = Date.now() - listStarted;
       if (this.loadedFor !== targetPk) return;
       const durableInbox: InboxItem[] = records
         .filter(record => !isHomeControl(record.tags, record.plaintext) && !isExpiredDisappearing(record.tags))
         .map(syncedMessageRecordToInboxItem);
-      const outgoing = await outgoingQueueRepository.list(targetPk);
+      const outgoingStarted = Date.now();
+      // Never the whole queue: every sent row carries its sealed gift wraps.
+      const [unsentOutgoing, recentSent] = await Promise.all([
+        outgoingQueueRepository.listUnsent(targetPk),
+        outgoingQueueRepository.listSentSince(targetPk, Date.now() - RECENT_SENT_MS, RECENT_SENT_LIMIT),
+      ]);
+      const outgoing = [...unsentOutgoing, ...recentSent];
+      const outgoingMs = Date.now() - outgoingStarted;
       if (this.loadedFor !== targetPk) return;
       const inboxById = new Map(durableInbox.map(item => [item.id, item]));
       const optimisticOutgoing = [
@@ -268,7 +280,9 @@ export const useMessagesStore = defineStore("messages", {
       this.recordInboxMutation("replace");
       this.inboxPartial = !!options.firstPage;
       if (options.firstPage) {
-        startupMark("inbox_first_page", { records: records.length, durationMs: Date.now() - listStarted });
+        startupMark("inbox_first_page", {
+          records: records.length, recordsMs, outgoing: outgoing.length, outgoingMs, durationMs: Date.now() - listStarted,
+        });
         const promise = new Promise<void>(resolve => setTimeout(resolve, FULL_INBOX_DELAY_MS))
           .then(() => this.loadedFor === targetPk && this.inboxPartial
             ? this.loadDurableInbox(targetPk, { mergeLive: true })
@@ -277,7 +291,23 @@ export const useMessagesStore = defineStore("messages", {
         fullInboxLoad = { account: targetPk, promise };
         void promise.finally(() => { if (fullInboxLoad?.promise === promise) fullInboxLoad = null; });
       } else {
-        startupMark("inbox_loaded", { records: records.length, durationMs: Date.now() - listStarted });
+        startupMark("inbox_loaded", {
+          records: records.length, recordsMs, outgoing: outgoing.length, outgoingMs, durationMs: Date.now() - listStarted,
+        });
+        scheduleBackgroundTask(`prune-outgoing:${targetPk}`, async () => {
+          if (this.loadedFor !== targetPk) return;
+          const started = Date.now();
+          try {
+            // Keep rows an unfinished DM task still resolves its state from.
+            const tasks = await outgoingDmTaskRepository.list(targetPk);
+            const keep = new Set(tasks.filter(task => task.state !== "sent" && task.outgoingId).map(task => task.outgoingId!));
+            const deleted = await outgoingQueueRepository.pruneSent(targetPk, Date.now() - SENT_RETENTION_MS, keep);
+            startupMark("outgoing_pruned", { deleted, durationMs: Date.now() - started });
+          } catch (error) {
+            // Pruning is housekeeping; the next launch tries again.
+            debugLog("storage", "outgoing_prune_failed", { reason: error instanceof Error ? error.name : "unknown" }, "warn");
+          }
+        }, { timeoutMs: 10_000 });
       }
       // Burning expired disappearing messages scans (and decrypts) every
       // stored message. It used to run before this list and kept Home blank

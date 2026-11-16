@@ -72,7 +72,8 @@ describe("durable outgoing queue", () => {
 
   it("recovers a push interrupted after relay acknowledgement and ignores historical sent messages", async () => {
     await outgoingQueueRepository.putIfAbsent(queued(ACCOUNT, "old", "sent"));
-    await outgoingQueueRepository.putIfAbsent({ ...queued(ACCOUNT, "interrupted", "sent"), pushState: "pending", pushExpiresAt: Date.now() + 60_000 });
+    // Marking a row sent writes updatedAt together with its Push deadline.
+    await outgoingQueueRepository.putIfAbsent({ ...queued(ACCOUNT, "interrupted", "sent"), pushState: "pending", pushExpiresAt: Date.now() + 60_000, updatedAt: Date.now() });
     registerOutgoingPushSigner(ACCOUNT, vi.fn());
     await retryOutgoingQueue(ACCOUNT);
     expect(publish).not.toHaveBeenCalled();
