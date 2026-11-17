@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.208",
-  "releaseSummary": "启动不再读出全部已发送记录，首页和新消息都更快",
+  "version": "0.1.209",
+  "releaseSummary": "从后台回来内容区空白时自动恢复",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

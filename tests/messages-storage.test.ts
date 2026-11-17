@@ -1,9 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
 const mocks = vi.hoisted(() => ({ list: vi.fn(), insert: vi.fn(), outgoing: vi.fn(), purgeExpired: vi.fn() }));
+// Background work (disappearing purge, outgoing prune) must not outlive the test.
+vi.mock("@/services/backgroundWorkScheduler", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/services/backgroundWorkScheduler")>()),
+  scheduleBackgroundTask: vi.fn(),
+}));
 vi.mock("@/repositories/syncedMessageRepository", () => ({
   syncedMessageRepository: { listRecent: mocks.list, listRecentFeed: mocks.list, insertMessageIfAbsent: mocks.insert, purgeExpiredDisappearing: mocks.purgeExpired }
 }));
@@ -24,6 +29,9 @@ class MemoryStorage implements Storage {
 }
 
 let storage: MemoryStorage;
+// Let the cold-start full inbox read (50 ms later) finish inside the test.
+afterEach(async () => { await new Promise(resolve => setTimeout(resolve, 80)); });
+
 beforeEach(() => {
   setActivePinia(createPinia());
   storage = new MemoryStorage();

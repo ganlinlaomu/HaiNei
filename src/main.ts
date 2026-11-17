@@ -8,12 +8,15 @@ import "./swipeActions.css";
 import router from "./router";
 
 import { useKeyStore } from "@/stores/keys";
+import { useCallStore } from "@/stores/call";
+import { useUIStore } from "@/stores/ui";
 import { clearExpiredCache } from "@/utils/imageCache";
 import { initVersionTracking, handleVersionUpdate } from "@/utils/versionManager";
 import { migrateLegacyLocalStorage } from "@/services/legacyLocalStorageMigration";
 import { initTheme } from "@/services/theme";
 import { installChunkLoadRecovery } from "@/utils/chunkLoadRecovery";
 import { installRuntimeDiagnostics } from "@/services/runtimeDiagnostics";
+import { installResumeRecovery } from "@/services/resumeRecovery";
 import { restoreWithWatchdog } from "@/utils/restoreWatchdog";
 import { installIncomingRingtoneActivation } from "@/utils/audioUnlock";
 
@@ -120,6 +123,9 @@ async function bootstrap() {
   // Ordinary tab changes/taps must never play the unmuted silent PCM prime:
   // iOS can pause background music even when the audio samples are all zero.
   installIncomingRingtoneActivation();
+  installResumeRecovery({
+    isBusy: () => useCallStore().phase !== "idle" || useUIStore().showPostEditor,
+  });
 
   // 异步恢复登录态，不阻塞首屏渲染
   (async () => {
