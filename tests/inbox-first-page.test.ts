@@ -1,10 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { readFileSync } from "node:fs";
 
 const ACCOUNT = "a".repeat(64);
 const OTHER = "b".repeat(64);
 const mocks = vi.hoisted(() => ({ feed: vi.fn(), full: vi.fn(), outgoing: vi.fn(), purge: vi.fn() }));
+// Background work (disappearing purge, outgoing prune) must not outlive the test.
+vi.mock("@/services/backgroundWorkScheduler", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/services/backgroundWorkScheduler")>()),
+  scheduleBackgroundTask: vi.fn(),
+}));
 vi.mock("@/repositories/syncedMessageRepository", () => ({
   syncedMessageRepository: {
     listRecentFeed: mocks.feed, listRecent: mocks.full,
@@ -20,6 +25,9 @@ const record = (id: string, createdAt: number, tags: string[][] = [["t", "hainei
   plaintext: id, createdAt, protocol: "nip17", transportKind: 1059, transportEventIds: [`wrap-${id}`],
   firstSeenAt: 1, lastSeenAt: 1, tags,
 });
+
+// Let the cold-start full inbox read (50 ms later) finish inside the test.
+afterEach(async () => { await new Promise(resolve => setTimeout(resolve, 80)); });
 
 beforeEach(() => {
   setActivePinia(createPinia());
