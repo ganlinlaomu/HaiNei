@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { ref, shallowRef } from "vue";
 
 export type CallPhase = "idle" | "outgoing" | "incoming" | "connecting" | "active" | "ended";
 export type CallEndReason =
@@ -20,7 +20,15 @@ export const useCallStore = defineStore("call", () => {
   const notificationMessageId = ref("");
   const direction = ref<"outgoing" | "incoming">("outgoing");
   /** Invite parameters for an incoming call, kept until accepted or dismissed. */
-  const invite = ref<{ room: string; secret: string } | null>(null);
+  const invite = ref<{ room: string; secret: string; media?: "video" } | null>(null);
+  /** "video" only while both sides use video; a voice call never leaves "audio". */
+  const media = ref<"audio" | "video">("audio");
+  /** This device's camera preview and the peer's video (video-only streams). */
+  const localVideo = shallowRef<MediaStream | null>(null);
+  const remoteVideo = shallowRef<MediaStream | null>(null);
+  const cameraOn = ref(true);
+  const remoteCameraOn = ref(true);
+  const cameraFacing = ref<"user" | "environment">("user");
   const connectedAt = ref(0);
   const muted = ref(false);
   const endReason = ref<CallEndReason | null>(null);
@@ -44,6 +52,12 @@ export const useCallStore = defineStore("call", () => {
     callId.value = "";
     notificationMessageId.value = "";
     invite.value = null;
+    media.value = "audio";
+    localVideo.value = null;
+    remoteVideo.value = null;
+    cameraOn.value = true;
+    remoteCameraOn.value = true;
+    cameraFacing.value = "user";
     connectedAt.value = 0;
     muted.value = false;
     endReason.value = null;
@@ -59,7 +73,7 @@ export const useCallStore = defineStore("call", () => {
     if (seen.size > 200) seen.delete(seen.values().next().value!);
   }
 
-  return { notificationExpanded, phase, peer, callId, notificationMessageId, direction, invite, connectedAt, muted, endReason, remoteRinging, reconnecting, quality, audioStatus, ringtoneBlocked, seen, reset, markSeen };
+  return { notificationExpanded, phase, peer, callId, notificationMessageId, direction, invite, media, localVideo, remoteVideo, cameraOn, remoteCameraOn, cameraFacing, connectedAt, muted, endReason, remoteRinging, reconnecting, quality, audioStatus, ringtoneBlocked, seen, reset, markSeen };
 });
 
 /** Lazily load the call engine (WebRTC, Trystero, media). */

@@ -30,6 +30,11 @@ export type CallSignal = {
   secret?: string;
   /** End only: connected duration. */
   durationSeconds?: number;
+  /**
+   * Invite only: the caller offers video. Older clients ignore the field and
+   * answer a plain voice call; video then needs both sides' in-room consent.
+   */
+  media?: "video";
 };
 
 export function callControlTags(signal: Pick<CallSignal, "action">): string[][] {
@@ -62,6 +67,7 @@ function parseCallPayload(plaintext?: string): CallSignal | null {
     if (!ROOM.test(value.room) || !SECRET.test(value.secret)) return null;
     signal.room = value.room;
     signal.secret = value.secret;
+    if (value.media === "video") signal.media = "video";
   }
   if (signal.action === "end" && Number.isSafeInteger(value.durationSeconds) && value.durationSeconds >= 0) {
     signal.durationSeconds = Math.min(value.durationSeconds, 24 * 60 * 60);

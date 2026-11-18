@@ -1,10 +1,10 @@
 <template>
   <!-- In the app, an incoming call first appears as a top banner (like other
        call apps) instead of covering what you are doing; tap to expand. -->
-  <div v-if="showBanner" class="call-banner" role="dialog" :aria-label="`${name} 的语音来电`">
+  <div v-if="showBanner" class="call-banner" role="dialog" :aria-label="`${name} 的${isVideo ? '视频' : '语音'}来电`">
     <button class="banner-peer" type="button" aria-label="展开来电界面" @click="expanded = true">
       <ProfileAvatar :pubkey="call.peer" :size="40" />
-      <span class="banner-copy"><strong>{{ name }}</strong><span>{{ call.ringtoneBlocked ? "来电静音 · 点铃铛播放" : "语音来电…" }}</span></span>
+      <span class="banner-copy"><strong>{{ name }}</strong><span>{{ call.ringtoneBlocked ? "来电静音 · 点铃铛播放" : isVideo ? "视频来电…" : "语音来电…" }}</span></span>
     </button>
     <button v-if="call.ringtoneBlocked" class="banner-action ring-retry" type="button" aria-label="点击开启来电铃声" data-live-audio-action @click="playRingtone">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
@@ -15,20 +15,29 @@
     <button class="banner-action accept" type="button" aria-label="接听" data-live-audio-action :disabled="acting" @click="accept">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
     </button>
+    <button v-if="isVideo" class="banner-action accept" type="button" aria-label="视频接听" data-live-audio-action :disabled="acting" @click="acceptVideo">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+    </button>
   </div>
   <div v-else-if="minimized && canMinimize" class="call-banner minimized-call" role="region" aria-label="正在通话">
     <button class="banner-peer" type="button" aria-label="展开通话界面" @click="minimized = false">
       <ProfileAvatar :pubkey="call.peer" :size="36" />
-      <span class="banner-copy"><strong>{{ name }} · {{ call.phase === "active" ? "通话中" : "语音通话" }}</strong><span>{{ status }}{{ call.muted ? " · 已静音" : "" }}</span></span>
+      <span class="banner-copy"><strong>{{ name }} · {{ call.phase === "active" ? "通话中" : isVideo ? "视频通话" : "语音通话" }}</strong><span>{{ status }}{{ call.muted ? " · 已静音" : "" }}</span></span>
       <span class="banner-expand" aria-hidden="true">⌄</span>
     </button>
     <button class="banner-action decline" type="button" aria-label="挂断" :disabled="acting" @click="hangup">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15c5-4 13-4 18 0l-2 3-4-1v-3a10 10 0 0 0-6 0v3l-4 1z"/></svg>
     </button>
   </div>
-  <div v-else class="call-overlay" role="dialog" aria-modal="true" :aria-label="`与 ${name} 的语音通话`" @click.self="dismissEnded">
+  <div v-else class="call-overlay" :class="{ 'video-mode': showVideoStage }" role="dialog" aria-modal="true" :aria-label="`与 ${name} 的${isVideo ? '视频' : '语音'}通话`" @click.self="dismissEnded">
+    <div v-if="showVideoStage" class="video-stage" aria-hidden="true">
+      <!-- Before the peer's video arrives, your own camera fills the screen. -->
+      <CallVideo v-if="remoteShown" class="video-main" :stream="call.remoteVideo" />
+      <CallVideo v-else-if="localShown" class="video-main" :stream="call.localVideo" :mirrored="call.cameraFacing === 'user'" />
+      <CallVideo v-if="remoteShown && localShown" class="video-self" :stream="call.localVideo" :mirrored="call.cameraFacing === 'user'" />
+    </div>
     <button v-if="canMinimize" class="call-minimize" type="button" @click="minimized = true">收起通话</button>
-    <div class="call-peer">
+    <div class="call-peer" :class="{ 'over-video': showVideoStage && (remoteShown || localShown) }">
       <ProfileAvatar :pubkey="call.peer" :size="96" />
       <strong class="call-name">{{ name }}</strong>
       <span class="call-status" role="status" aria-live="polite">{{ status }}</span>
@@ -45,7 +54,11 @@
         </button>
         <button class="call-button accept" type="button" aria-label="接听" data-live-audio-action :disabled="acting" @click="accept">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
-          <span>接听</span>
+          <span>{{ isVideo ? "语音接听" : "接听" }}</span>
+        </button>
+        <button v-if="isVideo" class="call-button accept" type="button" aria-label="视频接听" data-live-audio-action :disabled="acting" @click="acceptVideo">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+          <span>视频接听</span>
         </button>
       </template>
       <template v-else-if="call.phase === 'ended'">
@@ -63,6 +76,16 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/><path v-if="call.muted" d="M4 4l16 16"/></svg>
           <span>{{ call.muted ? "已静音" : "静音" }}</span>
         </button>
+        <template v-if="isVideo">
+          <button class="call-button mute" :class="{ on: !call.cameraOn }" type="button" :aria-pressed="!call.cameraOn" aria-label="关闭摄像头" :disabled="!call.localVideo" @click="toggleCamera">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3z"/><path v-if="!call.cameraOn" d="M3 3l18 18"/></svg>
+            <span>{{ call.cameraOn ? "摄像头" : "已关闭" }}</span>
+          </button>
+          <button class="call-button mute" type="button" aria-label="切换前后摄像头" :disabled="!call.localVideo || !call.cameraOn" @click="flipCamera">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><path d="M9 13a3 3 0 0 1 5-2M15 13a3 3 0 0 1-5 2"/></svg>
+            <span>翻转</span>
+          </button>
+        </template>
         <button v-if="call.audioStatus === 'blocked'" class="call-button recover" type="button" aria-label="恢复声音" data-live-audio-action :disabled="call.phase === 'outgoing'" @click="restoreAudio">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5zM15 9a5 5 0 0 1 0 6M18 6a9 9 0 0 1 0 12"/><path d="M20 2v4h-4"/></svg>
           <span>恢复声音</span>
@@ -85,6 +108,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import ProfileAvatar from "./ProfileAvatar.vue";
+import CallVideo from "./CallVideo.vue";
 import { loadCallEngine, loadedCallEngine, useCallStore } from "@/stores/call";
 import { privateProfileDisplayName, useProfilesStore } from "@/stores/profiles";
 import { useFriendsStore } from "@/stores/friends";
@@ -143,6 +167,10 @@ const canMinimize = computed(() => call.phase === "active" || call.phase === "co
 const expanded = ref(false);
 watch(() => call.callId, () => { expanded.value = false; minimized.value = false; });
 const showBanner = computed(() => call.phase === "incoming" && !expanded.value && !call.notificationExpanded);
+const isVideo = computed(() => call.media === "video");
+const showVideoStage = computed(() => isVideo.value && (call.phase === "outgoing" || call.phase === "connecting" || call.phase === "active"));
+const remoteShown = computed(() => !!call.remoteVideo && call.remoteCameraOn);
+const localShown = computed(() => !!call.localVideo && call.cameraOn);
 const now = ref(Date.now());
 const ticker = setInterval(() => { now.value = Date.now(); }, 1_000);
 onBeforeUnmount(() => clearInterval(ticker));
@@ -166,7 +194,7 @@ const ENDED_TEXT: Record<string, string> = {
 const status = computed(() => {
   switch (call.phase) {
     case "outgoing": return call.remoteRinging ? "对方响铃中…" : "正在呼叫…";
-    case "incoming": return "邀请你语音通话";
+    case "incoming": return isVideo.value ? "邀请你视频通话" : "邀请你语音通话";
     case "connecting": return "正在连接…";
     case "active": return call.reconnecting ? "网络中断，正在重新连接…"
       : `${clock(now.value - call.connectedAt)}${call.audioStatus === "blocked" ? " · 播放受限" : call.audioStatus === "waiting" ? " · 声音连接中" : ""}${call.quality === "poor" ? " · 网络不佳" : ""}`;
@@ -187,6 +215,9 @@ async function once(run: (engine: Awaited<ReturnType<typeof loadCallEngine>>) =>
 }
 
 async function accept() { await once(engine => engine.acceptCall()); }
+async function acceptVideo() { await once(engine => engine.acceptCall({ video: true })); }
+function toggleCamera() { loadedCallEngine()?.toggleCamera(); }
+function flipCamera() { void loadedCallEngine()?.flipCamera(); }
 async function decline() { await once(engine => engine.declineCall()); }
 async function hangup() { await once(engine => engine.hangup()); }
 async function mute() { (await loadCallEngine()).toggleMute(); }
@@ -203,9 +234,10 @@ function dismissEnded() { if (call.phase === "ended") call.reset(); }
 const canCallBack = computed(() => !!call.peer && call.endReason !== "answered_elsewhere" && call.endReason !== "microphone_denied");
 async function callBack() {
   const peer = call.peer;
+  const video = call.media === "video";
   await once(async engine => {
     call.reset();
-    await engine.startCall(peer);
+    await engine.startCall(peer, video ? { video: true } : undefined);
   });
 }
 </script>
@@ -242,5 +274,15 @@ async function callBack() {
 .call-hint{margin:0;color:#94a3b8;font-size:12px;text-align:center}
 .call-more{text-align:center}.call-more summary{min-height:44px;padding:12px;cursor:pointer}
 .call-minimize{position:absolute;top:calc(env(safe-area-inset-top) + 16px);left:20px;border:0;background:transparent;color:inherit;font:inherit;min-height:44px;padding:8px 12px}
+.call-overlay.video-mode{justify-content:flex-end;gap:14px;background:#000}
+.video-stage{position:absolute;inset:0;z-index:0;overflow:hidden;background:#000}
+.video-stage::after{content:"";position:absolute;inset:auto 0 0;height:45%;background:linear-gradient(180deg,transparent,rgba(0,0,0,.6))}
+.video-stage .video-main{position:absolute;inset:0}
+.video-stage .video-self{position:absolute;z-index:1;top:calc(env(safe-area-inset-top) + 64px);right:16px;width:28vw;max-width:140px;aspect-ratio:3/4;height:auto;border-radius:12px;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.45)}
+.video-mode>*:not(.video-stage){position:relative;z-index:1}
+.video-mode .call-minimize{position:absolute}
+.video-mode .call-peer.over-video{position:absolute;top:calc(env(safe-area-inset-top) + 60px);left:20px;right:calc(min(28vw,140px) + 32px);align-items:flex-start;gap:4px;text-align:left;text-shadow:0 1px 4px rgba(0,0,0,.7)}
+.call-peer.over-video>:first-child{display:none}
+.video-mode .call-peer.over-video .call-name{max-width:100%;font-size:20px}
 @media (prefers-reduced-motion:reduce){.call-banner{animation:none}}
 </style>

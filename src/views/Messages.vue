@@ -31,6 +31,9 @@
         <button v-if="accepted" class="header-search-button" type="button" aria-label="语音通话" data-live-audio-action data-ringtone-arm @pointerdown="preloadCall" @click="startVoiceCall">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
         </button>
+        <button v-if="accepted" class="header-search-button" type="button" aria-label="视频通话" data-live-audio-action data-ringtone-arm @pointerdown="preloadCall" @click="startVideoCall">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+        </button>
         <button class="header-search-button" type="button" aria-label="聊天中的图片、视频、文件和链接" @click="openSharedMedia">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
         </button>
@@ -465,6 +468,15 @@ const keys = useKeyStore();
 const ui = useUIStore();
 // The call engine (WebRTC, media) loads on first use; warm it on touch.
 function preloadCall() { void loadCallEngine().catch(() => undefined); }
+async function startVideoCall() {
+  try {
+    const engine = loadedCallEngine();
+    if (engine) await engine.startCall(peerPubkey.value, { video: true });
+    else await (await loadCallEngine()).startCall(peerPubkey.value, { video: true });
+  } catch (error) {
+    ui.addToast(error instanceof Error ? error.message : "无法发起通话", 2_400, "error");
+  }
+}
 async function startVoiceCall() {
   try {
     const engine = loadedCallEngine();
