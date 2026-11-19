@@ -4,7 +4,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callControlTags, parseCallSignal, serializeCallSignal } from "@/nostr/messaging/callControl";
-import { CAMERA_STREAM_KIND, VIDEO_CONSENT_TIMEOUT_MS, createVideoLink, isCameraStream } from "@/services/callVideo";
+import { CAMERA_STREAM_KIND, VIDEO_CONSENT_TIMEOUT_MS, createVideoLink, isCameraStream, isVideoRtp, videoStats, watchCameraTrack } from "@/services/callVideo";
 
 const ME = "a".repeat(64);
 const FRIEND = "b".repeat(64);
@@ -48,8 +48,9 @@ function fakeRoom() {
 }
 
 function track(kind: "audio" | "video") {
-  return { kind, enabled: true, readyState: "live", muted: false, stop: vi.fn() };
+  return { kind, enabled: true, readyState: "live", muted: false, stop: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn() };
 }
+const flush = async () => { for (let i = 0; i < 6; i += 1) await Promise.resolve(); };
 function stream(...kinds: Array<"audio" | "video">) {
   const tracks = kinds.map(track);
   return {
@@ -108,17 +109,18 @@ describe("in-room video handshake", () => {
     return { room, pc, camera, events, link: created, message, sent, connectAudio: () => { audio = true; created.audioReady(); } };
   }
 
-  it("caller adds its camera only after audio is connected and the callee asked for video", () => {
+  it("caller adds its camera only after audio is connected and the callee asked for video", async () => {
     const t = link("outgoing");
     t.link.joined("peer");
     t.message({ t: "want" });
     expect(t.room.addStream).not.toHaveBeenCalled();
     t.connectAudio();
+    await flush();
     expect(t.room.addStream).toHaveBeenCalledWith(t.camera, { target: "peer", metadata: { kind: CAMERA_STREAM_KIND } });
     expect(t.sent()).toContainEqual({ t: "go" });
   });
 
-  it("waits for a stable connection so the video offer never overlaps the audio one", () => {
+  it("waits for a stable connection so the video offer never overlaps the audio one", async () => {
     const t = link("outgoing");
     t.pc.signalingState = "have-remote-offer";
     t.link.joined("peer");
@@ -126,6 +128,7 @@ describe("in-room video handshake", () => {
     t.message({ t: "want" });
     expect(t.room.addStream).not.toHaveBeenCalled();
     t.pc.settle();
+    await flush();
     expect(t.room.addStream).toHaveBeenCalledTimes(1);
   });
 
@@ -144,13 +147,14 @@ describe("in-room video handshake", () => {
     expect(silent.room.addStream).not.toHaveBeenCalled();
   });
 
-  it("callee asks for video on joining and adds its camera after the caller's go", () => {
+  it("callee asks for video on joining and adds its camera after the caller's go", async () => {
     const t = link("incoming");
     t.link.joined("peer");
     expect(t.sent()).toEqual([{ t: "want" }]);
     t.connectAudio();
     expect(t.room.addStream).not.toHaveBeenCalled();
     t.message({ t: "go" });
+    await flush();
     expect(t.room.addStream).toHaveBeenCalledTimes(1);
   });
 
@@ -160,16 +164,82 @@ describe("in-room video handshake", () => {
     expect(t.sent()).toEqual([{ t: "voice" }]);
   });
 
-  it("relays camera on/off to the peer", () => {
+  it("relays camera on/off to the peer", async () => {
     const t = link("outgoing");
     t.link.joined("peer");
     t.message({ t: "want" });
     t.connectAudio();
+    await flush();
     t.link.setCameraOn(false);
     expect(t.camera.getVideoTracks()[0].enabled).toBe(false);
     expect(t.sent()).toContainEqual({ t: "camera", on: false });
     t.message({ t: "camera", on: false });
     expect(t.events.remoteCamera).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("black-frame protection", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  function eventTrack() {
+    const listeners: Record<string, Array<() => void>> = {};
+    return {
+      muted: false, readyState: "live",
+      addEventListener: (type: string, listener: () => void) => { (listeners[type] ||= []).push(listener); },
+      removeEventListener: (type: string, listener: () => void) => { listeners[type] = (listeners[type] || []).filter(l => l !== listener); },
+      fire(type: string) { for (const listener of listeners[type] || []) listener(); },
+    };
+  }
+
+  it("restarts a camera that iOS keeps interrupted, not one that recovers", () => {
+    const track = eventTrack();
+    const restart = vi.fn();
+    const stop = watchCameraTrack(track as any, restart, () => true);
+    track.muted = true; track.fire("mute");
+    vi.advanceTimersByTime(500);
+    track.muted = false; track.fire("unmute");
+    vi.advanceTimersByTime(1_000);
+    expect(restart).not.toHaveBeenCalled();
+    track.muted = true; track.fire("mute");
+    vi.advanceTimersByTime(800);
+    expect(restart).toHaveBeenCalledWith("interrupted");
+    track.fire("ended");
+    expect(restart).toHaveBeenCalledWith("ended");
+    stop();
+  });
+
+  it("replaces a stale camera before sending it", async () => {
+    const room = fakeRoom();
+    room.peers.peer = connection();
+    const order: string[] = [];
+    room.addStream.mockImplementation(() => { order.push("addStream"); return [Promise.resolve()]; });
+    const created = createVideoLink({
+      room: room as any, direction: "outgoing", peer: () => "peer", active: () => true, audioConnected: () => true,
+      camera: () => stream("video"), wantVideo: () => true, onRemoteVideo: vi.fn(), onRemoteCamera: vi.fn(), onVoiceOnly: vi.fn(),
+      ensureCamera: async () => { order.push("ensureCamera"); },
+    });
+    created.joined("peer");
+    room.actions.video.onMessage({ t: "want" }, { peerId: "peer" });
+    await vi.waitFor(() => expect(order).toEqual(["ensureCamera", "addStream"]));
+  });
+
+  it("reads video frame counters, including WebKit's untyped records", () => {
+    const codecs = new Map([["v", { mimeType: "video/H264" }], ["a", { mimeType: "audio/opus" }]]);
+    const entries = [
+      { type: "inbound-rtp", codecId: "v", framesDecoded: 42, framesReceived: 44, packetsReceived: 90, frameWidth: 480 },
+      { type: "inbound-rtp", codecId: "a", packetsReceived: 300 },
+      { type: "outbound-rtp", kind: "video", framesEncoded: 50, packetsSent: 100 },
+    ];
+    const report = { forEach: (fn: (entry: any) => void) => entries.forEach(fn), get: (id: string) => codecs.get(id) };
+    expect(isVideoRtp(entries[0], report)).toBe(true);
+    expect(isVideoRtp(entries[1], report)).toBe(false);
+    expect(videoStats(report)).toMatchObject({ framesDecoded: 42, framesReceived: 44, framesEncoded: 50, frameWidth: 480 });
+  });
+
+  it("never reads an untyped video record as the call's audio", async () => {
+    const { readFileSync } = await import("node:fs");
+    const engine = readFileSync("src/services/callEngine.ts", "utf8");
+    expect(engine).toContain("const untypedAudio = (entry: any) => !entry.kind && !entry.mediaType && !isVideoRtp(entry, report);");
   });
 });
 
