@@ -14,7 +14,9 @@ import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
 import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/messageRouting";
-import { createVideoLink, getCamera, isCameraStream, isVideoRtp, videoStats, watchCameraTrack, type VideoLink } from "@/services/callVideo";
+import {
+  createVideoLink, getCamera, inboundVideo, isCameraStream, isVideoRtp, pickRemoteVideoTrack, videoStats, watchCameraTrack, type VideoLink,
+} from "@/services/callVideo";
 import { onAppResume } from "@/services/appResumeCoordinator";
 
 /**
@@ -80,7 +82,7 @@ type CallSession = {
   /** Stops watching the current camera track for iOS interruptions. */
   cameraWatch: (() => void) | null;
   cameraRestarts: number;
-  videoSample: { decoded: number; stalled: number };
+  videoSample: { decoded: number; stalled: number; mutedReported?: boolean };
   /** Connection summary for the call's diagnostics. */
   quality: { route: string; rttMs: number; lost: number; received: number; poorSamples: number; samples: number; inboundStatsSeen: boolean };
 };
@@ -270,15 +272,28 @@ function startQualitySampling(session: CallSession, room: Room) {
         });
         scheduleAudioRetry(session, "incoming_rtp_but_paused");
       }
-      if (session.media === "video") sampleVideo(session, report);
+      if (session.media === "video") sampleVideo(session, report, connection);
     } catch { /* stats unavailable this round */ }
   }, STATS_INTERVAL_MS);
 }
 
 /** Video calls only: frame counters, so a black screen shows which side stalls. */
-function sampleVideo(session: CallSession, report: any) {
+function sampleVideo(session: CallSession, report: any, connection: RTCPeerConnection) {
   const store = useCallStore();
   const stats = videoStats(report);
+  const shown = store.remoteVideo?.getVideoTracks()[0];
+  // Frames are decoding but the rendered track is muted: render the
+  // receiver's own track instead (iPhone WebKit; see pickRemoteVideoTrack).
+  if (shown?.muted && (stats.framesDecoded ?? 0) > session.videoSample.decoded) {
+    const decoding = pickRemoteVideoTrack(undefined, connection.getReceivers?.(), inboundVideo(report)?.trackIdentifier);
+    if (decoding && decoding !== shown) {
+      store.remoteVideo = new MediaStream([decoding]);
+      startupMark("call_video_receiver_corrected", { muted: decoding.muted, framesDecoded: stats.framesDecoded });
+    } else if (!session.videoSample.mutedReported) {
+      session.videoSample.mutedReported = true;
+      startupMark("call_video_muted_while_decoding", { framesDecoded: stats.framesDecoded, receivers: connection.getReceivers?.().filter(r => r.track?.kind === "video").length ?? 0 });
+    }
+  }
   const camera = session.camera?.getVideoTracks()[0];
   const local = camera ? { localMuted: camera.muted, localEnabled: camera.enabled, localState: camera.readyState } : { localState: "none" };
   const remoteTrack = store.remoteVideo?.getVideoTracks()[0];
@@ -895,8 +910,14 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
     wantVideo: () => session.media === "video",
     onRemoteVideo: stream => {
       if (!active() || session.media !== "video") return;
-      store.remoteVideo = new MediaStream(stream.getVideoTracks());
-      startupMark("call_video_received", { direction: session.direction });
+      const streamTrack = stream.getVideoTracks()[0];
+      const receivers = currentRoom.getPeers()[session.mediaPeer]?.getReceivers?.();
+      const track = pickRemoteVideoTrack(streamTrack, receivers);
+      if (!track) return;
+      store.remoteVideo = new MediaStream([track]);
+      startupMark("call_video_received", {
+        direction: session.direction, fromReceiver: track !== streamTrack, muted: track.muted, streamTrackMuted: streamTrack?.muted ?? null,
+      });
     },
     onRemoteCamera: on => { if (active()) store.remoteCameraOn = on; },
     onVoiceOnly: () => { if (active()) dropVideo(session); },

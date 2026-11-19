@@ -16,6 +16,13 @@ import { debugLog, startupMark } from "@/utils/debugLog";
  *   either            { t: "camera", on } camera switched off / on
  * Both sides add their camera only once the connection is stable, the caller
  * first, so the two video offers never collide.
+ *
+ * Each side sends on its own sendonly transceiver (addTransceiver never
+ * reuses the peer's receiving one, unlike addTrack). The receiving
+ * transceiver then never changes direction: on some iPhones a remote video
+ * track whose transceiver turned sendrecv stayed muted forever (black video)
+ * while frames were decoding. Video is received from the connection's own
+ * track events, not Trystero's stream metadata.
  */
 export const CAMERA_STREAM_KIND = "hainei-camera";
 /** Roughly 480p at 24 fps; keeps relayed (TURN) calls cheap. */
@@ -45,8 +52,7 @@ export function getCamera(facing: "user" | "environment" = "user") {
   });
 }
 
-async function capBitrate(pc: RTCPeerConnection | undefined, track: MediaStreamTrack) {
-  const sender = pc?.getSenders?.().find(item => item.track === track);
+async function capBitrate(sender: RTCRtpSender | null) {
   if (!sender?.getParameters || !sender.setParameters) return;
   try {
     const params = sender.getParameters();
@@ -63,6 +69,34 @@ async function capBitrate(pc: RTCPeerConnection | undefined, track: MediaStreamT
 export function isVideoRtp(entry: any, report: any) {
   return entry?.kind === "video" || entry?.mediaType === "video"
     || String(report?.get?.(entry?.codecId)?.mimeType || "").toLowerCase().startsWith("video/");
+}
+
+/**
+ * The track to render for the peer's video. iPhone WebKit can hand the page
+ * a stream whose track stays muted forever while the receiver decodes frames
+ * on its own track (the same bug the voice path corrects for audio). Prefer
+ * the receiver track the stats report as decoding, then any unmuted one.
+ */
+export function pickRemoteVideoTrack(
+  streamTrack: MediaStreamTrack | undefined,
+  receivers: RTCRtpReceiver[] | undefined,
+  decodingTrackId?: string,
+) {
+  const live = (receivers || []).map(receiver => receiver.track)
+    .filter((track): track is MediaStreamTrack => !!track && track.kind === "video" && track.readyState === "live");
+  if (decodingTrackId) {
+    const decoding = live.find(track => track.id === decodingTrackId);
+    if (decoding) return decoding;
+  }
+  if (streamTrack && streamTrack.readyState === "live" && !streamTrack.muted) return streamTrack;
+  return live.find(track => !track.muted) || (streamTrack?.readyState === "live" ? streamTrack : live[0]);
+}
+
+/** The inbound video RTP record (kept internal: its ids are never logged). */
+export function inboundVideo(report: any) {
+  let inbound: any = null;
+  report.forEach((entry: any) => { if (entry.type === "inbound-rtp" && isVideoRtp(entry, report)) inbound = entry; });
+  return inbound;
 }
 
 /** Frame counters for one video call sample; no SSRCs, device or peer details. */
@@ -150,6 +184,9 @@ export function createVideoLink(options: {
   let waiting: { pc: RTCPeerConnection; listener: () => void } | null = null;
   let consentTimer: ReturnType<typeof setTimeout> | null = null;
   let voiceOnly = false;
+  let sender: RTCRtpSender | null = null;
+  let remoteTrackId = "";
+  let listening: { pc: RTCPeerConnection; listener: (event: RTCTrackEvent) => void } | null = null;
   const clearConsentTimer = () => {
     if (consentTimer) clearTimeout(consentTimer);
     consentTimer = null;
@@ -191,12 +228,43 @@ export function createVideoLink(options: {
     waiting = null;
   };
 
+  function receiveTrack(track: MediaStreamTrack | undefined) {
+    if (!track || track.kind !== "video" || voiceOnly || !options.active()) return;
+    if (track.id === remoteTrackId) return;
+    remoteTrackId = track.id;
+    options.onRemoteVideo(new MediaStream([track]));
+    if (direction === "incoming") {
+      // Seeing the caller's video is as good as its "go".
+      callerWent = true;
+      tryAttach();
+    }
+  }
+
+  /** Receive video straight from the connection (audio is left to Trystero). */
+  function listen(pc: RTCPeerConnection | undefined) {
+    if (!pc || listening?.pc === pc) return;
+    stopListening();
+    const listener = (event: RTCTrackEvent) => receiveTrack(event.track);
+    pc.addEventListener("track", listener as EventListener);
+    listening = { pc, listener };
+    // A video track that arrived before we listened (fast peers).
+    for (const transceiver of pc.getTransceivers?.() || []) {
+      const track = transceiver.receiver?.track;
+      if (track?.kind === "video" && track.readyState === "live" && /recv/.test(transceiver.currentDirection || "")) receiveTrack(track);
+    }
+  }
+  function stopListening() {
+    listening?.pc.removeEventListener("track", listening.listener as EventListener);
+    listening = null;
+  }
+
   function tryAttach() {
     const peer = options.peer();
     if (attached || voiceOnly || !peer || !options.active() || !options.audioConnected()) return;
     if (direction === "outgoing" ? !peerWantsVideo : !callerWent) return;
     const pc = room.getPeers()[peer];
     if (!pc || pc.signalingState === "closed") return;
+    listen(pc);
     if (pc.signalingState !== "stable") {
       // Never start the video offer while the audio negotiation is open.
       if (!waiting) {
@@ -214,12 +282,20 @@ export function createVideoLink(options: {
       if (!options.active() || options.peer() !== peer) return;
       const camera = options.camera();
       const track = camera?.getVideoTracks()[0];
-      if (camera && track) {
+      const current = room.getPeers()[peer];
+      if (camera && track && current && current.signalingState !== "closed") {
         startupMark("call_video_attaching", { direction, muted: track.muted, enabled: track.enabled, state: track.readyState });
-        for (const sending of room.addStream(camera, { target: peer, metadata: { kind: CAMERA_STREAM_KIND } })) {
-          void sending.then(() => capBitrate(room.getPeers()[peer], track)).catch(error => {
-            debugLog("system", "call_video_send_failed", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
-          });
+        try {
+          sender = current.addTransceiver(track, { direction: "sendonly", streams: [camera] }).sender;
+          // Encodings exist once the offer/answer has settled.
+          const capOnStable = () => {
+            if (current.signalingState !== "stable") return;
+            current.removeEventListener("signalingstatechange", capOnStable);
+            void capBitrate(sender);
+          };
+          current.addEventListener("signalingstatechange", capOnStable);
+        } catch (error) {
+          debugLog("system", "call_video_send_failed", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
         }
         send({ t: "camera", on: track.enabled });
       }
@@ -237,7 +313,10 @@ export function createVideoLink(options: {
         peerWantsVideo = false;
         callerWent = false;
         attached = false;
+        sender = null;
+        remoteTrackId = "";
       }
+      listen(room.getPeers()[peer]);
       if (direction === "incoming") send(options.wantVideo() ? { t: "want" } : { t: "voice" });
     },
     /** Audio just connected. */
@@ -250,28 +329,23 @@ export function createVideoLink(options: {
       }
       tryAttach();
     },
+    /** Video from a peer that still sends through Trystero (0.1.210-0.1.211). */
     remoteStream(stream: MediaStream) {
-      if (voiceOnly) return;
-      options.onRemoteVideo(stream);
-      if (direction === "incoming") {
-        // Seeing the caller's video is as good as its "go".
-        callerWent = true;
-        tryAttach();
-      }
+      receiveTrack(stream.getVideoTracks()[0]);
     },
     setCameraOn(on: boolean) {
       for (const track of options.camera()?.getVideoTracks() || []) track.enabled = on;
       if (attached) send({ t: "camera", on });
     },
     /** Swap the camera track in place (flip, or a camera iOS stopped). */
-    async replaceCamera(oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack) {
-      const peer = options.peer();
-      if (!attached || !peer) return;
-      await Promise.all(room.replaceTrack(oldTrack, newTrack, { target: peer }));
-      await capBitrate(room.getPeers()[peer], newTrack);
+    async replaceCamera(_oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack) {
+      if (!attached || !sender) return;
+      await sender.replaceTrack(newTrack);
+      await capBitrate(sender);
     },
     close() {
       stopWaiting();
+      stopListening();
       clearConsentTimer();
     },
   };

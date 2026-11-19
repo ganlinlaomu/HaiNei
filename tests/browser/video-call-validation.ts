@@ -1,6 +1,7 @@
-// Real browser RTP: a voice call, then video added in the order the app uses
-// (caller first, callee after, each only on a stable connection). The voice
-// RTP must keep flowing in both directions while and after video is added.
+// Real browser RTP: a voice call, then video added the way the app does it
+// (caller first, callee after, each only on a stable connection, each on its
+// own sendonly transceiver). Voice RTP must keep flowing in both directions,
+// and no video transceiver may ever turn bidirectional.
 import createPeer from "../../node_modules/@trystero-p2p/core/dist/peer.mjs";
 import { createCallMediaGate } from "../../src/services/callMedia";
 
@@ -100,11 +101,18 @@ export async function validateVideoCallMedia() {
       const beforeVideo = await Promise.all(pcs.map(audioStats));
 
       // Caller adds its camera on a stable connection, then the callee does.
+      const sendCamera = (index: number) => {
+        const camera = cameras[index].stream;
+        pcs[index].addTransceiver(camera.getVideoTracks()[0], { direction: "sendonly", streams: [camera] });
+      };
+      pcs.forEach((pc, index) => pc.addEventListener("track", event => {
+        if (event.track.kind === "video") remoteVideo[index] = new MediaStream([event.track]);
+      }));
       await whenStable(pcs[0]);
-      peers[0].addStream(cameras[0].stream);
+      sendCamera(0);
       await until(async () => !!remoteVideo[1], "callee receives caller video");
       await whenStable(pcs[1]);
-      peers[1].addStream(cameras[1].stream);
+      sendCamera(1);
 
       await until(async () => {
         if (errors.length) throw errors[0];
@@ -124,6 +132,15 @@ export async function validateVideoCallMedia() {
         if (!audioTransceivers.some(t => t.currentDirection === "sendrecv")) {
           throw new Error("audio transceiver is no longer sendrecv after video: " + JSON.stringify(audioTransceivers.map(t => t.currentDirection)));
         }
+      }
+      for (const pc of pcs) {
+        const video = pc.getTransceivers().filter(t => t.receiver.track?.kind === "video").map(t => t.currentDirection);
+        if (video.includes("sendrecv") || !video.includes("sendonly") || !video.includes("recvonly")) {
+          throw new Error("video must use one sendonly and one recvonly transceiver: " + JSON.stringify(video));
+        }
+      }
+      if (remoteVideo.some(stream => !stream || stream.getVideoTracks()[0].muted)) {
+        throw new Error("a remote video track is muted while frames are flowing");
       }
       if (audioOutputs.some(audio => (audio.srcObject as MediaStream).getVideoTracks().length > 0)) {
         throw new Error("a camera track reached an audio element");
