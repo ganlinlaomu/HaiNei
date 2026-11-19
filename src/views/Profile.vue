@@ -25,7 +25,8 @@
         <div class="profile-actions">
           <button v-if="isSelf" class="message-button" type="button" @pointerdown="loadMyProfileView" @focus="loadMyProfileView" @click="router.push('/settings/profile')">编辑资料</button>
           <button v-else-if="canMessage" class="message-button" type="button" @pointerdown="loadMessagesView" @focus="loadMessagesView" @click="router.push(`/messages/${ownerPubkey}`)">发私信</button>
-          <button v-if="canMessage" class="voice-call-button" type="button" :disabled="callBusy || call.phase !== 'idle'" data-live-audio-action data-ringtone-arm @pointerdown="preloadProfileCall" @focus="preloadProfileCall" @click="startProfileCall">语音电话</button>
+          <button v-if="canMessage" class="voice-call-button" type="button" :disabled="callBusy || call.phase !== 'idle'" data-live-audio-action data-ringtone-arm @pointerdown="preloadProfileCall" @focus="preloadProfileCall" @click="startProfileCall()">语音电话</button>
+          <button v-if="canMessage" class="voice-call-button" type="button" :disabled="callBusy || call.phase !== 'idle'" data-live-audio-action data-ringtone-arm @pointerdown="preloadProfileCall" @focus="preloadProfileCall" @click="startProfileCall(true)">视频通话</button>
           <button class="secondary-action" type="button" :aria-label="isSelf ? '复制我的公钥' : '复制用户公钥'" @click="copyPubkey">复制公钥</button>
           <button class="secondary-action" type="button" :aria-label="isSelf ? '打开我的二维码' : '打开用户二维码'" @click="showQr = true">二维码</button>
         </div>
@@ -118,14 +119,14 @@ const canMessage = computed(() => ownerPubkey.value !== keys.pkHex
   && friendships.loadedFor === keys.pkHex
   && friendships.isAccepted(ownerPubkey.value));
 function preloadProfileCall() { void loadCallEngine().catch(() => {}); }
-async function startProfileCall() {
+async function startProfileCall(video = false) {
   const peer = ownerPubkey.value;
   if (!canMessage.value || callBusy.value || call.phase !== "idle") return;
   const account = keys.pkHex;
   callBusy.value = true;
   try {
     const engine = loadedCallEngine() || await loadCallEngine();
-    if (keys.pkHex === account && keys.isUnlocked && friendships.isAccepted(peer)) await engine.startCall(peer);
+    if (keys.pkHex === account && keys.isUnlocked && friendships.isAccepted(peer)) await engine.startCall(peer, video ? { video: true } : undefined);
   } catch { ui.addToast("暂时无法发起通话，请重试", 2200, "error"); }
   finally { callBusy.value = false; }
 }

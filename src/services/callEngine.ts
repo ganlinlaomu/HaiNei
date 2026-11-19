@@ -14,6 +14,8 @@ import {
   CALL_LOG_TYPE, CALL_MISSED_TYPE, CALL_RING_WINDOW_SECONDS, callControlTags, randomHex, serializeCallSignal, type CallSignal,
 } from "@/nostr/messaging/callControl";
 import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/messageRouting";
+import { createVideoLink, getCamera, isCameraStream, type VideoLink } from "@/services/callVideo";
+import { onAppResume } from "@/services/appResumeCoordinator";
 
 /**
  * One-to-one voice calls between accepted friends. Signaling travels as
@@ -66,6 +68,15 @@ type CallSession = {
   ringtone: { stop(): void } | null;
   wakeLock: { release(): Promise<void> } | null;
   statsTimer: ReturnType<typeof setInterval> | null;
+  /** "video" only while both sides agreed; voice calls never change from "audio". */
+  media: "audio" | "video";
+  /** The caller offered video, or the callee received a video invite. */
+  videoOffered: boolean;
+  /** This device's camera: a video-only stream, separate from the microphone. */
+  camera: MediaStream | null;
+  video: VideoLink | null;
+  /** Stops the video call's resume watcher (video calls only). */
+  cameraResume: (() => void) | null;
   /** Connection summary for the call's diagnostics. */
   quality: { route: string; rttMs: number; lost: number; received: number; poorSamples: number; samples: number; inboundStatsSeen: boolean };
 };
@@ -81,7 +92,7 @@ function createSession(id: string, peer: string, direction: CallDirection): Call
     id, peer, direction, owner: account(), room: null, localStream: null, remoteAudio: null, remoteStream: null,
     audioCleanup: null, mediaCleanup: null, audioRetryTimer: null, audioFailures: 0, remoteMutedSamples: 0, routeResetAttempts: 0, playRequest: 0, outputDeviceId: "",
     mediaPeer: "", timers: new Set(), peerLossTimer: null, ringtone: null, wakeLock: null,
-    statsTimer: null, quality: { route: "", rttMs: 0, lost: 0, received: 0, poorSamples: 0, samples: 0, inboundStatsSeen: false },
+    statsTimer: null, media: "audio", videoOffered: false, camera: null, video: null, cameraResume: null, quality: { route: "", rttMs: 0, lost: 0, received: 0, poorSamples: 0, samples: 0, inboundStatsSeen: false },
   };
   activeSession = session;
   return session;
@@ -313,7 +324,7 @@ function recordCall(session: CallSession, reason: CallEndReason, durationSeconds
   const keys = useKeyStore();
   const options = {
     recipientPubkeys: [session.peer],
-    content: `📞 语音通话 · ${outcome}`,
+    content: `📞 ${session.media === "video" ? "视频通话" : "语音通话"} · ${outcome}`,
     tags: [["t", DIRECT_MESSAGE_TYPE], ["t", CALL_LOG_TYPE], [CALL_RECORD_TAG, session.id, session.direction, reason, String(durationSeconds)], ...(missed ? [["t", CALL_MISSED_TYPE]] : [])],
     relays: [...new Set([...DEFAULT_RELAY_URLS, ...getRelaysFromStorage("write")])],
     context: { senderPubkey: keys.pkHex, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
@@ -845,6 +856,24 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
   });
   session.mediaCleanup?.();
   session.mediaCleanup = media.clear;
+  // Video calls only: a voice call never creates this link or its room action.
+  session.video?.close();
+  session.video = session.videoOffered ? createVideoLink({
+    room: currentRoom,
+    direction: session.direction,
+    peer: () => session.mediaPeer,
+    active,
+    audioConnected: () => store.phase === "active",
+    camera: () => session.camera,
+    wantVideo: () => session.media === "video",
+    onRemoteVideo: stream => {
+      if (!active() || session.media !== "video") return;
+      store.remoteVideo = new MediaStream(stream.getVideoTracks());
+      startupMark("call_video_received", { direction: session.direction });
+    },
+    onRemoteCamera: on => { if (active()) store.remoteCameraOn = on; },
+    onVoiceOnly: () => { if (active()) dropVideo(session); },
+  }) : null;
   // A second device of the callee joined after another one answered.
   const taken = currentRoom.makeAction<boolean>("taken", {
     onMessage: () => { if (active()) void finish(session, "answered_elsewhere", false); },
@@ -862,6 +891,7 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
         store.reconnecting = false;
         startupMark("call_reconnected", { newPeer: true });
         media.joined(peerId);
+        session.video?.joined(peerId);
         return;
       }
       // The caller is the room's arbiter. An answering device must not mark
@@ -879,9 +909,16 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
       startupMark("call_reconnected", { newPeer: false });
     }
     media.joined(peerId);
+    session.video?.joined(peerId);
   };
-  currentRoom.onPeerStream = (stream, peerId) => {
+  currentRoom.onPeerStream = (stream, peerId, metadata) => {
     if (!active() || peerId !== session.mediaPeer) return;
+    // A camera stream never reaches the audio path below (it would rebind
+    // the remote audio element). Voice calls never receive one.
+    if (isCameraStream(stream, metadata)) {
+      if (session.media === "video") session.video?.remoteStream(stream);
+      return;
+    }
     // ontrack can precede setLocalDescription(answer). The gate waits for
     // stable before the callee adds audio, avoiding simultaneous audio offers.
     media.received(peerId);
@@ -896,6 +933,7 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
       startupMark("call_connected", { direction: session.direction });
       startQualitySampling(session, currentRoom);
     }
+    session.video?.audioReady();
   };
   currentRoom.onPeerLeave = peerId => {
     if (!active() || peerId !== session.mediaPeer) return;
@@ -919,6 +957,20 @@ async function joinCallRoom(session: CallSession, roomId: string, secret: string
 
 async function releaseSessionResources(session: CallSession) {
   clearTimers(session);
+  session.video?.close();
+  session.video = null;
+  session.cameraResume?.();
+  session.cameraResume = null;
+  const camera = session.camera;
+  session.camera = null;
+  for (const track of camera?.getTracks() || []) track.stop();
+  if (camera || session.videoOffered) {
+    const store = useCallStore();
+    if (store.callId === session.id) {
+      store.localVideo = null;
+      store.remoteVideo = null;
+    }
+  }
   session.mediaCleanup?.();
   session.mediaCleanup = null;
   // Cancelled / declined / unanswered calls must not keep ringtone resources.
@@ -1011,7 +1063,107 @@ async function finish(session: CallSession, reason: CallEndReason, notify: boole
     ENDED_BY_ME.has(reason) ? ENDED_BY_ME_MS : ENDED_SCREEN_MS);
 }
 
-export async function startCall(peerPubkey: string) {
+/**
+ * Acquire the camera for a video call. Without one (denied, no device) the
+ * call simply continues as voice. Returns false only if the call is gone.
+ */
+async function attachCamera(session: CallSession, stillWaiting: () => boolean) {
+  const store = useCallStore();
+  let camera: MediaStream;
+  try {
+    camera = await getCamera(store.cameraFacing);
+  } catch (error) {
+    startupMark("call_camera_unavailable", { name: error instanceof Error ? error.name : "unknown" });
+    if (!isCurrent(session) || !stillWaiting()) return false;
+    // The caller's handshake still tells the callee to go ahead without it.
+    store.cameraOn = false;
+    return true;
+  }
+  if (!isCurrent(session) || !stillWaiting()) {
+    for (const track of camera.getTracks()) track.stop();
+    return false;
+  }
+  session.camera = camera;
+  store.localVideo = camera;
+  store.cameraOn = true;
+  watchCameraResume(session);
+  return true;
+}
+
+/** The peer will not do video: this call carries on as an ordinary voice call. */
+function dropVideo(session: CallSession) {
+  const store = useCallStore();
+  session.media = "audio";
+  session.cameraResume?.();
+  session.cameraResume = null;
+  const camera = session.camera;
+  session.camera = null;
+  for (const track of camera?.getTracks() || []) track.stop();
+  if (store.callId === session.id) {
+    store.media = "audio";
+    store.localVideo = null;
+    store.remoteVideo = null;
+  }
+}
+
+export function toggleCamera() {
+  const store = useCallStore();
+  const session = activeSession;
+  if (!session || !isCurrent(session) || session.media !== "video" || !session.camera) return;
+  store.cameraOn = !store.cameraOn;
+  session.video?.setCameraOn(store.cameraOn);
+}
+
+async function swapCamera(session: CallSession, facing: "user" | "environment", reason: string) {
+  const store = useCallStore();
+  const camera = session.camera;
+  const oldTrack = camera?.getVideoTracks()[0];
+  if (!camera || !oldTrack) return;
+  let fresh: MediaStream;
+  try {
+    fresh = await getCamera(facing);
+  } catch (error) {
+    startupMark("call_camera_swap_failed", { reason, name: error instanceof Error ? error.name : "unknown" });
+    return;
+  }
+  const newTrack = fresh.getVideoTracks()[0];
+  if (!newTrack || !isCurrent(session) || session.camera !== camera) {
+    for (const track of fresh.getTracks()) track.stop();
+    return;
+  }
+  newTrack.enabled = store.cameraOn;
+  try {
+    await session.video?.replaceCamera(oldTrack, newTrack);
+  } catch (error) {
+    startupMark("call_camera_swap_failed", { reason, name: error instanceof Error ? error.name : "unknown" });
+  }
+  camera.removeTrack(oldTrack);
+  camera.addTrack(newTrack);
+  oldTrack.stop();
+  store.cameraFacing = facing;
+  // A new stream object so the preview element picks up the new track.
+  store.localVideo = new MediaStream(camera.getVideoTracks());
+  startupMark("call_camera_swapped", { reason, facing });
+}
+
+export async function flipCamera() {
+  const store = useCallStore();
+  const session = activeSession;
+  if (!session || !isCurrent(session) || session.media !== "video" || !session.camera) return;
+  await swapCamera(session, store.cameraFacing === "user" ? "environment" : "user", "flip");
+}
+
+/** iOS stops the camera while the PWA is in the background; restart it on return. */
+function watchCameraResume(session: CallSession) {
+  session.cameraResume?.();
+  session.cameraResume = onAppResume(() => {
+    if (!isCurrent(session) || session.media !== "video") return;
+    const track = session.camera?.getVideoTracks()[0];
+    if (track && track.readyState === "ended") void swapCamera(session, useCallStore().cameraFacing, "resume");
+  });
+}
+
+export async function startCall(peerPubkey: string, options: { video?: boolean } = {}) {
   const store = useCallStore();
   const peer = peerPubkey.toLowerCase();
   discardOrphanedSession();
@@ -1027,6 +1179,11 @@ export async function startCall(peerPubkey: string) {
   store.callId = id;
   store.direction = "outgoing";
   const session = createSession(id, peer, "outgoing");
+  if (options.video) {
+    session.media = "video";
+    session.videoOffered = true;
+    store.media = "video";
+  }
   // Load the small ringback resource only after the user starts a call.
   // Merely loading media is not audio priming; no play() occurs here.
   ringtoneElement("ringback");
@@ -1047,11 +1204,13 @@ export async function startCall(peerPubkey: string) {
   }
   session.localStream = stream;
   setCallAudioSession(session, "play-and-record", "microphone_ready");
+  // The camera is acquired after, and apart from, the microphone above.
+  if (session.media === "video" && !(await attachCamera(session, () => store.phase === "outgoing"))) return;
   void keepScreenOn(session);
   startTone(session, "ringback");
   try {
     await joinCallRoom(session, roomId, secret);
-    await sendSignal(peer, { action: "invite", callId: id, room: roomId, secret });
+    await sendSignal(peer, { action: "invite", callId: id, room: roomId, secret, ...(session.videoOffered ? { media: "video" as const } : {}) });
     // If cancellation raced the publish, send a second cancel after the invite
     // completes so relay reordering cannot leave a ghost incoming screen.
     if (!isCurrent(session)) {
@@ -1066,12 +1225,17 @@ export async function startCall(peerPubkey: string) {
   later(session, RING_TIMEOUT_MS, () => { if (store.phase === "outgoing") void finish(session, "no_answer", true); });
 }
 
-export async function acceptCall() {
+export async function acceptCall(options: { video?: boolean } = {}) {
   const store = useCallStore();
   discardOrphanedSession();
   const session = activeSession;
   if (!session || !isCurrent(session) || session.direction !== "incoming" || store.phase !== "incoming" || !store.invite) return;
   const invite = { ...store.invite };
+  if (invite.media === "video") {
+    session.videoOffered = true;
+    session.media = options.video ? "video" : "audio";
+  }
+  store.media = session.media;
   // Claim the real-time communication category BEFORE releasing the audible
   // ringtone. Old order: playback -> auto -> play-and-record; on iPhone this
   // can leave WebKit's output route stuck after ringing, even if play() resolves.
@@ -1103,6 +1267,7 @@ export async function acceptCall() {
   }
   session.localStream = stream;
   setCallAudioSession(session, "play-and-record", "microphone_ready");
+  if (session.media === "video" && !(await attachCamera(session, () => store.phase === "connecting"))) return;
   void keepScreenOn(session);
   // The self-copy of this accept stops our other devices from ringing.
   sendSignalBestEffort(session.peer, { action: "accept", callId: session.id });
@@ -1168,7 +1333,8 @@ export async function handleCallSignal(sender: string, recipient: string, signal
     store.callId = signal.callId;
     store.notificationMessageId = /^[0-9a-f]{64}$/i.test(messageId) ? messageId : "";
     store.direction = "incoming";
-    store.invite = { room: signal.room!, secret: signal.secret! };
+    store.invite = { room: signal.room!, secret: signal.secret!, ...(signal.media === "video" ? { media: "video" as const } : {}) };
+    store.media = signal.media === "video" ? "video" : "audio";
     const session = createSession(signal.callId, peer, "incoming");
     // Do not let a tap on the incoming-call banner prime unrelated ringtone
     // media or a Web Audio context just as WebKit starts microphone capture.
