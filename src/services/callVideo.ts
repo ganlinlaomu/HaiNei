@@ -52,16 +52,26 @@ export function getCamera(facing: "user" | "environment" = "user") {
   });
 }
 
-async function capBitrate(sender: RTCRtpSender | null) {
-  if (!sender?.getParameters || !sender.setParameters) return;
+/** iOS rejects setParameters (InvalidStateError) until the sender is ready. */
+const BITRATE_RETRY_MS = [1_000, 3_000];
+
+async function capBitrate(sender: RTCRtpSender | null, attempt = 0): Promise<void> {
+  if (!sender?.getParameters || !sender.setParameters || !sender.track) return;
   try {
     const params = sender.getParameters();
-    if (!params.encodings?.length) params.encodings = [{}];
+    if (!params.encodings?.length) throw new DOMException("no encodings yet", "InvalidStateError");
+    // Bitrate only: the camera is already captured at VIDEO_MAX_FRAMERATE, and
+    // some WebKit versions refuse a maxFramerate on the encoding.
     params.encodings[0].maxBitrate = VIDEO_MAX_BITRATE;
-    params.encodings[0].maxFramerate = VIDEO_MAX_FRAMERATE;
     await sender.setParameters(params);
+    startupMark("call_video_bitrate_capped", { attempt });
   } catch (error) {
-    debugLog("system", "call_video_bitrate_failed", { name: error instanceof Error ? error.name : "unknown" }, "warn");
+    const name = error instanceof Error ? error.name : "unknown";
+    if (attempt < BITRATE_RETRY_MS.length) {
+      setTimeout(() => { void capBitrate(sender, attempt + 1); }, BITRATE_RETRY_MS[attempt]);
+      return;
+    }
+    debugLog("system", "call_video_bitrate_failed", { name, attempts: attempt + 1 }, "warn");
   }
 }
 
