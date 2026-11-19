@@ -59,6 +59,68 @@ async function capBitrate(pc: RTCPeerConnection | undefined, track: MediaStreamT
   }
 }
 
+/** Recognise video RTP records, including WebKit's untyped ones (by codec). */
+export function isVideoRtp(entry: any, report: any) {
+  return entry?.kind === "video" || entry?.mediaType === "video"
+    || String(report?.get?.(entry?.codecId)?.mimeType || "").toLowerCase().startsWith("video/");
+}
+
+/** Frame counters for one video call sample; no SSRCs, device or peer details. */
+export function videoStats(report: any) {
+  let inbound: any = null;
+  let outbound: any = null;
+  report.forEach((entry: any) => {
+    if (entry.type === "inbound-rtp" && isVideoRtp(entry, report)) inbound = entry;
+    if (entry.type === "outbound-rtp" && isVideoRtp(entry, report)) outbound = entry;
+  });
+  return {
+    framesReceived: inbound?.framesReceived ?? null,
+    framesDecoded: inbound?.framesDecoded ?? null,
+    packetsReceived: inbound?.packetsReceived ?? null,
+    frameWidth: inbound?.frameWidth ?? null,
+    framesEncoded: outbound?.framesEncoded ?? null,
+    framesSent: outbound?.framesSent ?? null,
+    packetsSent: outbound?.packetsSent ?? null,
+    qualityLimitation: outbound?.qualityLimitationReason ?? null,
+  };
+}
+
+/**
+ * Watch the local camera track. iOS interrupts capture (track.muted, black
+ * frames) when the audio session changes, e.g. as the ringback starts; it
+ * also ends the track in the background. Either way `restart` replaces it.
+ */
+export function watchCameraTrack(track: MediaStreamTrack, restart: (reason: "interrupted" | "ended") => void, isVisible = () => document.visibilityState === "visible") {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const onMute = () => {
+    startupMark("call_camera_muted", { state: track.readyState });
+    if (timer) clearTimeout(timer);
+    // A brief interruption recovers by itself; only a lasting one is restarted.
+    timer = setTimeout(() => {
+      timer = null;
+      if (track.muted && track.readyState === "live" && isVisible()) restart("interrupted");
+    }, 800);
+  };
+  const onUnmute = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    startupMark("call_camera_unmuted", {});
+  };
+  const onEnded = () => {
+    startupMark("call_camera_ended", {});
+    if (isVisible()) restart("ended");
+  };
+  track.addEventListener("mute", onMute);
+  track.addEventListener("unmute", onUnmute);
+  track.addEventListener("ended", onEnded);
+  return () => {
+    if (timer) clearTimeout(timer);
+    track.removeEventListener("mute", onMute);
+    track.removeEventListener("unmute", onUnmute);
+    track.removeEventListener("ended", onEnded);
+  };
+}
+
 export type VideoLink = ReturnType<typeof createVideoLink>;
 
 export function createVideoLink(options: {
@@ -77,6 +139,8 @@ export function createVideoLink(options: {
   onRemoteCamera: (on: boolean) => void;
   /** Caller: the callee will not do video; turn this call into voice. */
   onVoiceOnly: () => void;
+  /** Replace an interrupted or ended camera before it is sent. */
+  ensureCamera?: () => Promise<void>;
 }) {
   const { room, direction } = options;
   let linkedPeer = "";
@@ -144,19 +208,24 @@ export function createVideoLink(options: {
     }
     stopWaiting();
     attached = true;
-    const camera = options.camera();
-    const track = camera?.getVideoTracks()[0];
-    if (camera && track) {
-      startupMark("call_video_attaching", { direction });
-      for (const sending of room.addStream(camera, { target: peer, metadata: { kind: CAMERA_STREAM_KIND } })) {
-        void sending.then(() => capBitrate(room.getPeers()[peer], track)).catch(error => {
-          debugLog("system", "call_video_send_failed", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
-        });
+    void (async () => {
+      // An interrupted camera would only send black frames: replace it first.
+      try { await options.ensureCamera?.(); } catch { /* attach what there is */ }
+      if (!options.active() || options.peer() !== peer) return;
+      const camera = options.camera();
+      const track = camera?.getVideoTracks()[0];
+      if (camera && track) {
+        startupMark("call_video_attaching", { direction, muted: track.muted, enabled: track.enabled, state: track.readyState });
+        for (const sending of room.addStream(camera, { target: peer, metadata: { kind: CAMERA_STREAM_KIND } })) {
+          void sending.then(() => capBitrate(room.getPeers()[peer], track)).catch(error => {
+            debugLog("system", "call_video_send_failed", { reason: error instanceof Error ? error.message.slice(0, 80) : "unknown" }, "warn");
+          });
+        }
+        send({ t: "camera", on: track.enabled });
       }
-      send({ t: "camera", on: track.enabled });
-    }
-    // The callee waits for this before adding its own camera.
-    if (direction === "outgoing") send({ t: "go" });
+      // The callee waits for this before adding its own camera.
+      if (direction === "outgoing") send({ t: "go" });
+    })();
   }
 
   return {

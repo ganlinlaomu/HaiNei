@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.210",
-  "releaseSummary": "新增视频通话，可选视频或语音接听",
+  "version": "0.1.211",
+  "releaseSummary": "修复视频通话一方画面黑屏",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

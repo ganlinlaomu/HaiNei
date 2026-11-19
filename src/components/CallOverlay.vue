@@ -32,7 +32,7 @@
   <div v-else class="call-overlay" :class="{ 'video-mode': showVideoStage }" role="dialog" aria-modal="true" :aria-label="`与 ${name} 的${isVideo ? '视频' : '语音'}通话`" @click.self="dismissEnded">
     <div v-if="showVideoStage" class="video-stage" aria-hidden="true">
       <!-- Before the peer's video arrives, your own camera fills the screen. -->
-      <CallVideo v-if="remoteShown" class="video-main" :stream="call.remoteVideo" />
+      <CallVideo v-if="remoteShown" class="video-main" :stream="call.remoteVideo" role="remote" />
       <CallVideo v-else-if="localShown" class="video-main" :stream="call.localVideo" :mirrored="call.cameraFacing === 'user'" />
       <CallVideo v-if="remoteShown && localShown" class="video-self" :stream="call.localVideo" :mirrored="call.cameraFacing === 'user'" />
     </div>
