@@ -211,6 +211,30 @@ describe("in-room video handshake", () => {
     expect(t.room.replaceTrack).not.toHaveBeenCalled();
   });
 
+  it("caps the video bitrate, retrying while iOS reports the sender not ready", async () => {
+    const t = link("outgoing");
+    const params = { encodings: [{} as any] };
+    t.pc.sender.getParameters = () => params as any;
+    (t.pc.sender as any).track = t.camera.getVideoTracks()[0];
+    t.pc.sender.setParameters
+      .mockRejectedValueOnce(Object.assign(new Error("not ready"), { name: "InvalidStateError" }))
+      .mockRejectedValueOnce(Object.assign(new Error("not ready"), { name: "InvalidStateError" }));
+    t.link.joined("peer");
+    t.message({ t: "want" });
+    t.connectAudio();
+    await flush();
+    // The cap is applied once the offer/answer settles.
+    t.pc.signalingState = "have-local-offer";
+    t.pc.settle();
+    await flush();
+    expect(t.pc.sender.setParameters).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(t.pc.sender.setParameters).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(t.pc.sender.setParameters).toHaveBeenCalledTimes(3);
+    expect(params.encodings[0]).toEqual({ maxBitrate: 600_000 });
+  });
+
   it("relays camera on/off to the peer", async () => {
     const t = link("outgoing");
     t.link.joined("peer");

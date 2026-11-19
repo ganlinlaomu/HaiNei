@@ -43,23 +43,33 @@
             data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="startCall(item.peer)">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
           </button>
+          <button class="call-back" type="button" :aria-label="`和 ${name(item.peer)} 视频通话`" :disabled="busy || call.phase !== 'idle' || !friendships.isAccepted(item.peer)"
+            data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="startCall(item.peer, true)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+          </button>
         </div>
       </li>
     </TransitionGroup>
     <button v-if="hasMore && !search.trim()" class="load-more" type="button" :disabled="loading" @click="limit += 50">加载更多</button>
 
     <div v-if="showPicker" class="picker-backdrop" @click.self="showPicker = false">
-      <section class="picker-sheet" role="dialog" aria-modal="true" aria-label="发起语音通话">
+      <section class="picker-sheet" role="dialog" aria-modal="true" aria-label="发起通话">
         <header class="picker-header"><h2>选择联系人</h2><button type="button" aria-label="关闭" @click="showPicker = false">×</button></header>
         <input v-model="contactSearch" type="search" autocomplete="off" placeholder="搜索通讯录" aria-label="搜索要拨打的联系人"/>
         <div class="picker-list">
           <p v-if="!callableFriends.length" class="calls-state">暂无匹配的好友</p>
-          <button v-for="friend in callableFriends" :key="friend.pubkey" class="picker-row" type="button"
-            :disabled="busy || call.phase !== 'idle'" data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="startCall(friend.pubkey)">
-            <ProfileAvatar :pubkey="friend.pubkey" :local-name="friend.name" :size="42"/>
-            <span class="picker-name">{{ name(friend.pubkey) }}</span>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
-          </button>
+          <div v-for="friend in callableFriends" :key="friend.pubkey" class="picker-item">
+            <button class="picker-row" type="button" :aria-label="`和 ${name(friend.pubkey)} 语音通话`"
+              :disabled="busy || call.phase !== 'idle'" data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="startCall(friend.pubkey)">
+              <ProfileAvatar :pubkey="friend.pubkey" :local-name="friend.name" :size="42"/>
+              <span class="picker-name">{{ name(friend.pubkey) }}</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>
+            </button>
+            <button class="call-back picker-video" type="button" :aria-label="`和 ${name(friend.pubkey)} 视频通话`"
+              :disabled="busy || call.phase !== 'idle'" data-live-audio-action data-ringtone-arm @pointerdown="preload" @focus="preload" @click="startCall(friend.pubkey, true)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+            </button>
+          </div>
         </div>
       </section>
     </div>
@@ -107,9 +117,12 @@ function callSubtitle(item: CallHistoryItem) {
   if (item.missed) return "未接来电";
   const direction = item.direction === "incoming" ? "呼入" : item.direction === "outgoing" ? "呼出" : "通话";
   // Outcome messages were formerly visible in DMs as “📞 语音通话 · ...”.
-  // Only show the duration or outcome, never the redundant phone icon/label.
-  const outcome = item.text.replace(/^📞\s*语音通话\s*(?:·\s*)?/, "").trim();
-  return outcome && outcome !== "语音通话" ? `${direction} · ${outcome}` : direction;
+  // Only show the duration or outcome, never the redundant phone icon/label;
+  // a video call keeps a short 视频 marker.
+  const video = /^📞\s*视频通话/.test(item.text);
+  const outcome = item.text.replace(/^📞\s*(?:语音|视频)通话\s*(?:·\s*)?/, "").trim();
+  const kind = video ? `${direction} · 视频` : direction;
+  return outcome && outcome !== "语音通话" && outcome !== "视频通话" ? `${kind} · ${outcome}` : kind;
 }
 function timeLabel(seconds: number) {
   const date = new Date(seconds * 1000);
@@ -181,7 +194,7 @@ async function deleteCallRecord(item: CallHistoryItem) {
 onBeforeUnmount(() => { generation++; subscription?.unsubscribe(); });
 
 function preload() { void loadCallEngine().catch(() => {}); }
-async function startCall(peer: string) {
+async function startCall(peer: string, video = false) {
   if (busy.value || call.phase !== "idle" || !friendships.isAccepted(peer)) return;
   busy.value = true; error.value = "";
   const account = keys.pkHex;
@@ -189,7 +202,7 @@ async function startCall(peer: string) {
     const engine = loadedCallEngine() || await loadCallEngine();
     if (keys.pkHex === account && keys.isUnlocked && friendships.isAccepted(peer)) {
       showPicker.value = false;
-      await engine.startCall(peer);
+      await engine.startCall(peer, video ? { video: true } : undefined);
     }
   } catch { error.value = "暂时无法发起通话，请重试"; }
   finally { busy.value = false; }
@@ -222,6 +235,7 @@ async function startCall(peer: string) {
 .picker-sheet input{height:44px;padding:0 14px;border:0;border-radius:12px;background:var(--bg-eff3f4);color:inherit;font-size:16px}
 .picker-list{overflow:auto;overscroll-behavior:contain}.picker-row{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;border:0;border-bottom:1px solid var(--bd-eff1f3);background:transparent;color:inherit;text-align:left}
 .picker-row .picker-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.picker-row :deep(.profile-avatar){flex:0 0 42px;max-width:42px;max-height:42px}.picker-row svg{color:#1687e8}.picker-row:disabled{opacity:.4}
+.picker-item{display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--bd-eff1f3)}.picker-item .picker-row{flex:1;min-width:0;border-bottom:0}.picker-video{margin-right:4px}
 .calls-page button:focus-visible{outline:2px solid #1687e8;outline-offset:2px}
 @media (min-width:768px){.picker-sheet{margin:auto;border-radius:22px}}
 </style>
