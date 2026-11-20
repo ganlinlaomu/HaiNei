@@ -7,7 +7,7 @@ import { HaiNeiDatabase } from "@/db/dexie";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { SyncedMessageRepository } from "@/repositories/syncedMessageRepository";
 import { MetaRepository } from "@/repositories/metaRepository";
-import { MessageSyncManager } from "@/nostr/messaging/sync/MessageSyncManager";
+import { FRIEND_HISTORY_RESCAN_VERSION, MessageSyncManager } from "@/nostr/messaging/sync/MessageSyncManager";
 import { GIFT_WRAP_TIMESTAMP_SKEW_SECONDS } from "@/nostr/messaging/subscriptions";
 
 const ACCOUNT = "a".repeat(64);
@@ -71,7 +71,7 @@ describe("review #5: newest local message lookup", () => {
     const repo = new SyncedMessageRepository(database());
     await repo.insertMessageIfAbsent(ACCOUNT, message("1".repeat(64), NOW - 100), NOW_MS);
     // Simulate an upgraded install that has messages but no stored watermark.
-    await repo.updateSyncState(ACCOUNT, { highWatermarkCreatedAt: undefined, historyBackfillCompletedAt: NOW_MS - 1 });
+    await repo.updateSyncState(ACCOUNT, { highWatermarkCreatedAt: undefined, historyBackfillCompletedAt: NOW_MS - 1, friendHistoryRescanVersion: FRIEND_HISTORY_RESCAN_VERSION });
     const list = vi.spyOn(repo, "list");
     const { manager } = startManager(repo);
     try {
@@ -135,6 +135,7 @@ describe("review #7: realtime subscription window", () => {
     await repo.updateSyncState(ACCOUNT, {
       highWatermarkCreatedAt: NOW - 30 * 86_400,
       historyBackfillCompletedAt: NOW_MS - 1,
+      friendHistoryRescanVersion: FRIEND_HISTORY_RESCAN_VERSION,
       lastCatchupCompletedAt: (NOW - 30 * 86_400) * 1000,
     });
     const { manager, subscriptions } = startManager(repo);

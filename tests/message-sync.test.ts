@@ -11,7 +11,7 @@ import {
   UNSUPPORTED_MESSAGE_CLEANUP_VERSION,
   unsupportedMessageCleanupMetaKey,
 } from "@/repositories/syncedMessageRepository";
-import { MessageSyncManager } from "@/nostr/messaging/sync/MessageSyncManager";
+import { FRIEND_HISTORY_RESCAN_VERSION, MessageSyncManager } from "@/nostr/messaging/sync/MessageSyncManager";
 import { CATCHUP_PAGE_LIMIT, INITIAL_HISTORY_MAX_BATCHES, RECEIVED_CURSOR_MARGIN_SECONDS, RESUME_MAX_BATCHES } from "@/nostr/messaging/sync/types";
 import { decryptedEventCache, eventCache, scopedKey } from "@/services/nostrCache";
 
@@ -645,6 +645,7 @@ describe("PR4 durable per-Relay reconciliation", () => {
     await repo.updateSyncState(ACCOUNT_A, {
       historyBackfillStartedAt: oldCompletedAt - 1_000,
       historyBackfillCompletedAt: oldCompletedAt - 1_000,
+      friendHistoryRescanVersion: FRIEND_HISTORY_RESCAN_VERSION,
       historyBackfillRelaySignature: "wss://a|wss://b",
       lastCatchupCompletedAt: oldCompletedAt,
       lastSuccessfulSyncAt: oldCompletedAt,
@@ -961,6 +962,7 @@ describe("PR4 durable per-Relay reconciliation", () => {
     await repo.updateSyncState(ACCOUNT_A, {
       historyBackfillStartedAt: oldAt - 1000,
       historyBackfillCompletedAt: oldAt - 1000,
+      friendHistoryRescanVersion: FRIEND_HISTORY_RESCAN_VERSION,
       historyBackfillRelaySignature: "wss://a|wss://b",
       lastCatchupCompletedAt: oldAt,
     });
@@ -1025,6 +1027,7 @@ describe("PR4 durable per-Relay reconciliation", () => {
     await repo.updateSyncState(ACCOUNT_A, {
       historyBackfillStartedAt: old - 1_000,
       historyBackfillCompletedAt: old,
+      friendHistoryRescanVersion: FRIEND_HISTORY_RESCAN_VERSION,
       lastCatchupCompletedAt: old,
     });
     const manager = new MessageSyncManager({
@@ -1667,6 +1670,7 @@ describe("message sync session", () => {
     await repo.updateSyncState(ACCOUNT_A, {
       historyBackfillStartedAt: nowMs - 10_000,
       historyBackfillCompletedAt: nowMs - 5_000,
+      friendHistoryRescanVersion: FRIEND_HISTORY_RESCAN_VERSION,
       historyBackfillRelaySignature: "wss://a",
     });
 

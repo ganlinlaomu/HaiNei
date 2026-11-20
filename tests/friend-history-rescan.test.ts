@@ -105,4 +105,67 @@ describe("friend history rescan", () => {
       second.stop();
     }
   });
+
+  it("keeps reading pass after pass until the oldest message, which comes last", async () => {
+    const db = new HaiNeiDatabase(`friend-rescan-${sequence++}`);
+    databases.push(db);
+    const repo = new SyncedMessageRepository(db);
+    await repo.updateSyncState(ACCOUNT, {
+      historyBackfillStartedAt: NOW_MS - 10_000_000,
+      historyBackfillCompletedAt: NOW_MS - 9_000_000,
+      historyBackfillRelaySignature: "wss://a",
+      lastCatchupCompletedAt: NOW_MS - 60_000,
+      highWatermarkCreatedAt: NOW_MS / 1000 - 60,
+    });
+    // More wraps than one pass (8 pages of 250) reads; the friend's old
+    // message is the oldest of them.
+    const TOTAL = 2_600;
+    const newest = NOW_MS / 1000 - 100;
+    const wraps = Array.from({ length: TOTAL }, (_, i) => ({ id: `wrap-${i}`, kind: 1059, created_at: newest - i }));
+    const subscribe = (relays: string[], filters: any[]) => {
+      const fullHistory = filters.some(filter => filter.until !== undefined) && filters.every(filter => filter.since === 0);
+      return {
+        on(name: string, callback: (...args: any[]) => void) {
+          if (!fullHistory) {
+            if (name === "eose" && filters.some(filter => filter.until !== undefined)) queueMicrotask(() => callback(relays[0]));
+            return;
+          }
+          if (name === "event") queueMicrotask(() => wraps
+            .filter(wrap => wrap.created_at <= filters[0].until)
+            .slice(0, filters[0].limit)
+            .forEach(wrap => callback(wrap, relays[0])));
+          if (name === "eose") queueMicrotask(() => queueMicrotask(() => callback(relays[0])));
+        },
+        unsub() {},
+      };
+    };
+    const oldest = wraps[TOTAL - 1];
+    const manager = new MessageSyncManager({
+      repository: repo,
+      subscribe,
+      observeRelays: () => () => undefined,
+      resumeRelays: () => {},
+      retryOutgoing: () => {},
+      now: () => NOW_MS,
+      decode: async event => event.id === oldest.id
+        ? { ...oldPeerMessage(), transportEventId: oldest.id, createdAt: oldest.created_at }
+        : null,
+    });
+    try {
+      await manager.start({
+        accountPubkey: ACCOUNT,
+        relays: ["wss://a"],
+        authors: [PEER, ACCOUNT],
+        decodeContext: { accountPubkey: ACCOUNT },
+        onMessage: async () => true,
+      });
+      await vi.waitFor(async () => {
+        expect((await repo.getSyncState(ACCOUNT)).friendHistoryRescanVersion).toBe(FRIEND_HISTORY_RESCAN_VERSION);
+      }, { timeout: 20_000, interval: 100 });
+      expect(await repo.get(ACCOUNT, "old-peer-message")).toBeTruthy();
+      expect((await repo.getSyncState(ACCOUNT)).friendHistoryRescanUntilByRelay).toBeUndefined();
+    } finally {
+      manager.stop();
+    }
+  }, 30_000);
 });
