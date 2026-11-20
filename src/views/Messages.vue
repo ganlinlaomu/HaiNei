@@ -526,10 +526,12 @@ const messages = computed(() => {
 /** Read the next older page; the returned commit applies it (or nothing if stale). */
 async function readOlderPage(reset = false): Promise<(() => void) | undefined> {
   if (!reset && historyExhausted.value) return undefined;
-  const account=keys.pkHex, peer=peerPubkey.value;
-  const page=await directMessages.loadPeerHistoryPage(peer,reset ? undefined : historyCursor.value);
+  const account=keys.pkHex, peer=peerPubkey.value, cursor=historyCursor.value;
+  const page=await directMessages.loadPeerHistoryPage(peer,reset ? undefined : cursor);
   return () => {
     if(account!==keys.pkHex || peer!==peerPubkey.value) return;
+    // A page read ahead of the scroll is stale once history was reset or moved on.
+    if(!reset && historyCursor.value!==cursor) return;
     if(reset) historyMessages.value=[];
     historyMessages.value=[...page.items,...historyMessages.value];
     historyCursor.value=page.cursor;

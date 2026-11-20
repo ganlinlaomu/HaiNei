@@ -169,6 +169,22 @@ describe("聊天消息窗口", () => {
     expect(t.rendered().length).toBeLessThanOrEqual(MAX_RENDERED_MESSAGES);
   });
 
+  it("离顶部还有两屏时就提前读下一页，滚到顶部时直接插入，不再重复读取", async () => {
+    const t = setup(range(100, 130), { exhausted: false, older: range(0, 100) });
+    t.api.setMessageListToBottom();
+    await settle();
+
+    await t.scrollTo(ROW * 16);
+    expect(t.fetchOlderPage).toHaveBeenCalledOnce();
+    // Read ahead only: nothing is inserted until the reader reaches the top.
+    expect(t.rendered()).not.toContain("m0099");
+
+    await t.scrollTo(ROW);
+    expect(t.fetchOlderPage).toHaveBeenCalledOnce();
+    expect(t.rendered()).toContain("m0099");
+    expect(t.rowTop("m0101")).toBeCloseTo(0);
+  });
+
   it("拉历史期间继续往上滑（iOS 惯性滚动），拉回来后停在用户滑到的位置，不被甩回去", async () => {
     const t = setup(range(100, 130), { exhausted: false, older: range(0, 100), deferredCommit: true });
     t.api.setMessageListToBottom();
