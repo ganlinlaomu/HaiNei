@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.216",
-  "releaseSummary": "好友以前发的私信重新显示；设置页连接与隐私默认收起",
+  "version": "0.1.217",
+  "releaseSummary": "往上翻聊天记录时，对方以前的消息会正常出现",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

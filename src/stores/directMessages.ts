@@ -530,7 +530,14 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       });
       return this.mergePeerHistory(peerPubkey, canonical);
     },
-    mergePeerHistory(peerPubkey: string, canonicalItems: InboxItem[]) {
+    /**
+     * `historyComplete: false` means older pages of `canonicalItems` are still
+     * unread. A sent task older than the loaded page is then left out: its
+     * canonical copy arrives with that page. Shown early, these tasks filled the
+     * scroll-up window with only our own old messages, and the page holding the
+     * peer's messages was not read until all of them had been scrolled past.
+     */
+    mergePeerHistory(peerPubkey: string, canonicalItems: InboxItem[], options: { historyComplete?: boolean } = {}) {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
       const peer = peerPubkey.toLowerCase();
       const friendships = useFriendshipsStore();
@@ -541,8 +548,10 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       });
       const tasks = this.outgoingTasks.filter(task => task.accountPubkey === account && task.peerPubkey === peer);
       const matches = matchOutgoingTasksToCanonical(canonical, tasks, account);
+      const loadedFrom = options.historyComplete === false && canonical.length ? canonical[0].created_at : undefined;
       const outgoing = tasks
         .filter(task => !matches.matchedLocalIds.has(task.localId))
+        .filter(task => loadedFrom === undefined || task.state !== "sent" || task.createdAt >= loadedFrom)
         .map(taskInboxItem);
       const merged = [...canonical.map(item => {
         const task = matches.taskByMessageId.get(item.id);
