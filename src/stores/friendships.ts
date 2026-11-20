@@ -181,18 +181,22 @@ export const useFriendshipsStore = defineStore("friendships", {
       }
     },
     /**
-     * Resolves once this account's records are read, so authorization checks
-     * see the real list. Never throws: a failed read leaves callers where they
-     * were before (records as they are), instead of failing a whole chat.
+     * Waits until this account's records are read. Returns whether they were:
+     * false means "unknown", never "not a friend". Callers must then not
+     * cache a filtered result or record a decision based on it. Never throws,
+     * so a failed read cannot fail a whole chat.
      */
-    async ensureLoaded(accountPubkey?: string) {
+    async ensureLoaded(accountPubkey?: string): Promise<boolean> {
       const account = normalized(accountPubkey || useKeyStore().pkHex);
-      if (!account || (this.loadedFor === account && !this.loading && this.authorizationReady)) return;
+      if (!account) return false;
+      const ready = () => this.loadedFor === account && !this.loading && this.authorizationReady;
+      if (ready()) return true;
       try {
         await this.load(account);
       } catch (error) {
         console.warn("[friendships] load failed", error instanceof Error ? error.message : "unknown");
       }
+      return ready();
     },
     async loadFresh(account: string) {
       this.records = [];

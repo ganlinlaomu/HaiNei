@@ -69,6 +69,7 @@ function seed(messages: InboxItem[], friendship: FriendshipRecord) {
   messageStore.inbox = messages;
   const friendships = useFriendshipsStore();
   friendships.loadedFor = ACCOUNT;
+  friendships.authorizationReady = true;
   friendships.records = [friendship];
   return { messageStore, friendships, direct: useDirectMessagesStore() };
 }

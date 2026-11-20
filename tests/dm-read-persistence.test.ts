@@ -38,6 +38,7 @@ async function restore() {
   setActivePinia(createPinia());
   const friendships = useFriendshipsStore();
   friendships.loadedFor = ACCOUNT;
+  friendships.authorizationReady = true;
   friendships.records = [{ accountPubkey: ACCOUNT, peerPubkey: PEER, state: "accepted", acceptedAt: 1, updatedAt: 1 }];
   await useMessagesStore().load(ACCOUNT);
   const direct = useDirectMessagesStore();

@@ -536,8 +536,48 @@ async function readOlderPage(reset = false): Promise<(() => void) | undefined> {
     historyMessages.value=[...page.items,...historyMessages.value];
     historyCursor.value=page.cursor;
     historyExhausted.value=page.exhausted;
+    if(page.authorizationPending) noteHistoryAuthorizationPending(account, peer);
   };
 }
+/**
+ * A page read while the friend list could not be loaded left the friend's
+ * messages out. Retry the friend list a few times; once it is readable,
+ * read the chat again.
+ */
+const AUTHORIZATION_RETRY_LIMIT = 3;
+let historyAuthorizationPending = false;
+let authorizationRetries = 0;
+let authorizationRereads = 0;
+let authorizationRetryTimer: ReturnType<typeof setTimeout> | null = null;
+const friendshipsReady = () => friendships.loadedFor === keys.pkHex && friendships.authorizationReady && !friendships.loading;
+function clearHistoryAuthorizationPending() {
+  historyAuthorizationPending = false;
+  authorizationRetries = 0;
+  authorizationRereads = 0;
+  if (authorizationRetryTimer !== null) clearTimeout(authorizationRetryTimer);
+  authorizationRetryTimer = null;
+}
+function rereadAfterAuthorization() {
+  if (!historyAuthorizationPending || disposed || authorizationRereads >= AUTHORIZATION_RETRY_LIMIT) return;
+  historyAuthorizationPending = false;
+  authorizationRereads += 1;
+  void load();
+}
+function noteHistoryAuthorizationPending(account: string, peer: string) {
+  historyAuthorizationPending = true;
+  if (friendshipsReady()) return void queueMicrotask(rereadAfterAuthorization);
+  if (authorizationRetryTimer !== null || authorizationRetries >= AUTHORIZATION_RETRY_LIMIT) return;
+  authorizationRetries += 1;
+  authorizationRetryTimer = setTimeout(() => {
+    authorizationRetryTimer = null;
+    if (disposed || account !== keys.pkHex || peer !== peerPubkey.value) return;
+    // Success flips friendshipsReady (the watcher re-reads); failure backs off.
+    void friendships.ensureLoaded(account).then(ok => {
+      if (!ok && historyAuthorizationPending) noteHistoryAuthorizationPending(account, peer);
+    });
+  }, 2_000 * authorizationRetries);
+}
+watch(friendshipsReady, ready => { if (ready) rereadAfterAuthorization(); });
 async function fetchOlderPage(reset = false) {
   (await readOlderPage(reset))?.();
 }
@@ -1234,6 +1274,7 @@ onMounted(() => {
 });
 watch([draft, replyingToId], scheduleDraftSave);
 watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
+  clearHistoryAuthorizationPending();
   historyMessages.value = [];
   historyCursor.value = undefined;
   historyExhausted.value = false;
@@ -1274,6 +1315,7 @@ onBeforeUnmount(() => {
   cancelBackgroundTask("chat-call-warmup");
   stopBeforeLock();
   disposed = true;
+  clearHistoryAuthorizationPending();
   flushDraft();
   pauseDraftPersistence();
   cancelSearchRequest();

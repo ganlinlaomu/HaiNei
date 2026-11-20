@@ -48,7 +48,12 @@ describe("friendship records while they load", () => {
     const store = useFriendshipsStore();
     list.mockImplementationOnce(() => Promise.reject(new Error("idb closed")));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    await expect(store.ensureLoaded(ME)).resolves.toBeUndefined();
+    // "Unknown", not "not a friend": callers must not cache or decide on it.
+    await expect(store.ensureLoaded(ME)).resolves.toBe(false);
+    release = () => undefined;
+    list.mockImplementationOnce(async () => [accepted]);
+    await expect(store.ensureLoaded(ME)).resolves.toBe(true);
+    expect(store.isAccepted(FRIEND)).toBe(true);
     warn.mockRestore();
   });
 });
