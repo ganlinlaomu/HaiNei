@@ -73,8 +73,13 @@ const RELAY_EVENT_FLUSH_MS = 5_000;
  * friendship check and discarded at ingestion (fixed in 0.1.216).
  */
 export const FRIEND_HISTORY_RESCAN_VERSION = 1;
-/** Decrypting a wrap blocks the main thread; yield to input this often. */
-const RESCAN_YIELD_EVERY = 20;
+/**
+ * Decrypting a wrap blocks the main thread for ~15ms on a phone; yielding
+ * every 20 left ~0.3s stalls that made an open chat stutter.
+ */
+const RESCAN_YIELD_EVERY = 4;
+/** Pause between bounded rescan passes; old messages come last (newest first). */
+const RESCAN_PASS_GAP_MS = 1_000;
 
 export const RELAY_CATCHUP_RETRY_BASE_MS = 1_000;
 export const RELAY_CATCHUP_RETRY_MAX_MS = 60_000;
@@ -889,14 +894,14 @@ export class MessageSyncManager {
       cancelTask = scheduleBackgroundTask(`dm-friend-rescan:${sessionId}`, async () => {
         this.cancelRescanTask = null;
         await this.runFriendHistoryRescan(sessionId, accountPubkey);
-      }, { priority: "idle", timeoutMs: 60_000 });
+      }, { priority: "idle", timeoutMs: delayed ? 5_000 : 60_000 });
     };
     this.cancelRescanTask = () => {
       if (timer !== null) clearTimeout(timer);
       cancelTask?.();
     };
     if (delayed) {
-      timer = setTimeout(start, 30_000);
+      timer = setTimeout(start, RESCAN_PASS_GAP_MS);
       (timer as any).unref?.();
     } else start();
   }
@@ -967,6 +972,8 @@ export class MessageSyncManager {
       debugLog("sync", "friend_history_rescan", {
         relays: relays.length, received: result.received, unique: result.unique,
         remainingRelays: Object.keys(cursors).length, done, durationMs: this.now() - started,
+        // How far back the slowest relay has been read, in hours.
+        reachedHoursAgo: done ? null : Math.round((nowSeconds - Math.max(...Object.values(cursors))) / 360) / 10,
       }, "info");
       // A failing relay is retried on the next launch, not in a loop.
       if (!done && !result.incomplete) {
