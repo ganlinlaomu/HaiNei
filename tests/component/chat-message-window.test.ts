@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, ref } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import type { InboxItem } from "@/stores/messages";
-import { MAX_RENDERED_MESSAGES, useChatMessageWindow } from "@/composables/useChatMessageWindow";
+import { MAX_RENDERED_MESSAGES, SCROLL_IDLE_MS, useChatMessageWindow } from "@/composables/useChatMessageWindow";
 
 // happy-dom has no layout. Model a chat list 500px tall whose rows are all
 // 50px, so scroll metrics and row positions follow from the rendered rows.
@@ -45,7 +45,7 @@ async function settle() {
   }
 }
 
-function setup(initial: InboxItem[], overrides: { exhausted?: boolean; older?: InboxItem[] } = {}) {
+function setup(initial: InboxItem[], overrides: { exhausted?: boolean; older?: InboxItem[]; deferredCommit?: boolean } = {}) {
   const messages = ref<InboxItem[]>(initial);
   const messageList = ref<HTMLElement | null>(null);
   const searchContextActive = ref(false);
@@ -54,9 +54,16 @@ function setup(initial: InboxItem[], overrides: { exhausted?: boolean; older?: I
   const retained = ref<string[]>([]);
   const markRead = vi.fn(() => Promise.resolve());
   const onScroll = vi.fn();
-  const fetchOlderPage = vi.fn(async () => {
-    messages.value = [...(overrides.older ?? []), ...messages.value];
-    historyExhausted.value = true;
+  let releasePage: () => void = () => undefined;
+  const fetchOlderPage = vi.fn(async (): Promise<void | (() => void)> => {
+    const commit = () => {
+      messages.value = [...(overrides.older ?? []), ...messages.value];
+      historyExhausted.value = true;
+    };
+    if (!overrides.deferredCommit) return commit();
+    // Like the chat view: the page is read (slowly) and committed by the window.
+    await new Promise<void>(resolve => { releasePage = resolve; });
+    return commit;
   });
   let api!: ReturnType<typeof useChatMessageWindow>;
 
@@ -83,8 +90,11 @@ function setup(initial: InboxItem[], overrides: { exhausted?: boolean; older?: I
     list.scrollTop = top;
     list.dispatchEvent(new Event("scroll"));
     await settle();
+    // Rows are only inserted once scrolling has stopped (iOS momentum).
+    await new Promise(resolve => setTimeout(resolve, SCROLL_IDLE_MS + 30));
+    await settle();
   };
-  return { wrapper, api, list, messages, searchContextActive, searchContextMessages, retained, markRead, onScroll, fetchOlderPage, rendered, rowTop, scrollTo };
+  return { wrapper, api, list, messages, searchContextActive, searchContextMessages, retained, markRead, onScroll, fetchOlderPage, rendered, rowTop, scrollTo, releasePage: () => releasePage() };
 }
 
 describe("聊天消息窗口", () => {
@@ -157,6 +167,50 @@ describe("聊天消息窗口", () => {
     expect(t.rendered()).toContain("m0099");
     expect(t.rowTop("m0101")).toBeCloseTo(0);
     expect(t.rendered().length).toBeLessThanOrEqual(MAX_RENDERED_MESSAGES);
+  });
+
+  it("拉历史期间继续往上滑（iOS 惯性滚动），拉回来后停在用户滑到的位置，不被甩回去", async () => {
+    const t = setup(range(100, 130), { exhausted: false, older: range(0, 100), deferredCommit: true });
+    t.api.setMessageListToBottom();
+    await settle();
+    // Near the top: the history read starts and takes a while.
+    await t.scrollTo(ROW * 2);
+    expect(t.fetchOlderPage).toHaveBeenCalledOnce();
+    // Momentum carries the list further up while the page is being read.
+    t.list.scrollTop = ROW;
+    const seen = t.rendered()[1]!;
+    const seenTop = t.rowTop(seen);
+
+    t.releasePage();
+    await settle();
+    await new Promise(resolve => setTimeout(resolve, SCROLL_IDLE_MS + 30));
+    await settle();
+
+    expect(t.rendered()).toContain("m0099");
+    expect(t.rowTop(seen)).toBeCloseTo(seenTop);
+  });
+
+  it("仍在惯性滚动时不插入更早的消息，停下后再插入（iOS 会丢弃滚动中的位置修正）", async () => {
+    const t = setup(range(100, 130), { exhausted: false, older: range(0, 100), deferredCommit: true });
+    t.api.setMessageListToBottom();
+    await settle();
+    t.list.scrollTop = ROW * 2;
+    t.list.dispatchEvent(new Event("scroll"));
+    await settle();
+    t.releasePage();
+    // Still scrolling: keep the DOM as it is.
+    for (let i = 0; i < 3; i++) {
+      t.list.dispatchEvent(new Event("scroll"));
+      await new Promise(resolve => setTimeout(resolve, SCROLL_IDLE_MS / 3));
+      await settle();
+      expect(t.rendered()).not.toContain("m0099");
+    }
+    const seen = t.rendered()[2]!;
+    const seenTop = t.rowTop(seen);
+    await new Promise(resolve => setTimeout(resolve, SCROLL_IDLE_MS + 30));
+    await settle();
+    expect(t.rendered()).toContain("m0099");
+    expect(t.rowTop(seen)).toBeCloseTo(seenTop);
   });
 
   it("滚动时关闭长按菜单（onScroll 回调）", async () => {
