@@ -24,6 +24,11 @@ export const TOP_LOAD_THRESHOLD = 120;
  * only after the scroll has been idle this long.
  */
 export const SCROLL_IDLE_MS = 150;
+/**
+ * Start reading the next older page while the reader is still this many
+ * screens from the top, so reaching the top does not wait on the local DB.
+ */
+export const OLDER_PREFETCH_SCREENS = 2;
 export const BOTTOM_FOLLOW_THRESHOLD = 120;
 
 /**
@@ -64,6 +69,19 @@ export function useChatMessageWindow(options: {
   const showJumpToLatest = ref(false);
   const pendingTailCount = ref(0);
   let prependingOlder = false;
+  /** A history page read ahead of the scroll; consumed by the next prepend. */
+  let prefetchedPage: { peer: string; startedAt: number; promise: Promise<void | (() => void)> } | undefined;
+  function prefetchOlderPage() {
+    if (prefetchedPage || prependingOlder || historyExhausted.value) return;
+    const promise = fetchOlderPage();
+    promise.catch(() => undefined);
+    prefetchedPage = { peer: peerPubkey.value, startedAt: now(), promise };
+  }
+  function takePrefetchedPage() {
+    const page = prefetchedPage;
+    prefetchedPage = undefined;
+    return page?.peer === peerPubkey.value ? page : undefined;
+  }
   let windowMutationInProgress = false;
   let followLatestTail = true;
   let restoreOverflowAnchorFrame: number | null = null;
@@ -164,6 +182,7 @@ export function useChatMessageWindow(options: {
   }
 
   function resetMessageWindow() {
+    prefetchedPage = undefined;
     const range = initialBoundedMessageWindow(
       messages.value.length,
       INITIAL_MESSAGE_COUNT,
@@ -186,12 +205,16 @@ export function useChatMessageWindow(options: {
       // often with iOS momentum. Measure the anchor only when the page is
       // applied: an anchor taken before the read threw the list back by
       // twice the distance scrolled meanwhile.
-      const commit = needsHistoryPage ? await fetchOlderPage() : undefined;
+      const startedAt = now();
+      const prefetched = needsHistoryPage ? takePrefetchedPage() : undefined;
+      const commit = needsHistoryPage ? await (prefetched?.promise ?? fetchOlderPage()) : undefined;
+      const waitedMs = Math.round(now() - startedAt);
       if (isDisposed() || peerAtStart !== peerPubkey.value) return;
       // Never insert above while momentum scrolling: iOS would drop the
       // scroll correction below. The page is already read; this only waits.
       await untilScrollIdle();
       if (isDisposed() || peerAtStart !== peerPubkey.value) return;
+      const idleMs = Math.round(now() - startedAt) - waitedMs;
 
       windowMutationInProgress = true;
       list.style.overflowAnchor = "none";
@@ -215,6 +238,15 @@ export function useChatMessageWindow(options: {
       if (isDisposed() || peerAtStart !== peerPubkey.value) return;
       restoreMessageDomAnchor(list, anchor);
       verifyScrollKept(list, anchor);
+      if (needsHistoryPage) {
+        debugLog("ui", "chat_older_page", {
+          prefetched: !!prefetched,
+          readMs: prefetched ? Math.round(now() - prefetched.startedAt) : waitedMs,
+          waitedMs,
+          idleMs,
+          applyMs: Math.round(now() - startedAt) - waitedMs - idleMs,
+        });
+      }
     } finally {
       windowMutationInProgress = false;
       prependingOlder = false;
@@ -298,6 +330,7 @@ export function useChatMessageWindow(options: {
     }
 
     if (list.scrollTop <= TOP_LOAD_THRESHOLD) void prependOlderMessages();
+    else if (windowStart.value === 0 && list.scrollTop <= list.clientHeight * OLDER_PREFETCH_SCREENS) prefetchOlderPage();
     const metrics = scrollMetrics(list);
     const nearBottom = isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD);
     if (nearBottom && windowEnd.value < messages.value.length) void appendNewerMessages();
