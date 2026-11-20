@@ -70,6 +70,7 @@ vi.mock("@/repositories/syncedMessageRepository", () => ({
   syncedMessageRepository: {
     insertMessageIfAbsent: mocks.insert,
     list: vi.fn(async () => []),
+    listConversationPage: vi.fn(async () => []),
   },
 }));
 vi.mock("@/repositories/metaRepository", () => ({
@@ -177,6 +178,41 @@ describe("optimistic outgoing DM tasks", () => {
     release(canonical());
     await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
     expect(direct.peerMessages(PEER)).toHaveLength(1);
+  });
+
+  it("never serves a history page read without the friend list from the warm cache", async () => {
+    const { direct } = seed();
+    const friendships = useFriendshipsStore();
+    const ensureLoaded = vi.spyOn(friendships, "ensureLoaded")
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    expect((await direct.prefetchPeerHistory(PEER)).authorizationPending).toBe(true);
+    // Not cached: the chat's next read asks for the friend list again.
+    expect((await direct.prefetchPeerHistory(PEER)).authorizationPending).toBeUndefined();
+    expect(ensureLoaded).toHaveBeenCalledTimes(2);
+    // A normal page is cached as before.
+    await direct.prefetchPeerHistory(PEER);
+    expect(ensureLoaded).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not fail a send as 'friendship changed' when the friend list could not be read", async () => {
+    mocks.send.mockImplementation(async (options: any) => {
+      await options.onQueued("canonical-wait");
+      return canonical("canonical-wait", options.content);
+    });
+    const { direct } = seed();
+    const friendships = useFriendshipsStore();
+    // First read fails (e.g. iOS dropped the IndexedDB connection), then works.
+    const ensureLoaded = vi.spyOn(friendships, "ensureLoaded")
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    const localId = direct.send(PEER, "等一下");
+    await vi.waitFor(() => expect(ensureLoaded).toHaveBeenCalledTimes(1));
+    expect(direct.peerMessages(PEER).find(item => item.outgoing?.localId === localId)?.outgoing?.state).not.toBe("send_failed");
+    expect(mocks.send).not.toHaveBeenCalled();
+    // Retried after a short backoff once the list is readable.
+    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledOnce(), { timeout: 3_000 });
+    await vi.waitFor(() => expect(direct.peerMessages(PEER)[0].outgoing?.state).toBe("sent"));
   });
 
   it("keeps quoted reply metadata on optimistic state, durable task, and NIP-17 send", async () => {

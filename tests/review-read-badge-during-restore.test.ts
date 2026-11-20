@@ -49,6 +49,7 @@ async function setup(phase: "ready" | "restoring") {
   messages.inbox = [incoming("1".repeat(64), 100)];
   const friendships = useFriendshipsStore();
   friendships.loadedFor = ACCOUNT;
+  friendships.authorizationReady = true;
   friendships.records = [accepted()];
   const direct = useDirectMessagesStore();
   await direct.refresh(ACCOUNT);

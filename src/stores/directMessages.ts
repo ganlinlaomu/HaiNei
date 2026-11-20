@@ -126,6 +126,8 @@ type PeerHistoryPage = {
   items: InboxItem[];
   cursor?: { createdAt: number; id: string };
   exhausted: boolean;
+  /** Filtered without the friend list (it could not be read): re-read once it is. */
+  authorizationPending?: true;
 };
 const PEER_HISTORY_WARM_TTL_MS = 30_000;
 const MAX_UNREAD_RECONCILE_ATTEMPTS = 4;
@@ -137,6 +139,9 @@ const preparingVideoTasks = new Set<string>();
 // before they are reported as failed.
 const MAX_INTERRUPTED_UPLOAD_RETRIES = 3;
 const interruptedUploadRetries = new Map<string, number>();
+/** Sends waiting for an unreadable friend list: 1s, 2s, 4s, 8s, 16s, then app resume. */
+const authorizationWaitRetries = new Map<string, number>();
+const AUTHORIZATION_WAIT_MAX_RETRIES = 5;
 const activeBurnRequests = new Set<string>();
 const scheduledBurnTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const taskPreviewUrls = new Map<string, string>();
@@ -681,7 +686,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
 
       const promise = (async (): Promise<PeerHistoryPage> => {
         const friendships = useFriendshipsStore();
-        await friendships.ensureLoaded(account);
+        const authorizationReady = await friendships.ensureLoaded(account);
         if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], exhausted: true };
         const conversation = await deriveConversationId([account, peer]);
         const records = await syncedMessageRepository.listConversationPage(account, conversation, undefined, 50);
@@ -692,12 +697,16 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           items,
           cursor: last ? { createdAt: last.createdAt, id: last.id } : undefined,
           exhausted: records.length < 50,
+          ...(authorizationReady ? {} : { authorizationPending: true }),
         };
       })();
 
       peerHistoryWarmups.set(key, { createdAt: Date.now(), promise });
       try {
-        return await promise;
+        const page = await promise;
+        // Filtered without the friend list: never serve it from the warm cache.
+        if (page.authorizationPending && peerHistoryWarmups.get(key)?.promise === promise) peerHistoryWarmups.delete(key);
+        return page;
       } catch (error) {
         if (peerHistoryWarmups.get(key)?.promise === promise) peerHistoryWarmups.delete(key);
         throw error;
@@ -708,13 +717,18 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
       const peer = peerPubkey.toLowerCase();
       const friendships = useFriendshipsStore();
-      await friendships.ensureLoaded(account);
+      const authorizationReady = await friendships.ensureLoaded(account);
       const conversation = await deriveConversationId([account, peer]);
       const records = await syncedMessageRepository.listConversationPage(account, conversation, before, 50);
       if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], cursor: before, exhausted: true };
       const items = filterPeerHistoryPage(records.map(syncedMessageRecordToInboxItem), account, friendships.getRecord(peer), this.preferencesByPeer[peer], "older");
       const last = records[0];
-      return { items, cursor: last ? { createdAt: last.createdAt, id: last.id } : before, exhausted: records.length < 50 };
+      return {
+        items,
+        cursor: last ? { createdAt: last.createdAt, id: last.id } : before,
+        exhausted: records.length < 50,
+        ...(authorizationReady ? {} : { authorizationPending: true }),
+      };
     },
     async loadPeerMessageContext(peerPubkey: string, messageId: string, radius = 20) {
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
@@ -1364,7 +1378,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         // Conversation heads come from the full inbox window, not the
         // cold-start first page that lets Home render early.
         messages.whenInboxComplete(account),
-        friendships.loadedFor === account && !friendships.loading ? Promise.resolve() : friendships.load(account),
+        friendships.ensureLoaded(account),
       ]);
       if (useKeyStore().pkHex.toLowerCase() !== account) return;
       let outgoingTasks = await outgoingDmTaskRepository.list(account);
@@ -1984,7 +1998,20 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           return;
         }
         const friendships = useFriendshipsStore();
-        await friendships.ensureLoaded(account);
+        if (!await friendships.ensureLoaded(account)) {
+          // The friend list could not be read: that is not "no longer
+          // friends". Keep the task pending and try again shortly; app resume
+          // (resumePending) also re-runs it.
+          const retries = (authorizationWaitRetries.get(key) || 0) + 1;
+          authorizationWaitRetries.set(key, retries);
+          if (retries <= AUTHORIZATION_WAIT_MAX_RETRIES) {
+            setTimeout(() => { void this.runTask(localId); }, 1_000 * 2 ** (retries - 1));
+          } else {
+            authorizationWaitRetries.delete(key);
+          }
+          return;
+        }
+        authorizationWaitRetries.delete(key);
         if (!friendships.isAccepted(task.peerPubkey)) {
           await this.failTask(localId, "send_failed", new Error("好友关系已变更"));
           return;
