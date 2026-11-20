@@ -1,5 +1,5 @@
 <template>
-  <details class="technical-section" open>
+  <details class="technical-section">
     <summary class="section-heading">
       <div class="section-heading-main">
         <span class="section-heading-icon" aria-hidden="true">
