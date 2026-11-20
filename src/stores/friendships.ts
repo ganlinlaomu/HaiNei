@@ -39,6 +39,13 @@ export function isFriendshipAcceptedAt(friendship: FriendshipRecord | undefined,
     && (window.endedAt === undefined || createdAt <= window.endedAt));
 }
 
+/**
+ * The in-flight load per account. A second load() while one runs used to clear
+ * records again; a caller that only checked loadedFor then read an empty
+ * list, so a current friend's messages were filtered out as a stranger's.
+ */
+let friendshipLoadFlight: { account: string; promise: Promise<void> } | null = null;
+
 const activeFriendshipControls = new Map<string, { action: FriendshipAction; promise: Promise<any> }>();
 
 let requestDeliveryObserverInstalled = false;
@@ -162,6 +169,32 @@ export const useFriendshipsStore = defineStore("friendships", {
       const account = normalized(accountPubkey || useKeyStore().pkHex);
       if (!account) return this.reset();
       if (this.loadedFor === account && !this.loading && this.authorizationReady) return;
+      if (this.loadedFor === account && this.loading && friendshipLoadFlight?.account === account) {
+        return friendshipLoadFlight.promise;
+      }
+      const promise = this.loadFresh(account);
+      friendshipLoadFlight = { account, promise };
+      try {
+        await promise;
+      } finally {
+        if (friendshipLoadFlight?.promise === promise) friendshipLoadFlight = null;
+      }
+    },
+    /**
+     * Resolves once this account's records are read, so authorization checks
+     * see the real list. Never throws: a failed read leaves callers where they
+     * were before (records as they are), instead of failing a whole chat.
+     */
+    async ensureLoaded(accountPubkey?: string) {
+      const account = normalized(accountPubkey || useKeyStore().pkHex);
+      if (!account || (this.loadedFor === account && !this.loading && this.authorizationReady)) return;
+      try {
+        await this.load(account);
+      } catch (error) {
+        console.warn("[friendships] load failed", error instanceof Error ? error.message : "unknown");
+      }
+    },
+    async loadFresh(account: string) {
       this.records = [];
       this.requestDeliveries = {};
       this.loadedFor = account;
@@ -204,6 +237,7 @@ export const useFriendshipsStore = defineStore("friendships", {
       return true;
     },
     reset() {
+      friendshipLoadFlight = null;
       this.records = [];
       this.loadedFor = "";
       this.loading = false;

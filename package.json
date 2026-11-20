@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.220",
-  "releaseSummary": "补回好友旧私信的速度加快，补读时聊天不再卡",
+  "version": "0.1.221",
+  "releaseSummary": "刚打开 App 时私信里对方的消息不再暂时消失",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
