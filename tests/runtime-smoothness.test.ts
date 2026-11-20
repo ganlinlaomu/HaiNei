@@ -45,7 +45,7 @@ describe("v0.1.10 runtime smoothness", () => {
     const keys = readFileSync("src/stores/keys.ts", "utf8");
     const cache = readFileSync("src/utils/imageCache.ts", "utf8");
     expect(keys).toContain("clearMemoryImageCache(currentPk)");
-    expect(IMAGE_PERSISTENT_CACHE_MAX_BYTES).toBe(256 * 1024 * 1024);
+    expect(IMAGE_PERSISTENT_CACHE_MAX_BYTES).toBe(1024 * 1024 * 1024);
     expect(cache).toContain("sealLocalVaultBytes");
     expect(cache).toContain("cacheIdForReference");
     expect(cache).toContain("imageCacheRepository.put(");

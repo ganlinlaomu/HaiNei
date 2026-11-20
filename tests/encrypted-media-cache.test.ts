@@ -54,13 +54,13 @@ describe("encrypted media cache vault", () => {
     )).rejects.toThrow("local_vault_locked");
   });
 
-  it("uses a hashed persistent key, 48 MB L1, and 256 MB encrypted L2", () => {
+  it("uses a hashed persistent key, 48 MB L1, and 1 GB encrypted L2", () => {
     const cache = readFileSync("src/utils/imageCache.ts", "utf8");
     const schema = readFileSync("src/db/dexie.ts", "utf8");
     const repository = readFileSync("src/repositories/imageCacheRepository.ts", "utf8");
 
     expect(cache).toContain("IMAGE_MEMORY_CACHE_MAX_BYTES = 48 * 1024 * 1024");
-    expect(cache).toContain("IMAGE_PERSISTENT_CACHE_MAX_BYTES = 256 * 1024 * 1024");
+    expect(cache).toContain("IMAGE_PERSISTENT_CACHE_MAX_BYTES = 1024 * 1024 * 1024");
     expect(cache).toContain('"SHA-256"');
     expect(cache).toContain('"media-cache"');
     expect(schema).toContain("[accountPubkey+url]");

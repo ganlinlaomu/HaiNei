@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.213",
-  "releaseSummary": "通话页可直接发起视频通话",
+  "version": "0.1.214",
+  "releaseSummary": "私信往上翻不再乱跳，图片缓存提高到 1GB",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

@@ -1,4 +1,5 @@
 import { computed, nextTick, ref, watch, type Ref } from "vue";
+import { installManualScrollAnchoring } from "@/utils/scrollAnchor";
 import type { InboxItem } from "@/stores/messages";
 import {
   focusBoundedMessageWindow,
@@ -53,6 +54,15 @@ export function useChatMessageWindow(options: {
   let windowMutationInProgress = false;
   let followLatestTail = true;
   let restoreOverflowAnchorFrame: number | null = null;
+  let stopScrollAnchoring: () => void = () => undefined;
+  // iOS Safari has no native scroll anchoring: keep older history still while
+  // its images and cards finish loading above the viewport.
+  watch(messageList, list => {
+    stopScrollAnchoring();
+    stopScrollAnchoring = list
+      ? installManualScrollAnchoring(list, { rowSelector: ".message-line[data-message-id]", enabled: () => !windowMutationInProgress })
+      : () => undefined;
+  }, { immediate: true, flush: "post" });
 
   const retainedPlaybackMessageId = ref("");
   const retainedMessageIds = computed(() => [...new Set([
@@ -361,6 +371,8 @@ export function useChatMessageWindow(options: {
   }
 
   function disposeMessageWindow() {
+    stopScrollAnchoring();
+    stopScrollAnchoring = () => undefined;
     if (restoreOverflowAnchorFrame !== null) cancelAnimationFrame(restoreOverflowAnchorFrame);
     if (messageScrollFrame !== null) cancelAnimationFrame(messageScrollFrame);
     messageScrollFrame = null;
