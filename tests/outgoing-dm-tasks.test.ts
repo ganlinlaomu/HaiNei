@@ -106,6 +106,7 @@ function seed(account = ACCOUNT) {
   messages.inbox = [];
   const friendships = useFriendshipsStore();
   friendships.loadedFor = account;
+  friendships.authorizationReady = true;
   friendships.records = account === ACCOUNT ? [{
     accountPubkey: ACCOUNT, peerPubkey: PEER, state: "accepted", acceptedAt: 1,
     acceptedEventId: "accepted", acceptedWindows: [{ acceptedAt: 1, acceptedEventId: "accepted" }], updatedAt: 1,

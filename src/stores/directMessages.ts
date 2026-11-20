@@ -621,7 +621,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!account || !peer || !needle || options.signal?.aborted) return [];
 
       const friendships = useFriendshipsStore();
-      if (friendships.loadedFor !== account) await friendships.load(account);
+      await friendships.ensureLoaded(account);
       if (options.signal?.aborted || keyStore.pkHex.toLowerCase() !== account) return [];
 
       const conversationId = await deriveConversationId([account, peer]);
@@ -681,7 +681,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
 
       const promise = (async (): Promise<PeerHistoryPage> => {
         const friendships = useFriendshipsStore();
-        if (friendships.loadedFor !== account) await friendships.load(account);
+        await friendships.ensureLoaded(account);
         if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], exhausted: true };
         const conversation = await deriveConversationId([account, peer]);
         const records = await syncedMessageRepository.listConversationPage(account, conversation, undefined, 50);
@@ -707,10 +707,11 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!before) return this.prefetchPeerHistory(peerPubkey);
       const account = (this.loadedFor || useKeyStore().pkHex).toLowerCase();
       const peer = peerPubkey.toLowerCase();
+      const friendships = useFriendshipsStore();
+      await friendships.ensureLoaded(account);
       const conversation = await deriveConversationId([account, peer]);
       const records = await syncedMessageRepository.listConversationPage(account, conversation, before, 50);
       if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], cursor: before, exhausted: true };
-      const friendships = useFriendshipsStore();
       const items = filterPeerHistoryPage(records.map(syncedMessageRecordToInboxItem), account, friendships.getRecord(peer), this.preferencesByPeer[peer], "older");
       const last = records[0];
       return { items, cursor: last ? { createdAt: last.createdAt, id: last.id } : before, exhausted: records.length < 50 };
@@ -720,7 +721,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const peer = peerPubkey.toLowerCase();
       if (!account || !peer || !messageId) return [] as InboxItem[];
       const friendships = useFriendshipsStore();
-      if (friendships.loadedFor !== account) await friendships.load(account);
+      await friendships.ensureLoaded(account);
       const conversationId = await deriveConversationId([account, peer]);
       const records = await syncedMessageRepository.listConversationAround(account, conversationId, messageId, radius);
       return records
@@ -910,7 +911,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!receipt) return false;
       const peer = message.senderPubkey.toLowerCase();
       const friendships = useFriendshipsStore();
-      if (friendships.loadedFor !== account) await friendships.load(account);
+      await friendships.ensureLoaded(account);
       if (!friendships.isAccepted(peer) || useKeyStore().pkHex.toLowerCase() !== account) return false;
       if (receipt.status === "read" && !readReceiptsEnabledForAccount(account)) return false;
       if (receipt.exact === true) {
@@ -1036,7 +1037,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       pendingReceiptCursors.delete(key);
       if (!upTo || !account || useKeyStore().pkHex.toLowerCase() !== account || this.loadedFor !== account) return;
       const friendships = useFriendshipsStore();
-      if (friendships.loadedFor !== account) await friendships.load(account);
+      await friendships.ensureLoaded(account);
       if (!friendships.isAccepted(peer)) return;
       if (status === "read" && !readReceiptsEnabledForAccount(account)) return;
       const keys = useKeyStore();
@@ -1072,7 +1073,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!isDirectMessageTags(message.tags) || !/^[0-9a-f]{64}$/i.test(message.id)) return;
       const peer = message.senderPubkey.toLowerCase();
       const friendships = useFriendshipsStore();
-      if (friendships.loadedFor !== account) await friendships.load(account);
+      await friendships.ensureLoaded(account);
       if (!friendships.isAccepted(peer)) return;
       if (this.loadedFor !== account) await this.refresh(account);
       if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
@@ -1260,6 +1261,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     async reconcileAuthorization(accountPubkey: string) {
       const account = accountPubkey.toLowerCase();
       if (!account || this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
+      // A warmed first page was filtered under the previous friendship state.
+      for (const key of [...peerHistoryWarmups.keys()]) if (key.startsWith(`${account}:`)) peerHistoryWarmups.delete(key);
       for (const peer of Object.keys(this.preferencesByPeer)) {
         await this.unhideForNewCanonicalMessages(account, peer);
         if (this.loadedFor !== account || useKeyStore().pkHex.toLowerCase() !== account) return;
@@ -1981,7 +1984,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           return;
         }
         const friendships = useFriendshipsStore();
-        if (friendships.loadedFor !== account) await friendships.load(account);
+        await friendships.ensureLoaded(account);
         if (!friendships.isAccepted(task.peerPubkey)) {
           await this.failTask(localId, "send_failed", new Error("好友关系已变更"));
           return;
