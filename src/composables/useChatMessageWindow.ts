@@ -1,5 +1,6 @@
 import { computed, nextTick, ref, watch, type Ref } from "vue";
 import { installManualScrollAnchoring } from "@/utils/scrollAnchor";
+import { debugLog } from "@/utils/debugLog";
 import type { InboxItem } from "@/stores/messages";
 import {
   focusBoundedMessageWindow,
@@ -16,6 +17,13 @@ export const INITIAL_MESSAGE_COUNT = 60;
 export const OLDER_MESSAGE_BATCH = 40;
 export const MAX_RENDERED_MESSAGES = 100;
 export const TOP_LOAD_THRESHOLD = 120;
+/**
+ * iOS ignores (or momentum overwrites) a scrollTop set while the list is
+ * still scrolling. Older rows inserted then left the list at the top of the
+ * new rows: the chat "jumped" to long-ago messages. Rows are inserted above
+ * only after the scroll has been idle this long.
+ */
+export const SCROLL_IDLE_MS = 150;
 export const BOTTOM_FOLLOW_THRESHOLD = 120;
 
 /**
@@ -32,7 +40,12 @@ export function useChatMessageWindow(options: {
   searchContextMessages: Readonly<Ref<InboxItem[]>>;
   sourceFocusReadSuppressed: Readonly<Ref<boolean>>;
   historyExhausted: Readonly<Ref<boolean>>;
-  fetchOlderPage: () => Promise<void>;
+  /**
+   * Read the next older page. Return a commit function to let the window
+   * apply it at the moment it re-anchors (preferred); committing inside the
+   * read lets Vue re-render before the anchor is measured.
+   */
+  fetchOlderPage: () => Promise<void | (() => void)>;
   /** Rows that must stay mounted (open menu, active swipe, highlight). */
   retainedIds: () => string[];
   isDisposed: () => boolean;
@@ -54,6 +67,13 @@ export function useChatMessageWindow(options: {
   let windowMutationInProgress = false;
   let followLatestTail = true;
   let restoreOverflowAnchorFrame: number | null = null;
+  let lastScrollAt = 0;
+  const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  async function untilScrollIdle() {
+    while (!isDisposed() && now() - lastScrollAt < SCROLL_IDLE_MS) {
+      await new Promise(resolve => setTimeout(resolve, Math.max(16, SCROLL_IDLE_MS - (now() - lastScrollAt))));
+    }
+  }
   let stopScrollAnchoring: () => void = () => undefined;
   // iOS Safari has no native scroll anchoring: keep older history still while
   // its images and cards finish loading above the viewport.
@@ -157,16 +177,26 @@ export function useChatMessageWindow(options: {
     if (!list || prependingOlder || (windowStart.value === 0 && historyExhausted.value)) return;
 
     prependingOlder = true;
-    windowMutationInProgress = true;
     const peerAtStart = peerPubkey.value;
-    const anchor = captureMessageDomAnchor(list);
+    const earlyAnchor = captureMessageDomAnchor(list);
     const needsHistoryPage = windowStart.value === 0 && !historyExhausted.value;
-    list.style.overflowAnchor = "none";
 
     try {
-      if (needsHistoryPage) await fetchOlderPage();
+      // The read is slow (local DB + decrypt) and the user keeps scrolling,
+      // often with iOS momentum. Measure the anchor only when the page is
+      // applied: an anchor taken before the read threw the list back by
+      // twice the distance scrolled meanwhile.
+      const commit = needsHistoryPage ? await fetchOlderPage() : undefined;
+      if (isDisposed() || peerAtStart !== peerPubkey.value) return;
+      // Never insert above while momentum scrolling: iOS would drop the
+      // scroll correction below. The page is already read; this only waits.
+      await untilScrollIdle();
       if (isDisposed() || peerAtStart !== peerPubkey.value) return;
 
+      windowMutationInProgress = true;
+      list.style.overflowAnchor = "none";
+      const anchor = typeof commit === "function" ? captureMessageDomAnchor(list) : earlyAnchor;
+      if (typeof commit === "function") commit();
       refreshRetainedPlaybackMessage();
       const anchorIndex = anchor ? messages.value.findIndex(message => message.id === anchor.id) : -1;
       const range = needsHistoryPage && anchorIndex >= 0
@@ -184,6 +214,7 @@ export function useChatMessageWindow(options: {
       await nextTick();
       if (isDisposed() || peerAtStart !== peerPubkey.value) return;
       restoreMessageDomAnchor(list, anchor);
+      verifyScrollKept(list, anchor);
     } finally {
       windowMutationInProgress = false;
       prependingOlder = false;
@@ -191,17 +222,30 @@ export function useChatMessageWindow(options: {
     }
   }
 
+  /** Diagnostics: did the browser keep the scroll position we restored? */
+  function verifyScrollKept(list: HTMLElement, anchor?: MessageDomAnchor) {
+    if (!anchor) return;
+    const expected = list.scrollTop;
+    requestAnimationFrame(() => {
+      if (isDisposed()) return;
+      const drift = Math.round(list.scrollTop - expected);
+      if (Math.abs(drift) > 40) debugLog("ui", "chat_prepend_scroll_overridden", { drift, sinceScrollMs: Math.round(now() - lastScrollAt) }, "warn");
+    });
+  }
+
   async function appendNewerMessages() {
     const list = messageList.value;
     if (!list || prependingOlder || windowEnd.value >= messages.value.length) return;
 
     prependingOlder = true;
-    windowMutationInProgress = true;
     const peerAtStart = peerPubkey.value;
-    const anchor = captureMessageDomAnchor(list);
-    list.style.overflowAnchor = "none";
 
     try {
+      await untilScrollIdle();
+      if (isDisposed() || peerAtStart !== peerPubkey.value) return;
+      windowMutationInProgress = true;
+      const anchor = captureMessageDomAnchor(list);
+      list.style.overflowAnchor = "none";
       refreshRetainedPlaybackMessage();
       const range = shiftBoundedMessageWindow(
         { start: windowStart.value, end: windowEnd.value },
@@ -245,6 +289,7 @@ export function useChatMessageWindow(options: {
   function processMessageScroll() {
     const list = messageList.value;
     if (!list) return;
+    lastScrollAt = now();
     onScroll?.();
     if (searchContextActive.value) {
       followLatestTail = false;

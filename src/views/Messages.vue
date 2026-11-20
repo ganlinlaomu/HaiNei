@@ -523,15 +523,21 @@ const messages = computed(() => {
   const values = [...results.values()];
   return added ? values.sort(compareInboxItems) : values;
 });
-async function fetchOlderPage(reset = false) {
-  if (!reset && historyExhausted.value) return;
+/** Read the next older page; the returned commit applies it (or nothing if stale). */
+async function readOlderPage(reset = false): Promise<(() => void) | undefined> {
+  if (!reset && historyExhausted.value) return undefined;
   const account=keys.pkHex, peer=peerPubkey.value;
   const page=await directMessages.loadPeerHistoryPage(peer,reset ? undefined : historyCursor.value);
-  if(account!==keys.pkHex || peer!==peerPubkey.value) return;
-  if(reset) historyMessages.value=[];
-  historyMessages.value=[...page.items,...historyMessages.value];
-  historyCursor.value=page.cursor;
-  historyExhausted.value=page.exhausted;
+  return () => {
+    if(account!==keys.pkHex || peer!==peerPubkey.value) return;
+    if(reset) historyMessages.value=[];
+    historyMessages.value=[...page.items,...historyMessages.value];
+    historyCursor.value=page.cursor;
+    historyExhausted.value=page.exhausted;
+  };
+}
+async function fetchOlderPage(reset = false) {
+  (await readOlderPage(reset))?.();
 }
 const searchContextMessages = ref<InboxItem[]>([]);
 const searchContextActive = ref(false);
@@ -701,7 +707,9 @@ const {
   handleMessageScroll, handleMessageMediaLoad, isTailRendered, isListNearBottom, disposeMessageWindow,
 } = useChatMessageWindow({
   messages, messageList, peerPubkey, searchContextActive, searchContextMessages,
-  sourceFocusReadSuppressed, historyExhausted, fetchOlderPage,
+  sourceFocusReadSuppressed, historyExhausted,
+  // The window applies the page itself, at the moment it re-anchors the list.
+  fetchOlderPage: () => readOlderPage(),
   retainedIds: () => [actionMenuMessageId.value, swipingMessageId.value, highlightedMessageId.value],
   isDisposed: () => disposed,
   isLoading: () => loadingConversation,
