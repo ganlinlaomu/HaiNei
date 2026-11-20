@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
   "version": "0.1.214",
-  "releaseSummary": "私信往上翻历史消息不再乱跳",
+  "releaseSummary": "私信往上翻不再乱跳，图片缓存提高到 1GB",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

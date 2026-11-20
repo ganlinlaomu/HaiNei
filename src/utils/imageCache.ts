@@ -8,7 +8,7 @@ import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { logger } from "@/utils/logger";
 
 export const IMAGE_MEMORY_CACHE_MAX_BYTES = 48 * 1024 * 1024;
-export const IMAGE_PERSISTENT_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+export const IMAGE_PERSISTENT_CACHE_MAX_BYTES = 1024 * 1024 * 1024;
 
 type MemoryImageEntry = {
   blob: Blob;
