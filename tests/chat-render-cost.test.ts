@@ -62,6 +62,19 @@ describe("chat history merge", () => {
     const merged = direct.mergePeerHistory(PEER, [incoming(2, 20), incoming(1, 10)]);
     expect(merged.map(item => item.content)).toEqual(["m1", "sending", "m2"]);
   });
+
+  it("keeps sent tasks older than the loaded page for that page while history remains", () => {
+    const direct = setup();
+    const task = (localId: string, createdAt: number, state: string) => ({
+      accountPubkey: ACCOUNT, peerPubkey: PEER, localId, createdAt, updatedAt: createdAt, text: localId, state,
+    } as OutgoingDmTaskRecord);
+    direct.outgoingTasks = [task("old-sent", 5, "sent"), task("old-failed", 6, "failed"), task("new-sent", 25, "sent")];
+    const page = [incoming(2, 20), incoming(1, 10)];
+    expect(direct.mergePeerHistory(PEER, page, { historyComplete: false }).map(item => item.content))
+      .toEqual(["old-failed", "m1", "m2", "new-sent"]);
+    expect(direct.mergePeerHistory(PEER, page, { historyComplete: true }).map(item => item.content))
+      .toEqual(["old-sent", "old-failed", "m1", "m2", "new-sent"]);
+  });
 });
 
 describe("burn countdown", () => {

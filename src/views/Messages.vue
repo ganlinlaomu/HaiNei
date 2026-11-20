@@ -500,7 +500,7 @@ const historyCursor = ref<{createdAt:number;id:string}>();
 const historyExhausted = ref(false);
 const messages = computed(() => {
   const peer = peerPubkey.value;
-  const existing = directMessages.mergePeerHistory(peer, historyMessages.value);
+  const existing = directMessages.mergePeerHistory(peer, historyMessages.value, { historyComplete: historyExhausted.value });
   const results = new Map(existing.map(message => [message.id, message]));
   let added = false;
   // A tombstone is only metadata: do not reconstruct decrypted content.
