@@ -3,7 +3,7 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.218";
+export const APP_VERSION = "0.1.219";
 export const DB_VERSION = 25;
 export const DATABASE_NAME = "closed_community_db";
 
@@ -159,6 +159,14 @@ export type MessageSyncStateRecord = {
   /** Oldest gift-wrap timestamp reached by an incomplete bounded history repair. */
   historyBackfillUntil?: number;
   historyBackfillRelaySignature?: string;
+  /**
+   * One-time re-read of all Relay history after the friend authorization rule
+   * changed. Before 0.1.216 a current friend's messages older than the local
+   * friendship record were rejected during sync and never stored.
+   */
+  friendHistoryRescanVersion?: number;
+  /** Per-relay resume cursor of an unfinished friend history rescan. */
+  friendHistoryRescanUntilByRelay?: Record<string, number>;
   highWatermarkCreatedAt?: number;
   lastRealtimeConnectedAt?: number;
   lastCatchupCompletedAt?: number;

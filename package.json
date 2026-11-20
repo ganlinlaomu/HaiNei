@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.218",
-  "releaseSummary": "往上翻聊天记录时提前读取更早的消息，翻页不再卡顿",
+  "version": "0.1.219",
+  "releaseSummary": "好友以前发的私信重新从中继补回来",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
