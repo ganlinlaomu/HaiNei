@@ -353,6 +353,12 @@ export function isAuthorizedDirectMessage(
   friendship?: FriendshipRecord,
 ) {
   if (item.pubkey === accountPubkey) return true;
+  // A current friend's whole history is shown. Per-window checks hid every
+  // earlier message whenever the local record lost its older windows (a
+  // re-add on another device replaced it during account sync), leaving only
+  // messages since the latest acceptance. Non-friends and removed friends
+  // are still limited to the time they were friends.
+  if (friendship?.state === "accepted") return true;
   return isFriendshipAcceptedAt(friendship, item.created_at);
 }
 
@@ -366,6 +372,42 @@ export function isAuthorizedCanonicalDirectMessage(
     accountPubkey,
     friendship,
   );
+}
+
+/**
+ * One page of a chat's stored history, as shown. Logs (counts and relative
+ * ages only) why messages were left out, so a report of "the other side's
+ * old messages are missing" can be told apart from paging problems.
+ */
+function filterPeerHistoryPage(
+  records: InboxItem[],
+  account: string,
+  friendship: FriendshipRecord | undefined,
+  preference: ConversationPreference | undefined,
+  page: "first" | "older",
+) {
+  let notConversation = 0;
+  let unauthorized = 0;
+  let deleted = 0;
+  const items = records.filter(item => {
+    if (!isConversationMessage(item)) { notConversation += 1; return false; }
+    if (!isAuthorizedDirectMessage(item, account, friendship)) { unauthorized += 1; return false; }
+    if (!afterDeletion(item, preference)) { deleted += 1; return false; }
+    return true;
+  });
+  const fromPeer = records.filter(item => item.pubkey !== account).length;
+  if (unauthorized || deleted || page === "first") {
+    const now = Date.now() / 1000;
+    const hours = (seconds?: number) => seconds ? Math.round((now - seconds) / 360) / 10 : null;
+    debugLog("ui", "dm_history_page", {
+      page, records: records.length, fromPeer, shown: items.length, notConversation, unauthorized, deleted,
+      friendState: friendship?.state ?? "none",
+      windows: friendship?.acceptedWindows?.length ?? 0,
+      acceptedHoursAgo: hours(friendship?.acceptedAt),
+      oldestRecordHoursAgo: hours(records[0]?.created_at),
+    }, unauthorized ? "warn" : "info");
+  }
+  return items;
 }
 
 function afterDeletion(item: InboxItem, preference?: ConversationPreference) {
@@ -635,9 +677,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
         const conversation = await deriveConversationId([account, peer]);
         const records = await syncedMessageRepository.listConversationPage(account, conversation, undefined, 50);
         if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], exhausted: true };
-        const items = records.map(syncedMessageRecordToInboxItem).filter(item => isConversationMessage(item)
-          && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
-          && afterDeletion(item, this.preferencesByPeer[peer]));
+        const items = filterPeerHistoryPage(records.map(syncedMessageRecordToInboxItem), account, friendships.getRecord(peer), this.preferencesByPeer[peer], "first");
         const last = records[0];
         return {
           items,
@@ -662,9 +702,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const records = await syncedMessageRepository.listConversationPage(account, conversation, before, 50);
       if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], cursor: before, exhausted: true };
       const friendships = useFriendshipsStore();
-      const items = records.map(syncedMessageRecordToInboxItem).filter(item => isConversationMessage(item)
-        && isAuthorizedDirectMessage(item, account, friendships.getRecord(peer))
-        && afterDeletion(item, this.preferencesByPeer[peer]));
+      const items = filterPeerHistoryPage(records.map(syncedMessageRecordToInboxItem), account, friendships.getRecord(peer), this.preferencesByPeer[peer], "older");
       const last = records[0];
       return { items, cursor: last ? { createdAt: last.createdAt, id: last.id } : before, exhausted: records.length < 50 };
     },
