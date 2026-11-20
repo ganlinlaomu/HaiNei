@@ -67,6 +67,15 @@ function validatedCheckpoint(
 const SEEN_WRAP_WINDOW_SECONDS = 10 * 24 * 60 * 60;
 const RELAY_EVENT_FLUSH_MS = 5_000;
 
+/**
+ * Bump to re-read every stored wrap once on devices whose initial history is
+ * complete. 1: current friends' older messages were rejected by a per-window
+ * friendship check and discarded at ingestion (fixed in 0.1.216).
+ */
+export const FRIEND_HISTORY_RESCAN_VERSION = 1;
+/** Decrypting a wrap blocks the main thread; yield to input this often. */
+const RESCAN_YIELD_EVERY = 20;
+
 export const RELAY_CATCHUP_RETRY_BASE_MS = 1_000;
 export const RELAY_CATCHUP_RETRY_MAX_MS = 60_000;
 
@@ -119,6 +128,9 @@ export class MessageSyncManager {
   private removeBackgroundListener: (() => void) | null = null;
    private idleContinuationTimer: ReturnType<typeof setTimeout> | null = null;
   private cancelIdleContinuation: (() => void) | null = null;
+  private rescanAbortController: AbortController | null = null;
+  private rescanSessionId = "";
+  private cancelRescanTask: (() => void) | null = null;
   private relayRetryAttempts = new Map<string, number>();
   private relayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -749,6 +761,8 @@ export class MessageSyncManager {
           syncStatePatch.historyBackfillCompletedAt = completedAt;
           syncStatePatch.historyBackfillUntil = undefined;
           syncStatePatch.historyBackfillRelaySignature = currentRelaySignature;
+          // Read under the current authorization rule: nothing left to rescan.
+          syncStatePatch.friendHistoryRescanVersion = FRIEND_HISTORY_RESCAN_VERSION;
         } else if (resumableHistoryCursor !== undefined) {
           syncStatePatch.historyBackfillUntil = resumableHistoryCursor;
         }
@@ -826,6 +840,7 @@ export class MessageSyncManager {
       if (!this.catchupAbortController?.signal.aborted && this.isForeground()) {
         await this.setStatus("live", sessionId);
         startupMark("relay_catchup_live");
+        this.scheduleFriendHistoryRescan(sessionId, options.accountPubkey);
       }
     } catch (e) {
       logger.warn(`[message-sync] catch-up failed account=${options.accountPubkey.slice(0, 8)}`, e);
@@ -854,6 +869,114 @@ export class MessageSyncManager {
           });
         }
       }
+    }
+  }
+
+  private cancelFriendHistoryRescan() {
+    this.cancelRescanTask?.();
+    this.cancelRescanTask = null;
+    this.rescanAbortController?.abort();
+  }
+
+  /** Runs after catch-up is live, in foreground idle time, one bounded pass at a time. */
+  private scheduleFriendHistoryRescan(sessionId: string, accountPubkey: string, delayed = false) {
+    if (this.rescanSessionId === sessionId || this.cancelRescanTask) return;
+    if (!this.isCurrent(sessionId, accountPubkey) || !this.isForeground()) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelTask: (() => void) | null = null;
+    const start = () => {
+      timer = null;
+      cancelTask = scheduleBackgroundTask(`dm-friend-rescan:${sessionId}`, async () => {
+        this.cancelRescanTask = null;
+        await this.runFriendHistoryRescan(sessionId, accountPubkey);
+      }, { priority: "idle", timeoutMs: 60_000 });
+    };
+    this.cancelRescanTask = () => {
+      if (timer !== null) clearTimeout(timer);
+      cancelTask?.();
+    };
+    if (delayed) {
+      timer = setTimeout(start, 30_000);
+      (timer as any).unref?.();
+    } else start();
+  }
+
+  private async runFriendHistoryRescan(sessionId: string, accountPubkey: string) {
+    const options = this.options;
+    if (!options || !this.isCurrent(sessionId, accountPubkey) || !this.isForeground()) return;
+    if (this.rescanSessionId || !options.relays.length) return;
+    const state = await this.repository.getSyncState(accountPubkey);
+    // A fresh history repair already reads everything under the current rule.
+    if (!state.historyBackfillCompletedAt
+      || (state.friendHistoryRescanVersion ?? 0) >= FRIEND_HISTORY_RESCAN_VERSION) return;
+    const nowSeconds = Math.floor(this.now() / 1000);
+    const saved = state.friendHistoryRescanUntilByRelay;
+    // A relay missing from a saved cursor map already reached its end.
+    const relays = saved ? options.relays.filter(url => typeof saved[url] === "number") : options.relays;
+    const finish = () => this.repository.updateSyncState(accountPubkey, {
+      friendHistoryRescanVersion: FRIEND_HISTORY_RESCAN_VERSION,
+      friendHistoryRescanUntilByRelay: undefined,
+    });
+    if (!relays.length) { await finish(); return; }
+
+    const controller = new AbortController();
+    this.rescanAbortController = controller;
+    this.rescanSessionId = sessionId;
+    const started = this.now();
+    let processed = 0;
+    try {
+      const filters = buildMessageSubscriptions(accountPubkey, options.authors, 0, nowSeconds)
+        .map(filter => ({ ...filter, limit: CATCHUP_PAGE_LIMIT }));
+      const result = await runPagedCatchup({
+        relays,
+        filters,
+        initialUntilByRelay: saved ? Object.fromEntries(relays.map(url => [url, Math.min(saved[url], nowSeconds)])) : undefined,
+        subscribeFn: this.subscribeFn,
+        trackSubscription: subscription => {
+          this.activeCatchupSubscriptions.add(subscription);
+          return () => this.activeCatchupSubscriptions.delete(subscription);
+        },
+        signal: controller.signal,
+        timeoutMs: this.catchupTimeoutMs,
+        maxBatches: INITIAL_HISTORY_MAX_BATCHES,
+        relayConcurrency: 1,
+        isCurrent: () => this.isCurrent(sessionId, accountPubkey),
+        onEvent: async (event, eventRelay) => {
+          await this.pipeline?.ingestNostrEvent(event, { source: "history", relayUrl: eventRelay });
+          if (++processed % RESCAN_YIELD_EVERY === 0) await new Promise(resolve => setTimeout(resolve, 0));
+        },
+      });
+      if (controller.signal.aborted || !this.isCurrent(sessionId, accountPubkey)) {
+        // Backgrounded mid-pass: the next foreground catch-up starts it again.
+        if (this.rescanSessionId === sessionId) this.rescanSessionId = "";
+        return;
+      }
+      const cursors: Record<string, number> = {};
+      for (const url of relays) {
+        const progress = result.relayProgress[url];
+        if (progress?.naturalEnd && !progress.incomplete) continue;
+        // Only a fully processed page may move a relay's cursor forward.
+        const previous = saved?.[url] ?? nowSeconds;
+        cursors[url] = !progress?.incomplete && typeof progress?.nextUntil === "number"
+          ? Math.min(progress.nextUntil, previous)
+          : previous;
+      }
+      const done = Object.keys(cursors).length === 0;
+      if (done) await finish();
+      else await this.repository.updateSyncState(accountPubkey, { friendHistoryRescanUntilByRelay: cursors });
+      debugLog("sync", "friend_history_rescan", {
+        relays: relays.length, received: result.received, unique: result.unique,
+        remainingRelays: Object.keys(cursors).length, done, durationMs: this.now() - started,
+      }, "info");
+      // A failing relay is retried on the next launch, not in a loop.
+      if (!done && !result.incomplete) {
+        this.rescanSessionId = "";
+        this.scheduleFriendHistoryRescan(sessionId, accountPubkey, true);
+      }
+    } catch (error) {
+      debugLog("sync", "friend_history_rescan_failed", describeError(error), "warn");
+    } finally {
+      if (this.rescanAbortController === controller) this.rescanAbortController = null;
     }
   }
 
@@ -903,6 +1026,7 @@ export class MessageSyncManager {
         if (document.visibilityState === "hidden") {
           this.catchupAbortController?.abort();
           this.clearIdleContinuation();
+          this.cancelFriendHistoryRescan();
         }
       };
       document.addEventListener("visibilitychange", onVisibilityChange);
@@ -960,6 +1084,7 @@ export class MessageSyncManager {
     this.catchupAbortController?.abort();
     this.catchupAbortController = null;
     this.clearIdleContinuation();
+    this.cancelFriendHistoryRescan();
     this.clearRelayRetries();
      this.removeBackgroundListener?.();
     this.removeBackgroundListener = null;
