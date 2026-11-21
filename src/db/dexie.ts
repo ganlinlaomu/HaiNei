@@ -3,7 +3,7 @@ import Dexie, { type Table, type Transaction } from "dexie";
 import { legacyBrowserStorageForMigration } from "@/services/legacyStorageAccess";
 import type { NostrEvent } from "nostr-tools";
 
-export const APP_VERSION = "0.1.222";
+export const APP_VERSION = "0.1.223";
 export const DB_VERSION = 25;
 export const DATABASE_NAME = "closed_community_db";
 
@@ -250,9 +250,12 @@ export type OutgoingQueueRecord = {
   message: unknown;
   events: unknown[];
   relays: string[];
-  /** Per-gift-wrap route. Absent on v16 rows, which continue using `relays`. */
+  /**
+   * Legacy (before fixed DM relays): per-recipient kind 10050 routes. Still
+   * present on old rows; ignored, every publish uses dmSendRelays().
+   */
   eventRoutes?: OutgoingEventRoute[];
-  /** New messages must finish discovery before any durable retry publishes. */
+  /** Legacy, ignored: see eventRoutes. */
   dmRelayRoutesPending?: boolean;
   relayResults?: OutgoingRelayResult[];
   // Separate from relay delivery so a suspended PWA can retry the push request.

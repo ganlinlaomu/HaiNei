@@ -32,16 +32,17 @@ describe("System Settings status UX", () => {
       ...readdirSync(settingsDir).filter(name => name.endsWith(".vue") && name !== "DiagnosticsSection.vue").map(name => join(settingsDir, name))]
       .map(templateOf).join("\n");
     expect(settingsTemplate).toContain("<div class=\"item-url\">收信地址</div>");
-    expect(settingsTemplate).toContain("好友会把私信送到这里，系统自动选择，一般不需要修改。");
+    expect(settingsTemplate).toContain("私信始终经海内自带的服务器收发，你添加的服务器也会一起用。好友也添加了同一个服务器时，你们才能经它互通。");
     expect(source).toContain("getOwnDmRelayStatus(account)");
     for (const jargon of ["kind 10050", "NIP-17", "NIP-65", "公共目录"]) {
       expect(settingsTemplate, jargon).not.toContain(jargon);
     }
     const debug = readFileSync(join(process.cwd(), "src/views/Debug.vue"), "utf8");
-    expect(debug).toContain("私信收件 Relay（kind 10050 / NIP-17）");
-    expect(debug).toContain("当前已连接的读取 Relay 中选择最多 2 个接收点");
-    expect(debug).toContain("未找到时兼容传统 Relay");
-    expect(debug).toContain("不会为每位联系人保持额外长连接");
+    expect(debug).toContain("<h3>私信 Relay</h3>");
+    expect(debug).toContain("都发到「默认 Relay + 写入 Relay」，从「默认 Relay + 读取 Relay」接收");
+    expect(debug).toContain("发送时不查询对方的 kind 10050");
+    expect(debug).toContain("dmSendRelays()");
+    expect(debug).toContain("dmReceiveRelays()");
     expect(debug).toContain("getOwnDmRelayStatus(account)");
   });
 

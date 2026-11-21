@@ -1,6 +1,5 @@
 import { getRelaysFromStorage, warmRelays } from "@/nostr/relays";
-import { filterRetiredDefaultRelayHints } from "@/services/connectionSettings";
-import { getOwnDmRelayStatus } from "@/services/dmRelayDirectory";
+import { dmReceiveRelays } from "@/services/dmRelays";
 
 export type RelayWarmupSession = {
   isLoggedIn: boolean;
@@ -15,8 +14,8 @@ export function warmReadRelaysForSession(session: RelayWarmupSession) {
 }
 
 /**
- * Warm the account's already advertised NIP-17 inbox relays while the encrypted
- * read cursor and friendship state are still being restored. This creates only
+ * Warm the relays private messages are received on while the encrypted read
+ * cursor and friendship state are still being restored. This creates only
  * temporary pooled sockets: subscriptions and decryption stay in account sync.
  */
 export async function warmDmRelaysForSession(
@@ -25,10 +24,7 @@ export async function warmDmRelaysForSession(
   isCurrent: () => boolean,
 ) {
   if (!accountPubkey || !session.isLoggedIn || !session.isUnlocked || !isCurrent()) return false;
-  const { relays: advertisedRelays } = await getOwnDmRelayStatus(accountPubkey);
-  // The IndexedDB lookup can complete after the user locks or switches accounts.
-  if (!session.isLoggedIn || !session.isUnlocked || !isCurrent()) return false;
-  const relays = filterRetiredDefaultRelayHints(advertisedRelays, getRelaysFromStorage("read"));
+  const relays = dmReceiveRelays();
   if (!relays.length) return false;
   warmRelays(relays);
   return true;

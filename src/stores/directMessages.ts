@@ -1,6 +1,5 @@
 import { defineStore } from "pinia";
 import type { FriendshipRecord, OutgoingDmTaskRecord } from "@/db/dexie";
-import { getRelaysFromStorage } from "@/nostr/relays";
 import { DIRECT_MESSAGE_TYPE, canStartDirectMessage, directMessagePeer, directMessagePreview, isDirectMessageTags } from "@/nostr/messaging/directMessages";
 import { isConversationMessage } from "@/nostr/messaging/messageRouting";
 import { deriveConversationId } from "@/nostr/messaging/protocol/common";
@@ -897,7 +896,6 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           recipientPubkeys: [peer],
           content: serializeBurnControl(messageId),
           tags: burnControlTags(),
-          relays: getRelaysFromStorage("write"),
           context: {
             senderPubkey: account,
             nip44Encrypt: keys.nip44Encrypt.bind(keys),
@@ -1007,7 +1005,6 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           recipientPubkeys: [peer],
           content: serializeExactDmReadReceipt({ createdAt: target.createdAt, messageId: id }, deadlineAt),
           tags: dmReceiptTags("read"),
-          relays: getRelaysFromStorage("write"),
           context: {
             senderPubkey: account,
             nip44Encrypt: keys.nip44Encrypt.bind(keys),
@@ -1064,7 +1061,6 @@ export const useDirectMessagesStore = defineStore("directMessages", {
           recipientPubkeys: [peer],
           content: serializeDmReceipt(status, upTo),
           tags: dmReceiptTags(status),
-          relays: getRelaysFromStorage("write"),
           context: {
             senderPubkey: account,
             nip44Encrypt: keys.nip44Encrypt.bind(keys),
@@ -2107,7 +2103,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
               recipientPubkeys: [task.peerPubkey], content, createdAt: task.createdAt, createdMs: task.createdMs,
               replyTo: task.replyTo,
               burnAfterSeconds: task.burnAfterSeconds,
-              tags: [["t", DIRECT_MESSAGE_TYPE]], relays: getRelaysFromStorage("write"), pushCategory: "message",
+              tags: [["t", DIRECT_MESSAGE_TYPE]], pushCategory: "message",
               context: { senderPubkey: account, nip44Encrypt: keys.supportsNip44 ? keys.nip44Encrypt.bind(keys) : undefined, signEvent: keys.signEvent.bind(keys) },
               onQueued: async outgoingId => { await this.patchTask(localId, { outgoingId }); },
             });

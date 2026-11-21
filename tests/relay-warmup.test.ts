@@ -3,15 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getRelays: vi.fn(() => ["wss://read.test"]),
   warm: vi.fn(),
-  getDm: vi.fn(async () => ({ relays: ["wss://dm.test"] })),
+  receive: vi.fn(() => ["wss://default.test", "wss://read.test"]),
 }));
 
 vi.mock("@/nostr/relays", () => ({
   getRelaysFromStorage: mocks.getRelays,
   warmRelays: mocks.warm,
 }));
-vi.mock("@/services/dmRelayDirectory", () => ({
-  getOwnDmRelayStatus: mocks.getDm,
+vi.mock("@/services/dmRelays", () => ({
+  dmReceiveRelays: mocks.receive,
 }));
 
 import { warmDmRelaysForSession, warmReadRelaysForSession } from "@/nostr/relayWarmup";
@@ -30,30 +30,22 @@ describe("account relay warmup", () => {
   });
 });
 
-describe("cached NIP-17 inbox warmup", () => {
-  it("opens the saved inbox relays without waiting for cloud read-state restoration", async () => {
+describe("private message relay warmup", () => {
+  it("opens the receive relays (defaults plus read relays) before account state is restored", async () => {
     const active = { isLoggedIn: true, isUnlocked: true };
     await expect(warmDmRelaysForSession("a".repeat(64), active, () => true)).resolves.toBe(true);
-    expect(mocks.getDm).toHaveBeenCalledWith("a".repeat(64));
-    expect(mocks.warm).toHaveBeenCalledWith(["wss://dm.test"]);
+    expect(mocks.warm).toHaveBeenCalledWith(["wss://default.test", "wss://read.test"]);
   });
 
-  it("does not touch the previous account's relays after an account switch", async () => {
-    let release!: (value: { relays: string[] }) => void;
-    const gate = new Promise<{ relays: string[] }>(resolve => { release = resolve; });
-    mocks.getDm.mockReturnValueOnce(gate);
+  it("does nothing for a session that is no longer current", async () => {
     const active = { isLoggedIn: true, isUnlocked: true };
-    let current = true;
-    const warming = warmDmRelaysForSession("a".repeat(64), active, () => current);
-    current = false;
-    release({ relays: ["wss://stale.test"] });
-    await expect(warming).resolves.toBe(false);
+    await expect(warmDmRelaysForSession("a".repeat(64), active, () => false)).resolves.toBe(false);
     expect(mocks.warm).not.toHaveBeenCalled();
   });
 
   it("skips locked or logged-out sessions", async () => {
     await expect(warmDmRelaysForSession("a".repeat(64), { isLoggedIn: true, isUnlocked: false }, () => true)).resolves.toBe(false);
     await expect(warmDmRelaysForSession("a".repeat(64), { isLoggedIn: false, isUnlocked: true }, () => true)).resolves.toBe(false);
-    expect(mocks.getDm).not.toHaveBeenCalled();
+    expect(mocks.receive).not.toHaveBeenCalled();
   });
 });

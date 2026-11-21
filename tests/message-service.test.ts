@@ -2,14 +2,15 @@ import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { finalizeEvent, getPublicKey, nip44, utils, type EventTemplate } from "nostr-tools";
 
-const { publishMock, resolveDmRelaysMock, cancelDmRelayDirectoryWorkMock } = vi.hoisted(() => ({
+const { publishMock, sendRelaysMock, cancelDmRelayDirectoryWorkMock, subscribeMock } = vi.hoisted(() => ({
   publishMock: vi.fn(),
-  resolveDmRelaysMock: vi.fn(),
+  sendRelaysMock: vi.fn(() => ["wss://one.test"]),
   cancelDmRelayDirectoryWorkMock: vi.fn(),
+  subscribeMock: vi.fn(),
 }));
-vi.mock("@/nostr/relays", () => ({ publish: publishMock }));
+vi.mock("@/nostr/relays", () => ({ publish: publishMock, subscribe: subscribeMock }));
+vi.mock("@/services/dmRelays", () => ({ dmSendRelays: sendRelaysMock }));
 vi.mock("@/services/dmRelayDirectory", () => ({
-  resolveDmRelays: resolveDmRelaysMock,
   cancelDmRelayDirectoryWork: cancelDmRelayDirectoryWorkMock,
 }));
 
@@ -18,7 +19,7 @@ import {
   cancelOutgoingWorkForAccount,
   publishQueuedOutgoing,
   queueDirectMessage,
-  resolveMessageEventRoutes,
+  retryOutgoingQueue,
   sendDirectMessage,
 } from "@/nostr/messaging/service";
 import { db } from "@/db/dexie";
@@ -40,15 +41,8 @@ const context = {
 describe("NIP-17 message publication", () => {
   beforeEach(async () => {
     publishMock.mockReset();
-    resolveDmRelaysMock.mockReset().mockImplementation(async (
-      accountPubkey: string,
-      ownerPubkey: string,
-      fallbackRelays: string[],
-    ) => ({
-      relays: fallbackRelays,
-      source: ownerPubkey === accountPubkey ? "own-10050" : "legacy-fallback",
-      cached: true,
-    }));
+    sendRelaysMock.mockReset().mockReturnValue(["wss://one.test"]);
+    subscribeMock.mockReset();
     cancelDmRelayDirectoryWorkMock.mockReset();
     await db.outgoingQueue.clear();
   });
@@ -63,7 +57,6 @@ describe("NIP-17 message publication", () => {
     await expect(sendDirectMessage({
       recipientPubkeys: [recipientPubkey],
       content: "hello",
-      relays: ["wss://one.test"],
       context
     })).resolves.toMatchObject({ message: { plaintext: "hello" } });
     expect(publishMock).toHaveBeenCalledTimes(2);
@@ -77,7 +70,6 @@ describe("NIP-17 message publication", () => {
     await expect(sendDirectMessage({
       recipientPubkeys: [recipientPubkey],
       content: "hello",
-      relays: ["wss://one.test"],
       context
     })).rejects.toThrow("收件人副本未被任何 relay 接收");
   });
@@ -90,7 +82,6 @@ describe("NIP-17 message publication", () => {
     await expect(sendDirectMessage({
       recipientPubkeys: [recipientPubkey],
       content: "retry one copy",
-      relays: ["wss://one.test"],
       context
     })).rejects.toThrow();
     const [queued] = await db.outgoingQueue.toArray();
@@ -106,7 +97,6 @@ describe("NIP-17 message publication", () => {
     const result = await sendDirectMessage({
       recipientPubkeys: [recipientPubkey],
       content: "hello",
-      relays: ["wss://one.test"],
       context
     });
     expect(result.events).toHaveLength(2);
@@ -121,223 +111,72 @@ describe("NIP-17 message publication", () => {
     );
   });
 
-  it("publishes each gift-wrap copy only to that target's resolved DM relays", async () => {
-    resolveDmRelaysMock.mockImplementation(async (
-      accountPubkey: string,
-      ownerPubkey: string,
-      fallbackRelays: string[],
-    ) => ownerPubkey === accountPubkey
-      ? { relays: ["wss://self-dm.test"], source: "own-10050", cached: true }
-      : ownerPubkey === recipientPubkey
-        ? { relays: ["wss://peer-dm.test"], source: "nip17-10050", cached: false }
-        : { relays: fallbackRelays, source: "legacy-fallback", cached: false }
-    );
-    publishMock.mockImplementation(async (relays: string[]) =>
-      relays.map(relay => ({ relay, ok: true, ts: 1 }))
-    );
+  it("publishes every copy, recipient's and our own, to the default plus write relays, without a 10050 lookup", async () => {
+    sendRelaysMock.mockReturnValue(["wss://default.test", "wss://write.test"]);
+    publishMock.mockImplementation(async (relays: string[]) => relays.map(relay => ({ relay, ok: true, ts: 1 })));
 
-    await sendDirectMessage({
-      recipientPubkeys: [recipientPubkey],
-      content: "routed",
-      relays: ["wss://legacy.test"],
-      context,
-    });
+    await sendDirectMessage({ recipientPubkeys: [recipientPubkey], content: "fixed", context });
 
-    const relayByTarget = new Map(publishMock.mock.calls.map(([relays, event]) => [
-      event.tags[0][1],
-      relays,
-    ]));
-    expect(relayByTarget.get(recipientPubkey)).toEqual(["wss://peer-dm.test"]);
-    expect(relayByTarget.get(senderPubkey)).toEqual(["wss://self-dm.test"]);
+    const relayByTarget = new Map(publishMock.mock.calls.map(([relays, event]) => [event.tags[0][1], relays]));
+    expect(relayByTarget.get(recipientPubkey)).toEqual(["wss://default.test", "wss://write.test"]);
+    expect(relayByTarget.get(senderPubkey)).toEqual(["wss://default.test", "wss://write.test"]);
+    // No directory query of any kind (kind 10050, purplepag.es).
+    expect(subscribeMock).not.toHaveBeenCalled();
     expect(publishMock.mock.calls.every(call => !call[0].includes("wss://purplepag.es"))).toBe(true);
     const [queued] = await db.outgoingQueue.toArray();
-    expect(queued.eventRoutes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ targetPubkey: recipientPubkey, relays: ["wss://peer-dm.test"], source: "nip17-10050" }),
-      expect.objectContaining({ targetPubkey: senderPubkey, relays: ["wss://self-dm.test"], source: "own-10050" }),
-    ]));
+    expect(queued.eventRoutes).toBeUndefined();
+    expect(queued.relays).toEqual(["wss://default.test", "wss://write.test"]);
   });
 
-  it("does not publish a recipient with an explicit empty DM route to legacy relays", async () => {
-    resolveDmRelaysMock.mockImplementation(async (_account: string, owner: string) => ({
-      relays: owner === senderPubkey ? ["wss://self-dm.test"] : [],
-      source: owner === senderPubkey ? "own-10050" : "nip17-10050",
-      cached: true,
-    }));
-    publishMock.mockResolvedValue([{ relay: "wss://self-dm.test", ok: true, ts: 1 }]);
-    await expect(sendDirectMessage({ recipientPubkeys: [recipientPubkey], content: "no public fallback", relays: ["wss://legacy.test"], context })).rejects.toThrow();
-    expect(publishMock.mock.calls.map(call => call[1].tags[0][1])).toEqual([senderPubkey]);
-    expect((await db.outgoingQueue.toArray())[0].eventRoutes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ targetPubkey: recipientPubkey, relays: [], source: "nip17-10050" }),
-    ]));
-  });
-
-  it("returns after durable queueing without waiting for DM relay discovery or Relay ACK", async () => {
-    let resolveStarted = false;
-    resolveDmRelaysMock.mockImplementation(async () => {
-      resolveStarted = true;
-      return { relays: ["wss://dm.test"], source: "nip17-10050", cached: false };
-    });
-    publishMock.mockResolvedValue([{ relay: "wss://dm.test", ok: true, ts: 1 }]);
-
-    const queued = await queueDirectMessage({
-      recipientPubkeys: [recipientPubkey],
-      content: "optimistic",
-      relays: ["wss://legacy.test"],
-      context,
-    });
-
+  it("returns after durable queueing without waiting for any Relay ACK", async () => {
+    const queued = await queueDirectMessage({ recipientPubkeys: [recipientPubkey], content: "optimistic", context });
     expect(queued.message.plaintext).toBe("optimistic");
-    expect(resolveStarted).toBe(false);
     expect(publishMock).not.toHaveBeenCalled();
     const [durable] = await db.outgoingQueue.toArray();
-    expect(durable).toMatchObject({
-      outgoingId: queued.message.id,
-      state: "pending",
-      dmRelayRoutesPending: true,
-    });
-  });
-
-  it("persists signed fallback copies before waiting for DM relay discovery", async () => {
-    let releaseDiscovery!: () => void;
-    const discoveryGate = new Promise<void>(resolve => { releaseDiscovery = resolve; });
-    resolveDmRelaysMock.mockImplementation(async (
-      accountPubkey: string,
-      ownerPubkey: string,
-      fallbackRelays: string[],
-    ) => {
-      await discoveryGate;
-      return {
-        relays: fallbackRelays,
-        source: ownerPubkey === accountPubkey ? "own-10050" : "legacy-fallback",
-        cached: false,
-      };
-    });
-    publishMock.mockResolvedValue([{ relay: "wss://legacy.test", ok: true, ts: 1 }]);
-    const onQueued = vi.fn();
-
-    const sending = sendDirectMessage({
-      recipientPubkeys: [recipientPubkey],
-      content: "durable first",
-      relays: ["wss://legacy.test"],
-      context,
-      onQueued,
-    });
-    await vi.waitFor(() => expect(onQueued).toHaveBeenCalledOnce());
-    const [durable] = await db.outgoingQueue.toArray();
-    expect(durable).toMatchObject({ state: "pending", relays: ["wss://legacy.test"], dmRelayRoutesPending: true });
+    expect(durable).toMatchObject({ outgoingId: queued.message.id, state: "pending" });
     expect(durable.events).toHaveLength(2);
-    expect(durable.eventRoutes).toHaveLength(2);
-
-    releaseDiscovery();
-    await expect(sending).resolves.toBeTruthy();
   });
 
-  it("refreshes a failed kind 10050 route for the durable retry", async () => {
-    resolveDmRelaysMock.mockImplementation(async (
-      accountPubkey: string,
-      ownerPubkey: string,
-      fallbackRelays: string[],
-      force = false,
-    ) => ownerPubkey === accountPubkey
-      ? { relays: ["wss://self-dm.test"], source: "own-10050", cached: true }
-      : force
-        ? { relays: ["wss://peer-new.test"], source: "nip17-10050", cached: false }
-        : { relays: ["wss://peer-old.test"], source: "nip17-10050", cached: false }
-    );
-    publishMock.mockImplementation(async (relays: string[]) => relays.map(relay => ({
-      relay,
-      ok: relay !== "wss://peer-old.test",
-      ts: 1,
-    })));
-
-    await expect(sendDirectMessage({
-      recipientPubkeys: [recipientPubkey],
-      content: "refresh route",
-      relays: ["wss://legacy.test"],
-      context,
-    })).rejects.toThrow("收件人副本未被任何 relay 接收");
-
-    expect(resolveDmRelaysMock).toHaveBeenCalledWith(
-      senderPubkey,
-      recipientPubkey,
-      ["wss://legacy.test"],
-      true,
-    );
+  it("uses a relay the user added after queueing when the message is retried", async () => {
+    publishMock.mockImplementation(async (relays: string[]) => relays.map(relay => ({ relay, ok: false, reason: "timeout", ts: 1 })));
+    await expect(sendDirectMessage({ recipientPubkeys: [recipientPubkey], content: "new relay", context })).rejects.toThrow();
     const [queued] = await db.outgoingQueue.toArray();
-    expect(queued.eventRoutes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ targetPubkey: recipientPubkey, relays: ["wss://peer-new.test"] }),
-    ]));
+
+    sendRelaysMock.mockReturnValue(["wss://one.test", "wss://added.test"]);
+    publishMock.mockReset().mockImplementation(async (relays: string[]) => relays.map(relay => ({ relay, ok: relay === "wss://added.test", ts: 2 })));
+    await expect(publishQueuedOutgoing(senderPubkey, queued.outgoingId)).resolves.toBeTruthy();
+    expect(publishMock.mock.calls.every(call => call[0].includes("wss://added.test"))).toBe(true);
+    expect((await db.outgoingQueue.get([senderPubkey, queued.outgoingId]))?.state).toBe("sent");
   });
 
-  it("resolves every target with at most two concurrent directory lookups", async () => {
-    const peers = ["3", "4", "5", "6"].map(value => value.repeat(64));
-    const events = [...peers, senderPubkey].map((targetPubkey, index) => ({
-      id: String(index + 1).repeat(64),
-      kind: 1059,
-      pubkey: senderPubkey,
-      created_at: 1,
-      content: "cipher",
-      sig: "0".repeat(128),
-      tags: [["p", targetPubkey]],
-    }));
-
-    const gates: Array<() => void> = [];
-    let active = 0;
-    let maxActive = 0;
-    resolveDmRelaysMock.mockImplementation(async (_account: string, owner: string) => {
-      active++;
-      maxActive = Math.max(active, maxActive);
-      await new Promise<void>(resolve => gates.push(resolve));
-      active--;
-      return { relays: [`wss://dm-${owner.slice(0, 1)}.test`], source: "nip17-10050", cached: false };
-    });
-    const resolving = resolveMessageEventRoutes(senderPubkey, events, ["wss://legacy.test"]);
-    await vi.waitFor(() => expect(gates).toHaveLength(2));
-    for (let released = 0; released < events.length;) {
-      const next = gates.splice(0);
-      released += next.length;
-      next.forEach(release => release());
-      if (released < events.length) await vi.waitFor(() => expect(gates.length).toBeGreaterThan(0));
-    }
-    const routes = await resolving;
-    const networkPeers = resolveDmRelaysMock.mock.calls
-      .map(call => call[1])
-      .filter(target => target !== senderPubkey);
-    expect(networkPeers).toEqual(peers);
-    expect(maxActive).toBe(2);
-    expect(routes).toHaveLength(events.length);
-  });
-
-  it("retries suspended discovery before publishing provisional legacy routes", async () => {
-    const encoded = await buildMessageEvents({ recipientPubkeys: [recipientPubkey], content: "resume discovery", context });
+  it("retries a row queued with per-recipient 10050 routes by the new rule", async () => {
+    const encoded = await buildMessageEvents({ recipientPubkeys: [recipientPubkey], content: "legacy row", context });
     await db.outgoingQueue.put({
-      accountPubkey: senderPubkey, outgoingId: encoded.message.id, state: "pending",
+      accountPubkey: senderPubkey, outgoingId: encoded.message.id, state: "waiting_network",
       message: encoded.message, events: encoded.events, relays: ["wss://legacy.test"],
-      dmRelayRoutesPending: true, attempts: 0, createdAt: 1, updatedAt: 1,
-    });
-    resolveDmRelaysMock.mockResolvedValue({ relays: ["wss://dm.test"], source: "nip17-10050", cached: false });
-    publishMock.mockResolvedValue([{ relay: "wss://dm.test", ok: true, ts: 1 }]);
+      eventRoutes: (encoded.events as any[]).map(event => ({
+        eventId: event.id, targetPubkey: event.tags[0][1], relays: ["wss://blocked-inbox.test"], source: "nip17-10050", resolvedAt: 1,
+      })),
+      dmRelayRoutesPending: true, attempts: 1, createdAt: 1, updatedAt: 1, nextAttemptAt: 0,
+    } as any);
+    publishMock.mockImplementation(async (relays: string[]) => relays.map(relay => ({ relay, ok: true, ts: 1 })));
 
-    await publishQueuedOutgoing(senderPubkey, encoded.message.id);
-    expect(publishMock.mock.calls.every(call => JSON.stringify(call[0]) === JSON.stringify(["wss://dm.test"]))).toBe(true);
-    expect(await db.outgoingQueue.get([senderPubkey, encoded.message.id])).toMatchObject({ dmRelayRoutesPending: false });
+    await retryOutgoingQueue(senderPubkey);
+    expect(publishMock).toHaveBeenCalledTimes(2);
+    expect(publishMock.mock.calls.every(call => JSON.stringify(call[0]) === JSON.stringify(["wss://one.test"]))).toBe(true);
+    expect((await db.outgoingQueue.get([senderPubkey, encoded.message.id]))?.state).toBe("sent");
   });
 
-  it("stops directory workers and does not publish after account cancellation", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>(resolve => { release = resolve; });
-    resolveDmRelaysMock.mockImplementation(async () => {
-      await gate;
-      return { relays: ["wss://dm.test"], source: "nip17-10050", cached: false };
-    });
-    const sending = sendDirectMessage({ recipientPubkeys: [recipientPubkey], content: "cancel", relays: ["wss://legacy.test"], context });
+  it("does not record a send after account cancellation mid-publish", async () => {
+    const releases: Array<(value: unknown) => void> = [];
+    publishMock.mockImplementation(() => new Promise(resolve => { releases.push(resolve); }));
+    const sending = sendDirectMessage({ recipientPubkeys: [recipientPubkey], content: "cancel", context });
     const rejection = expect(sending).rejects.toThrow("账号已切换");
-    await vi.waitFor(() => expect(resolveDmRelaysMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(publishMock).toHaveBeenCalledTimes(2));
     cancelOutgoingWorkForAccount(senderPubkey);
-    release();
+    releases.forEach(release => release([{ relay: "wss://one.test", ok: true, ts: 1 }]));
     await rejection;
-    expect(publishMock).not.toHaveBeenCalled();
-    expect((await db.outgoingQueue.toArray())[0]).toMatchObject({ state: "pending", dmRelayRoutesPending: true });
+    expect((await db.outgoingQueue.toArray())[0].state).not.toBe("sent");
   });
 
   it("keeps a stable logical message id when an optimistic task is encoded again", async () => {

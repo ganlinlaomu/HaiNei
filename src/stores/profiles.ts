@@ -10,7 +10,6 @@ import {
   HAI_NEI_PROFILE_TAGS,
   isHaiNeiProfileRequest
 } from "@/nostr/messaging/privateProfile";
-import { getRelaysFromStorage } from "@/nostr/relays";
 import { profileRepository } from "@/repositories/profileRepository";
 import { useKeyStore } from "@/stores/keys";
 import { HAINEI_BOT_NAME, isHaiNeiBot } from "@/utils/haineiBot";
@@ -100,7 +99,6 @@ export const useProfilesStore = defineStore("profiles", {
         recipientPubkeys: recipients,
         content: encodeHaiNeiProfilePayload(profile),
         tags: HAI_NEI_PROFILE_TAGS,
-        relays: getRelaysFromStorage("write"),
         context: {
           senderPubkey: account,
           nip44Encrypt: keys.nip44Encrypt.bind(keys),
@@ -126,7 +124,6 @@ export const useProfilesStore = defineStore("profiles", {
         recipientPubkeys: [peer],
         content: encodeHaiNeiProfileRequest(),
         tags: HAI_NEI_PROFILE_REQUEST_TAGS,
-        relays: getRelaysFromStorage("write"),
         context: {
           senderPubkey: account,
           nip44Encrypt: keys.nip44Encrypt.bind(keys),

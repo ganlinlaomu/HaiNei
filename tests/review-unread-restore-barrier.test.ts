@@ -136,8 +136,9 @@ async function startWithStatus(finalStatus: "offline" | "error" | "live", relays
     onRelayConnectionState: vi.fn(() => () => undefined),
     releaseUnusedRelayConnections: vi.fn(),
   }));
+  // The defaults are always added; an empty list stands for "no relay at all".
+  vi.doMock("@/services/dmRelays", () => ({ dmReceiveRelays: () => relays }));
   vi.doMock("@/services/dmRelayDirectory", () => ({
-    selectOwnDmRelays: (relays: string[]) => relays,
     ensureOwnDmRelayList: vi.fn(async () => true),
     getOwnDmRelayStatus: vi.fn(async () => ({ relays, pending: false, attempts: 0 })),
     cancelDmRelayDirectoryWork: vi.fn(),

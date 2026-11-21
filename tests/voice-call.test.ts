@@ -279,7 +279,8 @@ describe("call engine", () => {
     await startCall(FRIEND);
     const [inviteOptions] = mocks.send.mock.calls[0] as any[];
     expect(inviteOptions.push).toBe("call");
-    expect(inviteOptions.relays).toEqual(expect.arrayContaining(["wss://cloudflare-nostr-relay.noster.workers.dev"]));
+    // Relays are chosen by the send layer (dmSendRelays: defaults plus write relays).
+    expect(inviteOptions).not.toHaveProperty("relays");
   });
 
   it("records a declined incoming call privately on the callee side", async () => {

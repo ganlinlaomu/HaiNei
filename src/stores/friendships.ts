@@ -5,7 +5,6 @@ import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository"
 import type { OutgoingQueueState } from "@/db/dexie";
 import { startupMark } from "@/utils/debugLog";
 import { decodeFriendshipControl, friendshipTags, type FriendshipAction, type FriendshipControl } from "@/nostr/messaging/friendshipControl";
-import { DEFAULT_RELAYS, getRelaysFromStorage } from "@/nostr/relays";
 import { friendshipRepository } from "@/repositories/friendshipRepository";
 import type { FriendshipAcceptedWindow, FriendshipRecord, FriendshipState } from "@/db/dexie";
 import { useKeyStore } from "@/stores/keys";
@@ -67,10 +66,6 @@ async function readRequestDeliveries(account: string, records: FriendshipRecord[
     const queued = await outgoingQueueRepository.get(account, record.requestEventId!);
     return { outgoingId: record.requestEventId!, state: queued?.state ?? ("sent" as OutgoingQueueState) };
   }));
-}
-
-function friendshipControlRelays() {
-  return [...new Set([...getRelaysFromStorage("write"), ...DEFAULT_RELAYS])];
 }
 
 export type FriendshipControlEvent = FriendshipControl & { eventId: string; selfMessage: boolean };
@@ -304,7 +299,6 @@ export const useFriendshipsStore = defineStore("friendships", {
           recipientPubkeys: [peer],
           content: JSON.stringify({ type: `friend_${action}`, from: account, timestamp, ...(requestId ? { requestId } : {}) }),
           tags: friendshipTags(action),
-          relays: friendshipControlRelays(),
           context: { senderPubkey: account, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
         });
         if (keys.pkHex !== account || this.loadedFor !== account) throw new Error("账号已切换");

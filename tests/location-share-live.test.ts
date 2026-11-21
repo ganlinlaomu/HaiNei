@@ -35,7 +35,6 @@ import { extendTrail, LIVE_TRAIL_POINTS } from "@/stores/liveLocation";
 import LocationMapPreview from "@/components/LocationMapPreview.vue";
 import { distanceMetres, LIVE_HEARTBEAT_MS, LIVE_MOVE_METRES, LIVE_STALE_SECONDS, useLiveLocationStore } from "@/stores/liveLocation";
 import DmLocationCard from "@/components/DmLocationCard.vue";
-import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import LocationShareSheet from "@/components/LocationShareSheet.vue";
 
 const ACCOUNT = "a".repeat(64);
@@ -221,8 +220,8 @@ describe("sharing our location", () => {
     expect(mocks.sendFastControl).toHaveBeenCalledOnce();
     const sent = mocks.sendFastControl.mock.calls[0][0];
     expect(sent.wrapTtlSeconds).toBe(600);
-    // The built-in relays both sides share, plus our own write relays.
-    expect(sent.relays).toEqual(expect.arrayContaining(["wss://relay.test", ...DEFAULT_RELAY_URLS]));
+    // Relays are chosen by the send layer (dmSendRelays), not per caller.
+    expect(sent).not.toHaveProperty("relays");
     expect(sent.tags).toEqual(liveLocationControlTags());
     expect(decodeLiveLocationControl({ tags: sent.tags, plaintext: sent.content })).toMatchObject({ kind: "update", seq: 1 });
 
