@@ -22,7 +22,7 @@
           </div>
         </div>
       </div>
-      <p class="dm-relay-copy">好友会把私信送到这里，系统自动选择，一般不需要修改。</p>
+      <p class="dm-relay-copy">私信始终经海内自带的服务器收发，你添加的服务器也会一起用。好友也添加了同一个服务器时，你们才能经它互通。</p>
       <button class="text-button" type="button" @click="router.push('/debug')">查看技术详情</button>
     </article>
 

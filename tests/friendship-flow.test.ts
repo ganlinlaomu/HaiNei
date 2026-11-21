@@ -145,19 +145,10 @@ describe("friendship state and message authorization", () => {
     expect(mocks.list).toHaveBeenCalledTimes(2);
   });
 
-  it("uses configured write relays plus deduped bootstrap relays for friendship requests", async () => {
-    mocks.getRelaysFromStorage.mockReturnValue(["wss://configured.test", "wss://shared.test"]);
+  it("leaves relay choice to the send layer (defaults plus write relays, see dm-relays.test)", async () => {
     await useFriendshipsStore().sendRequest(PEER);
-    expect(mocks.getRelaysFromStorage).toHaveBeenCalledWith("write");
-    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({
-      relays: ["wss://configured.test", "wss://shared.test", "wss://bootstrap.test"]
-    }));
-  });
-
-  it("falls back to bootstrap relays when configured write relays are empty", async () => {
-    mocks.getRelaysFromStorage.mockReturnValue([]);
-    await useFriendshipsStore().sendRequest(PEER);
-    expect(mocks.queue).toHaveBeenCalledWith(expect.objectContaining({ relays: BOOTSTRAP_RELAYS }));
+    expect(mocks.queue).toHaveBeenCalledOnce();
+    expect(mocks.queue.mock.calls[0][0]).not.toHaveProperty("relays");
   });
 
   it("returns a durable pending request without waiting for slow relays", async () => {

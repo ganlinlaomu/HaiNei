@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.222",
-  "releaseSummary": "本机读不出好友列表时，私信不再被误隐藏或误判发送失败",
+  "version": "0.1.223",
+  "releaseSummary": "私信改为固定经默认服务器和你的服务器收发，不再依赖查询对方收件箱",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

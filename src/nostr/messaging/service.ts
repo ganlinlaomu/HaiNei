@@ -3,16 +3,13 @@ import { nostrClient } from "@/services/nostrClient";
 import { debugLog } from "@/utils/debugLog";
 import { nip17Adapter, type CanonicalMessage, type EncodeContext } from "./protocol";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
-import type { OutgoingEventRoute, OutgoingQueueRecord, OutgoingQueueState, OutgoingRelayResult } from "@/db/dexie";
+import type { OutgoingQueueRecord, OutgoingQueueState, OutgoingRelayResult } from "@/db/dexie";
 import { triggerGenericPush } from "@/services/pushNotifications";
-import { normalizeRelayUrl } from "@/services/connectionSettings";
 import { CALL_LOG_TYPE, CALL_MISSED_TYPE, isCallInviteTags } from "@/nostr/messaging/callControl";
 import type { EncryptedPushHint, PushCategory } from "@/services/pushNotifications";
 import { DIRECT_MESSAGE_TYPE } from "@/nostr/messaging/directMessages";
-import {
-  cancelDmRelayDirectoryWork,
-  resolveDmRelays,
-} from "@/services/dmRelayDirectory";
+import { cancelDmRelayDirectoryWork } from "@/services/dmRelayDirectory";
+import { dmSendRelays } from "@/services/dmRelays";
 
 export type MessageProtocolPolicy = "nip17";
 
@@ -23,7 +20,6 @@ export interface SendDirectMessageOptions {
   rootId?: string;
   tags?: string[][];
   protocol?: MessageProtocolPolicy;
-  relays: string[];
   context: EncodeContext;
   pushCategory?: PushCategory;
   createdAt?: number;
@@ -87,7 +83,7 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-export async function buildMessageEvents(options: Omit<SendDirectMessageOptions, "relays">) {
+export async function buildMessageEvents(options: SendDirectMessageOptions) {
   const outgoing = {
     recipientPubkeys: options.recipientPubkeys,
     plaintext: options.content,
@@ -103,14 +99,13 @@ export async function buildMessageEvents(options: Omit<SendDirectMessageOptions,
   return nip17Adapter.encode!(outgoing, options.context);
 }
 
+/** Every copy (recipients' and our own) goes to the same relays: see dmSendRelays. */
 export async function publishMessageEvents(
   events: NostrEvent[],
   relays: string[],
   previousResults: OutgoingRelayResult[] = [],
-  eventRoutes: OutgoingEventRoute[] = [],
   assertCurrent: () => void = () => {},
 ) {
-  const routes = new Map(eventRoutes.map(route => [route.eventId, route]));
   const batches = await mapWithConcurrency(events, 2, async event => {
     assertCurrent();
     const targetPubkey = eventTarget(event);
@@ -118,9 +113,7 @@ export async function publishMessageEvents(
     // retry publish only copies that have never been accepted, preserving the
     // original signed event and avoiding duplicate delivery to other peers.
     if (previousResults.some(result => result.eventId === event.id && result.ok)) return [];
-    const route = routes.get(event.id);
-    const targetRelays = route ? route.relays : relays;
-    const pendingRelays = targetRelays.filter(relay => !previousResults.some(
+    const pendingRelays = relays.filter(relay => !previousResults.some(
       result => result.eventId === event.id && result.relay === relay && result.ok
     ));
     if (!pendingRelays.length) return [];
@@ -129,7 +122,6 @@ export async function publishMessageEvents(
       kind: event.kind,
       target: targetPubkey?.slice(0, 12) || "missing",
       relayCount: pendingRelays.length,
-      routeSource: route?.source || "legacy-fallback",
     });
     const results = await nostrClient.publish(event, pendingRelays);
     return results.map(result => {
@@ -143,52 +135,6 @@ export async function publishMessageEvents(
     });
   });
   return batches.flat();
-}
-
-export async function resolveMessageEventRoutes(
-  accountPubkey: string,
-  events: NostrEvent[],
-  fallbackRelays: string[],
-  assertCurrent: () => void = () => {},
-) {
-  const targets = [...new Set(events.map(eventTarget).filter((value): value is string => !!value))];
-  const byTarget = new Map<string, Awaited<ReturnType<typeof resolveDmRelays>>>();
-  // Bound concurrency, not the audience: later peers must not silently bypass
-  // kind 10050 discovery. The directory also bounds queries across messages.
-  const resolutions = await mapWithConcurrency(targets, 2, target => {
-    assertCurrent();
-    return resolveDmRelays(accountPubkey, target, fallbackRelays);
-  });
-  assertCurrent();
-  targets.forEach((target, index) => byTarget.set(target, resolutions[index]));
-  const resolvedAt = Date.now();
-  return events.flatMap<OutgoingEventRoute>(event => {
-    const targetPubkey = eventTarget(event);
-    const route = targetPubkey ? byTarget.get(targetPubkey) : undefined;
-    if (!targetPubkey || !route) return [];
-    return [{
-      eventId: event.id,
-      targetPubkey,
-      relays: route.relays,
-      source: route.source,
-      resolvedAt,
-    }];
-  });
-}
-
-function legacyMessageEventRoutes(events: NostrEvent[], fallbackRelays: string[]) {
-  const resolvedAt = Date.now();
-  return events.flatMap<OutgoingEventRoute>(event => {
-    const targetPubkey = eventTarget(event);
-    if (!targetPubkey || !fallbackRelays.length) return [];
-    return [{
-      eventId: event.id,
-      targetPubkey,
-      relays: [...new Set(fallbackRelays)],
-      source: "legacy-fallback",
-      resolvedAt,
-    }];
-  });
 }
 
 function mergeRelayResults(previous: OutgoingRelayResult[], current: OutgoingRelayResult[]) {
@@ -218,9 +164,7 @@ export async function queueDirectMessage(options: SendDirectMessageOptions): Pro
     state: "pending",
     message: encoded.message,
     events: encoded.events,
-    relays: options.relays,
-    eventRoutes: legacyMessageEventRoutes(encoded.events, options.relays),
-    dmRelayRoutesPending: true,
+    relays: dmSendRelays(),
     attempts: 0,
     createdAt: now,
     updatedAt: now
@@ -243,8 +187,8 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
 
 /**
  * Latency-critical, ephemeral control messages (voice call signaling). The
- * durable outgoing queue first looks up the recipient's relay list and waits
- * for every relay (a slow one held a call invite, and its push, for seconds).
+ * durable outgoing queue waits for every relay (a slow one held a call
+ * invite, and its push, for seconds).
  * Here every copy goes to all given relays at once, the call resolves as soon
  * as any relay accepts the recipient's copy, and a call push goes out right
  * away carrying the encrypted wrap, so a closed app can ring without a fetch.
@@ -253,7 +197,7 @@ export async function sendDirectMessage(options: SendDirectMessageOptions): Prom
 export async function sendFastControl(options: SendDirectMessageOptions & { push?: "call"; selfOnly?: boolean; shouldPush?: () => boolean }) {
   const account = options.context.senderPubkey.toLowerCase();
   const encoded = await buildMessageEvents(options);
-  const relays = [...new Set(options.relays.map(url => normalizeRelayUrl(url)).filter(Boolean))];
+  const relays = dmSendRelays();
   if (!relays.length) throw new Error("没有可用的 relay");
   const events = encoded.events as NostrEvent[];
   // selfOnly: a private record for this account's devices (never the peer).
@@ -327,36 +271,6 @@ export function cancelOutgoingWorkForAccount(accountPubkey: string) {
   cancelDmRelayDirectoryWork(account);
 }
 
-async function refreshFailedEventRoutes(
-  record: OutgoingQueueRecord,
-  failedEvents: NostrEvent[],
-  assertCurrent: () => void,
-) {
-  if (!record.eventRoutes?.length || !failedEvents.length) return record.eventRoutes;
-  const failedIds = new Set(failedEvents.map(event => event.id));
-  const refreshed = await mapWithConcurrency(record.eventRoutes, 2, async route => {
-    assertCurrent();
-    if (
-      !failedIds.has(route.eventId)
-      || route.targetPubkey === record.accountPubkey
-      || route.source !== "nip17-10050"
-    ) return route;
-    const resolution = await resolveDmRelays(
-      record.accountPubkey,
-      route.targetPubkey,
-      record.relays,
-      true,
-    );
-    return {
-      ...route,
-      relays: resolution.relays,
-      source: resolution.source,
-      resolvedAt: Date.now(),
-    } satisfies OutgoingEventRoute;
-  });
-  return refreshed;
-}
-
 function scheduleRetry(accountPubkey: string, delay: number) {
   const account = accountPubkey.toLowerCase();
   const normalizedDelay = Math.max(0, Math.floor(delay));
@@ -393,7 +307,7 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     if ((accountGenerations.get(accountPubkey) || 0) !== generation) throw new Error("账号已切换");
   };
   const task = (async () => {
-    let record = await outgoingQueueRepository.get(accountPubkey, outgoingId);
+    const record = await outgoingQueueRepository.get(accountPubkey, outgoingId);
     assertCurrent();
     if (!record) throw new Error("待发送项目不存在");
     if (record.state === "sent") {
@@ -408,25 +322,21 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
       emitOutgoingQueueState(waiting);
       throw new Error("网络不可用，消息将在联网后重试");
     }
-    if (record.dmRelayRoutesPending) {
-      const eventRoutes = await resolveMessageEventRoutes(accountPubkey, record.events as NostrEvent[], record.relays, assertCurrent);
-      assertCurrent();
-      const resolved = await outgoingQueueRepository.update(accountPubkey, outgoingId, {
-        eventRoutes, dmRelayRoutesPending: false, updatedAt: Date.now(),
-      });
-      if (!resolved) throw new Error("待发送项目不存在");
-      record = resolved;
-    }
-    assertCurrent();
+    // Routes are not stored per record: a retry, also of a row queued by an
+    // older version with per-recipient 10050 routes, uses the current
+    // relays, including ones the user added since.
+    const relays = dmSendRelays();
     const attempts = record.attempts + 1;
-    const sending = await outgoingQueueRepository.update(accountPubkey, outgoingId, { state: "sending", attempts, updatedAt: Date.now() });
+    const sending = await outgoingQueueRepository.update(accountPubkey, outgoingId, {
+      state: "sending", attempts, relays, updatedAt: Date.now(),
+    });
     emitOutgoingQueueState(sending);
     assertCurrent();
     const events = record.events as NostrEvent[];
     let relayResults: PublishedMessage["relayResults"];
     try {
       const previousResults = record.relayResults || [];
-      const currentResults = await publishMessageEvents(events, record.relays, previousResults, record.eventRoutes, assertCurrent);
+      const currentResults = await publishMessageEvents(events, relays, previousResults, assertCurrent);
       assertCurrent();
       relayResults = mergeRelayResults(previousResults, currentResults);
     } catch (error) {
@@ -447,14 +357,9 @@ export async function publishQueuedOutgoing(accountPubkey: string, outgoingId: s
     if (failedRequiredEvents.length) {
       const state = attempts >= 3 ? "failed" : "waiting_network";
       const delay = Math.min(60_000, 2 ** attempts * 1_000);
-      const refreshedRoutes = attempts === 1
-        ? await refreshFailedEventRoutes(record, failedRequiredEvents, assertCurrent)
-        : record.eventRoutes;
-      assertCurrent();
       const failed = await outgoingQueueRepository.update(accountPubkey, outgoingId, {
         state,
         relayResults,
-        eventRoutes: refreshedRoutes,
         nextAttemptAt: Date.now() + delay,
         lastError: `${failedRequiredEvents.length}/${requiredEvents.length} recipient copies failed`,
         updatedAt: Date.now()

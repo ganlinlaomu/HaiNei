@@ -9,8 +9,6 @@ import {
   type LocationShare,
 } from "@/nostr/messaging/locationShare";
 import { sendFastControl } from "@/nostr/messaging/service";
-import { getRelaysFromStorage } from "@/nostr/relays";
-import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { onBeforeAccountLock } from "@/services/accountLifecycle";
 import { useDirectMessagesStore } from "@/stores/directMessages";
 import { useKeyStore } from "@/stores/keys";
@@ -220,9 +218,6 @@ export const useLiveLocationStore = defineStore("liveLocation", {
           recipientPubkeys: [share.peer],
           content,
           tags: liveLocationControlTags(),
-          // Like call signals: the built-in relays are the channel both sides
-          // always share, plus ours, so a friend with other relays still gets it.
-          relays: [...new Set([...DEFAULT_RELAY_URLS, ...getRelaysFromStorage("write")])],
           wrapTtlSeconds,
           context: {
             senderPubkey: share.account,

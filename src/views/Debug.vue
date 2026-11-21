@@ -50,11 +50,17 @@
     </section>
 
     <section class="card-panel dm-inbox-panel">
-      <div class="section-title"><h3>私信收件 Relay（kind 10050 / NIP-17）</h3><span>{{ dmInboxStatusLabel }}</span></div>
-      <p class="empty">自动从当前已连接的读取 Relay 中选择最多 2 个接收点，并将 kind 10050 发布到公共目录。发信时优先使用对方列表；未找到时兼容传统 Relay。公共目录仅用于列表发现，不传送私信；不会为每位联系人保持额外长连接。设置页对用户显示为「收信地址」。</p>
+      <div class="section-title"><h3>私信 Relay</h3><span>kind 10050 {{ dmInboxStatusLabel }}</span></div>
+      <p class="empty">私信、点赞、评论、回执等所有 gift wrap 都发到「默认 Relay + 写入 Relay」，从「默认 Relay + 读取 Relay」接收；发送时不查询对方的 kind 10050。kind 10050 仍发布为默认 Relay（下方列表），只为让旧版海内发来的消息落在这里会读的 Relay 上。</p>
       <div class="send-meta">
+        <span>发送：</span><span v-for="relay in dmRoutes.send" :key="`s-${relay}`">{{ relay }}</span>
+      </div>
+      <div class="send-meta">
+        <span>接收：</span><span v-for="relay in dmRoutes.receive" :key="`r-${relay}`">{{ relay }}</span>
+      </div>
+      <div class="send-meta">
+        <span>kind 10050：</span>
         <span v-for="relay in dmInbox.relays" :key="relay">{{ relay }}</span>
-        <span v-if="!dmInbox.relays.length">等待已连接的安全 Relay</span>
       </div>
       <div class="send-meta dm-inbox-meta">
         <span v-if="dmInbox.publishedAt">发布于 {{ formatTime(dmInbox.publishedAt) }}</span>
@@ -120,6 +126,7 @@ import { useKeyStore } from "@/stores/keys";
 import { getDeliveryStats } from "@/services/dmDeliveryStats";
 import { persistentStorageState, type PersistentStorageState } from "@/services/persistentStorage";
 import { getOwnDmRelayStatus } from "@/services/dmRelayDirectory";
+import { dmReceiveRelays, dmSendRelays } from "@/services/dmRelays";
 
 type RelayStatus = RelayRuntimeStatus;
 type LastSend = { ts: number; logicalMessageId: string; recipients: number; giftWraps: number; copies: Array<{ eventId: string; target: string; role: string; relays: Array<{ relay: string; status: string; reason?: string }> }> };
@@ -148,9 +155,11 @@ const persistentStorageLabel = computed(() => ({
 const currentTime = computed(() => new Date(now.value).toLocaleString());
 const dmInbox = ref<{ relays: string[]; eventId?: string; publishedAt?: number; pending: boolean; attempts: number; nextAttemptAt?: number; lastError?: string }>({ relays: [], pending: false, attempts: 0 });
 const dmInboxStatusLabel = computed(() => dmInbox.value.pending ? "等待发布重试" : dmInbox.value.publishedAt ? "已发布" : "自动配置中");
+const dmRoutes = ref<{ send: string[]; receive: string[] }>({ send: [], receive: [] });
 async function refreshDmInbox() {
   const account = keys.pkHex;
   if (!account) return;
+  dmRoutes.value = { send: dmSendRelays(), receive: dmReceiveRelays() };
   const status = await getOwnDmRelayStatus(account).catch(() => null);
   if (status && keys.pkHex === account) dmInbox.value = status;
 }

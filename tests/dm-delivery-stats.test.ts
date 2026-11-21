@@ -53,7 +53,6 @@ describe("accountMessageSync records persisted deliveries", () => {
       releaseUnusedRelayConnections: vi.fn(),
     }));
     vi.doMock("@/services/dmRelayDirectory", () => ({
-      selectOwnDmRelays: (relays: string[]) => relays,
       ensureOwnDmRelayList: vi.fn(async () => true),
       getOwnDmRelayStatus: vi.fn(async () => ({ relays: ["wss://relay.test"], pending: false, attempts: 0 })),
       cancelDmRelayDirectoryWork: vi.fn(),

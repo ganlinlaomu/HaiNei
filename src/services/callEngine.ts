@@ -3,7 +3,6 @@ import { useCallStore, type CallEndReason } from "@/stores/call";
 import { useKeyStore } from "@/stores/keys";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { sendDirectMessage, sendFastControl } from "@/nostr/messaging/service";
-import { getRelaysFromStorage } from "@/nostr/relays";
 import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 import { refreshNearbyRelaySockets } from "@/services/nearbyTransfer";
 import { turnIceServers } from "@/services/relaySession";
@@ -326,7 +325,6 @@ async function sendSignal(peer: string, signal: CallSignal) {
     recipientPubkeys: [peer],
     content: serializeCallSignal(signal),
     tags: callControlTags(signal),
-    relays: [...new Set([...DEFAULT_RELAY_URLS, ...getRelaysFromStorage("write")])],
     context: { senderPubkey: keys.pkHex, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
     ...(signal.action === "invite" ? { push: "call" as const,
       shouldPush: () => activeSession?.id === signal.callId && useCallStore().phase === "outgoing",
@@ -368,7 +366,6 @@ function recordCall(session: CallSession, reason: CallEndReason, durationSeconds
     recipientPubkeys: [session.peer],
     content: `📞 ${session.media === "video" ? "视频通话" : "语音通话"} · ${outcome}`,
     tags: [["t", DIRECT_MESSAGE_TYPE], ["t", CALL_LOG_TYPE], [CALL_RECORD_TAG, session.id, session.direction, reason, String(durationSeconds)], ...(missed ? [["t", CALL_MISSED_TYPE]] : [])],
-    relays: [...new Set([...DEFAULT_RELAY_URLS, ...getRelaysFromStorage("write")])],
     context: { senderPubkey: keys.pkHex, nip44Encrypt: keys.nip44Encrypt.bind(keys), signEvent: keys.signEvent.bind(keys) },
   };
   const sent = missed ? sendDirectMessage(options) : sendFastControl({ ...options, selfOnly: true });

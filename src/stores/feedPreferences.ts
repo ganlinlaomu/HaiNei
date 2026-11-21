@@ -2,7 +2,6 @@ import { defineStore } from "pinia";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { sendDirectMessage } from "@/nostr/messaging/service";
 import { decodeTombstone, encodeTombstone, isFeedPinMessage, HAI_NEI_TOMBSTONE_TAGS } from "@/nostr/messaging/feedControl";
-import { getRelaysFromStorage } from "@/nostr/relays";
 import { metaRepository } from "@/repositories/metaRepository";
 import { useKeyStore } from "@/stores/keys";
 import { scheduleAccountStateSync } from "@/services/accountStateSync";
@@ -149,7 +148,6 @@ export const useFeedPreferencesStore = defineStore("feedPreferences", {
         recipientPubkeys: recipients,
         content: encodeTombstone(message.id),
         tags: HAI_NEI_TOMBSTONE_TAGS,
-        relays: getRelaysFromStorage("write"),
         context: {
           senderPubkey: account,
           nip44Encrypt: keys.supportsNip44 ? keys.nip44Encrypt.bind(keys) : undefined,

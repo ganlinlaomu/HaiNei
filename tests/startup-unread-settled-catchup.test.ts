@@ -87,7 +87,6 @@ async function restoreOnSecondDevice(readCursor: Message, runs: CatchupRun[]) {
     releaseUnusedRelayConnections: vi.fn(),
   }));
   vi.doMock("@/services/dmRelayDirectory", () => ({
-    selectOwnDmRelays: (relays: string[]) => relays,
     ensureOwnDmRelayList: vi.fn(async () => true),
     getOwnDmRelayStatus: vi.fn(async () => ({ relays: ["wss://x.test", "wss://y.test"], pending: false, attempts: 0 })),
     cancelDmRelayDirectoryWork: vi.fn(),

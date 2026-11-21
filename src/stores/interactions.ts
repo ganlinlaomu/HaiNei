@@ -3,7 +3,6 @@ import { defineStore } from "pinia";
 import { deviceStorage, putDeviceValue } from "@/services/deviceStorage";
 import type { CanonicalMessage } from "@/nostr/messaging/protocol";
 import { sendDirectMessage } from "@/nostr/messaging/service";
-import { getRelaysFromStorage } from "@/nostr/relays";
 import { useKeyStore } from "@/stores/keys";
 import { useNotificationsStore } from "@/stores/notifications";
 import { logger } from "@/utils/logger";
@@ -282,7 +281,6 @@ export const useInteractionsStore = defineStore("interactions", {
           ...(interaction.type === "like" ? [["liked", String(isActiveLike(interaction))]] : []),
           ...(interaction.type === "comment" ? mentionTags(interaction.mentionedPubkeys || []) : [])
         ],
-        relays: getRelaysFromStorage(),
         context: {
           senderPubkey: key.pkHex,
           nip44Encrypt: key.supportsNip44 ? key.nip44Encrypt.bind(key) : undefined,

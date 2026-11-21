@@ -1,4 +1,3 @@
-import { filterRetiredDefaultRelayHints } from "@/services/connectionSettings";
 import { observeRecoverySignal, clearRecoveryObservations } from "@/services/callNotificationRecovery";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import { getActivePinia } from "pinia";
@@ -36,10 +35,9 @@ import { deliveryStatsLogData, recordPersistedDelivery, resetDeliveryStats } fro
 import {
   cancelDmRelayDirectoryWork,
   ensureOwnDmRelayList,
-  getOwnDmRelayStatus,
   logDmRelayDirectoryFailure,
-  selectOwnDmRelays,
 } from "@/services/dmRelayDirectory";
+import { dmReceiveRelays } from "@/services/dmRelays";
 
 export type AccountSyncKeys = {
   pkHex: string;
@@ -99,114 +97,6 @@ function clearStartupUnreadGraceTimer() {
   if (startupUnreadGraceTimer) clearTimeout(startupUnreadGraceTimer);
   startupUnreadGraceTimer = null;
 }
-let dmRelayHealthUnsubscribe: (() => void) | null = null;
-const DM_RELAY_FAILURE_THRESHOLD = 3;
-const DM_RELAY_FAILURE_GRACE_MS = 5 * 60_000;
-const DM_RELAY_RECHECK_MS = 5 * 60_000;
-type DmRelayFailureState = {
-  failures: number;
-  firstFailedAt: number;
-  timer: ReturnType<typeof setTimeout> | null;
-};
-const dmRelayHealthFailures = new Map<string, DmRelayFailureState>();
-
-function clearDmRelayFailure(relayUrl: string) {
-  const state = dmRelayHealthFailures.get(relayUrl);
-  if (state?.timer) clearTimeout(state.timer);
-  dmRelayHealthFailures.delete(relayUrl);
-}
-
-function stopDmRelayHealthWatch() {
-  for (const relayUrl of [...dmRelayHealthFailures.keys()]) clearDmRelayFailure(relayUrl);
-  dmRelayHealthUnsubscribe?.();
-  dmRelayHealthUnsubscribe = null;
-}
-
-function bindDmRelayHealthWatch(
-  account: string,
-  isCurrent: () => boolean,
-  signer: (event: EventTemplate) => Promise<VerifiedEvent>,
-) {
-  stopDmRelayHealthWatch();
-
-  const scheduleReconcile = (relayUrl: string, delay: number) => {
-    const state = dmRelayHealthFailures.get(relayUrl);
-    if (!state) return;
-    if (state.timer) clearTimeout(state.timer);
-    state.timer = setTimeout(() => {
-      const latest = dmRelayHealthFailures.get(relayUrl);
-      if (!latest || !isCurrent()) return;
-      latest.timer = null;
-
-      const runtime = inspectRelays()[relayUrl];
-      if (runtime?.state === "connected" || runtime?.ready === true) {
-        clearDmRelayFailure(relayUrl);
-        return;
-      }
-
-      const failureAge = Date.now() - latest.firstFailedAt;
-      if (latest.failures < DM_RELAY_FAILURE_THRESHOLD || failureAge < DM_RELAY_FAILURE_GRACE_MS) {
-        scheduleReconcile(relayUrl, Math.max(1_000, DM_RELAY_FAILURE_GRACE_MS - failureAge));
-        return;
-      }
-
-      void ensureOwnDmRelayList(account, signer, { replaceUnhealthyRelays: [relayUrl], refreshRemote: false })
-        .then(async () => {
-          if (!isCurrent()) return;
-          const own = await getOwnDmRelayStatus(account);
-          if (!own.relays.includes(relayUrl)) {
-            clearDmRelayFailure(relayUrl);
-            return;
-          }
-          // No healthy replacement was available. Keep the sticky route and
-          // retry conservatively instead of shrinking/churning the inbox list.
-          scheduleReconcile(relayUrl, DM_RELAY_RECHECK_MS);
-        })
-        .catch(logDmRelayDirectoryFailure);
-    }, Math.max(0, delay));
-    (state.timer as any).unref?.();
-  };
-
-  const scheduleAnyOverdueFailures = () => {
-    const now = Date.now();
-    for (const [relayUrl, state] of dmRelayHealthFailures) {
-      if (state.failures < DM_RELAY_FAILURE_THRESHOLD) continue;
-      const remaining = DM_RELAY_FAILURE_GRACE_MS - (now - state.firstFailedAt);
-      scheduleReconcile(relayUrl, Math.max(0, remaining));
-    }
-  };
-
-  dmRelayHealthUnsubscribe = onRelayConnectionState(event => {
-    if (!isCurrent()) {
-      stopDmRelayHealthWatch();
-      return;
-    }
-    const readRelays = new Set(getRelaysFromStorage("read"));
-    if (!readRelays.has(event.url)) return;
-
-    if (event.connected) {
-      clearDmRelayFailure(event.url);
-      // A newly healthy alternative may now be able to replace another Relay
-      // that has already crossed the sustained-failure threshold.
-      scheduleAnyOverdueFailures();
-      return;
-    }
-    if (!event.failed) return;
-
-    const previous = dmRelayHealthFailures.get(event.url);
-    const next: DmRelayFailureState = previous || {
-      failures: 0,
-      firstFailedAt: event.at || Date.now(),
-      timer: null,
-    };
-    next.failures += 1;
-    dmRelayHealthFailures.set(event.url, next);
-    if (next.failures < DM_RELAY_FAILURE_THRESHOLD) return;
-
-    const elapsed = Math.max(0, (event.at || Date.now()) - next.firstFailedAt);
-    scheduleReconcile(event.url, Math.max(0, DM_RELAY_FAILURE_GRACE_MS - elapsed));
-  });
-}
 
 onMessageAuthorizationChanged(accountPubkey => {
   if (activeKeys?.pkHex.toLowerCase() !== accountPubkey) return;
@@ -249,7 +139,6 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
   activeCallSignalGate?.dispose();
   activeCallSignalGate = null;
   clearStartupUnreadGraceTimer();
-  stopDmRelayHealthWatch();
   removeAccountRelayObserver?.();
   removeAccountRelayObserver = null;
   activeKeys = keys;
@@ -367,13 +256,9 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
 
   try {
     let homeHandler: ReturnType<typeof createHomeMessageHandler>;
-    const storedOwnDm = await getOwnDmRelayStatus(account);
-    if (!isCurrent()) return false;
-    const legacyReadRelays = getRelaysFromStorage("read");
-    const advertisedDmRelays = storedOwnDm.relays.length ? storedOwnDm.relays : selectOwnDmRelays(legacyReadRelays);
-    const dmRelays = filterRetiredDefaultRelayHints(advertisedDmRelays, legacyReadRelays);
-    subscribedReadRelaySignature = readRelaySignature(legacyReadRelays);
-    const messageRelays = [...new Set([...dmRelays, ...legacyReadRelays])];
+    // Defaults (always) plus every configured read relay: see dmRelays.ts.
+    subscribedReadRelaySignature = readRelaySignature(getRelaysFromStorage("read"));
+    const messageRelays = dmReceiveRelays();
     // Connectivity is independent of historical repair. Observe first, then
     // inspect the current pool so already-open sockets are not reported offline.
     const publishRelaySnapshot = () => {
@@ -617,7 +502,6 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
     reconcileManagedRelay();
     if (!isCurrent()) return false;
     if (keys.supportsNip44) {
-      bindDmRelayHealthWatch(account, isCurrent, assertCurrentSigner);
       void ensureOwnDmRelayList(account, assertCurrentSigner).catch(logDmRelayDirectoryFailure);
     }
     return true;
@@ -662,7 +546,6 @@ export function stopAccountMessageSync() {
   const account = activeKeys?.pkHex.toLowerCase() || accountSyncSnapshot.accountPubkey;
   accountSyncGeneration++;
   clearStartupUnreadGraceTimer();
-  stopDmRelayHealthWatch();
   removeAccountRelayObserver?.();
   removeAccountRelayObserver = null;
   activeKeys = null;

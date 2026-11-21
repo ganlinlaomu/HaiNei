@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_RELAY_URLS } from "@/services/connectionSettings";
 
 describe("account relay startup ordering", () => {
   it("loads the selected account settings before warming read relays", () => {
@@ -22,16 +23,17 @@ describe("account relay startup ordering", () => {
     expect(dmWarmup).toBeLessThan(cloudWait);
 
     const warmup = readFileSync(join(process.cwd(), "src/nostr/relayWarmup.ts"), "utf8");
-    expect(warmup).toContain("await getOwnDmRelayStatus(accountPubkey)");
+    expect(warmup).toContain("dmReceiveRelays()");
     expect(warmup).toContain("!isCurrent()");
     expect(warmup).not.toContain("subscribe(");
   });
 
-  it("does not subscribe or preconnect retired default inbox Relay hints", () => {
+  it("subscribes and preconnects the fixed receive relays, never a stored kind 10050 list", () => {
     const sync = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
     const warmup = readFileSync(join(process.cwd(), "src/nostr/relayWarmup.ts"), "utf8");
-    expect(sync).toContain("filterRetiredDefaultRelayHints(advertisedDmRelays, legacyReadRelays)");
-    expect(warmup).toContain("filterRetiredDefaultRelayHints(advertisedRelays, getRelaysFromStorage(\"read\"))");
+    expect(sync).toContain("const messageRelays = dmReceiveRelays();");
+    expect(sync).not.toContain("getOwnDmRelayStatus");
+    expect(warmup).not.toContain("getOwnDmRelayStatus");
   });
 
   it("does not serialize managed Relay network requests or healthy resume catch-up", () => {
@@ -102,18 +104,11 @@ describe("account relay startup ordering", () => {
     expect(source).toContain('event.reconnected ? "reconnect" : "resume"');
   });
 
-  it("keeps DM relays sticky and only reconciles after sustained connection failures", () => {
+  it("never rewrites kind 10050 from relay health: its content is fixed to the default relays", () => {
     const source = readFileSync(join(process.cwd(), "src/services/accountMessageSync.ts"), "utf8");
-    expect(source).toContain("bindDmRelayHealthWatch");
-    expect(source).toContain("DM_RELAY_FAILURE_THRESHOLD = 3");
-    expect(source).toContain("DM_RELAY_FAILURE_GRACE_MS = 5 * 60_000");
-    expect(source).toContain("onRelayConnectionState(event =>");
-    expect(source).toContain("if (event.connected)");
-    expect(source).toContain("clearDmRelayFailure(event.url)");
-    expect(source).toContain('getRelaysFromStorage("read")');
-    expect(source).toContain("replaceUnhealthyRelays: [relayUrl]");
-    expect(source).toContain("getOwnDmRelayStatus(account)");
-    expect(source).toContain("stopDmRelayHealthWatch()");
+    expect(source).not.toContain("bindDmRelayHealthWatch");
+    expect(source).not.toContain("replaceUnhealthyRelays");
+    expect(source).toContain("void ensureOwnDmRelayList(account, assertCurrentSigner)");
   });
 });
 
@@ -184,9 +179,7 @@ describe("account message sync generation", () => {
       releaseUnusedRelayConnections: vi.fn(),
     }));
     vi.doMock("@/services/dmRelayDirectory", () => ({
-      selectOwnDmRelays: (relays: string[]) => relays.slice(0, 2),
       ensureOwnDmRelayList,
-      getOwnDmRelayStatus: vi.fn(async () => ({ relays: ["wss://relay.test"], pending: false, attempts: 0 })),
       cancelDmRelayDirectoryWork,
       logDmRelayDirectoryFailure: vi.fn(),
     }));
@@ -242,7 +235,8 @@ describe("account message sync generation", () => {
     await expect(startedB).resolves.toBe(true);
     expect(managerStart).toHaveBeenCalledTimes(1);
     expect(managerStart.mock.calls[0][0].accountPubkey).toBe(accountB);
-    expect(managerStart.mock.calls[0][0].relays).toEqual(["wss://relay.test"]);
+    // Defaults are always subscribed, plus the configured read relays.
+    expect(managerStart.mock.calls[0][0].relays).toEqual([...DEFAULT_RELAY_URLS, "wss://relay.test"]);
     expect(ensureOwnDmRelayList).toHaveBeenCalledTimes(1);
     expect(ensureOwnDmRelayList.mock.calls[0][0]).toBe(accountB);
 

@@ -1,5 +1,4 @@
 import { defineStore } from "pinia";
-import { getRelaysFromStorage } from "@/nostr/relays";
 import {
   onOutgoingQueueState,
   publishQueuedOutgoing,
@@ -114,7 +113,6 @@ export const usePostsStore = defineStore("posts", {
         content: plaintext,
         replyTo,
         tags: postTags,
-        relays: getRelaysFromStorage(),
         context: {
           senderPubkey: accountAtStart,
           nip44Encrypt: key.supportsNip44 ? key.nip44Encrypt.bind(key) : undefined,
@@ -163,7 +161,6 @@ export const usePostsStore = defineStore("posts", {
           content: plaintext,
           replyTo,
           tags,
-          relays: getRelaysFromStorage(),
           context: {
             senderPubkey: accountAtStart,
             nip44Encrypt: key.supportsNip44 ? key.nip44Encrypt.bind(key) : undefined,
