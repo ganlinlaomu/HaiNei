@@ -17,6 +17,7 @@ import { normalizeAccountPubkey } from "@/repositories/accountScope";
 import { compareMessages, isCursorAfter, isMessageAfter, messageMillis, type ReadCursor } from "@/nostr/messaging/sync/sorting";
 import { MAX_FUTURE_SKEW_SECONDS, type SyncStatus } from "@/nostr/messaging/sync/types";
 import { performanceCounters } from "@/services/nostrCache";
+import { conversationPageSize } from "./conversationPage";
 
 export type InsertMessageResult = { inserted: boolean; record: SyncedMessageRecord };
 export type AdvanceReadStateResult = { advanced: boolean; state: ConversationReadStateRecord };
@@ -671,12 +672,17 @@ export class SyncedMessageRepository {
     }
   }
 
+  /**
+   * At most MAX_CONVERSATION_PAGE_SIZE rows, whatever `limit` asks for. A
+   * caller that infers "no older rows" from a short page must compare with
+   * the clamped size (conversationPageSize), not with what it asked for.
+   */
   async listConversationPage(accountPubkey: string, conversationId: string, before?: {createdAt:number;id:string}, limit = 50) {
     const account = normalizeAccountPubkey(accountPubkey);
     return (await this.database.syncedMessages.where("[accountPubkey+conversationId+createdAt+id]")
       .between([account,conversationId,0,""],
         [account,conversationId,before?.createdAt ?? Number.MAX_SAFE_INTEGER,before?.id ?? "\uffff"],true,!before)
-      .reverse().limit(Math.max(1,Math.min(limit,100))).toArray()).reverse();
+      .reverse().limit(conversationPageSize(limit)).toArray()).reverse();
   }
   async listConversation(accountPubkey: string, conversationId: string) {
     // Compatibility for explicit full-history operations (search/rebuild).

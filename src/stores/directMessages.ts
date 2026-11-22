@@ -32,6 +32,7 @@ import { metaRepository } from "@/repositories/metaRepository";
 import { outgoingDmTaskRepository } from "@/repositories/outgoingDmTaskRepository";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
+import { conversationPageSize, MAX_CONVERSATION_PAGE_SIZE } from "@/repositories/conversationPage";
 import { isFriendshipAcceptedAt, useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
 import { useMessagesStore, type InboxItem } from "@/stores/messages";
@@ -130,11 +131,12 @@ type PeerHistoryPage = {
 };
 const PEER_HISTORY_WARM_TTL_MS = 30_000;
 /**
- * Scrolling up reads this many older rows at a time: one read fills one
- * window batch (useChatMessageWindow OLDER_MESSAGE_BATCH). The first page
- * stays 50 so a chat opens fast.
+ * Scrolling up reads this many older rows at a time (the repository's page
+ * cap). The first page stays 50 so a chat opens fast. 0.1.228 asked for 150:
+ * the repository returned 100, and "fewer than asked" marked the history
+ * exhausted after one page, so older messages stopped loading.
  */
-const OLDER_HISTORY_PAGE_SIZE = 150;
+const OLDER_HISTORY_PAGE_SIZE = MAX_CONVERSATION_PAGE_SIZE;
 const MAX_UNREAD_RECONCILE_ATTEMPTS = 4;
 const peerHistoryWarmups = new Map<string, { createdAt: number; promise: Promise<PeerHistoryPage> }>();
 const activeOutgoingTasks = new Map<string, Promise<void>>();
@@ -731,7 +733,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       return {
         items,
         cursor: last ? { createdAt: last.createdAt, id: last.id } : before,
-        exhausted: records.length < OLDER_HISTORY_PAGE_SIZE,
+        exhausted: records.length < conversationPageSize(OLDER_HISTORY_PAGE_SIZE),
         ...(authorizationReady ? {} : { authorizationPending: true }),
       };
     },
