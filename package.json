@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.229",
-  "releaseSummary": "修复长对话往上翻约 150 条后看不到更早消息的问题",
+  "version": "0.1.230",
+  "releaseSummary": "聊天页渲染加快：往上翻旧消息时每次插入的卡顿减少约三分之二",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

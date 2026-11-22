@@ -5,6 +5,7 @@ import { parseFriendRecommendation } from "./friendRecommendation";
 import { parseLocationShare } from "./locationShare";
 
 import { isDirectMessageTags } from "./messageRouting";
+import { memoByContent } from "@/utils/memoByContent";
 export { DIRECT_MESSAGE_TYPE, isDirectMessageTags } from "./messageRouting";
 
 export function canStartDirectMessage(
@@ -31,7 +32,7 @@ export function directMessagePeer(
   return message.recipientPubkeys.map(value => value.toLowerCase()).find(value => value !== account) || "";
 }
 
-export function directMessagePreview(content: string) {
+function computeDirectMessagePreview(content: string) {
   if (parseFriendRecommendation(content)) return "[好友推荐]";
   if (parseLocationShare(content)) return "[位置]";
   if (parsePrivateAudioMessage(content)) return "[语音]";
@@ -45,3 +46,11 @@ export function directMessagePreview(content: string) {
     .trim();
   return text || (hasImage ? "[图片]" : "");
 }
+
+/**
+ * The one-line preview of a message (conversation list, search, chat text).
+ * It runs five content parsers and two regexes, and the chat calls it several
+ * times per rendered row on every render, so results are cached by content.
+ */
+export const directMessagePreview = memoByContent(computeDirectMessagePreview);
+

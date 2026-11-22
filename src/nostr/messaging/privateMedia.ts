@@ -38,6 +38,9 @@ export function serializePrivateAudioMessage(media: PrivateAudioMedia) {
 }
 
 export function parsePrivateAudioMessage(content: string): PrivateAudioMessage | null {
+  // Only a JSON object can pass the type check below; plain text would make
+  // JSON.parse throw, and that exception is the costly part of a chat render.
+  if (typeof content !== "string" || !content.trimStart().startsWith("{")) return null;
   try {
     const value = JSON.parse(content) as Partial<PrivateAudioMessage> | null;
     if (!value || value.type !== "audio") return null;
@@ -82,6 +85,9 @@ export function serializePrivateVideoMessage(media: PrivateVideoMedia) {
 }
 
 export function parsePrivateVideoMessage(content: string): PrivateVideoMessage | null {
+  // Only a JSON object can pass the type check below; plain text would make
+  // JSON.parse throw, and that exception is the costly part of a chat render.
+  if (typeof content !== "string" || !content.trimStart().startsWith("{")) return null;
   try {
     const value = JSON.parse(content) as Partial<PrivateVideoMessage> | null;
     if (!value || value.type !== "video") return null;
