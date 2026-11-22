@@ -58,6 +58,8 @@ export type AccountMessageSyncSnapshot = {
    * be paging in the background. Reset when a new pass starts.
    */
   preferredCaughtUp?: boolean;
+  /** The one-time friend history rescan (older messages still being re-read). */
+  historyRescan?: "running" | "pending" | "done";
 };
 
 /** What the conversation list title shows: 连接中… / 同步中… / nothing. */
@@ -459,6 +461,9 @@ export async function startAccountMessageSync(keys: AccountSyncKeys, startup: { 
         if (!isCurrent() || directMessages.historyHydrationPhase !== "hydrating") return;
         clearStartupUnreadGraceTimer();
         settleStartupUnread("live");
+      },
+      onHistoryRescanStatus: historyRescan => {
+        if (isCurrent()) setAccountMessageSyncStatus(account, accountSyncSnapshot.status, { historyRescan });
       },
       onCatchupStatus: catchup => {
         if (!isCurrent()) return;

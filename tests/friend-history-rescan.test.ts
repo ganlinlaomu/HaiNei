@@ -74,12 +74,14 @@ describe("friend history rescan", () => {
       now: () => NOW_MS,
       decode: async event => event.id === "old-wrap" ? oldPeerMessage() : null,
     });
+    const rescanStatus = vi.fn();
     const options = {
       accountPubkey: ACCOUNT,
       relays: ["wss://a"],
       authors: [PEER, ACCOUNT],
       decodeContext: { accountPubkey: ACCOUNT },
       onMessage: async () => true,
+      onHistoryRescanStatus: rescanStatus,
     };
 
     const first = build();
@@ -90,9 +92,11 @@ describe("friend history rescan", () => {
       }, { timeout: 5_000 });
       expect(await repo.get(ACCOUNT, "old-peer-message")).toBeTruthy();
       expect(fullHistoryQueries.length).toBeGreaterThan(0);
+      await vi.waitFor(() => expect(rescanStatus.mock.calls.map(call => call[0])).toEqual(["running", "done"]));
     } finally {
       first.stop();
     }
+    rescanStatus.mockClear();
 
     // Done once: the next launch only runs the normal catch-up.
     fullHistoryQueries.length = 0;
@@ -101,6 +105,8 @@ describe("friend history rescan", () => {
       await second.start(options);
       await new Promise(resolve => setTimeout(resolve, 300));
       expect(fullHistoryQueries).toEqual([]);
+      // Nothing to re-read: the chat shows no "older messages coming" hint.
+      expect(rescanStatus).not.toHaveBeenCalled();
     } finally {
       second.stop();
     }
@@ -151,6 +157,7 @@ describe("friend history rescan", () => {
         ? { ...oldPeerMessage(), transportEventId: oldest.id, createdAt: oldest.created_at }
         : null,
     });
+    const rescanStatus = vi.fn();
     try {
       await manager.start({
         accountPubkey: ACCOUNT,
@@ -158,14 +165,27 @@ describe("friend history rescan", () => {
         authors: [PEER, ACCOUNT],
         decodeContext: { accountPubkey: ACCOUNT },
         onMessage: async () => true,
+        onHistoryRescanStatus: rescanStatus,
       });
       await vi.waitFor(async () => {
         expect((await repo.getSyncState(ACCOUNT)).friendHistoryRescanVersion).toBe(FRIEND_HISTORY_RESCAN_VERSION);
       }, { timeout: 20_000, interval: 100 });
       expect(await repo.get(ACCOUNT, "old-peer-message")).toBeTruthy();
       expect((await repo.getSyncState(ACCOUNT)).friendHistoryRescanUntilByRelay).toBeUndefined();
+      // Two passes: pending between them, done at the end.
+      await vi.waitFor(() => expect(rescanStatus.mock.calls.map(call => call[0])).toEqual(["running", "pending", "running", "done"]));
     } finally {
       manager.stop();
     }
   }, 30_000);
+
+  it("the chat shows the hint only while the rescan is unfinished and local history has run out", async () => {
+    const { readFileSync } = await import("node:fs");
+    const chat = readFileSync("src/views/Messages.vue", "utf8");
+    expect(chat).toContain('v-if="historyRescanActive && historyExhausted && messages.length > 0"');
+    expect(chat).toContain('(snapshot.historyRescan === "running" || snapshot.historyRescan === "pending")');
+    expect(chat).toContain("stopRescanStatus();");
+    const sync = readFileSync("src/services/accountMessageSync.ts", "utf8");
+    expect(sync).toContain("onHistoryRescanStatus: historyRescan =>");
+  });
 });
