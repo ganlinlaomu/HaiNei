@@ -707,7 +707,7 @@ describe("direct-message navigation and UI contract", () => {
     const messageWindow = readThemedSource(join(process.cwd(), "src/composables/useChatMessageWindow.ts"), "utf8");
     expect(chat).toContain("useChatMessageWindow({");
     expect(messageWindow).toContain("const windowEnd = ref(initialWindowRange.end)");
-    expect(messageWindow).toContain("MAX_RENDERED_MESSAGES = 100");
+    expect(messageWindow).toContain("MAX_RENDERED_MESSAGES = 300");
     expect(messageWindow).toContain("shiftBoundedMessageWindow");
     expect(messageWindow).toContain("mergeBoundedMessageIndexes(");
     expect(chat).toContain("retainedPlaybackMessageId");

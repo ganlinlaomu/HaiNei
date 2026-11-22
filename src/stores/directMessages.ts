@@ -129,6 +129,12 @@ type PeerHistoryPage = {
   authorizationPending?: true;
 };
 const PEER_HISTORY_WARM_TTL_MS = 30_000;
+/**
+ * Scrolling up reads this many older rows at a time: one read fills one
+ * window batch (useChatMessageWindow OLDER_MESSAGE_BATCH). The first page
+ * stays 50 so a chat opens fast.
+ */
+const OLDER_HISTORY_PAGE_SIZE = 150;
 const MAX_UNREAD_RECONCILE_ATTEMPTS = 4;
 const peerHistoryWarmups = new Map<string, { createdAt: number; promise: Promise<PeerHistoryPage> }>();
 const activeOutgoingTasks = new Map<string, Promise<void>>();
@@ -718,14 +724,14 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       const friendships = useFriendshipsStore();
       const authorizationReady = await friendships.ensureLoaded(account);
       const conversation = await deriveConversationId([account, peer]);
-      const records = await syncedMessageRepository.listConversationPage(account, conversation, before, 50);
+      const records = await syncedMessageRepository.listConversationPage(account, conversation, before, OLDER_HISTORY_PAGE_SIZE);
       if (useKeyStore().pkHex.toLowerCase() !== account) return { items: [], cursor: before, exhausted: true };
       const items = filterPeerHistoryPage(records.map(syncedMessageRecordToInboxItem), account, friendships.getRecord(peer), this.preferencesByPeer[peer], "older");
       const last = records[0];
       return {
         items,
         cursor: last ? { createdAt: last.createdAt, id: last.id } : before,
-        exhausted: records.length < 50,
+        exhausted: records.length < OLDER_HISTORY_PAGE_SIZE,
         ...(authorizationReady ? {} : { authorizationPending: true }),
       };
     },
