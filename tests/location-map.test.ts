@@ -65,9 +65,10 @@ describe("Worker tile proxy", () => {
       expect(parseTilePath(bad), bad).toBeNull();
     }
     expect(tileRequestAllowed(request("https://hainei-9iv.pages.dev/"))).toBe(true);
-    expect(tileRequestAllowed(request("https://abc123.hainei-9iv.pages.dev/"))).toBe(true);
+    // Preview deployments are built from any branch: not allowed.
+    expect(tileRequestAllowed(request("https://abc123.hainei-9iv.pages.dev/"))).toBe(false);
     expect(tileRequestAllowed(request(undefined, "https://hainei-9iv.pages.dev"))).toBe(true);
-    expect(tileRequestAllowed(request(undefined, "https://abc123.hainei-9iv.pages.dev"))).toBe(true);
+    expect(tileRequestAllowed(request(undefined, "https://abc123.hainei-9iv.pages.dev"))).toBe(false);
     expect(tileRequestAllowed(request("https://localhost/"))).toBe(true);
     expect(tileRequestAllowed(request("https://evil.example/"))).toBe(false);
     expect(tileRequestAllowed(request("https://hainei-9iv.pages.dev.evil.example/"))).toBe(false);

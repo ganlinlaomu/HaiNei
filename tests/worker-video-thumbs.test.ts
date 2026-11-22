@@ -58,6 +58,40 @@ describe("Worker /api/video-thumb", () => {
     expect(cache.store.size).toBe(0);
   });
 
+  it("只接受位图类型，SVG 等一律拒绝", async () => {
+    const path = "/api/video-thumb/youtube/M7lc1UVf-VE.jpg";
+    for (const type of ["image/svg+xml", "text/html", "image/jpeg-but-not"]) {
+      const upstream = vi.fn(async () => new Response("<svg onload=alert(1)>", { headers: { "Content-Type": type } }));
+      expect((await handleVideoThumbRequest(request(path), path, { fetchUpstream: upstream, cache: new MemoryCache() })).status).toBe(404);
+    }
+    const png = vi.fn(async () => new Response(new Uint8Array([0x89, 0x50]), { headers: { "Content-Type": "image/PNG; charset=binary" } }));
+    const ok = await handleVideoThumbRequest(request(path), path, { fetchUpstream: png, cache: new MemoryCache() });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("Content-Type")).toBe("image/png");
+    expect(ok.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  it("没有 Content-Length 时也按实际大小限制 2MB", async () => {
+    const path = "/api/video-thumb/youtube/M7lc1UVf-VE.jpg";
+    const big = () => new Response(new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < 3; i++) controller.enqueue(new Uint8Array(1024 * 1024));
+        controller.close();
+      },
+    }), { headers: { "Content-Type": "image/jpeg" } });
+    const cache = new MemoryCache();
+    expect((await handleVideoThumbRequest(request(path), path, { fetchUpstream: vi.fn(async () => big()), cache })).status).toBe(404);
+    expect(cache.store.size).toBe(0);
+  });
+
+  it("旧缓存里类型不对的条目按 jpeg 返回", async () => {
+    const path = "/api/video-thumb/youtube/M7lc1UVf-VE.jpg";
+    const cache = new MemoryCache();
+    await cache.put(new Request("https://video-thumb.hainei.invalid/youtube/M7lc1UVf-VE.jpg"), new Response("x", { headers: { "Content-Type": "image/svg+xml" } }));
+    const response = await handleVideoThumbRequest(request(path), path, { fetchUpstream: vi.fn(), cache });
+    expect(response.headers.get("Content-Type")).toBe("image/jpeg");
+  });
+
   it("只允许 HaiNei 页面，id 必须合法", async () => {
     const upstream = vi.fn();
     const path = "/api/video-thumb/youtube/M7lc1UVf-VE.jpg";
