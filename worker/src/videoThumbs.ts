@@ -10,6 +10,35 @@ const THUMB_PATH = /^\/api\/video-thumb\/(youtube|vimeo)\/([A-Za-z0-9_-]{1,20})\
 const EDGE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const BROWSER_TTL_SECONDS = 24 * 60 * 60;
 const MAX_BYTES = 2 * 1024 * 1024;
+// Raster types only: an upstream SVG would run as a document on this origin.
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+function imageType(value: string | null) {
+  const type = (value || "").split(";")[0].trim().toLowerCase();
+  return IMAGE_TYPES.has(type) ? type : "";
+}
+
+/** The body, or null once it exceeds `limit` (Content-Length may be absent or wrong). */
+async function readLimited(body: ReadableStream<Uint8Array> | null, limit: number) {
+  if (!body) return null;
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
 const USER_AGENT = "HaiNei/1.0 (private messaging app video preview; +https://hainei-9iv.pages.dev; admin@hainei.app)";
 
 type ThumbDeps = {
@@ -58,10 +87,12 @@ export async function handleVideoThumbRequest(request: Request, path: string, de
     const imageUrl = await upstreamImageUrl(thumb.provider, thumb.id, fetchUpstream);
     if (!imageUrl) return missing();
     const upstream = await fetchUpstream(imageUrl, { headers: { "User-Agent": USER_AGENT, Accept: "image/jpeg,image/*" } });
-    const type = upstream.headers.get("Content-Type") || "";
+    const type = imageType(upstream.headers.get("Content-Type"));
     const length = Number(upstream.headers.get("Content-Length") || 0);
-    if (!upstream.ok || !type.startsWith("image/") || length > MAX_BYTES) return missing();
-    const response = new Response(upstream.body, {
+    if (!upstream.ok || !type || length > MAX_BYTES) return missing();
+    const bytes = await readLimited(upstream.body, MAX_BYTES);
+    if (!bytes) return missing();
+    const response = new Response(bytes, {
       status: 200,
       headers: { "Content-Type": type, "Cache-Control": `public, max-age=${EDGE_TTL_SECONDS}` },
     });
@@ -76,7 +107,9 @@ function withClientHeaders(response: Response) {
   return new Response(response.body, {
     status: 200,
     headers: {
-      "Content-Type": response.headers.get("Content-Type") || "image/jpeg",
+      // Edge entries cached before the type check may carry any type.
+      "Content-Type": imageType(response.headers.get("Content-Type")) || "image/jpeg",
+      "X-Content-Type-Options": "nosniff",
       "Cache-Control": `private, max-age=${BROWSER_TTL_SECONDS}`,
       "Access-Control-Allow-Origin": "*",
       "Cross-Origin-Resource-Policy": "cross-origin",

@@ -14,7 +14,9 @@ const UPSTREAM = "https://tile.openstreetmap.org";
 // The OSM tile policy requires an identifying User-Agent with contact info.
 const USER_AGENT = "HaiNei/1.0 (private messaging app location map; +https://hainei-9iv.pages.dev; admin@hainei.app)";
 
-const ALLOWED_ORIGIN = /^(https:\/\/([a-z0-9-]+\.)?hainei-9iv\.pages\.dev|https?:\/\/localhost(:\d+)?|http:\/\/127\.0\.0\.1(:\d+)?)$/;
+// The production site only: preview deployments (<hash>.hainei-9iv.pages.dev)
+// are built from any branch. https://localhost is also the Android app.
+const ALLOWED_ORIGIN = /^(https:\/\/hainei-9iv\.pages\.dev|https?:\/\/localhost(:\d+)?|http:\/\/127\.0\.0\.1(:\d+)?)$/;
 
 export function isTilePath(path: string) {
   return path.startsWith("/tiles/");
