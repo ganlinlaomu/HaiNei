@@ -21,10 +21,12 @@ import type { EventTemplate, VerifiedEvent } from "nostr-tools/core";
 import {
   encryptPrivateKey,
   decryptPrivateKey,
+  needsKdfUpgrade,
   storeEncryptedKey,
   retrieveEncryptedKey,
   removeEncryptedKey,
-  hasEncryptedKey
+  hasEncryptedKey,
+  type EncryptedData,
 } from "@/utils/crypto";
 import { debugLog, startupMark } from "@/utils/debugLog";
 import { clearAccountScopedCaches } from "@/services/nostrCache";
@@ -83,6 +85,27 @@ let biometricUnlockFlight: { account: string; promise: Promise<void> } | null = 
 const remoteSignerReconnectFlights = new Map<string, Promise<boolean>>();
 const remoteSignerLastReconnectAt = new Map<string, number>();
 const REMOTE_SIGNER_PREWARM_COOLDOWN_MS = 15_000;
+
+/**
+ * Re-encrypt a password-protected key written with fewer PBKDF2 rounds.
+ * Writes only if the stored record is still the one just unlocked: a
+ * password change or a switch to device mode in the meantime wins.
+ */
+async function upgradeEncryptedKey(pubkey: string, skHex: string, password: string, unlocked: EncryptedData) {
+  try {
+    const upgraded = await encryptPrivateKey(skHex, password);
+    const current = retrieveEncryptedKey(pubkey);
+    if (!current || current.ciphertext !== unlocked.ciphertext || current.salt !== unlocked.salt || current.iv !== unlocked.iv) {
+      debugLog("account", "kdf_upgrade_skipped", { reason: current ? "record_changed" : "record_removed" }, "info");
+      return;
+    }
+    await storeEncryptedKey(pubkey, upgraded);
+    debugLog("account", "kdf_upgraded", { from: unlocked.iterations ?? null, to: upgraded.iterations }, "info");
+  } catch (error) {
+    // The old record still unlocks; the next unlock tries again.
+    debugLog("account", "kdf_upgrade_failed", { reason: error instanceof Error ? error.name : "unknown" }, "warn");
+  }
+}
 
 async function safeGetPublicKey(skHex: string): Promise<string> {
   return nostr.getPublicKey(nostr.utils.hexToBytes(skHex));
@@ -1085,6 +1108,8 @@ export const useKeyStore = defineStore("keys", {
         this.loginTimestamp = Math.floor(Date.now() / 1000);
         await this.persistActiveSession();
         await this.rememberCurrentAccount();
+        // Off the unlock path: a weaker older record is re-encrypted once.
+        if (needsKdfUpgrade(encrypted)) void upgradeEncryptedKey(pk, skHex, password, encrypted);
 
         await this.loadAccountStores(this.pkHex);
       } catch (e: any) {

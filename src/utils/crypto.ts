@@ -4,7 +4,17 @@
  */
 import { deviceStorage, putDeviceValue, removeDeviceValue } from "@/services/deviceStorage";
 
-const PBKDF2_ITERATIONS = 100000;
+/** OWASP's PBKDF2-HMAC-SHA256 guidance; same as the recovery backup. */
+export const PBKDF2_ITERATIONS = 600_000;
+/**
+ * What records written before this constant was stored as a field used.
+ * A record without `iterations` must keep decrypting with this, not with
+ * the current default.
+ */
+const LEGACY_PBKDF2_ITERATIONS = 100_000;
+// A tampered record must not make unlock hang or run a trivial derivation.
+const MIN_PBKDF2_ITERATIONS = 10_000;
+const MAX_PBKDF2_ITERATIONS = 5_000_000;
 const SALT_LENGTH = 16;
 const IV_LENGTH = 12;
 
@@ -135,7 +145,7 @@ export async function decryptPrivateKey(
   const ciphertext = base64ToArray(encrypted.ciphertext);
 
   // Derive decryption key from password
-  const key = await deriveKey(password, salt, encrypted.iterations || PBKDF2_ITERATIONS);
+  const key = await deriveKey(password, salt, storedIterations(encrypted));
 
   // Decrypt the data
   try {
@@ -150,6 +160,19 @@ export async function decryptPrivateKey(
   } catch (e) {
     throw new Error("解密失败：密码错误或数据损坏");
   }
+}
+
+function storedIterations(encrypted: EncryptedData) {
+  const iterations = encrypted.iterations ?? LEGACY_PBKDF2_ITERATIONS;
+  if (!Number.isSafeInteger(iterations) || iterations < MIN_PBKDF2_ITERATIONS || iterations > MAX_PBKDF2_ITERATIONS) {
+    throw new Error("解密失败：密码错误或数据损坏");
+  }
+  return iterations;
+}
+
+/** True when a record was written with fewer rounds than new ones get. */
+export function needsKdfUpgrade(encrypted: EncryptedData) {
+  return (encrypted.iterations ?? LEGACY_PBKDF2_ITERATIONS) < PBKDF2_ITERATIONS;
 }
 
 /**
