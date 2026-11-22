@@ -22,6 +22,34 @@ describe("local debug logs", () => {
     expect(store.entries).toEqual([]);
   });
 
+  it("keeps info and above apart, so a flood of debug lines cannot push summaries out", () => {
+    const store = useDebugLogsStore();
+    vi.spyOn(logger, "info").mockImplementation(() => {});
+    vi.spyOn(logger, "warn").mockImplementation(() => {});
+    store.add({ category: "sync", event: "friend_history_rescan", level: "info", ts: 1 });
+    store.add({ category: "sync", event: "catchup_failed", level: "warn", ts: 2 });
+    for (let index = 0; index < 5_000; index += 1) {
+      store.add({ category: "sync", event: "decode_success", level: "debug", ts: 10 + index });
+    }
+    // The main buffer has only the debug flood now…
+    expect(store.entries.some(entry => entry.event === "friend_history_rescan")).toBe(false);
+    // …while the summary still holds both, and no debug line.
+    expect(store.summaryEntries().map(entry => entry.event)).toEqual(["friend_history_rescan", "catchup_failed"]);
+  });
+
+  it("caps the summary at its newest 1000 entries and clears it with the rest", () => {
+    const store = useDebugLogsStore();
+    vi.spyOn(logger, "info").mockImplementation(() => {});
+    for (let index = 0; index < 1_300; index += 1) {
+      store.add({ category: "system", event: `info-${index}`, level: "info", ts: index });
+    }
+    const summary = store.summaryEntries();
+    expect(summary).toHaveLength(1000);
+    expect(summary[0].event).toBe("info-300");
+    store.clear();
+    expect(store.summaryEntries()).toEqual([]);
+  });
+
   it("redacts secrets and truncates identifiers before storage and console", () => {
     debugLog("nip17", "decode_failed", {
       eventId: "e".repeat(64),
