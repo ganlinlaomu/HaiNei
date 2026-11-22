@@ -600,9 +600,17 @@ const sourceFocusReadSuppressed = ref(false);
 const draft = ref("");
 const replyingToId = ref("");
 const draftReplyMessage = ref<InboxItem | undefined>();
-const lookupMessage = (id?: string) => id
-  ? messages.value.find(message => message.id === id) || searchContextMessages.value.find(message => message.id === id)
-  : undefined;
+// Quoted replies look their target up while rendering, up to three times a
+// row; a linear scan of the whole conversation per lookup grew with the
+// rendered window. One index per change of either list instead.
+const messageById = computed(() => {
+  const byId = new Map<string, InboxItem>();
+  for (const message of searchContextMessages.value) byId.set(message.id, message);
+  // The conversation wins over a search-context copy of the same message.
+  for (const message of messages.value) byId.set(message.id, message);
+  return byId;
+});
+const lookupMessage = (id?: string) => id ? messageById.value.get(id) : undefined;
 const replyingToMessage = computed(() => lookupMessage(replyingToId.value) || (draftReplyMessage.value?.id === replyingToId.value ? draftReplyMessage.value : undefined));
 const { scheduleDraftSave, flushDraft, pauseDraftPersistence, restoreDraft, clearAfterSend } = useDmDraft({
   account: () => keys.pkHex,

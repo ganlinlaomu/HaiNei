@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, ref } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import type { InboxItem } from "@/stores/messages";
-import { MAX_RENDERED_MESSAGES, SCROLL_IDLE_MS, useChatMessageWindow } from "@/composables/useChatMessageWindow";
+import { MAX_RENDERED_MESSAGES, OLDER_INSERT_SCREENS, OLDER_MESSAGE_BATCH, SCROLL_IDLE_MS, useChatMessageWindow } from "@/composables/useChatMessageWindow";
 
 // happy-dom has no layout. Model a chat list 500px tall whose rows are all
 // 50px, so scroll metrics and row positions follow from the rendered rows.
@@ -128,15 +128,16 @@ describe("聊天消息窗口", () => {
     const t = setup(range(0, 80));
     t.api.setMessageListToBottom();
     await settle();
-    await t.scrollTo(1_000);
-    const topBefore = t.rowTop("m0040");
+    // Further than OLDER_INSERT_SCREENS from the top: nothing is inserted above.
+    await t.scrollTo(2_000);
+    const topBefore = t.rowTop("m0060");
     t.markRead.mockClear();
 
     t.messages.value = [...t.messages.value, item(80), item(81)];
     await settle();
 
-    expect(t.list.scrollTop).toBe(1_000);
-    expect(t.rowTop("m0040")).toBe(topBefore);
+    expect(t.list.scrollTop).toBe(2_000);
+    expect(t.rowTop("m0060")).toBe(topBefore);
     expect(t.api.showJumpToLatest.value).toBe(true);
     expect(t.api.pendingTailCount.value).toBe(2);
     expect(t.markRead).not.toHaveBeenCalled();
@@ -150,9 +151,25 @@ describe("聊天消息窗口", () => {
     const topRow = t.rendered()[2]!;
     await t.scrollTo(2 * ROW);
 
-    expect(t.rendered()[0]).toBe("m0200");
+    // The 60 newest were rendered; one batch of older rows went in above.
+    expect(t.rendered()[0]).toBe(`m${String(300 - 60 - OLDER_MESSAGE_BATCH).padStart(4, "0")}`);
     expect(t.rowTop(topRow)).toBeCloseTo(0);
     expect(t.rendered().length).toBeLessThanOrEqual(MAX_RENDERED_MESSAGES);
+  });
+
+  it("离顶部还有三屏以内就插入更早的消息，不用等撞到顶部，正在看的那一行不跳", async () => {
+    const t = setup(range(0, 600));
+    t.api.setMessageListToBottom();
+    await settle();
+    // 60 rows rendered (3000px). At 1400px the 29th row is at the list top,
+    // with ~3 screens of content still above it.
+    const seen = t.rendered()[28]!;
+    await t.scrollTo(1_400);
+
+    // Inserted without reaching the top; the row being read did not move.
+    expect(t.rendered()).toHaveLength(60 + OLDER_MESSAGE_BATCH);
+    expect(t.rendered()[0]).toBe(`m${String(600 - 60 - OLDER_MESSAGE_BATCH).padStart(4, "0")}`);
+    expect(t.rowTop(seen)).toBeCloseTo(0);
   });
 
   it("已经到本地最早一条时，滚到顶部会去拉历史，拉回来后位置不跳", async () => {
@@ -169,14 +186,17 @@ describe("聊天消息窗口", () => {
     expect(t.rendered().length).toBeLessThanOrEqual(MAX_RENDERED_MESSAGES);
   });
 
-  it("离顶部还有两屏时就提前读下一页，滚到顶部时直接插入，不再重复读取", async () => {
-    const t = setup(range(100, 130), { exhausted: false, older: range(0, 100) });
+  it("离顶部还有几屏时就提前读下一页，接近顶部时直接插入，不再重复读取", async () => {
+    // 60 rows (3000px) all rendered, so the next rows come from history.
+    const t = setup(range(100, 160), { exhausted: false, older: range(0, 100) });
     t.api.setMessageListToBottom();
     await settle();
 
-    await t.scrollTo(ROW * 16);
+    // Within the prefetch distance, but further than OLDER_INSERT_SCREENS.
+    expect(2_000).toBeGreaterThan(VIEWPORT * OLDER_INSERT_SCREENS);
+    await t.scrollTo(2_000);
     expect(t.fetchOlderPage).toHaveBeenCalledOnce();
-    // Read ahead only: nothing is inserted until the reader reaches the top.
+    // Read ahead only: nothing is inserted yet.
     expect(t.rendered()).not.toContain("m0099");
 
     await t.scrollTo(ROW);
@@ -278,7 +298,8 @@ describe("聊天消息窗口", () => {
   });
 
   it("跳到某条消息时把它周围的消息渲染出来", async () => {
-    const t = setup(range(0, 300));
+    // Longer than the render cap, so the tail is outside the focused window.
+    const t = setup(range(0, MAX_RENDERED_MESSAGES * 2 + 100));
     t.api.setMessageListToBottom();
     await settle();
 

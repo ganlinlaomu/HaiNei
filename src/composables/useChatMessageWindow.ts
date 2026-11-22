@@ -14,9 +14,17 @@ import {
 } from "@/utils/messageWindow";
 
 export const INITIAL_MESSAGE_COUNT = 60;
-export const OLDER_MESSAGE_BATCH = 40;
-export const MAX_RENDERED_MESSAGES = 100;
+/**
+ * Older rows go in above the reader only once scrolling is idle (iOS, below),
+ * so each insertion is a pause. Few, large batches inserted while there is
+ * still plenty to scroll keep a fling from running into the top: 100 rows in
+ * batches of 40, inserted only at the very top, felt like loading page by page.
+ */
+export const OLDER_MESSAGE_BATCH = 120;
+export const MAX_RENDERED_MESSAGES = 300;
 export const TOP_LOAD_THRESHOLD = 120;
+/** Insert older rows while the reader is still this many screens from the top. */
+export const OLDER_INSERT_SCREENS = 3;
 /**
  * iOS ignores (or momentum overwrites) a scrollTop set while the list is
  * still scrolling. Older rows inserted then left the list at the top of the
@@ -28,7 +36,7 @@ export const SCROLL_IDLE_MS = 150;
  * Start reading the next older page while the reader is still this many
  * screens from the top, so reaching the top does not wait on the local DB.
  */
-export const OLDER_PREFETCH_SCREENS = 2;
+export const OLDER_PREFETCH_SCREENS = 6;
 export const BOTTOM_FOLLOW_THRESHOLD = 120;
 
 /**
@@ -245,7 +253,9 @@ export function useChatMessageWindow(options: {
           waitedMs,
           idleMs,
           applyMs: Math.round(now() - startedAt) - waitedMs - idleMs,
-        });
+          // How close to the top the reader was: near 0 means a fling hit it.
+          screensFromTop: list.clientHeight ? Math.round((anchor?.scrollTop ?? list.scrollTop) / list.clientHeight * 10) / 10 : null,
+        }, "info");
       }
     } finally {
       windowMutationInProgress = false;
@@ -329,7 +339,7 @@ export function useChatMessageWindow(options: {
       return;
     }
 
-    if (list.scrollTop <= TOP_LOAD_THRESHOLD) void prependOlderMessages();
+    if (list.scrollTop <= Math.max(TOP_LOAD_THRESHOLD, list.clientHeight * OLDER_INSERT_SCREENS)) void prependOlderMessages();
     else if (windowStart.value === 0 && list.scrollTop <= list.clientHeight * OLDER_PREFETCH_SCREENS) prefetchOlderPage();
     const metrics = scrollMetrics(list);
     const nearBottom = isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD);
