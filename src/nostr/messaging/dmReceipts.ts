@@ -32,7 +32,9 @@ export function isDmReceiptMessage(message: Pick<CanonicalMessage, "tags">) {
 }
 
 export function decodeDmReceiptPayload(plaintext: string | undefined): DmReceiptPayload | null {
-  if (!plaintext) return null;
+  // Only a JSON object can pass the type check below; plain text would make
+  // JSON.parse throw, and that exception is the costly part of a chat render.
+  if (!plaintext || !plaintext.trimStart().startsWith("{")) return null;
   try {
     const parsed = JSON.parse(plaintext) as Partial<DmReceiptPayload>;
     if (parsed.type !== DM_RECEIPT_TYPE || (parsed.status !== "delivered" && parsed.status !== "read")) return null;

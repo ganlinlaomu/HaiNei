@@ -19,7 +19,9 @@ export function serializeBurnControl(messageId: string) {
 /** Recognize historical control payloads even when their tags were lost on
  * local restore. Detection does not authorize a deletion operation. */
 export function decodeBurnControlPayload(plaintext?: string): string | null {
-  if (!plaintext) return null;
+  // Only a JSON object can pass the type check below; plain text would make
+  // JSON.parse throw, and that exception is the costly part of a chat render.
+  if (!plaintext || !plaintext.trimStart().startsWith("{")) return null;
   try {
     const obj = JSON.parse(plaintext) as { type?: unknown; messageId?: unknown } | null;
     if (!obj || obj.type !== DM_BURN_CONTROL_TYPE || typeof obj.messageId !== "string" || !ID.test(obj.messageId)) return null;

@@ -415,6 +415,7 @@ import DmFileMessage from "@/components/DmFileMessage.vue";
 import { formatDmFileSize, MAX_DM_FILE_BYTES, parsePrivateFileMessage } from "@/nostr/messaging/privateFile";
 import { takePendingShare } from "@/services/shareTarget";
 import { onAccountMessageSyncStatus } from "@/services/accountMessageSync";
+import { memoByContent } from "@/utils/memoByContent";
 const VideoPlayer = defineAsyncComponent(() => import("@/components/VideoPlayer.vue"));
 import DmBurnCountdown from "@/components/DmBurnCountdown.vue";
 import ProfileAvatar from "@/components/ProfileAvatar.vue";
@@ -794,10 +795,20 @@ let disposed = false;
 let composerFocused = false;
 let composerFocusSettleTimer: number | null = null;
 
-const hasImage = (content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content);
-const messageText = (content: string) => parsePrivateFileMessage(content) ? "" : ["[图片]", "[语音]", "[视频]", "[好友推荐]", "[位置]"].includes(directMessagePreview(content)) ? "" : directMessagePreview(content);
-const friendRecommendation = parseFriendRecommendation;
-const locationShare = parseLocationShare;
+// Each row derives its kind and text from its content several times per
+// render; content is immutable per string, so every parse is cached by it
+// (memoByContent). Returned objects are shared: treat them as read-only.
+const hasImage = memoByContent((content: string) => /!\[[^\]]*?\]\(\s*(?:https?:\/\/|blossom\+aesgcm:)[^\s)]+\s*\)/i.test(content));
+const parseFileContent = memoByContent(parsePrivateFileMessage);
+const parseAudioContent = memoByContent(parsePrivateAudioMessage);
+const parseVideoContent = memoByContent(parsePrivateVideoMessage);
+const messageText = memoByContent((content: string) => {
+  if (parseFileContent(content)) return "";
+  const preview = directMessagePreview(content);
+  return ["[图片]", "[语音]", "[视频]", "[好友推荐]", "[位置]"].includes(preview) ? "" : preview;
+});
+const friendRecommendation = memoByContent(parseFriendRecommendation);
+const locationShare = memoByContent(parseLocationShare);
 const locationSheetOpen = ref(false);
 const liveLocation = useLiveLocationStore();
 const {
@@ -821,11 +832,11 @@ const {
   startLiveSharing: (peer, durationSeconds, location) => liveLocation.startSharing(peer, durationSeconds, location),
   notify: (message, durationMs, kind) => ui.addToast(message, durationMs, kind),
 });
-const audioMedia = (message: InboxItem) => parsePrivateAudioMessage(message.content)?.media || null;
+const audioMedia = (message: InboxItem) => parseAudioContent(message.content)?.media || null;
 const hasAudio = (message: InboxItem) => !!message.outgoing?.hasAudio || !!audioMedia(message);
-const videoMedia = (message: InboxItem) => parsePrivateVideoMessage(message.content)?.media || null;
+const videoMedia = (message: InboxItem) => parseVideoContent(message.content)?.media || null;
 const hasVideo = (message: InboxItem) => !!message.outgoing?.hasVideo || !!videoMedia(message);
-const fileMedia = (message: InboxItem) => parsePrivateFileMessage(message.content)?.media || null;
+const fileMedia = (message: InboxItem) => parseFileContent(message.content)?.media || null;
 const hasFile = (message: InboxItem) => !!message.outgoing?.hasFile || !!fileMedia(message);
 const dmVideoData = (media: PrivateVideoMedia): VideoData => ({ type: "video", url: media.encryptedRef, provider: "Encrypted", embedUrl: media.encryptedRef });
 const hasMessageImage = (message: InboxItem) => !!message.outgoing?.imagePreviewUrl || hasImage(message.content);
@@ -1045,15 +1056,18 @@ function showWindowTimestamp(index: number) {
   const previous = windowMessages.value[index - 1];
   return !previous || current.created_at - previous.created_at > 900;
 }
+// One formatter each: toLocale*String builds a new Intl formatter per call,
+// which was ~0.5 s per insertion of older rows. Same options, same output.
+const messageTimeFormat = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const bubbleTimeFormat = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" });
 function formatMessageTime(timestamp: number) {
-  const date = new Date(timestamp * 1000);
-  return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return messageTimeFormat.format(new Date(timestamp * 1000));
 }
 function formatBubbleTime(timestamp: number) {
-  return new Date(timestamp * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  return bubbleTimeFormat.format(new Date(timestamp * 1000));
 }
 function formatSearchTime(timestamp: number) {
-  return new Date(timestamp * 1000).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return messageTimeFormat.format(new Date(timestamp * 1000));
 }
 function openSearch() {
   textInput.value?.blur();

@@ -2,6 +2,21 @@ import { DM_RECEIPT_TYPE, isDmReceiptPayload } from "./dmReceipts";
 import { DM_BURN_CONTROL_TYPE, isBurnControlPayload } from "./dmBurnControl";
 import { CALL_CONTROL_TYPE, CALL_LOG_TYPE, isCallPayload } from "./callControl";
 import { LIVE_LOCATION_CONTROL_TYPE } from "./locationShare";
+import { memoByContent } from "@/utils/memoByContent";
+
+// Every chat render re-classifies the whole loaded history; these three
+// content parsers dominated it. They are pure functions of the content.
+// Sized above a long loaded history: the whole list is classified in one
+// pass, and a first-in-first-out cache smaller than it would miss every time.
+// Values are booleans; the content strings are held by the messages anyway.
+const ROUTING_CACHE_CAPACITY = 20_000;
+const receiptContent = memoByContent((content: string) => isDmReceiptPayload(content), ROUTING_CACHE_CAPACITY);
+const burnContent = memoByContent((content: string) => isBurnControlPayload(content), ROUTING_CACHE_CAPACITY);
+const callContent = memoByContent((content: string) => isCallPayload(content), ROUTING_CACHE_CAPACITY);
+function isControlPayload(content: string | undefined) {
+  if (content === undefined) return isDmReceiptPayload(undefined) || isBurnControlPayload(undefined) || isCallPayload(undefined);
+  return receiptContent(content) || burnContent(content) || callContent(content);
+}
 
 // Until 2026-10-10 18:30 JST, an unmarked NIP-17 rumor was a HaiNei Feed
 // post. Afterwards, newly authored posts have an explicit encrypted tag.
@@ -44,9 +59,7 @@ export function isHomeControl(tags: string[][] | undefined, content?: string) {
     || values.has(`t:${DM_BURN_CONTROL_TYPE}`)
     || values.has(`t:${CALL_CONTROL_TYPE}`)
     || values.has(`t:${LIVE_LOCATION_CONTROL_TYPE}`)
-    || isDmReceiptPayload(content)
-    || isBurnControlPayload(content)
-    || isCallPayload(content);
+    || isControlPayload(content);
 }
 
 export type MessageRoute = "feed" | "direct" | "control" | "unsupported";

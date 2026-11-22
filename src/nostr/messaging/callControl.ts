@@ -58,7 +58,9 @@ export function serializeCallSignal(signal: CallSignal) {
 }
 
 function parseCallPayload(plaintext?: string): CallSignal | null {
-  if (!plaintext) return null;
+  // Only a JSON object can pass the type check below; plain text would make
+  // JSON.parse throw, and that exception is the costly part of a chat render.
+  if (!plaintext || !plaintext.trimStart().startsWith("{")) return null;
   let value: any;
   try { value = JSON.parse(plaintext); } catch { return null; }
   if (!value || value.type !== CALL_CONTROL_TYPE || !ACTIONS.has(value.action) || !CALL_ID.test(value.callId)) return null;
