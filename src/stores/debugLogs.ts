@@ -31,6 +31,12 @@ const MAX_LOGS = 1000;
 /** Launch milestones are kept apart: a startup history catch-up alone can
  * log a thousand lines within seconds and push them out of the main buffer. */
 const MAX_STARTUP_MARKS = 200;
+/**
+ * info and above, kept apart from per-event debug lines: one sync pass writes
+ * a thousand debug lines in seconds (an export held only 8 s), which pushed
+ * out summaries such as friend_history_rescan and dm_history_page.
+ */
+const MAX_SUMMARY_LOGS = 1000;
 // Trim in chunks so the buffer is not shifted on every append.
 const TRIM_SLACK = 200;
 // Launch milestones and warnings are also saved on the device, so a launch
@@ -52,6 +58,7 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
   let buffer: DebugLogEntry[] = [];
   let startupBuffer: DebugLogEntry[] = [];
   let notableBuffer: DebugLogEntry[] = [];
+  let summaryBuffer: DebugLogEntry[] = [];
   const revision = ref(0);
   const launchStartedAt = Date.now();
   let previousLaunch: unknown = null;
@@ -97,6 +104,10 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
       ...(data ? { data } : {})
     };
     buffer.push(record);
+    if (record.level !== "debug") {
+      summaryBuffer.push(record);
+      if (summaryBuffer.length > MAX_SUMMARY_LOGS + TRIM_SLACK) summaryBuffer = summaryBuffer.slice(-MAX_SUMMARY_LOGS);
+    }
     if (record.event.startsWith("startup_")) {
       startupBuffer.push(record);
       if (startupBuffer.length > MAX_STARTUP_MARKS) startupBuffer = startupBuffer.slice(-MAX_STARTUP_MARKS);
@@ -124,6 +135,11 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
     return startupBuffer.slice();
   }
 
+  /** info, warn and error entries, newest last; survives floods of debug lines. */
+  function summaryEntries() {
+    return summaryBuffer.length > MAX_SUMMARY_LOGS ? summaryBuffer.slice(-MAX_SUMMARY_LOGS) : summaryBuffer.slice();
+  }
+
   /** Periodic "page still responsive" stamp, saved with the launch log. */
   function noteAlive() {
     lastAliveAt = Date.now();
@@ -146,6 +162,7 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
     buffer = [];
     startupBuffer = [];
     notableBuffer = [];
+    summaryBuffer = [];
     revision.value++;
   }
 
@@ -153,5 +170,5 @@ export const useDebugLogsStore = defineStore("debugLogs", () => {
     return JSON.stringify(entries.value, null, 2);
   }
 
-  return { entries, add, addSanitized, clear, exportJson, startupMarks, previousLaunchLog, noteAlive };
+  return { entries, add, addSanitized, clear, exportJson, startupMarks, summaryEntries, previousLaunchLog, noteAlive };
 });
