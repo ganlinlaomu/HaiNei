@@ -44,6 +44,11 @@ export type MessageSyncOptions = {
   onStatus?: (status: SyncStatus) => void;
   /** Distinct from a working realtime connection: history may be incomplete. */
   onCatchupStatus?: (status: "settled" | "pending") => void;
+  /**
+   * The one-time friend history rescan: "running" during a pass, "pending"
+   * between passes or after an interruption, "done" once complete.
+   */
+  onHistoryRescanStatus?: (status: "running" | "pending" | "done") => void;
   /** Relay to catch up from first (the managed relay is far faster to page). */
   preferredCatchupRelay?: () => string;
   /** The preferred relay finished its catch-up window; others may still be paging. */

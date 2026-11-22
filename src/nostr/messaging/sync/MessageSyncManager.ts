@@ -918,10 +918,16 @@ export class MessageSyncManager {
     const saved = state.friendHistoryRescanUntilByRelay;
     // A relay missing from a saved cursor map already reached its end.
     const relays = saved ? options.relays.filter(url => typeof saved[url] === "number") : options.relays;
-    const finish = () => this.repository.updateSyncState(accountPubkey, {
-      friendHistoryRescanVersion: FRIEND_HISTORY_RESCAN_VERSION,
-      friendHistoryRescanUntilByRelay: undefined,
-    });
+    const report = (status: "running" | "pending" | "done") => {
+      if (this.isCurrent(sessionId, accountPubkey)) options.onHistoryRescanStatus?.(status);
+    };
+    const finish = async () => {
+      await this.repository.updateSyncState(accountPubkey, {
+        friendHistoryRescanVersion: FRIEND_HISTORY_RESCAN_VERSION,
+        friendHistoryRescanUntilByRelay: undefined,
+      });
+      report("done");
+    };
     if (!relays.length) { await finish(); return; }
 
     const controller = new AbortController();
@@ -929,6 +935,7 @@ export class MessageSyncManager {
     this.rescanSessionId = sessionId;
     const started = this.now();
     let processed = 0;
+    report("running");
     try {
       const filters = buildMessageSubscriptions(accountPubkey, options.authors, 0, nowSeconds)
         .map(filter => ({ ...filter, limit: CATCHUP_PAGE_LIMIT }));
@@ -954,6 +961,7 @@ export class MessageSyncManager {
       if (controller.signal.aborted || !this.isCurrent(sessionId, accountPubkey)) {
         // Backgrounded mid-pass: the next foreground catch-up starts it again.
         if (this.rescanSessionId === sessionId) this.rescanSessionId = "";
+        report("pending");
         return;
       }
       const cursors: Record<string, number> = {};
@@ -968,7 +976,10 @@ export class MessageSyncManager {
       }
       const done = Object.keys(cursors).length === 0;
       if (done) await finish();
-      else await this.repository.updateSyncState(accountPubkey, { friendHistoryRescanUntilByRelay: cursors });
+      else {
+        await this.repository.updateSyncState(accountPubkey, { friendHistoryRescanUntilByRelay: cursors });
+        report("pending");
+      }
       debugLog("sync", "friend_history_rescan", {
         relays: relays.length, received: result.received, unique: result.unique,
         remainingRelays: Object.keys(cursors).length, done, durationMs: this.now() - started,
@@ -982,6 +993,7 @@ export class MessageSyncManager {
       }
     } catch (error) {
       debugLog("sync", "friend_history_rescan_failed", describeError(error), "warn");
+      report("pending");
     } finally {
       if (this.rescanAbortController === controller) this.rescanAbortController = null;
     }
