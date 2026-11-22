@@ -24,16 +24,15 @@ describe("System Settings status UX", () => {
     expect(source).toContain("void refreshDiagnostics()");
   });
 
-  it("explains the DM inbox in plain words and keeps protocol details on the Debug page", () => {
+  it("has no DM inbox card (kind 10050 is legacy-only) and keeps protocol details on the Debug page", () => {
     // Every user-facing settings template except the Diagnostics section.
     const settingsDir = join(process.cwd(), "src/views/settings");
     const templateOf = (path: string) => { const text = readFileSync(path, "utf8"); return text.slice(0, text.indexOf("</template>")); };
     const settingsTemplate = [join(process.cwd(), "src/views/SystemSettings.vue"),
       ...readdirSync(settingsDir).filter(name => name.endsWith(".vue") && name !== "DiagnosticsSection.vue").map(name => join(settingsDir, name))]
       .map(templateOf).join("\n");
-    expect(settingsTemplate).toContain("<div class=\"item-url\">收信地址</div>");
-    expect(settingsTemplate).toContain("私信始终经海内自带的服务器收发，你添加的服务器也会一起用。好友也添加了同一个服务器时，你们才能经它互通。");
-    expect(source).toContain("getOwnDmRelayStatus(account)");
+    expect(settingsTemplate).not.toContain("收信地址");
+    expect(source).not.toContain("getOwnDmRelayStatus");
     for (const jargon of ["kind 10050", "NIP-17", "NIP-65", "公共目录"]) {
       expect(settingsTemplate, jargon).not.toContain(jargon);
     }

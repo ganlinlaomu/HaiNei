@@ -2,7 +2,6 @@ import { computed, reactive } from "vue";
 import { inspectRelays, onRelayConnectionState, type RelayRuntimeStatus } from "@/nostr/relays";
 import { outgoingQueueRepository } from "@/repositories/outgoingQueueRepository";
 import { syncedMessageRepository } from "@/repositories/syncedMessageRepository";
-import { getOwnDmRelayStatus } from "@/services/dmRelayDirectory";
 import { useKeyStore } from "@/stores/keys";
 import { useSettingsStore } from "@/stores/settings";
 import { formatRelativeTimestamp } from "./settingsFormat";
@@ -32,28 +31,8 @@ export function useRelayRuntimeStatus() {
     lastCatchupCompletedAt: 0,
     pendingOutgoing: 0,
   });
-  const dmRelayStatus = reactive<{
-    relays: string[];
-    eventId?: string;
-    publishedAt?: number;
-    pending: boolean;
-    attempts: number;
-    lastError?: string;
-  }>({ relays: [], pending: false, attempts: 0 });
   const enabledRelayCount = computed(() => relayList.value.filter(relay => relay.enabled).length);
   const connectedRelayCount = computed(() => relayList.value.filter(relay => relay.enabled && statuses[relay.url]?.state === "connected").length);
-  const dmRelayStatusLabel = computed(() =>
-    dmRelayStatus.pending
-      ? "稍后自动重试"
-      : dmRelayStatus.publishedAt
-        ? "已就绪"
-        : "正在设置"
-  );
-  const dmRelayStatusTone = computed(() => ({
-    healthy: !!dmRelayStatus.publishedAt && !dmRelayStatus.pending,
-    pending: dmRelayStatus.pending || !dmRelayStatus.publishedAt,
-    failed: !!dmRelayStatus.lastError && dmRelayStatus.pending,
-  }));
   const syncStatusLabel = computed(() => syncStatusText(diagnostics.syncStatus));
   const lastCatchupLabel = computed(() => diagnostics.lastCatchupCompletedAt
     ? formatRelativeTimestamp(diagnostics.lastCatchupCompletedAt)
@@ -64,12 +43,8 @@ export function useRelayRuntimeStatus() {
   let statusInterval: ReturnType<typeof setInterval> | null = null;
   let statusUnsubscribe: (() => void) | null = null;
 
-  function resetDmRelayStatus() {
-    Object.assign(dmRelayStatus, { relays: [], eventId: undefined, publishedAt: undefined, pending: false, attempts: 0, lastError: undefined });
-  }
   /** Forget the previous account's runtime state (signed out: everything). */
   function resetRuntimeStatus(signedOut: boolean) {
-    resetDmRelayStatus();
     if (!signedOut) return;
     for (const url of Object.keys(statuses)) delete statuses[url];
     Object.assign(diagnostics, { syncStatus: "idle", lastCatchupCompletedAt: 0, pendingOutgoing: 0 });
@@ -79,20 +54,17 @@ export function useRelayRuntimeStatus() {
     const account = keyStore.pkHex;
     if (!account) {
       Object.assign(diagnostics, { syncStatus: "idle", lastCatchupCompletedAt: 0, pendingOutgoing: 0 });
-      resetDmRelayStatus();
       return;
     }
     try {
-      const [syncState, pending, ownDmRelays] = await Promise.all([
+      const [syncState, pending] = await Promise.all([
         syncedMessageRepository.getSyncState(account),
         outgoingQueueRepository.listRetryable(account, true),
-        getOwnDmRelayStatus(account).catch(() => null),
       ]);
       if (keyStore.pkHex !== account) return;
       diagnostics.syncStatus = syncState.status || "idle";
       diagnostics.lastCatchupCompletedAt = syncState.lastCatchupCompletedAt || 0;
       diagnostics.pendingOutgoing = pending.length;
-      if (ownDmRelays) Object.assign(dmRelayStatus, ownDmRelays);
     } catch {
       if (keyStore.pkHex === account) diagnostics.syncStatus = "error";
     }
@@ -137,8 +109,6 @@ export function useRelayRuntimeStatus() {
     diagnostics,
     enabledRelayCount,
     connectedRelayCount,
-    dmRelayStatusLabel,
-    dmRelayStatusTone,
     syncStatusLabel,
     lastCatchupLabel,
     diagnosticsSummary,
