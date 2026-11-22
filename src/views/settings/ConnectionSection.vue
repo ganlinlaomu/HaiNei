@@ -13,19 +13,6 @@
     </summary>
     <p class="section-detail">海内自带的服务器始终开启，保证你和好友之间至少有一条共同的通道；也可以添加自己的服务器作为备用。</p>
 
-    <article class="item-card dm-relay-card">
-      <div class="item-header">
-        <div class="item-main">
-          <div class="item-url">收信地址</div>
-          <div class="meta-row">
-            <span class="pill" :class="dmRelayStatusTone">{{ dmRelayStatusLabel }}</span>
-          </div>
-        </div>
-      </div>
-      <p class="dm-relay-copy">私信始终经海内自带的服务器收发，你添加的服务器也会一起用。好友也添加了同一个服务器时，你们才能经它互通。</p>
-      <button class="text-button" type="button" @click="router.push('/debug')">查看技术详情</button>
-    </article>
-
     <form class="add-form" @submit.prevent="addRelay">
       <input
         v-model="newRelay"
@@ -81,7 +68,6 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { useRouter } from "vue-router";
 import { reconnectRelay } from "@/nostr/relays";
 import { DEFAULT_RELAY_URLS, type RelayConfig, type RelaySource } from "@/services/connectionSettings";
 import { useSettingsStore } from "@/stores/settings";
@@ -90,8 +76,7 @@ import { formatTimestamp } from "./settingsFormat";
 import type { RelayRuntime } from "./useRelayRuntimeStatus";
 
 const props = defineProps<{ runtime: RelayRuntime }>();
-const { statuses, dmRelayStatusLabel, dmRelayStatusTone, refreshStatuses, forgetRelay } = props.runtime;
-const router = useRouter();
+const { statuses, refreshStatuses, forgetRelay } = props.runtime;
 const settings = useSettingsStore();
 const ui = useUIStore();
 const relayList = computed(() => settings.relayList);
@@ -152,9 +137,6 @@ function reconnect(url: string) {
 
 <style scoped src="./systemSettingsSection.css"></style>
 <style scoped>
-.dm-relay-card { margin-bottom: 14px; }
-.dm-relay-copy { margin: 10px 0 8px; color: var(--fg-64748b); font-size: .75rem; line-height: 1.5; }
-.dm-relay-list { display: grid; gap: 4px; color: var(--fg-475569); font: .7rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 .relay-last-seen{margin-top:8px;color:var(--fg-64748b);font-size:.7rem}
 .system-relay-lock{color:var(--fg-64748b);font-size:.76rem;font-weight:600}
 </style>
