@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.230",
-  "releaseSummary": "聊天页渲染加快：往上翻旧消息时每次插入的卡顿减少约三分之二",
+  "version": "0.1.231",
+  "releaseSummary": "离开聊天再回来，已经看过的旧消息不用重新加载",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
