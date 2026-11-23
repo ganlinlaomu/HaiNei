@@ -1,6 +1,7 @@
 import "fake-indexeddb/auto";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import type { InboxItem } from "@/stores/messages";
 import { forgetChatHistory, joinChatHistory, recallChatHistory, rememberChatHistory, useDirectMessagesStore } from "@/stores/directMessages";
 import { useKeyStore } from "@/stores/keys";
@@ -89,5 +90,28 @@ describe("joining remembered history to a fresh first page", () => {
     const edited = { ...item(380), content: "updated" } as InboxItem;
     const fresh = { items: [edited, item(399)], cursor: cursorOf(380), exhausted: false };
     expect(joinChatHistory(remembered, fresh)!.items.find(row => row.id === edited.id)?.content).toBe("updated");
+  });
+});
+
+describe("chat history restore timing", () => {
+  it("restores remembered rows before waiting for paint or a fresh first page", () => {
+    const source = readFileSync("src/views/Messages.vue", "utf8");
+    const loadStart = source.indexOf("async function load() {");
+    const immediate = source.indexOf("showRememberedHistoryImmediately(account, peer);", loadStart);
+    const firstPaint = source.indexOf("await waitForFirstPaint();", loadStart);
+    const freshPage = source.indexOf("await fetchOlderPage(true);", loadStart);
+    expect(immediate).toBeGreaterThan(loadStart);
+    expect(immediate).toBeLessThan(firstPaint);
+    expect(immediate).toBeLessThan(freshPage);
+  });
+
+  it("requires authoritative friendship state before revealing plaintext memory", () => {
+    const source = readFileSync("src/views/Messages.vue", "utf8");
+    const start = source.indexOf("function showRememberedHistoryImmediately");
+    const end = source.indexOf("/** Join the remembered older history", start);
+    const implementation = source.slice(start, end);
+    expect(implementation).toContain("friendships.authorizationReady");
+    expect(implementation).toContain("friendships.isAccepted(peer)");
+    expect(implementation).toContain("enforceAuthorization: true");
   });
 });
