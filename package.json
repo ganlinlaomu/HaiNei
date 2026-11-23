@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
   "version": "0.1.234",
-  "releaseSummary": "返回聊天时直接停在最新消息，不再先显示旧消息再跳到底部",
+  "releaseSummary": "往上翻旧消息时滚动中直接加载，不用再停下来等",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",
