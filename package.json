@@ -1,6 +1,6 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.233",
+  "version": "0.1.234",
   "releaseSummary": "返回聊天时直接停在最新消息，不再先显示旧消息再跳到底部",
   "private": true,
   "scripts": {

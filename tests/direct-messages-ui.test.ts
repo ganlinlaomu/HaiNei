@@ -730,7 +730,7 @@ describe("direct-message navigation and UI contract", () => {
     expect(chat).toContain("showJumpToLatest");
     expect(chat).toContain("function jumpToLatest()");
     const messageWindow = readThemedSource(join(process.cwd(), "src/composables/useChatMessageWindow.ts"), "utf8");
-    expect(messageWindow).toContain("isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD)");
+    expect(messageWindow).toContain("distanceFromBottom(list, reversed) <= BOTTOM_FOLLOW_THRESHOLD");
     expect(messageWindow).toContain("pendingTailCount.value += newTailCount");
     expect(chat).toContain("showJumpToLatest.value = false");
     expect(chat).toContain("pendingTailCount.value = 0");

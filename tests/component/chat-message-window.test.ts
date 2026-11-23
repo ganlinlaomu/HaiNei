@@ -13,10 +13,20 @@ const VIEWPORT = 500;
 const item = (n: number) => ({ id: `m${String(n).padStart(4, "0")}`, pubkey: "p", created_at: n, content: "", tags: [] }) as unknown as InboxItem;
 const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => item(from + i));
 
+// Reversed (column-reverse) lists measure scrollTop from the bottom: 0 at the
+// latest message, negative going up. Content added above does not move rows.
+let reversedLayout = false;
+const distanceFromTopOf = (list: HTMLElement) => reversedLayout
+  ? list.scrollHeight - VIEWPORT + list.scrollTop
+  : list.scrollTop;
+
 function layout(list: HTMLElement) {
   let scrollTop = 0;
   const height = () => list.querySelectorAll(".message-line").length * ROW;
-  const clamp = (value: number) => Math.max(0, Math.min(value, Math.max(0, height() - VIEWPORT)));
+  const range = () => Math.max(0, height() - VIEWPORT);
+  const clamp = (value: number) => reversedLayout
+    ? Math.min(0, Math.max(value, -range()))
+    : Math.max(0, Math.min(value, range()));
   Object.defineProperty(list, "clientHeight", { configurable: true, get: () => VIEWPORT });
   Object.defineProperty(list, "scrollHeight", { configurable: true, get: height });
   Object.defineProperty(list, "scrollTop", { configurable: true, get: () => scrollTop, set: value => { scrollTop = clamp(value); } });
@@ -27,13 +37,14 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     const list = this.closest<HTMLElement>(".message-list");
     const rows = list ? [...list.querySelectorAll(".message-line")] : [];
-    const top = rows.indexOf(this) * ROW - (list?.scrollTop ?? 0);
+    const top = rows.indexOf(this) * ROW - (list ? distanceFromTopOf(list) : 0);
     return { top, bottom: top + ROW, height: ROW } as DOMRect;
   });
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number);
   vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
 });
 afterEach(() => {
+  reversedLayout = false;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -45,7 +56,8 @@ async function settle() {
   }
 }
 
-function setup(initial: InboxItem[], overrides: { exhausted?: boolean; older?: InboxItem[]; deferredCommit?: boolean } = {}) {
+function setup(initial: InboxItem[], overrides: { exhausted?: boolean; older?: InboxItem[]; deferredCommit?: boolean; reverse?: boolean } = {}) {
+  reversedLayout = overrides.reverse ?? false;
   const messages = ref<InboxItem[]>(initial);
   const messageList = ref<HTMLElement | null>(null);
   const searchContextActive = ref(false);
@@ -76,6 +88,7 @@ function setup(initial: InboxItem[], overrides: { exhausted?: boolean; older?: I
         retainedIds: () => retained.value,
         isDisposed: () => false, isLoading: () => false,
         markRead, onScroll,
+        reverse: overrides.reverse ?? false,
       });
       return () => h("section", { ref: messageList, class: "message-list", onScroll: api.handleMessageScroll },
         api.windowMessages.value.map(message => h("div", { key: message.id, class: "message-line", "data-message-id": message.id })));
@@ -323,5 +336,100 @@ describe("聊天消息窗口", () => {
     await settle();
 
     expect(t.onScroll).not.toHaveBeenCalled();
+  });
+});
+
+describe("聊天消息窗口（底部锚定 column-reverse）", () => {
+  const reversed = (initial: InboxItem[], overrides: Parameters<typeof setup>[1] = {}) => setup(initial, { ...overrides, reverse: true });
+  // Scroll without waiting for idle: like iOS momentum, events keep coming.
+  const flick = async (t: ReturnType<typeof setup>, top: number) => {
+    t.list.scrollTop = top;
+    t.list.dispatchEvent(new Event("scroll"));
+    await settle();
+  };
+
+  it("打开时停在底部（scrollTop 0）", async () => {
+    const t = reversed(range(0, 200));
+    t.api.setMessageListToBottom();
+    await settle();
+    expect(t.api.reversed).toBe(true);
+    expect(t.list.scrollTop).toBe(0);
+    expect(t.rendered().at(-1)).toBe("m0199");
+    expect(t.rowTop("m0199")).toBe(VIEWPORT - ROW);
+    expect(t.api.showJumpToLatest.value).toBe(false);
+  });
+
+  it("惯性滚动中就插入更早的消息，不等停下，正在看的那一行不动", async () => {
+    const t = reversed(range(0, 600));
+    t.api.setMessageListToBottom();
+    await settle();
+    // 60 rows (3000px): near the top, still scrolling.
+    await flick(t, -(60 * ROW - VIEWPORT) + 2 * ROW);
+    const seen = t.rendered()[2]!;
+    const seenTop = t.rowTop(seen);
+    await flick(t, t.list.scrollTop);
+
+    expect(t.rendered()).toHaveLength(60 + OLDER_MESSAGE_BATCH);
+    expect(t.rendered()[0]).toBe(`m${String(600 - 60 - OLDER_MESSAGE_BATCH).padStart(4, "0")}`);
+    expect(t.rowTop(seen)).toBe(seenTop);
+  });
+
+  it("从历史读回的页也在滚动中直接插入", async () => {
+    const t = reversed(range(100, 130), { exhausted: false, older: range(0, 100), deferredCommit: true });
+    t.api.setMessageListToBottom();
+    await settle();
+    await flick(t, -(30 * ROW - VIEWPORT) + ROW);
+    expect(t.fetchOlderPage).toHaveBeenCalledOnce();
+    const seenTop = t.rowTop("m0101");
+    t.releasePage();
+    await settle();
+    // No idle wait: the scroll is still "going".
+    expect(t.rendered()).toContain("m0099");
+    expect(t.rowTop("m0101")).toBe(seenTop);
+  });
+
+  it("停下后才裁掉远在下方的行，看到的位置不跳，渲染行数回到上限内", async () => {
+    const t = reversed(range(0, 1_000));
+    t.api.setMessageListToBottom();
+    await settle();
+    // Keep flicking toward the top so several batches go in above.
+    for (let i = 0; i < 4; i++) await flick(t, -(t.list.scrollHeight - VIEWPORT) + ROW);
+    expect(t.rendered().length).toBeGreaterThan(MAX_RENDERED_MESSAGES);
+    const seen = t.rendered()[1]!;
+    const seenTop = t.rowTop(seen);
+
+    await new Promise(resolve => setTimeout(resolve, SCROLL_IDLE_MS + 30));
+    await settle();
+
+    expect(t.rendered().length).toBeLessThanOrEqual(MAX_RENDERED_MESSAGES);
+    expect(t.rowTop(seen)).toBe(seenTop);
+  });
+
+  it("在底部时来了新消息：留在底部", async () => {
+    const t = reversed(range(0, 80));
+    t.api.setMessageListToBottom();
+    await settle();
+    t.messages.value = [...t.messages.value, item(80)];
+    await settle();
+    expect(t.rendered().at(-1)).toBe("m0080");
+    expect(t.list.scrollTop).toBe(0);
+    expect(t.rowTop("m0080")).toBe(VIEWPORT - ROW);
+    expect(t.api.showJumpToLatest.value).toBe(false);
+  });
+
+  it("往上翻看时来了新消息：看到的那一行不动，显示「回到最新」", async () => {
+    const t = reversed(range(0, 80));
+    t.api.setMessageListToBottom();
+    await settle();
+    await t.scrollTo(-1_000);
+    const seen = t.rendered()[30]!;
+    const seenTop = t.rowTop(seen);
+
+    t.messages.value = [...t.messages.value, item(80), item(81)];
+    await settle();
+
+    expect(t.rowTop(seen)).toBe(seenTop);
+    expect(t.api.showJumpToLatest.value).toBe(true);
+    expect(t.api.pendingTailCount.value).toBe(2);
   });
 });
