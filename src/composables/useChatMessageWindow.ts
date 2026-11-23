@@ -1,22 +1,21 @@
 import { computed, nextTick, ref, watch, type Ref } from "vue";
 import { installManualScrollAnchoring } from "@/utils/scrollAnchor";
+import { distanceFromBottom, distanceFromTop, scrollToListBottom, supportsReverseScroll } from "@/utils/reverseScroll";
 import { debugLog } from "@/utils/debugLog";
 import type { InboxItem } from "@/stores/messages";
 import {
   focusBoundedMessageWindow,
   initialBoundedMessageWindow,
-  isNearMessageBottom,
   mergeBoundedMessageIndexes,
   scrollTopAfterAnchorShift,
-  scrollTopAfterNewMessages,
   shiftBoundedMessageWindow,
-  type MessageScrollMetrics,
 } from "@/utils/messageWindow";
 
 export const INITIAL_MESSAGE_COUNT = 60;
 /**
- * Older rows go in above the reader only once scrolling is idle (iOS, below),
- * so each insertion is a pause. Few, large batches inserted while there is
+ * In the legacy (top-anchored) list, older rows go in above the reader only
+ * once scrolling is idle (iOS, below), so each insertion is a pause. The
+ * bottom-anchored (column-reverse) list inserts them while scrolling. Few, large batches inserted while there is
  * still plenty to scroll keep a fling from running into the top: 100 rows in
  * batches of 40, inserted only at the very top, felt like loading page by page.
  */
@@ -29,7 +28,8 @@ export const OLDER_INSERT_SCREENS = 3;
  * iOS ignores (or momentum overwrites) a scrollTop set while the list is
  * still scrolling. Older rows inserted then left the list at the top of the
  * new rows: the chat "jumped" to long-ago messages. Rows are inserted above
- * only after the scroll has been idle this long.
+ * only after the scroll has been idle this long. The reversed list needs no
+ * correction to insert above, and only waits this long to trim rows below.
  */
 export const SCROLL_IDLE_MS = 150;
 /**
@@ -65,12 +65,19 @@ export function useChatMessageWindow(options: {
   isLoading: () => boolean;
   markRead: () => Promise<void>;
   onScroll?: () => void;
+  /**
+   * Bottom-anchored list (see reverseScroll.ts). Defaults to whether the
+   * browser supports it; tests set it explicitly.
+   */
+  reverse?: boolean;
 }) {
   const {
     messages, messageList, peerPubkey, searchContextActive, searchContextMessages,
     sourceFocusReadSuppressed, historyExhausted, fetchOlderPage, retainedIds,
     isDisposed, isLoading, markRead, onScroll,
   } = options;
+  /** The list is bottom-anchored: the view must render it reversed. */
+  const reversed = options.reverse ?? supportsReverseScroll();
   const initialWindowRange = initialBoundedMessageWindow(messages.value.length, INITIAL_MESSAGE_COUNT);
   const windowStart = ref(initialWindowRange.start);
   const windowEnd = ref(initialWindowRange.end);
@@ -106,7 +113,7 @@ export function useChatMessageWindow(options: {
   watch(messageList, list => {
     stopScrollAnchoring();
     stopScrollAnchoring = list
-      ? installManualScrollAnchoring(list, { rowSelector: ".message-line[data-message-id]", enabled: () => !windowMutationInProgress })
+      ? installManualScrollAnchoring(list, { rowSelector: ".message-line[data-message-id]", enabled: () => !windowMutationInProgress, reversed })
       : () => undefined;
   }, { immediate: true, flush: "post" });
 
@@ -142,7 +149,7 @@ export function useChatMessageWindow(options: {
       void nextTick(setMessageListToBottom);
       return;
     }
-    if (list) list.scrollTop = list.scrollHeight;
+    if (list) scrollToListBottom(list, reversed);
     followLatestTail = true;
     showJumpToLatest.value = false;
     pendingTailCount.value = 0;
@@ -151,9 +158,6 @@ export function useChatMessageWindow(options: {
     void nextTick(setMessageListToBottom);
   }
 
-  function scrollMetrics(element: HTMLElement): MessageScrollMetrics {
-    return { scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight };
-  }
 
   type MessageDomAnchor = { id: string; offset: number; scrollTop: number };
 
@@ -178,7 +182,10 @@ export function useChatMessageWindow(options: {
       .find(candidate => candidate.dataset.messageId === anchor.id);
     if (!row) return;
     const nextOffset = row.getBoundingClientRect().top - list.getBoundingClientRect().top;
-    list.scrollTop = scrollTopAfterAnchorShift(anchor.scrollTop, anchor.offset, nextOffset);
+    // Reversed scrollTop is 0 at the bottom and negative above: no clamp at 0.
+    list.scrollTop = reversed
+      ? anchor.scrollTop + (nextOffset - anchor.offset)
+      : scrollTopAfterAnchorShift(anchor.scrollTop, anchor.offset, nextOffset);
   }
 
   function restoreNativeOverflowAnchor(list: HTMLElement) {
@@ -199,7 +206,92 @@ export function useChatMessageWindow(options: {
     windowEnd.value = range.end;
   }
 
+  /**
+   * Bottom-anchored: older rows go in above without touching scrollTop, so
+   * there is no waiting for scrolling to stop. Rows beyond the render cap are
+   * dropped from the far bottom later, once scrolling is idle.
+   */
+  async function prependOlderReversed() {
+    const list = messageList.value;
+    if (!list || prependingOlder || (windowStart.value === 0 && historyExhausted.value)) return;
+    prependingOlder = true;
+    const peerAtStart = peerPubkey.value;
+    const needsHistoryPage = windowStart.value === 0 && !historyExhausted.value;
+    try {
+      const startedAt = now();
+      const prefetched = needsHistoryPage ? takePrefetchedPage() : undefined;
+      const commit = needsHistoryPage ? await (prefetched?.promise ?? fetchOlderPage()) : undefined;
+      const waitedMs = Math.round(now() - startedAt);
+      if (isDisposed() || peerAtStart !== peerPubkey.value) return;
+      windowMutationInProgress = true;
+      const firstId = messages.value[windowStart.value]?.id;
+      const lastId = messages.value[Math.max(windowStart.value, windowEnd.value - 1)]?.id;
+      if (typeof commit === "function") commit();
+      refreshRetainedPlaybackMessage();
+      // A committed page shifts every index; find the rendered rows again.
+      const first = firstId ? messages.value.findIndex(message => message.id === firstId) : -1;
+      const last = lastId ? messages.value.findIndex(message => message.id === lastId) : -1;
+      if (first >= 0 && last >= first) {
+        windowStart.value = Math.max(0, first - OLDER_MESSAGE_BATCH);
+        windowEnd.value = last + 1;
+      } else {
+        windowStart.value = Math.max(0, windowStart.value - OLDER_MESSAGE_BATCH);
+      }
+      await nextTick();
+      if (needsHistoryPage) {
+        debugLog("ui", "chat_older_page", {
+          reversed: true,
+          prefetched: !!prefetched,
+          readMs: prefetched ? Math.round(now() - prefetched.startedAt) : waitedMs,
+          waitedMs,
+          idleMs: 0,
+          applyMs: Math.round(now() - startedAt) - waitedMs,
+          screensFromTop: list.clientHeight ? Math.round(distanceFromTop(list, true) / list.clientHeight * 10) / 10 : null,
+        }, "info");
+      }
+    } finally {
+      windowMutationInProgress = false;
+      prependingOlder = false;
+    }
+    void trimNewerRowsWhenIdle();
+  }
+
+  let trimScheduled = false;
+  /** Bottom-anchored: drop rows past the render cap from far below the viewport. */
+  async function trimNewerRowsWhenIdle() {
+    if (!reversed || trimScheduled) return;
+    trimScheduled = true;
+    try {
+      // Removing rows below the viewport needs a scrollTop correction, which
+      // iOS only keeps once momentum has ended.
+      await untilScrollIdle();
+      const list = messageList.value;
+      if (!list || isDisposed() || prependingOlder) return;
+      const excess = windowEnd.value - windowStart.value - MAX_RENDERED_MESSAGES;
+      if (excess <= 0) return;
+      // Only rows at least a screen below what is visible.
+      const limit = list.getBoundingClientRect().bottom + list.clientHeight;
+      let removable = 0;
+      for (; removable < excess; removable++) {
+        const id = messages.value[windowEnd.value - 1 - removable]?.id;
+        const row = id ? list.querySelector<HTMLElement>(`[data-message-id="${id}"]`) : null;
+        if (!row || row.getBoundingClientRect().top < limit) break;
+      }
+      if (!removable) return;
+      windowMutationInProgress = true;
+      const anchor = captureMessageDomAnchor(list);
+      windowEnd.value -= removable;
+      await nextTick();
+      if (isDisposed()) return;
+      restoreMessageDomAnchor(list, anchor);
+    } finally {
+      windowMutationInProgress = false;
+      trimScheduled = false;
+    }
+  }
+
   async function prependOlderMessages() {
+    if (reversed) return prependOlderReversed();
     const list = messageList.value;
     if (!list || prependingOlder || (windowStart.value === 0 && historyExhausted.value)) return;
 
@@ -339,10 +431,10 @@ export function useChatMessageWindow(options: {
       return;
     }
 
-    if (list.scrollTop <= Math.max(TOP_LOAD_THRESHOLD, list.clientHeight * OLDER_INSERT_SCREENS)) void prependOlderMessages();
-    else if (windowStart.value === 0 && list.scrollTop <= list.clientHeight * OLDER_PREFETCH_SCREENS) prefetchOlderPage();
-    const metrics = scrollMetrics(list);
-    const nearBottom = isNearMessageBottom(metrics, BOTTOM_FOLLOW_THRESHOLD);
+    const fromTop = distanceFromTop(list, reversed);
+    if (fromTop <= Math.max(TOP_LOAD_THRESHOLD, list.clientHeight * OLDER_INSERT_SCREENS)) void prependOlderMessages();
+    else if (windowStart.value === 0 && fromTop <= list.clientHeight * OLDER_PREFETCH_SCREENS) prefetchOlderPage();
+    const nearBottom = distanceFromBottom(list, reversed) <= BOTTOM_FOLLOW_THRESHOLD;
     if (nearBottom && windowEnd.value < messages.value.length) void appendNewerMessages();
 
     const atConversationTail = windowEnd.value >= messages.value.length;
@@ -376,7 +468,7 @@ export function useChatMessageWindow(options: {
     }
 
     const list = messageList.value;
-    const previousMetrics = list ? scrollMetrics(list) : undefined;
+    const previousFromBottom = list ? distanceFromBottom(list, reversed) : undefined;
     const previousWindowEnd = Math.min(windowEnd.value, previousIds.length);
     const previousFirstId = previousIds[windowStart.value];
     const previousWindowLastId = previousIds[Math.max(windowStart.value, previousWindowEnd - 1)];
@@ -399,10 +491,10 @@ export function useChatMessageWindow(options: {
     }
 
     const wasAtConversationTail = previousWindowEnd >= previousIds.length;
-    const followingLatest = !!list && !!previousMetrics && wasAtConversationTail
-      && isNearMessageBottom(previousMetrics, BOTTOM_FOLLOW_THRESHOLD);
+    const followingLatest = !!list && previousFromBottom !== undefined && wasAtConversationTail
+      && previousFromBottom <= BOTTOM_FOLLOW_THRESHOLD;
 
-    if (list && previousMetrics && hasNewTail && followingLatest) {
+    if (list && hasNewTail && followingLatest) {
       refreshRetainedPlaybackMessage();
       const range = initialBoundedMessageWindow(
         nextIds.length,
@@ -411,7 +503,8 @@ export function useChatMessageWindow(options: {
       windowStart.value = range.start;
       windowEnd.value = range.end;
       await nextTick();
-      list.scrollTop = scrollTopAfterNewMessages(previousMetrics, list.scrollHeight, BOTTOM_FOLLOW_THRESHOLD);
+      // Was near the bottom: follow to the new latest message.
+      scrollToListBottom(list, reversed);
       followLatestTail = true;
       showJumpToLatest.value = false;
       pendingTailCount.value = 0;
@@ -455,7 +548,7 @@ export function useChatMessageWindow(options: {
 
   function isListNearBottom() {
     const list = messageList.value;
-    return !!list && isNearMessageBottom(scrollMetrics(list), BOTTOM_FOLLOW_THRESHOLD);
+    return !!list && distanceFromBottom(list, reversed) <= BOTTOM_FOLLOW_THRESHOLD;
   }
 
   function disposeMessageWindow() {
@@ -467,6 +560,7 @@ export function useChatMessageWindow(options: {
   }
 
   return {
+    reversed,
     windowStart, windowEnd, windowMessages, showJumpToLatest, pendingTailCount, retainedPlaybackMessageId,
     setMessageListToBottom, scrollToBottom, resetMessageWindow, focusWindowOn,
     handleMessageScroll, handleMessageMediaLoad, isTailRendered, isListNearBottom, disposeMessageWindow,

@@ -68,7 +68,7 @@ describe("manual scroll anchoring (iOS Safari)", () => {
   });
 
   it("chat wires it in and fixes the width of image-only bubbles", () => {
-    expect(readFileSync("src/composables/useChatMessageWindow.ts", "utf8")).toContain("installManualScrollAnchoring(list, { rowSelector: \".message-line[data-message-id]\", enabled: () => !windowMutationInProgress })");
+    expect(readFileSync("src/composables/useChatMessageWindow.ts", "utf8")).toContain("installManualScrollAnchoring(list, { rowSelector: \".message-line[data-message-id]\", enabled: () => !windowMutationInProgress, reversed })");
     const chat = readFileSync("src/views/Messages.vue", "utf8");
     expect(chat).toContain("'image-bubble': !isDisappearing(message) && !isMediaCaption(message) && hasMessageImage(message)");
     expect(chat).toContain(".image-bubble{box-sizing:border-box;width:min(260px,65vw)}");

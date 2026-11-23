@@ -20,15 +20,23 @@ export function installManualScrollAnchoring(
     /** False while the caller restores its own anchor (e.g. prepending a page). */
     enabled: () => boolean;
     native?: boolean;
+    /**
+     * A bottom-anchored list (flex-direction: column-reverse, see
+     * reverseScroll.ts): rows above the viewport may change height freely;
+     * rows wholly below it push the visible content up, so those are
+     * compensated. Always manual: native anchoring is off for such a list.
+     */
+    reversed?: boolean;
   },
 ) {
-  if ((options.native ?? supportsNativeScrollAnchoring())
+  if ((!options.reversed && (options.native ?? supportsNativeScrollAnchoring()))
     || typeof ResizeObserver === "undefined" || typeof MutationObserver === "undefined") {
     return () => undefined;
   }
   const heights = new WeakMap<Element, number>();
   const resize = new ResizeObserver(entries => {
-    const listTop = list.getBoundingClientRect().top;
+    const listRect = list.getBoundingClientRect();
+    const listTop = listRect.top;
     let delta = 0;
     for (const entry of entries) {
       const row = entry.target as HTMLElement;
@@ -36,10 +44,16 @@ export function installManualScrollAnchoring(
       const previous = heights.get(row);
       heights.set(row, rect.height);
       if (previous === undefined || previous === rect.height) continue;
-      // Only rows wholly above the viewport; a visible row may grow downwards.
-      if (rect.bottom <= listTop + 1) delta += rect.height - previous;
+      if (options.reversed) {
+        // Only rows wholly below the viewport; a visible row may grow upwards.
+        if (rect.top >= listRect.bottom - 1) delta += rect.height - previous;
+      } else if (rect.bottom <= listTop + 1) {
+        // Only rows wholly above the viewport; a visible row may grow downwards.
+        delta += rect.height - previous;
+      }
     }
-    if (delta && options.enabled()) list.scrollTop += delta;
+    // Reversed: scrollTop counts up from the bottom (0) as negative values.
+    if (delta && options.enabled()) list.scrollTop += options.reversed ? -delta : delta;
   });
   const observeRows = (root: ParentNode) => {
     for (const row of root.querySelectorAll(options.rowSelector)) resize.observe(row);
