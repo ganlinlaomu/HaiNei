@@ -166,6 +166,66 @@ function peerHistoryWarmKey(accountPubkey: string, peerPubkey: string) {
 function invalidatePeerHistoryWarmup(accountPubkey: string, peerPubkey: string) {
   peerHistoryWarmups.delete(peerHistoryWarmKey(accountPubkey, peerPubkey));
 }
+
+/**
+ * The history a chat has already read, kept when the chat view unmounts
+ * (it is not kept alive) so reopening it does not re-read every older page.
+ * Plaintext in memory: bounded, cleared on reset (account switch, lock), and
+ * dropped for a peer whose conversation is deleted, hidden or burned.
+ */
+export type ChatHistoryMemory = { items: InboxItem[]; cursor?: { createdAt: number; id: string }; exhausted: boolean };
+const CHAT_HISTORY_MEMORY_CHATS = 3;
+const CHAT_HISTORY_MEMORY_ITEMS = 2_000;
+const chatHistoryMemory = new Map<string, ChatHistoryMemory>();
+
+export function rememberChatHistory(accountPubkey: string, peerPubkey: string, memory: ChatHistoryMemory) {
+  if (!accountPubkey || !peerPubkey || !memory.items.length) return;
+  const key = peerHistoryWarmKey(accountPubkey, peerPubkey);
+  let { items, cursor, exhausted } = memory;
+  if (items.length > CHAT_HISTORY_MEMORY_ITEMS) {
+    // Keep the newest; the oldest kept row becomes where reading resumes.
+    items = items.slice(-CHAT_HISTORY_MEMORY_ITEMS);
+    cursor = { createdAt: items[0].created_at, id: items[0].id };
+    exhausted = false;
+  }
+  chatHistoryMemory.delete(key);
+  chatHistoryMemory.set(key, { items: items.slice(), cursor, exhausted });
+  while (chatHistoryMemory.size > CHAT_HISTORY_MEMORY_CHATS) chatHistoryMemory.delete(chatHistoryMemory.keys().next().value as string);
+}
+
+export function recallChatHistory(accountPubkey: string, peerPubkey: string): ChatHistoryMemory | undefined {
+  return chatHistoryMemory.get(peerHistoryWarmKey(accountPubkey, peerPubkey));
+}
+
+export function forgetChatHistory(accountPubkey: string, peerPubkey: string) {
+  chatHistoryMemory.delete(peerHistoryWarmKey(accountPubkey, peerPubkey));
+}
+
+const cursorItem = (cursor: { createdAt: number; id: string }) => ({ created_at: cursor.createdAt, id: cursor.id }) as InboxItem;
+
+/**
+ * Join remembered older history to a freshly read first page, or null when
+ * they may not meet. The fresh page starts at `fresh.cursor` (its oldest
+ * stored row); if that is newer than the newest remembered message, more
+ * arrived meanwhile than one page holds, and joining would hide the
+ * messages in between. Fresh rows win over remembered copies.
+ */
+export function joinChatHistory(
+  remembered: ChatHistoryMemory | undefined,
+  fresh: ChatHistoryMemory,
+): ChatHistoryMemory | null {
+  if (!remembered?.items.length || fresh.exhausted) return null;
+  const rememberedNewest = remembered.items[remembered.items.length - 1];
+  if (fresh.cursor && compareInboxItems(cursorItem(fresh.cursor), rememberedNewest) > 0) return null;
+  const merged = new Map(remembered.items.map(item => [item.id, item]));
+  for (const item of fresh.items) merged.set(item.id, item);
+  const items = [...merged.values()].sort(compareInboxItems);
+  const rememberedIsOlder = !remembered.cursor || !fresh.cursor
+    || compareInboxItems(cursorItem(remembered.cursor), cursorItem(fresh.cursor)) < 0;
+  return rememberedIsOlder
+    ? { items, cursor: remembered.cursor, exhausted: remembered.exhausted }
+    : { items, cursor: fresh.cursor, exhausted: fresh.exhausted };
+}
 function receiptQueueKey(accountPubkey: string, peerPubkey: string, status: DmReceiptStatus) {
   return `${accountPubkey}:${peerPubkey}:${status}`;
 }
@@ -859,6 +919,8 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       // temporary message; unknown non-friends cannot plant future tombstones.
       if (!useFriendshipsStore().isAccepted(peer) && !target) return false;
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, targetId, peer);
+      // The remembered chat history may hold the burned message's plaintext.
+      if (accepted) forgetChatHistory(account, peer);
       if (accepted && useKeyStore().pkHex.toLowerCase() === account) this.burnedById = { ...this.burnedById, [targetId]: { peerPubkey: peer, createdAt: target?.createdAt, senderPubkey: target?.senderPubkey, conversationId: target?.conversationId } };
       if (!accepted || useKeyStore().pkHex.toLowerCase() !== account) return false;
       for (const transportId of target?.transportEventIds || []) {
@@ -889,6 +951,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       if (!target || !hasDisappearingMarker(target.tags) || !isDirectMessageTags(target.tags)
         || directMessagePeer(target, account) !== peer) return false;
       const accepted = await syncedMessageRepository.burnDisappearingMessage(account, messageId, peer);
+      if (accepted) forgetChatHistory(account, peer);
       if (accepted && useKeyStore().pkHex.toLowerCase() === account) this.burnedById = { ...this.burnedById, [messageId]: { peerPubkey: peer, createdAt: target.createdAt, senderPubkey: target.senderPubkey, conversationId: target.conversationId } };
       if (!accepted || keys.pkHex.toLowerCase() !== account) return false;
       for (const transportId of target.transportEventIds || []) {
@@ -1643,6 +1706,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     async hideConversation(peerPubkey: string) {
       const peer = peerPubkey.toLowerCase();
       invalidatePeerHistoryWarmup(this.loadedFor, peer);
+      forgetChatHistory(this.loadedFor, peer);
       const items = this.peerMessages(peer);
       const latest = items.at(-1);
       const preference: ConversationPreference = {
@@ -1661,6 +1725,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
     async deleteConversation(peerPubkey: string) {
       const peer = peerPubkey.toLowerCase();
       invalidatePeerHistoryWarmup(this.loadedFor, peer);
+      forgetChatHistory(this.loadedFor, peer);
       const items = this.peerMessages(peer);
       const latest = items.at(-1);
       const existing = this.preferencesByPeer[peer];
@@ -2213,6 +2278,7 @@ export const useDirectMessagesStore = defineStore("directMessages", {
       this.burnedById = {};
       clearReceiptTimers();
       peerHistoryWarmups.clear();
+      chatHistoryMemory.clear();
       this.outgoingTasks = [];
     },
   },

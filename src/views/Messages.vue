@@ -440,7 +440,7 @@ import type { VideoData } from "@/utils/videoUtils";
 import { useDmImageSelection } from "@/composables/useDmImageSelection";
 import { useChatMessageWindow } from "@/composables/useChatMessageWindow";
 import { useDmComposerActions } from "@/composables/useDmComposerActions";
-import { directMessagesForPeer, useDirectMessagesStore, WAITING_NETWORK_ERROR } from "@/stores/directMessages";
+import { directMessagesForPeer, joinChatHistory, recallChatHistory, rememberChatHistory, useDirectMessagesStore, WAITING_NETWORK_ERROR } from "@/stores/directMessages";
 import { useFriendsStore } from "@/stores/friends";
 import { useFriendshipsStore } from "@/stores/friendships";
 import { useKeyStore } from "@/stores/keys";
@@ -592,6 +592,34 @@ function noteHistoryAuthorizationPending(account: string, peer: string) {
 watch(friendshipsReady, ready => { if (ready) rereadAfterAuthorization(); });
 async function fetchOlderPage(reset = false) {
   (await readOlderPage(reset))?.();
+}
+/**
+ * Keep the older history this chat already read when the view unmounts or
+ * switches peer, so reopening it shows it at once (store: rememberChatHistory).
+ * By the time the view unmounts the route has already changed, so the peer
+ * comes from historyOwner (set when the history was read), not the route.
+ */
+let historyOwner: { account: string; peer: string } | null = null;
+function rememberHistory(account: string, peer: string) {
+  if (!account || !peer || !historyMessages.value.length) return;
+  // Locking or switching account resets the store before this view
+  // unmounts: never put decrypted history back after that.
+  if (!keys.isUnlocked || directMessages.loadedFor.toLowerCase() !== account.toLowerCase()) return;
+  rememberChatHistory(account, peer, {
+    items: historyMessages.value,
+    cursor: historyCursor.value,
+    exhausted: historyExhausted.value,
+  });
+}
+/** Join the remembered older history to the fresh first page, if they meet. */
+function restoreRememberedHistory(account: string, peer: string) {
+  const joined = joinChatHistory(recallChatHistory(account, peer), {
+    items: historyMessages.value, cursor: historyCursor.value, exhausted: historyExhausted.value,
+  });
+  if (!joined) return;
+  historyMessages.value = joined.items;
+  historyCursor.value = joined.cursor;
+  historyExhausted.value = joined.exhausted;
 }
 const searchContextMessages = ref<InboxItem[]>([]);
 const searchContextActive = ref(false);
@@ -1211,6 +1239,9 @@ async function load() {
     // This is an indexed conversation query (and is normally already warmed by
     // the conversation list), so no full inbox scan is needed to render chat.
     await fetchOlderPage(true);
+    if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
+    restoreRememberedHistory(account, peer);
+    historyOwner = { account, peer };
     await directMessages.loadBurnedPeer(peer);
     const openRows = await syncedMessageRepository.listOpenedDisappearing(account, peer);
     if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
@@ -1307,6 +1338,9 @@ onMounted(() => {
 });
 watch([draft, replyingToId], scheduleDraftSave);
 watch([() => keys.pkHex, peerPubkey], (_next, previous) => {
+  // Same account, other peer: keep what the previous chat had read.
+  if (historyOwner && previous?.[0] === keys.pkHex) rememberHistory(historyOwner.account, historyOwner.peer);
+  historyOwner = null;
   clearHistoryAuthorizationPending();
   historyMessages.value = [];
   historyCursor.value = undefined;
@@ -1345,6 +1379,8 @@ watch(() => route.query.focus, target => {
   }
 });
 onBeforeUnmount(() => {
+  if (historyOwner) rememberHistory(historyOwner.account, historyOwner.peer);
+  historyOwner = null;
   stopRescanStatus();
   cancelBackgroundTask("chat-call-warmup");
   stopBeforeLock();
