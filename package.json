@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.231",
-  "releaseSummary": "离开聊天再回来，已经看过的旧消息不用重新加载",
+  "version": "0.1.232",
+  "releaseSummary": "离开聊天再回来，对方已经显示过的旧消息立即恢复",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

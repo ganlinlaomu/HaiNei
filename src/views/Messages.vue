@@ -611,6 +611,36 @@ function rememberHistory(account: string, peer: string) {
     exhausted: historyExhausted.value,
   });
 }
+/**
+ * Paint remembered rows before any IndexedDB work. On the normal
+ * chat -> directory -> chat path all account stores are still authoritative,
+ * so making the user wait for a fresh first page only recreates the apparent
+ * disappearance that the memory is meant to prevent.
+ *
+ * Never reveal the memory while authorization is unresolved: it contains
+ * plaintext and a friendship may have been removed while this view was away.
+ */
+function showRememberedHistoryImmediately(account: string, peer: string) {
+  if (!keys.isUnlocked
+    || directMessages.loadedFor.toLowerCase() !== account.toLowerCase()
+    || friendships.loadedFor.toLowerCase() !== account.toLowerCase()
+    || friendships.loading
+    || !friendships.authorizationReady
+    || !friendships.isAccepted(peer)) return false;
+  const remembered = recallChatHistory(account, peer);
+  if (!remembered?.items.length) return false;
+  const items = directMessagesForPeer(remembered.items, account, peer, {
+    friendship: friendships.getRecord(peer),
+    preference: directMessages.preferencesByPeer[peer],
+    enforceAuthorization: true,
+  });
+  if (!items.length) return false;
+  historyMessages.value = items;
+  historyCursor.value = remembered.cursor;
+  historyExhausted.value = remembered.exhausted;
+  historyOwner = { account, peer };
+  return true;
+}
 /** Join the remembered older history to the fresh first page, if they meet. */
 function restoreRememberedHistory(account: string, peer: string) {
   const joined = joinChatHistory(recallChatHistory(account, peer), {
@@ -1227,6 +1257,10 @@ async function load() {
     return void router.replace("/conversations");
   }
 
+  // Returning from another route must restore already-read rows before the
+  // first paint; the fresh-page query below is reconciliation, not a gate.
+  showRememberedHistoryImmediately(account, peer);
+
   try {
     // Never make IndexedDB hydration or account-store checks compete with the
     // route transition. Paint the chat shell first, then hydrate local data.
@@ -1235,6 +1269,9 @@ async function load() {
 
     await loadAccountStoresOnce(account, [messageStore, friendships, friends, profiles]);
     if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
+    // A cold activation may not have had authoritative friendship state at
+    // function entry. Restore as soon as loading it makes the memory safe.
+    showRememberedHistoryImmediately(account, peer);
 
     // This is an indexed conversation query (and is normally already warmed by
     // the conversation list), so no full inbox scan is needed to render chat.
