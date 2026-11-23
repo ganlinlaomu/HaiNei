@@ -641,6 +641,20 @@ function showRememberedHistoryImmediately(account: string, peer: string) {
   historyOwner = { account, peer };
   return true;
 }
+/**
+ * Remembered rows painted early must also be scrolled to the latest message
+ * in that same render: the bottom used to be set only after the fresh page
+ * was read, so the chat first showed older rows, then jumped (~0.35 s on the
+ * Pi). A jump to a source message (focus) keeps its own positioning.
+ */
+function showRememberedAtLatest(account: string, peer: string) {
+  if (!showRememberedHistoryImmediately(account, peer)) return false;
+  if (!sourceFocusReadSuppressed.value) {
+    resetMessageWindow();
+    void nextTick(setMessageListToBottom);
+  }
+  return true;
+}
 /** Join the remembered older history to the fresh first page, if they meet. */
 function restoreRememberedHistory(account: string, peer: string) {
   const joined = joinChatHistory(recallChatHistory(account, peer), {
@@ -1259,7 +1273,7 @@ async function load() {
 
   // Returning from another route must restore already-read rows before the
   // first paint; the fresh-page query below is reconciliation, not a gate.
-  showRememberedHistoryImmediately(account, peer);
+  let rememberedShown = showRememberedAtLatest(account, peer);
 
   try {
     // Never make IndexedDB hydration or account-store checks compete with the
@@ -1271,7 +1285,9 @@ async function load() {
     if (generation !== loadGeneration || account !== keys.pkHex || peer !== peerPubkey.value) return;
     // A cold activation may not have had authoritative friendship state at
     // function entry. Restore as soon as loading it makes the memory safe.
-    showRememberedHistoryImmediately(account, peer);
+    // Only then: a second restore would pull a reader who already started
+    // scrolling back to the bottom.
+    if (!rememberedShown) rememberedShown = showRememberedAtLatest(account, peer);
 
     // This is an indexed conversation query (and is normally already warmed by
     // the conversation list), so no full inbox scan is needed to render chat.

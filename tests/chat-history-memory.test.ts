@@ -97,12 +97,24 @@ describe("chat history restore timing", () => {
   it("restores remembered rows before waiting for paint or a fresh first page", () => {
     const source = readFileSync("src/views/Messages.vue", "utf8");
     const loadStart = source.indexOf("async function load() {");
-    const immediate = source.indexOf("showRememberedHistoryImmediately(account, peer);", loadStart);
+    const immediate = source.indexOf("showRememberedAtLatest(account, peer);", loadStart);
     const firstPaint = source.indexOf("await waitForFirstPaint();", loadStart);
     const freshPage = source.indexOf("await fetchOlderPage(true);", loadStart);
     expect(immediate).toBeGreaterThan(loadStart);
     expect(immediate).toBeLessThan(firstPaint);
     expect(immediate).toBeLessThan(freshPage);
+  });
+
+  it("scrolls early-painted remembered rows to the latest message in the same render", () => {
+    const source = readFileSync("src/views/Messages.vue", "utf8");
+    const start = source.indexOf("function showRememberedAtLatest");
+    const implementation = source.slice(start, source.indexOf("\n}\n", start));
+    expect(implementation).toContain("showRememberedHistoryImmediately(account, peer)");
+    expect(implementation).toContain("void nextTick(setMessageListToBottom)");
+    // A jump to a source message keeps its own position.
+    expect(implementation).toContain("if (!sourceFocusReadSuppressed.value)");
+    // The second, post-store attempt only runs if the first could not show.
+    expect(source).toContain("if (!rememberedShown) rememberedShown = showRememberedAtLatest(account, peer);");
   });
 
   it("requires authoritative friendship state before revealing plaintext memory", () => {
