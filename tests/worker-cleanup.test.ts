@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupExpiredRecords } from "../worker/src/cleanup";
-import worker, { handleScheduled } from "../worker/src/index";
+import worker, { handlePushQueue, handleScheduled } from "../worker/src/index";
 import { consumeRateLimit } from "../worker/src/requestGuards";
 import { createChallenge } from "../worker/src/auth";
 
@@ -36,16 +36,18 @@ describe("Worker scheduled cleanup", () => {
       hainei_rate_limits: 340,
       hainei_device_pairs: 2,
       hainei_push_deliveries: 7,
+      hainei_pending_pushes: 4,
     });
     const now = 1_900_000_000;
     const report = await cleanupExpiredRecords({ DB: db } as any, now);
 
-    expect(report).toEqual({ ranAt: now, challenges: 12, rateLimits: 340, devicePairs: 2, pushDeliveries: 7, failed: [] });
+    expect(report).toEqual({ ranAt: now, challenges: 12, rateLimits: 340, devicePairs: 2, pushDeliveries: 7, pendingPushes: 4, failed: [] });
     expect(db.calls).toEqual([
       { sql: "DELETE FROM hainei_auth_challenges WHERE expires_at <= ? OR (used_at IS NOT NULL AND used_at <= ?)", binds: [now, now - 3600] },
       { sql: "DELETE FROM hainei_rate_limits WHERE expires_at <= ?", binds: [now] },
       { sql: "DELETE FROM hainei_device_pairs WHERE expires_at < ?", binds: [now - 300] },
       { sql: "DELETE FROM hainei_push_deliveries WHERE updated_at <= ?", binds: [now - 7 * 24 * 3600] },
+      { sql: "DELETE FROM hainei_pending_pushes WHERE expires_at <= ?", binds: [now] },
     ]);
     expect(console.log).toHaveBeenCalledWith("HaiNei cleanup", JSON.stringify(report));
   });
@@ -55,7 +57,7 @@ describe("Worker scheduled cleanup", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const db = new CleanupD1({ hainei_rate_limits: new Error("no such table"), hainei_auth_challenges: 3 });
     await expect(cleanupExpiredRecords({ DB: db } as any, 1_900_000_000)).rejects.toThrow("cleanup_failed:rateLimits");
-    expect(db.calls).toHaveLength(4);
+    expect(db.calls).toHaveLength(5);
   });
 
   it("runs from the cron trigger inside waitUntil so the runtime keeps it alive", async () => {
@@ -80,5 +82,21 @@ describe("Worker scheduled cleanup", () => {
     for (const file of ["auth.ts", "requestGuards.ts", "devicePair.ts", "push.ts"]) {
       expect(readFileSync(`worker/src/${file}`, "utf8"), file).not.toMatch(/void env\.DB\.prepare\("?`?\s*DELETE/);
     }
+  });
+
+  it("re-enqueues a failed deferred push without exhausting its finite retry budget", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const ack = vi.fn();
+    const retry = vi.fn();
+    const send = vi.fn(async () => undefined);
+    await handlePushQueue({ messages: [{ body: { endpointHash: "a".repeat(64) }, ack, retry }] }, {
+      DB: new CleanupD1(), PUSH_QUEUE: { send },
+    } as any);
+    expect(send).toHaveBeenCalledWith(
+      { endpointHash: "a".repeat(64) },
+      { delaySeconds: 30, contentType: "json" },
+    );
+    expect(ack).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
   });
 });

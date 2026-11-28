@@ -465,7 +465,7 @@ describe("privacy-preserving push and badge", () => {
   it("tells the worker which endpoint this device registered before", () => {
     const source = readFileSync("src/services/pushNotifications.ts", "utf8");
     expect(source).toContain("previousEndpoint: previous");
-    expect(source.match(/await registerSubscription\(subscription, pubkey, signEvent\)/g)).toHaveLength(2);
+    expect(source).toContain('authenticatedPost("/api/push/sync"');
     expect(source).toContain("deviceStorage.removeItem(endpointKey(pubkey))");
   });
 
@@ -925,6 +925,8 @@ describe("privacy-preserving push and badge", () => {
   it("maps deployment and VAPID failures to safe actionable messages", () => {
     expect(pushServiceErrorMessage(404, "not_found", "fallback")).toBe("推送服务尚未部署，请更新 HaiNei Worker");
     expect(pushServiceErrorMessage(503, "push_not_configured", "fallback")).toBe("推送服务尚未配置 VAPID");
+    expect(pushServiceErrorMessage(503, "push_queue_unavailable", "fallback"))
+      .toBe("推送延迟队列尚未部署，请更新 HaiNei Worker");
     expect(pushServiceErrorMessage(500, "push_storage_unavailable", "fallback"))
       .toBe("推送服务数据库尚未准备好，请检查 Worker 部署和 D1 迁移");
   });
@@ -974,10 +976,7 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("Notification", notification);
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 })));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true, accepted: true, presenceToken: "t".repeat(43) }), { status: 201 })));
 
     await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
 
@@ -1000,10 +999,7 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("Notification", notification);
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 })));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true, accepted: true, presenceToken: "t".repeat(43) }), { status: 201 })));
 
     await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
 
@@ -1020,14 +1016,13 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("Notification", notification);
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true, accepted: true, presenceToken: "t".repeat(43) }), { status: 201 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
 
     // Single-trip auth: no separate challenge request.
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://app.test/api/push/subscribe");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://app.test/api/push/sync");
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({ event: expect.any(Object) });
     expect(fetchMock.mock.calls.some(call => String(call[0]).endsWith("/api/auth/challenge"))).toBe(false);
   });
@@ -1044,19 +1039,18 @@ describe("privacy-preserving push and badge", () => {
     const subscribeResponse = new Promise<Response>(resolve => { finishSubscribe = resolve; });
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
-      .mockImplementationOnce(() => subscribeResponse)
-      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
+      .mockImplementationOnce(() => subscribeResponse);
     vi.stubGlobal("fetch", fetchMock);
 
     const enabling = enablePushNotifications(ACCOUNT, async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(pushEnabledForAccount(ACCOUNT)).toBe(false);
-    finishSubscribe(new Response(JSON.stringify({ subscribed: true }), { status: 201 }));
+    finishSubscribe(new Response(JSON.stringify({ subscribed: true, accepted: true, presenceToken: "t".repeat(43) }), { status: 201 }));
     await enabling;
     expect(pushEnabledForAccount(ACCOUNT)).toBe(true);
   });
 
-  it("re-registers an existing browser subscription before policy refresh", async () => {
+  it("re-registers an existing browser subscription and policy in one request", async () => {
     const notification = { permission: "granted", requestPermission: vi.fn() };
     const subscription = {
       endpoint: "https://push.test/existing",
@@ -1066,8 +1060,7 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager: { getSubscription: vi.fn(async () => subscription) } }) } });
     vi.stubGlobal("Notification", notification);
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true }), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ subscribed: true, accepted: true, presenceToken: "t".repeat(43) }), { status: 201 }));
     vi.stubGlobal("fetch", fetchMock);
     localStorage.setItem(`hainei_push_enabled_${ACCOUNT}`, "1");
 
@@ -1077,8 +1070,9 @@ describe("privacy-preserving push and badge", () => {
       async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any,
     )).resolves.toBe(true);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://app.test/api/push/subscribe");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://app.test/api/push/policy");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://app.test/api/push/sync");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ senderPubkeys: [OTHER] });
   });
 
   it("clears a stale local opt-in when the browser subscription disappeared", async () => {
@@ -1102,7 +1096,6 @@ describe("privacy-preserving push and badge", () => {
     vi.stubGlobal("Notification", notification);
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ publicKey: "AQ" }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ challenge: "challenge", expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: "push_storage_unavailable" }), { status: 500 })));
     localStorage.setItem(`hainei_push_enabled_${ACCOUNT}`, "1");
 

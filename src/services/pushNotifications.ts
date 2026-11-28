@@ -1,7 +1,7 @@
 import type { EventTemplate, VerifiedEvent, NostrEvent } from "nostr-tools";
 import { deviceStorage } from "@/services/deviceStorage";
 import { debugLog, startupMark } from "@/utils/debugLog";
-import { signWorkerRequest, signedWorkerPost } from "@/services/workerAuth";
+import { sha256Hex, signWorkerRequest, signedWorkerPost } from "@/services/workerAuth";
 import { DEFAULT_HAINEI_WORKER_URL, haineiWorkerBaseUrl, resolveHaiNeiWorkerBaseUrl } from "@/services/workerUrl";
 import { friendRepository } from "@/repositories/friendRepository";
 
@@ -9,6 +9,7 @@ const PUSH_ACTION = "hainei_push";
 const SERVICE_WORKER_TIMEOUT_MS = 10_000;
 const PUSH_SUBSCRIBE_TIMEOUT_MS = 15_000;
 const FETCH_TIMEOUT_MS = 15_000;
+const PUSH_SYNC_COOLDOWN_MS = 10 * 60_000;
 
 type SignEvent = (event: EventTemplate) => Promise<VerifiedEvent>;
 export type PushCategory = "message" | "call" | "activity";
@@ -70,6 +71,7 @@ export function pushServiceErrorMessage(status: number, code: unknown, fallback:
   const error = typeof code === "string" ? code : "";
   if (status === 404 || error === "not_found") return "推送服务尚未部署，请更新 HaiNei Worker";
   if (error === "push_not_configured") return "推送服务尚未配置 VAPID";
+  if (error === "push_queue_unavailable") return "推送延迟队列尚未部署，请更新 HaiNei Worker";
   if (error === "push_subscription_limit") return "推送设备记录已达上限，请重新开启推送";
   if (error === "push_storage_unavailable" || error === "internal_error") {
     return "推送服务数据库尚未准备好，请检查 Worker 部署和 D1 迁移";
@@ -176,11 +178,8 @@ export async function enablePushNotifications(pubkey: string, signEvent: SignEve
   }
   debugLog("system", "push_subscribe_ok");
   debugLog("system", "push_auth_start");
-  await registerSubscription(subscription, pubkey, signEvent);
+  await syncRegisteredPush(subscription, pubkey, signEvent, authorizedSenderPubkeys, true);
   debugLog("system", "push_worker_subscribe_ok");
-  await authenticatedPost("/api/push/policy", {
-    senderPubkeys: [...new Set(authorizedSenderPubkeys.map(value => value.toLowerCase()))],
-  }, pubkey, signEvent);
   debugLog("system", "push_policy_sync_ok");
   deviceStorage.setItem(enabledKey, "1");
 }
@@ -259,32 +258,68 @@ async function runPushAuthorizationPolicySync(
     return false;
   }
 
-  await registerSubscription(subscription, pubkey, signEvent);
+  await syncRegisteredPush(subscription, pubkey, signEvent, senderPubkeys);
   debugLog("system", "push_worker_resubscribe_ok");
-  // Muted conversations never wake this account. The mute flag is synced per
-  // friend (friend_metadata), so every device computes the same policy.
-  const muted = new Set(await friendRepository.listMutedPeers(pubkey).catch(() => [] as string[]));
-  await authenticatedPost("/api/push/policy", {
-    senderPubkeys: [...new Set(senderPubkeys.map(value => value.toLowerCase()))].filter(value => !muted.has(value)),
-  }, pubkey, signEvent);
   debugLog("system", "push_policy_resync_ok");
   return true;
 }
 
 const endpointKey = (pubkey: string) => `hainei_push_endpoint_${pubkey.toLowerCase()}`;
+const presenceTokenKey = (pubkey: string) => `hainei_push_presence_token_${pubkey.toLowerCase()}`;
+const syncMetadataKey = (pubkey: string) => `hainei_push_sync_${pubkey.toLowerCase()}`;
+
+type PushSyncMetadata = { endpoint: string; policyHash: string; verifiedAt: number };
+
+function subscriptionEndpoint(subscription: PushSubscription) {
+  return subscription.endpoint || String(subscription.toJSON().endpoint || "");
+}
+
+async function effectiveAuthorizedSenders(pubkey: string, senderPubkeys: string[]) {
+  const muted = new Set(await friendRepository.listMutedPeers(pubkey).catch(() => [] as string[]));
+  return [...new Set(senderPubkeys.map(value => value.toLowerCase()))]
+    .filter(value => !muted.has(value))
+    .sort();
+}
+
+function readSyncMetadata(pubkey: string): PushSyncMetadata | null {
+  try {
+    const parsed = JSON.parse(deviceStorage.getItem(syncMetadataKey(pubkey)) || "null") as PushSyncMetadata | null;
+    return parsed && typeof parsed.endpoint === "string" && typeof parsed.policyHash === "string"
+      && Number.isFinite(parsed.verifiedAt) ? parsed : null;
+  } catch { return null; }
+}
 
 /**
- * Register this device's subscription with the worker, naming the endpoint
- * it registered last time if the browser has since replaced it, so the
- * worker drops the old one instead of notifying this device twice.
+ * Register the endpoint and replace its sender policy in one signed request.
+ * A successful identical sync is reused briefly so opening Settings or
+ * duplicate startup hooks never prompt a NIP-46 signer again.
  */
-async function registerSubscription(subscription: PushSubscription, pubkey: string, signEvent: SignEvent) {
+async function syncRegisteredPush(
+  subscription: PushSubscription,
+  pubkey: string,
+  signEvent: SignEvent,
+  senderPubkeys: string[],
+  force = false,
+) {
+  const endpoint = subscriptionEndpoint(subscription);
+  if (!endpoint) throw new Error("browser push subscription 失败");
+  const authorized = await effectiveAuthorizedSenders(pubkey, senderPubkeys);
+  const policyHash = await sha256Hex(JSON.stringify(authorized));
   const previous = deviceStorage.getItem(endpointKey(pubkey)) || "";
-  await authenticatedPost("/api/push/subscribe", {
+  const cached = readSyncMetadata(pubkey);
+  if (!force && cached?.endpoint === endpoint && cached.policyHash === policyHash
+    && Date.now() - cached.verifiedAt < PUSH_SYNC_COOLDOWN_MS
+    && !!deviceStorage.getItem(presenceTokenKey(pubkey))) return;
+  const result = await authenticatedPost("/api/push/sync", {
     subscription: subscription.toJSON(),
-    ...(previous && previous !== subscription.endpoint ? { previousEndpoint: previous } : {}),
+    senderPubkeys: authorized,
+    ...(previous && previous !== endpoint ? { previousEndpoint: previous } : {}),
   }, pubkey, signEvent);
-  deviceStorage.setItem(endpointKey(pubkey), subscription.endpoint);
+  const presenceToken = String(result?.presenceToken || "");
+  if (!/^[A-Za-z0-9_-]{40,64}$/.test(presenceToken)) throw new Error("推送服务未返回设备状态令牌");
+  deviceStorage.setItem(endpointKey(pubkey), endpoint);
+  deviceStorage.setItem(presenceTokenKey(pubkey), presenceToken);
+  deviceStorage.setItem(syncMetadataKey(pubkey), JSON.stringify({ endpoint, policyHash, verifiedAt: Date.now() }));
 }
 
 /** Detach this device's endpoint from an outgoing account; keep the browser
@@ -298,6 +333,8 @@ export async function unsubscribeAccountPushOnExit(pubkey: string, signEvent: Si
   if (!endpoint) return false;
   await authenticatedPost("/api/push/unsubscribe", { endpoint }, pubkey, signEvent);
   deviceStorage.removeItem(endpointKey(pubkey));
+  deviceStorage.removeItem(presenceTokenKey(pubkey));
+  deviceStorage.removeItem(syncMetadataKey(pubkey));
   // Preserve the opt-in flag: the next time this account unlocks on this device
   // its browser subscription must be registered again with the worker.
   return true;
@@ -312,6 +349,8 @@ export async function disablePushNotifications(pubkey: string, signEvent: SignEv
   }
   deviceStorage.removeItem(`hainei_push_enabled_${pubkey.toLowerCase()}`);
   deviceStorage.removeItem(endpointKey(pubkey));
+  deviceStorage.removeItem(presenceTokenKey(pubkey));
+  deviceStorage.removeItem(syncMetadataKey(pubkey));
 }
 
 export async function triggerGenericPush(
@@ -446,24 +485,21 @@ export async function testPushNotification(pubkey: string, signEvent: SignEvent)
   return "系统推送服务已接受测试通知；请确认本机是否弹出提醒。此结果不代表通知已经显示。";
 }
 
-let presenceEndpoint: string | null | undefined;
-
 /**
- * Tell the worker whether this device is on screen, so pushes skip it while
- * the app already shows messages and calls itself (a pushed system banner
- * stayed on top of the open app). Best effort: the worker expires a
- * foreground report after 40 s anyway.
+ * A subscription-scoped capability makes the lifecycle request cheap and
+ * safe to send with keepalive. The delayed queue is still the correctness
+ * fallback when iOS freezes the page before a final hidden report.
  */
-export async function reportPushForeground(pubkey: string, signEvent: SignEvent, foreground: boolean) {
+export async function reportPushForeground(pubkey: string, foreground: boolean) {
   if (!supportsPushNotifications() || !pushEnabledForAccount(pubkey)) return;
-  if (presenceEndpoint === undefined) {
-    try {
-      const registration = await withTimeout(navigator.serviceWorker.ready, SERVICE_WORKER_TIMEOUT_MS, "service worker 未就绪");
-      presenceEndpoint = (await registration.pushManager.getSubscription())?.endpoint || null;
-    } catch {
-      return;
-    }
-  }
-  if (!presenceEndpoint) return;
-  await authenticatedPost("/api/push/presence", { endpoint: presenceEndpoint, foreground }, pubkey, signEvent);
+  const endpoint = deviceStorage.getItem(endpointKey(pubkey));
+  const presenceToken = deviceStorage.getItem(presenceTokenKey(pubkey));
+  if (!endpoint || !presenceToken) return;
+  const response = await fetch(`${baseUrl()}/api/push/presence`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint, presenceToken, foreground }),
+    keepalive: !foreground,
+  });
+  if (foreground && !response.ok) throw new Error("推送前台状态更新失败");
 }

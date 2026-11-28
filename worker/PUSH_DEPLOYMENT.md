@@ -12,12 +12,15 @@ npm exec wrangler -- secret put VAPID_PRIVATE_KEY --config worker/wrangler.toml
 
 ## 2. 应用生产 D1 迁移并部署现有 Worker
 
-`0002_push_subscriptions.sql` 创建订阅表；`0004_security_controls.sql` 新增原子限流、收件人授权和推送去重表。**必须先完成 D1 迁移，再部署 Worker 和前端**。以下命令明确作用于 `worker/wrangler.toml` 中绑定的现有生产数据库：
+`0002_push_subscriptions.sql` 创建订阅表；`0004_security_controls.sql` 新增原子限流、收件人授权和推送去重表；`0009_deferred_push.sql` 新增设备状态令牌和前台消息的持久化延迟表。**必须先完成 D1 迁移并创建 Queue，再部署 Worker 和前端**。以下命令明确作用于 `worker/wrangler.toml` 中绑定的现有生产数据库和队列：
 
 ```bash
 npm exec wrangler -- d1 migrations apply DB --remote --config worker/wrangler.toml
+npm exec wrangler -- queues create hainei-push-deferred --config worker/wrangler.toml
 npm exec wrangler -- deploy --config worker/wrangler.toml
 ```
+
+`queues create` 只需首次执行；若提示队列已存在，可直接继续部署。Queue 只保存 endpoint 的 SHA-256 标识并负责唤醒，待发消息仍以 D1 为准，因此重试不会丢失或重复展示。
 
 部署前确认 `VAPID_PUBLIC_KEY` 不为空；`VAPID_PRIVATE_KEY` 只应存在于 Cloudflare Worker secret。
 
@@ -44,11 +47,11 @@ curl -fsS -X POST "$HAINEI_WORKER_URL/api/push/public-key"
 
 预期为 `{ "publicKey": "..." }`，而不是 `not_found` 或 `push_not_configured`。
 
-然后在 HaiNei 设置中点击“开启推送”。该操作会先获取 challenge，用当前 Nostr 账号对**完整 URL、POST 方法和业务 payload 哈希**签名，调用 `/api/push/subscribe`，再把当前 accepted 好友列表同步到 `/api/push/policy`。用只返回计数的查询确认订阅和授权已写入：
+然后在 HaiNei 设置中点击“开启推送”。该操作用当前 Nostr 账号对**完整 URL、POST 方法和业务 payload 哈希**签名，通过一次 `/api/push/sync` 同时登记订阅和当前 accepted 好友列表，并取得只属于该 endpoint 的设备状态令牌。10 分钟内相同配置不会重复要求远程签名器确认。用只返回计数的查询确认订阅和授权已写入：
 
 ```bash
 npm exec wrangler -- d1 execute DB --remote --config worker/wrangler.toml \
-  --command "SELECT COUNT(*) AS subscription_count FROM hainei_push_subscriptions; SELECT COUNT(*) AS authorization_count FROM hainei_push_authorizations"
+  --command "SELECT COUNT(*) AS subscription_count FROM hainei_push_subscriptions; SELECT COUNT(*) AS authorization_count FROM hainei_push_authorizations; SELECT COUNT(*) AS pending_count FROM hainei_pending_pushes"
 ```
 
 从另一已接受好友账号发送一条私信，确认 `/api/push/trigger` 正常时返回通用 `202 { "accepted": true }`，发送失败时返回 `503 { "error": "push_delivery_failed" }` 供发送端重试，不返回收件人订阅数或设备信息；后台实际投递必须要求该 sender 仍在收件人的授权表中，并按 canonical message id 去重。系统通知严格只有：
@@ -59,6 +62,8 @@ HaiNei
 ```
 
 点赞、评论和好友活动不得触发推送；私信推送载荷不得包含发送者、pubkey、消息、动态、评论、资料或任何解密内容。最后关闭推送，再次查询计数，确认对应订阅已删除。
+
+前台设备的普通私信不会立即交给 Apple/FCM，避免 iOS 顶部横幅。Worker 先把它写入 D1 并延迟约 42 秒复查：页面仍在前台则删除待发项；页面已隐藏则补发。页面隐藏时会用设备状态令牌和 `keepalive` 立即清除前台状态，并让 Queue 提前补发，不需要 Nostr 或 NIP-46 再签名。语音来电继续使用第 7 节的独立 1.5 秒页面接管流程，不进入 40 秒延迟。
 
 
 ## 5. 安全回滚注意

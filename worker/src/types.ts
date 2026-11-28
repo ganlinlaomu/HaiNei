@@ -14,11 +14,16 @@ export interface ServiceBinding {
   fetch(request: Request): Promise<Response>;
 }
 
+export interface QueueBinding<T = unknown> {
+  send(body: T, options?: { delaySeconds?: number; contentType?: "json" }): Promise<void>;
+}
+
 export interface Env {
   DB: D1Database;
   BLOSSOM: ServiceBinding;
   /** Cloudflare refuses Worker-to-Worker fetches over the same account's workers.dev URLs (404). */
   RELAY_SERVICE?: ServiceBinding;
+  PUSH_QUEUE?: QueueBinding<{ endpointHash: string }>;
   BLOSSOM_SERVICE_TOKEN: string;
   RELAY_APP_URL?: string;
   RELAY_APP_TOKEN?: string;

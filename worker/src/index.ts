@@ -9,10 +9,13 @@ import { handleVideoThumbRequest, isVideoThumbPath } from "./videoThumbs";
 import {
   getPushPublicKey,
   removePushSubscription, setPushForeground, acknowledgeVisibleCall,
+  setPushForegroundByToken,
   replacePushAuthorizationPolicy,
   savePushSubscription,
+  syncPushSubscription,
   triggerGenericPush,
   testOwnPush,
+  processDeferredPushes,
 } from "./push";
 import { HttpError, integerSetting, type Env } from "./types";
 import { cleanupExpiredRecords } from "./cleanup";
@@ -158,8 +161,22 @@ export async function handleRequest(request: Request, env: Env) {
       );
       return json(await savePushSubscription(env, pubkey, payload.subscription, payload.previousEndpoint), 201);
     }
+    if (path === "/api/push/sync") {
+      const payload = await body(request, env, 48 * 1024);
+      const pubkey = await verifyAndConsumeChallenge(
+        env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
+      );
+      return json(await syncPushSubscription(
+        env, pubkey, payload.subscription, payload.previousEndpoint, payload.senderPubkeys,
+      ), 201);
+    }
     if (path === "/api/push/presence") {
       const payload = await body(request, env, 16 * 1024);
+      if (payload.presenceToken !== undefined) {
+        return json(await setPushForegroundByToken(
+          env, payload.endpoint, payload.presenceToken, payload.foreground,
+        ));
+      }
       const pubkey = await verifyAndConsumeChallenge(
         env, payload.challenge, payload.event, undefined, "hainei_push", authBinding(request, payload),
       );
@@ -227,9 +244,40 @@ export async function handleRequest(request: Request, env: Env) {
 
 type ScheduledController = { scheduledTime: number; cron: string };
 type ExecutionContext = { waitUntil(promise: Promise<unknown>): void };
+type QueueMessage<T> = {
+  body: T;
+  ack(): void;
+  retry(options?: { delaySeconds?: number }): void;
+};
+type QueueBatch<T> = { messages: QueueMessage<T>[] };
 
 export function handleScheduled(controller: ScheduledController, env: Env, context: ExecutionContext) {
   context.waitUntil(cleanupExpiredRecords(env, Math.floor(controller.scheduledTime / 1000)));
 }
 
-export default { fetch: handleRequest, scheduled: handleScheduled };
+export async function handlePushQueue(batch: QueueBatch<{ endpointHash?: unknown }>, env: Env) {
+  await Promise.all(batch.messages.map(async message => {
+    const endpointHash = typeof message.body?.endpointHash === "string" ? message.body.endpointHash : "";
+    if (!/^[0-9a-f]{64}$/.test(endpointHash)) {
+      message.ack();
+      return;
+    }
+    try {
+      await processDeferredPushes(env, endpointHash);
+      message.ack();
+    } catch (error) {
+      console.error("HaiNei deferred push failed", error instanceof Error ? error.message : "unknown");
+      // Provider/D1 failures must not exhaust the queue's finite retry budget:
+      // D1 still owns the pending row, so schedule a fresh durable wake-up.
+      try {
+        if (!env.PUSH_QUEUE) throw new Error("push_queue_unavailable");
+        await env.PUSH_QUEUE.send({ endpointHash }, { delaySeconds: 30, contentType: "json" });
+        message.ack();
+      } catch {
+        message.retry({ delaySeconds: 30 });
+      }
+    }
+  }));
+}
+
+export default { fetch: handleRequest, scheduled: handleScheduled, queue: handlePushQueue };

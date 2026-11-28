@@ -1,5 +1,5 @@
-// Foreground reports remain an advisory, backwards-compatible API. They must
-// never gate delivery because iOS can freeze a page before its leave request.
+// Foreground reports suppress banners while the app is visible. Deferred
+// delivery makes a missed lifecycle request recoverable instead of lossy.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { PUSH_FOREGROUND_TTL_SECONDS, setPushForeground } from "../worker/src/push";
@@ -26,8 +26,9 @@ describe("push foreground presence", () => {
     expect(PUSH_FOREGROUND_TTL_SECONDS).toBeLessThanOrEqual(60);
   });
 
-  it("records advisory presence without using it to gate delivery", () => {
-    expect(readFileSync("worker/src/push.ts", "utf8")).not.toContain("AND s.foreground_until <= ?");
+  it("queues messages for foreground devices and keeps calls on their handoff path", () => {
+    expect(readFileSync("worker/src/push.ts", "utf8")).toContain("deferPushRow(");
+    expect(readFileSync("worker/src/push.ts", "utf8")).toContain('pushPayload.type === "call"');
     expect(readFileSync("worker/migrations/0007_push_foreground.sql", "utf8")).toContain("ADD COLUMN foreground_until INTEGER NOT NULL DEFAULT 0");
     expect(readFileSync("worker/src/index.ts", "utf8")).toContain('if (path === "/api/push/presence") {');
   });

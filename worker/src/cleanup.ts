@@ -6,6 +6,7 @@ export type CleanupReport = {
   rateLimits: number;
   devicePairs: number;
   pushDeliveries: number;
+  pendingPushes: number;
   failed: string[];
 };
 
@@ -32,8 +33,11 @@ export async function cleanupExpiredRecords(env: Env, now = Math.floor(Date.now(
     { key: "rateLimits", sql: "DELETE FROM hainei_rate_limits WHERE expires_at <= ?", binds: [now] },
     { key: "devicePairs", sql: "DELETE FROM hainei_device_pairs WHERE expires_at < ?", binds: [now - DEVICE_PAIR_GRACE_SECONDS] },
     { key: "pushDeliveries", sql: "DELETE FROM hainei_push_deliveries WHERE updated_at <= ?", binds: [now - PUSH_DELIVERY_RETENTION_SECONDS] },
+    { key: "pendingPushes", sql: "DELETE FROM hainei_pending_pushes WHERE expires_at <= ?", binds: [now] },
   ];
-  const report: CleanupReport = { ranAt: now, challenges: 0, rateLimits: 0, devicePairs: 0, pushDeliveries: 0, failed: [] };
+  const report: CleanupReport = {
+    ranAt: now, challenges: 0, rateLimits: 0, devicePairs: 0, pushDeliveries: 0, pendingPushes: 0, failed: [],
+  };
   for (const task of tasks) {
     try {
       const result = await env.DB.prepare(task.sql).bind(...task.binds).run();

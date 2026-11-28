@@ -93,6 +93,7 @@ type PushSubscriptionRow = {
   endpoint: string;
   p256dh: string;
   auth: string;
+  foreground_until?: number;
 };
 
 type PushDiagnostics = {
@@ -101,6 +102,7 @@ type PushDiagnostics = {
   sent: number;
   failed: number;
   expired: number;
+  deferred?: number;
   handled?: number;
   // Recipients with a failed device and no device reached; set only when > 0.
   undelivered?: number;
@@ -366,6 +368,8 @@ export function getPushPublicKey(env: Env) {
 export async function savePushSubscription(env: Env, accountPubkey: string, value: unknown, previousEndpointValue?: unknown) {
   const subscription = parseSubscription(env, value);
   const now = Math.floor(Date.now() / 1000);
+  const presenceToken = base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)));
+  const presenceTokenHash = await sha256Hex(presenceToken);
   // The browser replaced this device's endpoint: drop the old row so the
   // device is not notified twice (and the old one ignores foreground state).
   if (typeof previousEndpointValue === "string" && previousEndpointValue && previousEndpointValue !== subscription.endpoint) {
@@ -408,12 +412,22 @@ export async function savePushSubscription(env: Env, accountPubkey: string, valu
 
   await env.DB.prepare(`
     INSERT INTO hainei_push_subscriptions
-      (account_pubkey, endpoint, p256dh, auth, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+      (account_pubkey, endpoint, p256dh, auth, created_at, updated_at, presence_token_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(account_pubkey, endpoint) DO UPDATE SET
-      p256dh = excluded.p256dh, auth = excluded.auth, updated_at = excluded.updated_at
-  `).bind(accountPubkey, subscription.endpoint, subscription.p256dh, subscription.auth, now, now).run();
-  return { subscribed: true };
+      p256dh = excluded.p256dh, auth = excluded.auth, updated_at = excluded.updated_at,
+      presence_token_hash = excluded.presence_token_hash
+  `).bind(accountPubkey, subscription.endpoint, subscription.p256dh, subscription.auth, now, now, presenceTokenHash).run();
+  return { subscribed: true, presenceToken };
+}
+
+/** Register the browser endpoint and replace its sender policy with one signature. */
+export async function syncPushSubscription(
+  env: Env, accountPubkey: string, subscription: unknown, previousEndpoint: unknown, senderPubkeys: unknown,
+) {
+  const saved = await savePushSubscription(env, accountPubkey, subscription, previousEndpoint);
+  const policy = await replacePushAuthorizationPolicy(env, accountPubkey, senderPubkeys);
+  return { ...saved, ...policy };
 }
 
 export async function removePushSubscription(env: Env, accountPubkey: string, endpointValue: unknown) {
@@ -424,13 +438,12 @@ export async function removePushSubscription(env: Env, accountPubkey: string, en
   return { subscribed: false };
 }
 
-/** How long the legacy advisory foreground state remains current. */
+/** How long a visible device's renewable lease remains current. */
 export const PUSH_FOREGROUND_TTL_SECONDS = 40;
 
 /**
- * Keep accepting presence reports for deployed clients and call-challenge
- * warming. Delivery never relies on this value: a mobile OS can suspend the
- * page before its final "left" report reaches the Worker.
+ * Signed compatibility route for already-deployed clients. New clients use a
+ * subscription-scoped token so lifecycle heartbeats never invoke NIP-46.
  */
 export async function setPushForeground(env: Env, accountPubkey: string, endpointValue: unknown, foreground: unknown, now = Math.floor(Date.now() / 1000)) {
   const endpoint = validatedPushEndpoint(env, endpointValue);
@@ -438,6 +451,30 @@ export async function setPushForeground(env: Env, accountPubkey: string, endpoin
   await env.DB.prepare(`
     UPDATE hainei_push_subscriptions SET foreground_until = ? WHERE account_pubkey = ? AND endpoint = ?
   `).bind(until, accountPubkey, endpoint).run();
+  if (!until) await enqueuePendingEndpoint(env, await sha256Hex(endpoint), 0);
+  return { foregroundUntil: until };
+}
+
+export async function setPushForegroundByToken(
+  env: Env, endpointValue: unknown, tokenValue: unknown, foreground: unknown,
+  now = Math.floor(Date.now() / 1000),
+) {
+  const endpoint = validatedPushEndpoint(env, endpointValue);
+  const token = typeof tokenValue === "string" ? tokenValue.trim() : "";
+  if (!/^[A-Za-z0-9_-]{40,64}$/.test(token)) throw new HttpError(401, "invalid_presence_token");
+  const tokenHash = await sha256Hex(token);
+  await consumeRateLimit(env, `push:presence:${tokenHash.slice(0, 24)}`, 10, 60, now);
+  const row = await env.DB.prepare(`
+    SELECT account_pubkey FROM hainei_push_subscriptions
+    WHERE endpoint = ? AND presence_token_hash = ?
+  `).bind(endpoint, tokenHash).first<{ account_pubkey: string }>();
+  if (!row) throw new HttpError(401, "invalid_presence_token");
+  const until = foreground === true ? now + PUSH_FOREGROUND_TTL_SECONDS : 0;
+  await env.DB.prepare(`
+    UPDATE hainei_push_subscriptions SET foreground_until = ?
+    WHERE account_pubkey = ? AND endpoint = ? AND presence_token_hash = ?
+  `).bind(until, row.account_pubkey, endpoint, tokenHash).run();
+  if (!until) await enqueuePendingEndpoint(env, await sha256Hex(endpoint), 0);
   return { foregroundUntil: until };
 }
 
@@ -490,6 +527,98 @@ export function sanitizePushRecipients(value: unknown, senderPubkey: string) {
 async function sha256Hex(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+type PendingPushRow = {
+  sender_pubkey: string;
+  recipient_pubkey: string;
+  message_id: string;
+  endpoint_hash: string;
+  endpoint: string;
+  hint_json: string | null;
+  deliver_after: number;
+};
+
+async function enqueuePendingEndpoint(env: Env, endpointHash: string, delaySeconds: number) {
+  if (!env.PUSH_QUEUE) return false;
+  await env.PUSH_QUEUE.send(
+    { endpointHash },
+    { delaySeconds: Math.max(0, Math.min(86_400, Math.ceil(delaySeconds))), contentType: "json" },
+  );
+  return true;
+}
+
+async function deferPushRow(
+  env: Env, senderPubkey: string, messageId: string, row: PushSubscriptionRow,
+  now: number, hints: WorkerEncryptedPushHint[],
+) {
+  if (!env.PUSH_QUEUE) throw new HttpError(503, "push_queue_unavailable");
+  const endpointHash = await sha256Hex(row.endpoint);
+  const deliverAfter = Math.max(now + 1, Number(row.foreground_until || 0) + 2);
+  const hint = hints.find(item => item.recipient === row.account_pubkey);
+  await env.DB.prepare(`
+    INSERT INTO hainei_pending_pushes
+      (sender_pubkey, recipient_pubkey, message_id, endpoint_hash, endpoint,
+       hint_json, deliver_after, expires_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(sender_pubkey, recipient_pubkey, message_id, endpoint_hash)
+    DO UPDATE SET hint_json = excluded.hint_json, deliver_after = excluded.deliver_after,
+      expires_at = excluded.expires_at
+  `).bind(
+    senderPubkey, row.account_pubkey, messageId, endpointHash, row.endpoint,
+    hint ? JSON.stringify(hint) : null, deliverAfter, now + 24 * 60 * 60, now,
+  ).run();
+  await enqueuePendingEndpoint(env, endpointHash, deliverAfter - now);
+}
+
+async function deletePendingPush(env: Env, row: PendingPushRow) {
+  await env.DB.prepare(`
+    DELETE FROM hainei_pending_pushes
+    WHERE sender_pubkey = ? AND recipient_pubkey = ? AND message_id = ? AND endpoint_hash = ?
+  `).bind(row.sender_pubkey, row.recipient_pubkey, row.message_id, row.endpoint_hash).run();
+}
+
+/** Queue consumer: re-check the renewable lease before either alerting or discarding. */
+export async function processDeferredPushes(env: Env, endpointHash: string, now = Math.floor(Date.now() / 1000)) {
+  if (!/^[0-9a-f]{64}$/.test(endpointHash)) throw new Error("invalid_deferred_push_endpoint");
+  const pending = await env.DB.prepare(`
+    SELECT sender_pubkey, recipient_pubkey, message_id, endpoint_hash, endpoint, hint_json, deliver_after
+    FROM hainei_pending_pushes WHERE endpoint_hash = ? ORDER BY created_at LIMIT 100
+  `).bind(endpointHash).all<PendingPushRow>();
+  let nextWakeAt = Number.POSITIVE_INFINITY;
+  for (const item of pending.results) {
+    const subscription = await env.DB.prepare(`
+      SELECT s.account_pubkey, s.endpoint, s.p256dh, s.auth, s.foreground_until
+      FROM hainei_push_subscriptions AS s
+      INNER JOIN hainei_push_authorizations AS a
+        ON a.recipient_pubkey = s.account_pubkey
+        AND a.sender_pubkey = ? AND a.expires_at > ?
+      WHERE s.account_pubkey = ? AND s.endpoint = ?
+    `).bind(item.sender_pubkey, now, item.recipient_pubkey, item.endpoint).first<PushSubscriptionRow>();
+    if (!subscription) {
+      await deletePendingPush(env, item);
+      continue;
+    }
+    if (Number(subscription.foreground_until || 0) > now) {
+      if (item.deliver_after > now) nextWakeAt = Math.min(nextWakeAt, item.deliver_after);
+      else await deletePendingPush(env, item);
+      continue;
+    }
+    let hints: WorkerEncryptedPushHint[] = [];
+    if (item.hint_json) {
+      try { hints = sanitizeEncryptedPushHints([JSON.parse(item.hint_json)]); } catch { /* exact ID remains sufficient */ }
+    }
+    const diagnostics: PushDiagnostics = {
+      requested: 1, subscriptionsFound: 1, sent: 0, failed: 0, expired: 0,
+    };
+    await deliverPushRows(env, item.sender_pubkey, item.message_id, [subscription], diagnostics, now, hints);
+    if (diagnostics.undelivered) throw new Error("deferred_push_delivery_failed");
+    await deletePendingPush(env, item);
+  }
+  // A queue item represents the endpoint, not one message. Coalesce all
+  // future rows into one wake-up to avoid an N² retry storm in busy chats.
+  if (Number.isFinite(nextWakeAt)) await enqueuePendingEndpoint(env, endpointHash, nextWakeAt - now);
+  return { processed: pending.results.length };
 }
 
 async function reservePushDelivery(
@@ -577,7 +706,7 @@ export async function triggerGenericPush(
 
   const placeholders = recipients.map(() => "?").join(",");
   const rows = await env.DB.prepare(`
-    SELECT s.account_pubkey, s.endpoint, s.p256dh, s.auth
+    SELECT s.account_pubkey, s.endpoint, s.p256dh, s.auth, s.foreground_until
     FROM hainei_push_subscriptions AS s
     INNER JOIN hainei_push_authorizations AS a
       ON a.recipient_pubkey = s.account_pubkey
@@ -588,6 +717,7 @@ export async function triggerGenericPush(
   diagnostics.subscriptionsFound = rows.results.length;
   if (!rows.results.length) return diagnostics;
 
+  const hints = sanitizeEncryptedPushHints(hintsValue);
   if (pushPayload.type === "call") {
     diagnostics.handled = 0;
     await new Promise(resolve => setTimeout(resolve, CALL_PUSH_HANDOFF_MS));
@@ -599,10 +729,15 @@ export async function triggerGenericPush(
     const pending = checked.filter(item => !item.handled).map(item => item.row);
     diagnostics.handled = checked.length - pending.length;
     if (!pending.length) return diagnostics;
-    return deliverPushRows(env, senderPubkey, messageId, pending, diagnostics, now, sanitizeEncryptedPushHints(hintsValue), pushPayload);
+    return deliverPushRows(env, senderPubkey, messageId, pending, diagnostics, now, hints, pushPayload);
   }
 
-  return deliverPushRows(env, senderPubkey, messageId, rows.results, diagnostics, now, sanitizeEncryptedPushHints(hintsValue), pushPayload);
+  const immediate = rows.results.filter(row => Number(row.foreground_until || 0) <= now);
+  const foreground = rows.results.filter(row => Number(row.foreground_until || 0) > now);
+  if (immediate.length) await deliverPushRows(env, senderPubkey, messageId, immediate, diagnostics, now, hints, pushPayload);
+  for (const row of foreground) await deferPushRow(env, senderPubkey, messageId, row, now, hints);
+  if (foreground.length) diagnostics.deferred = foreground.length;
+  return diagnostics;
 }
 
 // The authenticated account can inspect delivery only to its own browser endpoint.
