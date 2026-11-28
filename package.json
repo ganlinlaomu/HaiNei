@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.235",
-  "releaseSummary": "一次只登录一个账号，登录着的账号都能正常收到通知",
+  "version": "0.1.236",
+  "releaseSummary": "修复切到后台后私信推送偶尔完全不出现，并主动验证和修复本机推送连接",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

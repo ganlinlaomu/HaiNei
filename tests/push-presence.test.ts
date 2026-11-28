@@ -1,6 +1,5 @@
-// A pushed system banner stayed on top of the open app (closing it right
-// away did not remove the iOS banner). The app now reports foreground and
-// the worker skips that device's pushes while it is on screen.
+// Foreground reports remain an advisory, backwards-compatible API. They must
+// never gate delivery because iOS can freeze a page before its leave request.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { PUSH_FOREGROUND_TTL_SECONDS, setPushForeground } from "../worker/src/push";
@@ -27,8 +26,8 @@ describe("push foreground presence", () => {
     expect(PUSH_FOREGROUND_TTL_SECONDS).toBeLessThanOrEqual(60);
   });
 
-  it("skips foreground devices when delivering, via a migration-added column", () => {
-    expect(readFileSync("worker/src/push.ts", "utf8")).toContain("AND s.foreground_until <= ?");
+  it("records advisory presence without using it to gate delivery", () => {
+    expect(readFileSync("worker/src/push.ts", "utf8")).not.toContain("AND s.foreground_until <= ?");
     expect(readFileSync("worker/migrations/0007_push_foreground.sql", "utf8")).toContain("ADD COLUMN foreground_until INTEGER NOT NULL DEFAULT 0");
     expect(readFileSync("worker/src/index.ts", "utf8")).toContain('if (path === "/api/push/presence") {');
   });

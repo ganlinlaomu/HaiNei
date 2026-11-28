@@ -424,13 +424,13 @@ export async function removePushSubscription(env: Env, accountPubkey: string, en
   return { subscribed: false };
 }
 
-/** How long a foreground report holds pushes back if the app never says it left. */
+/** How long the legacy advisory foreground state remains current. */
 export const PUSH_FOREGROUND_TTL_SECONDS = 40;
 
 /**
- * The app reports that this device is on screen (it gets messages and calls
- * over its own relay connection) or has left. Pushes skip the device while
- * foreground; the short TTL bounds a missed "left" report.
+ * Keep accepting presence reports for deployed clients and call-challenge
+ * warming. Delivery never relies on this value: a mobile OS can suspend the
+ * page before its final "left" report reaches the Worker.
  */
 export async function setPushForeground(env: Env, accountPubkey: string, endpointValue: unknown, foreground: unknown, now = Math.floor(Date.now() / 1000)) {
   const endpoint = validatedPushEndpoint(env, endpointValue);
@@ -584,8 +584,7 @@ export async function triggerGenericPush(
       AND a.sender_pubkey = ?
       AND a.expires_at > ?
     WHERE s.account_pubkey IN (${placeholders})
-      ${pushPayload.type === "call" ? "" : "AND s.foreground_until <= ?"}
-  `).bind(senderPubkey, now, ...recipients, ...(pushPayload.type === "call" ? [] : [now])).all<PushSubscriptionRow>();
+  `).bind(senderPubkey, now, ...recipients).all<PushSubscriptionRow>();
   diagnostics.subscriptionsFound = rows.results.length;
   if (!rows.results.length) return diagnostics;
 
