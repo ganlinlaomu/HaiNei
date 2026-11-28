@@ -49,6 +49,17 @@ service = "blossom-imgbed"
 binding = "RELAY_SERVICE"
 service = "cloudflare-nostr-relay"
 
+[[queues.producers]]
+binding = "PUSH_QUEUE"
+queue = "hainei-push-deferred"
+
+[[queues.consumers]]
+queue = "hainei-push-deferred"
+max_batch_size = 10
+max_batch_timeout = 2
+max_retries = 5
+retry_delay = 30
+
 # Set server-side only with:
 # npx wrangler secret put BLOSSOM_SERVICE_TOKEN --config worker/wrangler.toml
 # npx wrangler secret put RELAY_APP_TOKEN --config worker/wrangler.toml

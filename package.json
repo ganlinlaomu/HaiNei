@@ -1,7 +1,7 @@
 {
   "name": "closed-community-pwa",
-  "version": "0.1.236",
-  "releaseSummary": "修复切到后台后私信推送偶尔完全不出现，并主动验证和修复本机推送连接",
+  "version": "0.1.237",
+  "releaseSummary": "前台聊天不再弹系统横幅，切到后台后待发私信可靠补送，推送验证也不再反复要求签名",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/patch-trystero-nostr.js",

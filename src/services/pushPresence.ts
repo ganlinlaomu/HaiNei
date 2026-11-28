@@ -1,8 +1,6 @@
-// Presence is advisory only. Push delivery must never depend on the final
-// hidden report: iOS can suspend the page before that request leaves. The
-// service worker checks live window visibility when a push arrives and closes
-// the silent notification when HaiNei is already visible.
-// Keep the heartbeat for call-challenge warming and backwards compatibility.
+// Renew a short visible-device lease without account signatures. Foreground
+// message pushes wait in a durable queue; a keepalive hidden report releases
+// them immediately, and lease expiry releases them if iOS drops that request.
 const HEARTBEAT_MS = 25_000;
 
 type Signer = { pkHex: string; isUnlocked: boolean; signEvent: (event: any) => Promise<any> };
@@ -23,7 +21,7 @@ export function installPushPresence(keys: Signer) {
         // Warm before a call arrives; periodic presence updates also replenish
         // a consumed/expired one-time challenge while this account is unlocked.
         if (foreground) void prefetchCallHandledChallenge(pubkey).catch(() => undefined);
-        return reportPushForeground(pubkey, keys.signEvent.bind(keys), foreground);
+        return reportPushForeground(pubkey, foreground);
       })
       .catch(() => undefined);
   };

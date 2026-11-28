@@ -47,13 +47,13 @@ describe("push policy and muted conversations", () => {
         return new Response(JSON.stringify({ challenge: "c".repeat(64), expiresAt: Math.floor(Date.now() / 1000) + 300 }), { status: 201 });
       }
       bodies.push({ url, body: JSON.parse(String(init?.body || "{}")) });
-      return new Response(JSON.stringify({ accepted: true, subscribed: true }), { status: 200 });
+      return new Response(JSON.stringify({ accepted: true, subscribed: true, presenceToken: "t".repeat(43) }), { status: 200 });
     }));
 
     await expect(syncPushAuthorizationPolicy(ACCOUNT, [MUTED, NORMAL],
       async event => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any)).resolves.toBe(true);
 
-    const policy = bodies.find(item => item.url.endsWith("/api/push/policy"));
+    const policy = bodies.find(item => item.url.endsWith("/api/push/sync"));
     expect(policy.body.senderPubkeys).toEqual([NORMAL]);
   });
 
@@ -66,8 +66,8 @@ describe("push policy and muted conversations", () => {
       maxInFlight = Math.max(maxInFlight, inFlight);
       await new Promise(resolve => setTimeout(resolve, 5));
       inFlight -= 1;
-      if (url.endsWith("/api/push/policy")) policies.push(JSON.parse(String(init?.body || "{}")).senderPubkeys);
-      return new Response(JSON.stringify({ accepted: true, subscribed: true }), { status: 200 });
+      if (url.endsWith("/api/push/sync")) policies.push(JSON.parse(String(init?.body || "{}")).senderPubkeys);
+      return new Response(JSON.stringify({ accepted: true, subscribed: true, presenceToken: "t".repeat(43) }), { status: 200 });
     }));
     const sign = async (event: any) => ({ ...event, pubkey: ACCOUNT, id: "id", sig: "sig" }) as any;
 
@@ -79,7 +79,8 @@ describe("push policy and muted conversations", () => {
 
     expect(results).toEqual([true, true, true]);
     expect(maxInFlight).toBe(1);
-    // The first run, then one follow-up with the latest list.
-    expect(policies).toEqual([[NORMAL], [MUTED, NORMAL]]);
+    // Async muted-peer lookup lets the waiting calls replace the not-yet-sent
+    // first payload, so only the latest policy needs a network signature.
+    expect(policies).toEqual([[MUTED, NORMAL]]);
   });
 });

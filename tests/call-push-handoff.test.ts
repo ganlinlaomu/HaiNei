@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { acknowledgeVisibleCall, CALL_PUSH_HANDOFF_MS, triggerGenericPush } from "../worker/src/push";
+import { acknowledgeVisibleCall, CALL_PUSH_HANDOFF_MS, processDeferredPushes, setPushForeground, setPushForegroundByToken, triggerGenericPush } from "../worker/src/push";
 import { handleRequest } from "../worker/src/index";
 import type { Env } from "../worker/src/types";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
@@ -24,7 +24,7 @@ class SqliteD1 {
       challenge_hash TEXT PRIMARY KEY, pubkey TEXT, created_at INTEGER,
       expires_at INTEGER, used_at INTEGER
     )`);
-    for (const path of ["0002_push_subscriptions.sql", "0004_security_controls.sql", "0007_push_foreground.sql"]) {
+    for (const path of ["0002_push_subscriptions.sql", "0004_security_controls.sql", "0007_push_foreground.sql", "0009_deferred_push.sql"]) {
       this.db.exec(readFileSync(`worker/migrations/${path}`, "utf8"));
     }
   }
@@ -55,7 +55,7 @@ beforeEach(async () => {
   auth = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64url");
   db = new SqliteD1();
   env = { DB: db, VAPID_PUBLIC_KEY: publicKey, VAPID_PRIVATE_KEY: privateKey,
-    VAPID_SUBJECT: "mailto:test@example.com" } as unknown as Env;
+    VAPID_SUBJECT: "mailto:test@example.com", PUSH_QUEUE: { send: vi.fn(async () => undefined) } } as unknown as Env;
   const now = Math.floor(Date.now() / 1000);
   db.db.prepare("INSERT INTO hainei_push_authorizations VALUES (?, ?, ?, ?)").run(CALLEE, CALLER, now + 3600, now);
   addDevice(ENDPOINT, now + 40);
@@ -74,7 +74,9 @@ afterEach(() => {
 
 function addDevice(endpoint: string, foregroundUntil = 0) {
   const now = Math.floor(Date.now() / 1000);
-  db.db.prepare("INSERT INTO hainei_push_subscriptions VALUES (?, ?, ?, ?, ?, ?, ?)")
+  db.db.prepare(`INSERT INTO hainei_push_subscriptions
+    (account_pubkey, endpoint, p256dh, auth, created_at, updated_at, foreground_until)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(CALLEE, endpoint, publicKey, auth, now, now, foregroundUntil);
 }
 async function settleCall(id = MESSAGE) {
@@ -124,9 +126,30 @@ describe("per-device incoming-call notification ownership", () => {
     expect(await settleCall()).toMatchObject({ handled: 0, sent: 1 });
   });
 
-  it("delivers an ordinary message during a stale foreground lease", async () => {
-    expect(await triggerGenericPush(env, CALLER, [CALLEE], "message", MESSAGE)).toMatchObject({ subscriptionsFound: 1, sent: 1 });
+  it("defers an ordinary message while foreground, then delivers it when the app leaves", async () => {
+    expect(await triggerGenericPush(env, CALLER, [CALLEE], "message", MESSAGE))
+      .toMatchObject({ subscriptionsFound: 1, sent: 0, deferred: 1 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(env.PUSH_QUEUE!.send).toHaveBeenCalledOnce();
+
+    await setPushForeground(env, CALLEE, ENDPOINT, false);
+    const pending = db.db.prepare("SELECT endpoint_hash FROM hainei_pending_pushes").get() as { endpoint_hash: string };
+    await processDeferredPushes(env, pending.endpoint_hash);
     expect(fetchMock).toHaveBeenCalledOnce();
+    expect(db.db.prepare("SELECT COUNT(*) AS count FROM hainei_pending_pushes").get()).toEqual({ count: 0 });
+  });
+
+  it("updates presence with the endpoint-scoped token instead of an account signature", async () => {
+    const token = "t".repeat(43);
+    const hash = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token))).toString("hex");
+    db.db.prepare("UPDATE hainei_push_subscriptions SET presence_token_hash = ? WHERE endpoint = ?").run(hash, ENDPOINT);
+
+    expect(await setPushForegroundByToken(env, ENDPOINT, token, true, 1_000))
+      .toEqual({ foregroundUntil: 1_040 });
+    expect(db.db.prepare("SELECT foreground_until FROM hainei_push_subscriptions WHERE endpoint = ?").get(ENDPOINT))
+      .toEqual({ foreground_until: 1_040 });
+    await expect(setPushForegroundByToken(env, ENDPOINT, "x".repeat(43), true, 1_001))
+      .rejects.toMatchObject({ status: 401 });
   });
 
   it("does not bypass recipient authorization", async () => {
