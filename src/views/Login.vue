@@ -57,8 +57,8 @@
           {{ loading ? `正在验证 ${biometricLabel}…` : `用 ${biometricLabel} 进入` }}
         </button>
 
-        <button class="hn-btn hn-btn-secondary" type="button" :disabled="loading" @click="switchAccount">
-          切换账号
+        <button class="hn-btn hn-btn-secondary" type="button" :disabled="loading" @click="useAnotherAccount">
+          退出，登录其他账号
         </button>
       </div>
     </form>
@@ -218,7 +218,6 @@ const needsUnlock = computed(() => !!ks.pkHex && ks.isEncrypted && !ks.isUnlocke
 const biometricEnabled = computed(() => !!ks.pkHex && ks.hasBiometricUnlock(ks.pkHex));
 const hasPasswordFallback = computed(() => ks.credentialMode === "password");
 const biometricLabel = computed(() => biometricMethodLabel());
-const addingAccount = computed(() => route.query.mode === "add");
 const pageMode = computed<"restoring" | "unlock" | "login">(() => {
   if (ks.isRestoring) return "restoring";
   if (needsUnlock.value || unlockInProgress.value) return "unlock";
@@ -228,7 +227,6 @@ const currentAccount = computed(() => ks.accounts.find(account => account.pubkey
 const currentAccountName = computed(() => currentAccount.value ? accountDisplayName(currentAccount.value) : "这台手机上的账号");
 
 const defaultStep = computed<LoginStep>(() => {
-  if (addingAccount.value) return "methods";
   return ks.accounts.length ? "accounts" : "welcome";
 });
 const step = computed<LoginStep>(() => {
@@ -266,12 +264,6 @@ function back() {
   const previous = historyBack();
   if (previous.startsWith("/login")) {
     router.back();
-    return;
-  }
-  if (addingAccount.value && step.value === defaultStep.value) {
-    // Adding an account started from Settings while still signed in: go back there.
-    if (previous) router.back();
-    else void router.replace(isSafeInternalRedirect(route.query.redirect) ? route.query.redirect : "/settings/system");
     return;
   }
   const { step: _step, ...query } = route.query;
@@ -387,8 +379,7 @@ async function pastePrivateKey() {
 }
 
 function openDevicePair() {
-  // While signed in (adding an account), this phone is the new device.
-  void router.push(addingAccount.value ? { path: "/device-pair", query: { role: "receive" } } : "/device-pair");
+  void router.push("/device-pair");
 }
 
 async function beginGoogleRecovery() {
@@ -463,7 +454,7 @@ async function selectAccount(pubkey: string) {
     selectedForUnlock = result === "unlock";
   } catch (error) {
     logLoginFailure("switch", "select-account", error);
-    errorMessage.value = error instanceof Error ? error.message : "切换账号失败";
+    errorMessage.value = error instanceof Error ? error.message : "登录失败";
   } finally {
     loading.value = false;
   }
@@ -619,7 +610,8 @@ async function finishRegistration() {
   }
 }
 
-async function switchAccount() {
+/** Only one account is signed in at a time: leave this one before choosing another. */
+async function useAnotherAccount() {
   if (loading.value) return;
   loading.value = true;
   clearSensitiveInputs();

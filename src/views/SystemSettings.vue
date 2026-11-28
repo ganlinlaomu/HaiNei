@@ -140,15 +140,6 @@
               <button type="button" class="account-inline-action" @click="router.push('/device-pair')">开始扫码</button>
             </div>
 
-            <div class="account-actions-row">
-              <button class="account-action-button account-action-secondary" type="button" @click="switchAccount">
-                切换账号
-              </button>
-              <button class="account-action-button account-action-primary" type="button" @click="addAccount">
-                添加账号
-              </button>
-            </div>
-
             <div class="account-danger-row">
               <button class="account-danger-button" type="button" @click="doLogout">
                 退出登录
@@ -160,15 +151,6 @@
 
     </section>
 
-    <AccountSwitcherSheet
-      :open="showAccountSwitcher"
-      :accounts="keyStore.accounts"
-      :current-pubkey="keyStore.pkHex"
-      :busy-pubkey="switchingTo"
-      @close="showAccountSwitcher = false"
-      @select="switchToAccount"
-      @add="addAccount"
-    />
     <GoogleRecoveryPanel
       v-if="googleBackupAvailable && googleBackupMounted"
       ref="googleBackupPanel"
@@ -190,7 +172,6 @@
 import { APP_VERSION } from "@/db/dexie";
 import { APP_UPDATE_SUMMARY } from "@/appRelease";
 import SecondaryPageHeader from "@/components/SecondaryPageHeader.vue";
-import AccountSwitcherSheet from "@/components/AccountSwitcherSheet.vue";
 import ConnectionSection from "./settings/ConnectionSection.vue";
 import MediaSection from "./settings/MediaSection.vue";
 import DiagnosticsSection from "./settings/DiagnosticsSection.vue";
@@ -205,7 +186,6 @@ import CacheSection from "./settings/CacheSection.vue";
 import { computed, defineAsyncComponent, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { nip19 } from "nostr-tools";
 import { hexToBytes } from "nostr-tools/utils";
-import { accountDisplayName } from "@/services/accountRegistry";
 import { biometricMethodLabel } from "@/utils/biometricLabel";
 const GoogleRecoveryPanel = defineAsyncComponent(() => import("@/components/GoogleRecoveryPanel.vue"));
 import { useRouter } from "vue-router";
@@ -249,8 +229,6 @@ const googleBackupAvailable = computed(() =>
 );
 const googleBackupMounted = ref(false);
 const googleBackupPanel = ref<{ begin?: () => Promise<void> } | null>(null);
-const showAccountSwitcher = ref(false);
-const switchingTo = ref("");
 const securityBusy = ref(false);
 const revealedNsec = ref("");
 const protectionChoice = ref<"device" | "password" | "session">("device");
@@ -324,43 +302,6 @@ async function toggleBiometricUnlock() {
   } finally {
     biometricBusy.value = false;
   }
-}
-
-function switchAccount() {
-  keyStore.refreshAccounts();
-  showAccountSwitcher.value = true;
-}
-
-async function switchToAccount(pubkey: string) {
-  if (switchingTo.value) return;
-  if (pubkey === keyStore.pkHex) {
-    showAccountSwitcher.value = false;
-    return;
-  }
-  const target = keyStore.accounts.find(account => account.pubkey === pubkey);
-  switchingTo.value = pubkey;
-  try {
-    // Credentials are checked before the current account is locked, so a
-    // failure leaves the user signed in where they were.
-    const result = await keyStore.selectRememberedAccount(pubkey);
-    showAccountSwitcher.value = false;
-    if (result === "connected") {
-      await router.replace("/");
-      if (target) ui.addToast(`已切换到 ${accountDisplayName(target)}`, 1_800, "success");
-    } else {
-      await router.replace({ path: "/login", query: { redirect: "/" } });
-    }
-  } catch (error) {
-    ui.addToast(error instanceof Error ? error.message : "切换账号失败", 2_500, "error");
-  } finally {
-    switchingTo.value = "";
-  }
-}
-
-function addAccount() {
-  showAccountSwitcher.value = false;
-  // Stay signed in until another account actually signs in; backing out returns here.
-  void router.push({ path: "/login", query: { mode: "add", redirect: "/" } });
 }
 
 async function beginGoogleBackup() {
@@ -564,12 +505,8 @@ onBeforeUnmount(() => {
 .account-setting-row{display:flex;min-height:72px;align-items:center;gap:14px;padding:14px 15px}
 .account-inline-action{flex:0 0 auto;min-width:64px;height:36px;padding:0 13px;border:1px solid var(--bd-d8e0e8);border-radius:10px;background:var(--bg-f8fafc);color:var(--fg-334155);font-size:.86rem;font-weight:600;cursor:pointer}
 .account-inline-action:disabled{opacity:.55;cursor:default}
-.account-actions-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px 15px;border-top:1px solid var(--bd-eef2f6)}
-.account-action-button{min-height:48px;border-radius:13px;font-size:.94rem;font-weight:600;cursor:pointer;transition:transform 120ms ease,background 120ms ease,border-color 120ms ease}
-.account-action-button:active,.account-inline-action:active,.account-danger-button:active{transform:scale(.985)}
-.account-action-secondary{border:1px solid var(--bd-d7dee7);background:var(--bg-f8fafc);color:var(--fg-334155)}
-.account-action-primary{border:1px solid #475569;background:#475569;color:#fff}
-.account-danger-row{padding:0 15px 14px}
+.account-inline-action:active,.account-danger-button:active{transform:scale(.985)}
+.account-danger-row{padding:14px 15px;border-top:1px solid var(--bd-eef2f6)}
 .account-setting-row+.account-setting-row,.account-control-card>.protection-modes{border-top:1px solid var(--bd-eef2f6)}
 .key-row{align-items:flex-start}.key-row-actions{display:flex;flex:0 0 auto;flex-direction:column;gap:8px}
 .revealed-key{display:block;margin-top:6px;padding:10px;border-radius:10px;background:var(--bg-f8fafc);color:var(--fg-0f1419);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;user-select:all}
@@ -581,7 +518,7 @@ onBeforeUnmount(() => {
 .password-setup{display:grid;gap:8px;padding:2px 0 8px 30px}
 .protection-modes:disabled{opacity:.6}
 .account-danger-button{width:100%;min-height:46px;border:1px solid var(--bd-fecaca);border-radius:13px;background:var(--bg-fff7f7);color:var(--fg-dc2626);font-size:.93rem;font-weight:600;cursor:pointer}
-@media(max-width:520px){.account-panel{padding-left:0}.account-actions-row{gap:8px}.account-action-button{min-height:46px}}
+@media(max-width:520px){.account-panel{padding-left:0}}
 
 .technical-settings { padding-top: 0; }
 

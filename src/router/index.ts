@@ -202,9 +202,9 @@ router.beforeEach(async (to, from, next) => {
     const requiresAuth = !!(to.meta && (to.meta as any).requiresAuth);
 
     if (to.path === "/login") {
-      // If already logged in and unlocked, redirect away from login — unless the
-      // user is adding another account from Settings while staying signed in.
-      if (keyStore.isLoggedIn && keyStore.isUnlocked && to.query.mode !== "add") {
+      // Only one account is signed in at a time: an unlocked session never
+      // sees the login page. Signing in elsewhere starts with 退出登录.
+      if (keyStore.isLoggedIn && keyStore.isUnlocked) {
         return next({ path: "/" });
       }
       // If needs unlock, stay on login page
