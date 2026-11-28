@@ -1,7 +1,8 @@
-// While HaiNei is on screen it gets messages and calls over its own relay
-// connection, so the worker should not push to this device: on iOS a pushed
-// system banner stays on top of the open app. Report foreground every 25 s
-// (the worker forgets it after 40 s) and report leaving on hide.
+// Presence is advisory only. Push delivery must never depend on the final
+// hidden report: iOS can suspend the page before that request leaves. The
+// service worker checks live window visibility when a push arrives and closes
+// the silent notification when HaiNei is already visible.
+// Keep the heartbeat for call-challenge warming and backwards compatibility.
 const HEARTBEAT_MS = 25_000;
 
 type Signer = { pkHex: string; isUnlocked: boolean; signEvent: (event: any) => Promise<any> };

@@ -124,9 +124,14 @@ describe("per-device incoming-call notification ownership", () => {
     expect(await settleCall()).toMatchObject({ handled: 0, sent: 1 });
   });
 
-  it("does not bypass recipient authorization or change ordinary message foreground policy", async () => {
-    expect(await triggerGenericPush(env, CALLER, [CALLEE], "message", MESSAGE)).toMatchObject({ subscriptionsFound: 0, sent: 0 });
+  it("delivers an ordinary message during a stale foreground lease", async () => {
+    expect(await triggerGenericPush(env, CALLER, [CALLEE], "message", MESSAGE)).toMatchObject({ subscriptionsFound: 1, sent: 1 });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not bypass recipient authorization", async () => {
     db.db.exec("DELETE FROM hainei_push_authorizations");
+    expect(await triggerGenericPush(env, CALLER, [CALLEE], "message", MESSAGE)).toMatchObject({ subscriptionsFound: 0, sent: 0 });
     expect(await triggerGenericPush(env, CALLER, [CALLEE], "call", MESSAGE)).toMatchObject({ subscriptionsFound: 0, sent: 0 });
     expect(fetchMock).not.toHaveBeenCalled();
   });
