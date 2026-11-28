@@ -24,11 +24,4 @@ describe("account switch passkey flow", () => {
     expect(login).toContain('if (pageMode.value !== "unlock" || loading.value || unlockInProgress.value) return;');
     expect(login).toContain("await presentUnlockMethod()");
   });
-
-  it("returns account switches to Home and lets passkey accounts unlock on the login page", () => {
-    const settings = source("src/views/SystemSettings.vue");
-
-    expect(settings).toContain('await router.replace("/")');
-    expect(settings).toContain('await router.replace({ path: "/login", query: { redirect: "/" } })');
-  });
 });

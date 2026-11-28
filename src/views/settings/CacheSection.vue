@@ -15,7 +15,7 @@
       <div class="small">
         <div>内存缓存：{{ cacheStats.count }} 个文件 · {{ formatSize(cacheStats.size) }} / {{ formatSize(IMAGE_MEMORY_CACHE_MAX_BYTES) }}</div>
         <div>加密本地缓存：{{ cacheStats.persistentCount }} 个文件 · {{ formatSize(cacheStats.persistentSize) }} / {{ formatSize(IMAGE_PERSISTENT_CACHE_MAX_BYTES) }}</div>
-        <div>内存缓存会在锁定、切换账号或退出后清除；加密本地缓存保留，解锁后按需解密。</div>
+        <div>内存缓存会在锁定或退出登录后清除；加密本地缓存保留，解锁后按需解密。</div>
         <div v-if="cacheStats.persistentOldestTimestamp">最早本地缓存：{{ new Date(cacheStats.persistentOldestTimestamp).toLocaleDateString() }}</div>
       </div>
       <div class="button-row">

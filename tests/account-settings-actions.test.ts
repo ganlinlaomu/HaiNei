@@ -3,51 +3,37 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("account actions in Settings", () => {
-  it("keeps switch, add and logout together in the Account section", () => {
+  it("signs in one account at a time: Settings offers logout, not switch or add", () => {
     const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
     expect(settings).toContain('<details class="technical-section account-section identity-section">');
     expect(settings).toContain('<summary class="section-heading account-heading">');
     expect(settings).toContain('class="section-heading-icon"');
     expect(settings).not.toContain('<details class="account-section top-level-group">');
-    expect(settings).toContain('@click="switchAccount"');
-    expect(settings).toContain("切换账号");
-    expect(settings).toContain('@click="addAccount"');
-    expect(settings).toContain("添加账号");
     expect(settings).toContain('@click="doLogout"');
     expect(settings).toContain("退出登录");
-    expect(settings).toContain("<p>{{ nickname }} · {{ shortPk }} · {{ accountProtectionText }}</p>");
-    expect(settings).toContain("<AccountSwitcherSheet");
-    expect(settings).toContain("keyStore.refreshAccounts()");
-    expect(settings).toContain("await keyStore.selectRememberedAccount(pubkey)");
     expect(settings).toContain("await keyStore.logout()");
+    expect(settings).toContain("<p>{{ nickname }} · {{ shortPk }} · {{ accountProtectionText }}</p>");
+    // Switching kept the other account signed out of Web Push without the
+    // user noticing; one signed-in account means its notifications always work.
+    expect(settings).not.toContain("切换账号");
+    expect(settings).not.toContain("添加账号");
+    expect(settings).not.toContain("AccountSwitcherSheet");
+    expect(settings).not.toContain("selectRememberedAccount");
+    expect(settings).not.toContain('mode: "add"');
   });
 
-  it("switches between remembered accounts without signing out first", () => {
-    const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
-    const switcher = settings.slice(settings.indexOf("async function switchToAccount"), settings.indexOf("function addAccount"));
-    // The old flow cleared the session before an account was chosen, so backing
-    // out of the login page left the user signed out.
-    expect(switcher).not.toContain("clearActiveSession");
-    expect(switcher).toContain('if (result === "connected")');
-    expect(switcher).toContain('await router.replace({ path: "/login", query: { redirect: "/" } })');
-  });
-
-  it("adds an account while staying signed in until the new one is ready", () => {
-    const settings = readFileSync(join(process.cwd(), "src/views/SystemSettings.vue"), "utf8");
-    const add = settings.slice(settings.indexOf("function addAccount"), settings.indexOf("async function beginGoogleBackup"));
-    expect(add).not.toContain("clearActiveSession");
-    expect(add).toContain('query: { mode: "add", redirect: "/" }');
-
+  it("never shows the login page to an unlocked session", () => {
     const router = readFileSync(join(process.cwd(), "src/router/index.ts"), "utf8");
-    expect(router).toContain('keyStore.isLoggedIn && keyStore.isUnlocked && to.query.mode !== "add"');
+    expect(router).toContain("if (keyStore.isLoggedIn && keyStore.isUnlocked) {");
+    expect(router).not.toContain('mode !== "add"');
 
     const login = readFileSync(join(process.cwd(), "src/views/Login.vue"), "utf8");
-    expect(login).toContain('const addingAccount = computed(() => route.query.mode === "add")');
-    expect(login).toContain('if (addingAccount.value) return "methods";');
-    expect(login).toContain('{ path: "/device-pair", query: { role: "receive" } }');
-
-    const pair = readFileSync(join(process.cwd(), "src/views/DevicePair.vue"), "utf8");
-    expect(pair).toContain('keys.isLoggedIn && route.query.role !== "receive"');
+    expect(login).not.toContain("addingAccount");
+    expect(login).not.toContain("切换账号");
+    // The lock screen leaves the current account before another is chosen.
+    const leave = login.slice(login.indexOf("async function useAnotherAccount"));
+    expect(leave).toContain("await ks.clearActiveSession();");
+    expect(login).toContain("退出，登录其他账号");
   });
 
   it("moves local password and session-only login out of the login page into 账号安全", () => {
